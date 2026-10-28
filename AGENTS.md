@@ -30,8 +30,13 @@ Parameters are in each tool's description; this is when to reach for which.
 - **Find and understand nodes:** `search_nodes` (name/label/category/description across the 29 atomic
   nodes and the **whole** library; returns the exact `definition`), then `describe_node` for
   connector ids, parameter types and **enum values**. Never guess ids or enum numbers.
-- **Inspect a graph:** `describe_graph` (ids, links as `input<-srcId.output`, non-default params),
-  `list_graph_inputs` (exposed inputs and what they drive).
+- **Inspect a graph:** `describe_graph` (ids, links as `input<-srcId.output`, non-default params,
+  frames/comments), `list_graph_inputs` (exposed inputs and what they drive).
+- **Safety net:** `snapshot_graph` before risky or large changes to a user's graph (a full .sbs
+  copy in `~/.sd_mcp/snapshots/`; the open package, its file and saved state are untouched), then
+  `diff_graph` to show exactly what changed against `'saved'`, `'latest'`, a label or a path.
+  Prefer this over Undo, which is per document. Report the diff to the user after editing their
+  graphs.
 - **Look:** `preview_node` (image of any node, even ones not feeding an output),
   `screenshot_designer` (what the user sees: window, graph, 2D, 3D, panels), `open_graph`
   (open a graph and centre on a node first, so the user and screenshots see it).
@@ -45,6 +50,10 @@ Parameters are in each tool's description; this is when to reach for which.
   `delete_nodes`; several changes at once with `apply_edits` (one call, one undo step, refs for new
   nodes); new graph with `create_graph`; controls with `expose_param` / `remove_graph_input`;
   size with `set_graph_size`.
+- **Make graphs readable** (do this for every graph you build or restructure): `arrange_graph`
+  (columns by data flow, positions only), then `add_frame` per logical section and `add_comment`
+  for non-obvious choices. `describe_node` shows library slider ranges (`range a..b step c`) and
+  every parameter's description, so pick values inside the range.
 - **Bigger logic:** `run_designer_script` (script on disk, preferred for anything long) or
   `execute_designer_code`. Both time out (`timeout_s`); `cancel_designer_job` aborts.
 - **Output:** `save_package`; `export_outputs` (straight from Designer, live unsaved state,
@@ -87,7 +96,7 @@ substance-designer-mcp/
   and need a **Designer restart** by the user (never hot-reload; see below).
 - The bridge token file (README.md, Security) gives code execution in Designer: **never print,
   log or send its contents anywhere.**
-- Environment variables `SD_DESIGNER_BIN_DIR`, `SD_DESIGNER_APP`, `SD_DESIGNER_LOG`, `SD_BRIDGE_PORT`: see README.md,
+- Environment variables `SD_DESIGNER_BIN_DIR`, `SD_DESIGNER_APP`, `SD_DESIGNER_LOG`, `SD_SNAPSHOT_DIR`, `SD_BRIDGE_PORT`: see README.md,
   Configuration. A port change must be made for the plugin and the server alike.
 - **When tools fail:** match the symptom in README.md, Troubleshooting. As an agent, first try
   `launch_designer`, then `read_designer_log`. If the bridge accepts connections but never
@@ -172,6 +181,17 @@ substance-designer-mcp/
   `$outputsize` only take effect with inheritance set to Absolute (`set_params` does that).
   `setDefaultParentSize()` takes **pixels** (values under 16 are clamped to 16). See Rendering
   for how size interacts with sbsrender.
+- Node positions are node **centres**; a node is 96×96 in graph units. Frames:
+  `SDGraphObjectFrame.sNew(graph)` with `setTitle`, `setPosition` (top-left), `setSize`,
+  `setColor`, `setDescription`; comments: `SDGraphObjectComment.sNew(graph)` or
+  `sNewAsChild(node)` with `setDescription`; list them with `graph.getGraphObjects()`.
+- Slider ranges exist only for **library** node parameters, as annotations (`min`, `max`,
+  `step`, `clamp`) on the referenced graph's input property. Atomic nodes expose no ranges, only
+  `prop.getDescription()`.
+- Fit the graph view: the graph dock's toolbar action "Fit in view (selection)" (shortcut F)
+  fits everything when nothing is selected (`open_graph` without a node does this).
+- `pkgMgr.saveCopyOfPackageAs(pkg, path)` writes a copy without changing the package's path or
+  saved state (what snapshots use); `savePackageAs` does change them.
 - UI: current graph via `getQtForPythonUIMgr().getCurrentGraph()`; editor control via
   **`app.getUIMgr()`**: `openResourceInEditor(graph)`, `focusGraphNode(graphViewID, node)`
   (ids via `getGraphViewIDCount/At`, `getGraphFromGraphViewID`), `getGraphNodeBBox`,

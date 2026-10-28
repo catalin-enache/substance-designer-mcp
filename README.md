@@ -25,14 +25,16 @@ node look wrong?", "expose the wear amount and render three variations", or "sho
 material in the 3D view". [examples/build_dwarf_trimsheet.py](examples/build_dwarf_trimsheet.py)
 is a full example: a 2048² stone + wood trim sheet built entirely through this bridge.
 
-## Tools (32)
+## Tools (38)
 
 | Area | Tools |
 |---|---|
 | Connection | `designer_status`, `launch_designer` (starts Designer and waits for it), `cancel_designer_job`, `read_designer_log` |
-| Finding nodes | `search_nodes` (built-in nodes and Designer's whole library), `describe_node` (parameters, types, dropdown values) |
+| Finding nodes | `search_nodes` (built-in nodes and Designer's whole library), `describe_node` (parameters, types, ranges, descriptions, dropdown values) |
 | Inspecting | `describe_graph`, `list_graph_inputs`, `preview_node` (image of any node), `node_stats` (exact pixel numbers), `check_tiling` (does it tile seamlessly?) |
 | Tuning | `sweep_param` (try several values of a parameter side by side; the original value is restored) |
+| Safety | `snapshot_graph`, `list_snapshots`, `diff_graph` (what changed vs the saved file or a snapshot) |
+| Readability | `arrange_graph` (tidy layout by data flow), `add_frame`, `add_comment` |
 | Viewing | `screenshot_designer` (window, graph, 2D view, 3D view, panels; only Designer is captured, never other apps), `open_graph` (open a graph, centred on a node) |
 | Editing | `add_node`, `set_params`, `connect`, `disconnect`, `move_nodes`, `delete_nodes`, `apply_edits` (many edits at once), `create_graph`, `set_graph_size` |
 | Controls | `expose_param`, `remove_graph_input` (turn node parameters into graph inputs) |
@@ -40,7 +42,8 @@ is a full example: a 2048² stone + wood trim sheet built entirely through this 
 | Output | `save_package`, `export_outputs` (straight from Designer), `sbsar_info`, `render_sbs` (parameters, size, PNG/EXR…), `preview_maps` |
 
 Every change Claude makes through these tools is **one undo step** in Designer ("Claude: …"),
-so Ctrl+Z with that graph in focus reverts it. Undo history is per document.
+so Ctrl+Z with that graph in focus reverts it. Undo history is per document. Before bigger
+changes to your graphs, Claude can take a snapshot and afterwards show you exactly what changed.
 
 ## Requirements
 
@@ -115,6 +118,7 @@ after a Designer update.
 | `SD_DESIGNER_BIN_DIR` | macOS: `/Applications/Adobe Substance 3D Designer/Adobe Substance 3D Designer.app/Contents/MacOS`; Windows: `C:\Program Files\Adobe\Adobe Substance 3D Designer` | finding `sbscooker` / `sbsrender` |
 | `SD_DESIGNER_APP` | macOS: `/Applications/Adobe Substance 3D Designer/Adobe Substance 3D Designer.app`; Windows: `C:\Program Files\Adobe\Adobe Substance 3D Designer\Adobe Substance 3D Designer.exe` | `launch_designer` |
 | `SD_DESIGNER_LOG` | newest `log.txt` in Designer's settings folder (see Troubleshooting) | `read_designer_log` |
+| `SD_SNAPSHOT_DIR` | `~/.sd_mcp/snapshots` | where `snapshot_graph` keeps snapshots (one folder per graph; safe to delete) |
 | `SD_BRIDGE_PORT` | `9877` | plugin, MCP server and CLI client (set the same value for all three) |
 
 Pass them when registering: `claude mcp add --scope user -e SD_DESIGNER_BIN_DIR="D:\Adobe\Designer" substance-designer -- ...`

@@ -284,8 +284,8 @@ def delete_nodes(node_ids: list[str], graph: str | None = None) -> str:
 
 @server.tool()
 def open_graph(graph: str, node_id: str | None = None) -> str:
-    """Open a graph in Designer's graph editor (so the user and screenshot_designer see it);
-    with node_id, also centre the graph view on that node."""
+    """Open a graph in Designer's graph editor (so the user and screenshot_designer see it).
+    Without node_id the whole graph is fitted in view; with node_id the view centres on that node."""
     return _checked(_bridge(_helpers_call('open_graph(%r, %r)' % (graph, node_id)), timeout=60))
 
 
@@ -635,6 +635,217 @@ def _last_start(lines):
         if 'Python SDK Version' in lines[i]:
             return i
     return 0
+
+
+SNAPSHOT_DIR = os.environ.get('SD_SNAPSHOT_DIR') or os.path.join(os.path.expanduser('~'), '.sd_mcp', 'snapshots')
+
+
+def _safe_name(text):
+    return re.sub(r'[^A-Za-z0-9_.-]+', '_', text).strip('_') or 'snapshot'
+
+
+def _copy_package(graph, path):
+    text = _bridge(_helpers_call('save_package_copy(%r, %r)' % (graph, path)), timeout=120)
+    found = dict(re.findall(r'^(COPY|PACKAGE|GRAPH)=(.*)$', text, re.M))
+    if 'COPY' not in found or not os.path.exists(path):
+        raise ToolError(text.strip().splitlines()[-1] if text.strip() else 'could not copy package')
+    return found
+
+
+@server.tool()
+def snapshot_graph(graph: str | None = None, label: str | None = None) -> str:
+    """Save a snapshot of a graph's package (a full .sbs copy) before risky work. It doesn't
+    change the open package, its file or its saved state. Compare later with diff_graph; the
+    snapshot .sbs can also be opened in Designer to recover anything. Snapshots live in
+    ~/.sd_mcp/snapshots/<graph>/ (override with SD_SNAPSHOT_DIR)."""
+    stamp = time.strftime('%Y%m%d-%H%M%S')
+    tmp = os.path.join(tempfile.mkdtemp(prefix='sd_snap_'), 'copy.sbs')
+    try:
+        info = _copy_package(graph, tmp)
+        folder = os.path.join(SNAPSHOT_DIR, _safe_name(info['GRAPH']))
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, stamp + ('-' + _safe_name(label) if label else '') + '.sbs')
+        shutil.move(tmp, path)
+    finally:
+        shutil.rmtree(os.path.dirname(tmp), ignore_errors=True)
+    return 'snapshot of %s saved: %s' % (info['GRAPH'], path)
+
+
+def _snapshots(graph_id):
+    folder = os.path.join(SNAPSHOT_DIR, _safe_name(graph_id))
+    if not os.path.isdir(folder):
+        return []
+    return sorted(os.path.join(folder, f) for f in os.listdir(folder) if f.endswith('.sbs'))
+
+
+@server.tool()
+def list_snapshots(graph: str | None = None) -> str:
+    """List saved snapshots (newest last). graph: graph identifier (default: all graphs)."""
+    graphs = [_safe_name(graph)] if graph else (sorted(os.listdir(SNAPSHOT_DIR)) if os.path.isdir(SNAPSHOT_DIR) else [])
+    lines = []
+    for gid in graphs:
+        for path in _snapshots(gid):
+            lines.append('%s  %s' % (gid, path))
+    return '\n'.join(lines) if lines else 'No snapshots%s.' % (' for ' + graph if graph else '')
+
+
+def _graph_model(sbs_path, graph_id):
+    """Parse one graph of a .sbs into comparable dicts."""
+    root = ET.parse(sbs_path).getroot()
+    g = next((x for x in root.iter('graph') if x.find('identifier') is not None
+              and x.find('identifier').get('v') == graph_id), None)
+    if g is None:
+        raise ToolError('graph %r not found in %s' % (graph_id, sbs_path))
+    def value_of(param):
+        pv = param.find('paramValue')
+        if pv is None or not len(pv):
+            return ''
+        el = pv[0]
+        return 'function' if el.tag == 'dynamicValue' else (el.get('v') or '')
+    nodes = {}
+    for n in g.find('compNodes') if g.find('compNodes') is not None else []:
+        uid = n.find('uid').get('v')
+        impl = n.find('compImplementation')
+        kind = '?'
+        if impl is not None and len(impl):
+            el = impl[0]
+            if el.tag == 'compFilter':
+                kind = el.find('filter').get('v')
+            elif el.tag == 'compInstance':
+                path = el.find('path').get('v') if el.find('path') is not None else ''
+                kind = 'instance:' + re.sub(r'^pkg:///|\?.*$', '', path)
+            elif el.tag == 'compOutputBridge':
+                kind = 'output'
+            elif el.tag == 'compInputBridge':
+                kind = 'input'
+        # atomic and library (instance) nodes store parameters the same way
+        params = {prm.find('name').get('v'): value_of(prm)
+                  for prm in (impl.iter('parameter') if impl is not None else [])}
+        links = set()
+        conns = n.find('connections')
+        for c in (conns if conns is not None else []):
+            links.add((c.find('identifier').get('v'), c.find('connRef').get('v')))
+        pos = n.find('GUILayout/gpos')
+        nodes[uid] = {'kind': kind, 'params': params, 'links': links,
+                      'pos': pos.get('v') if pos is not None else ''}
+    inputs = {}
+    for pi in g.iter('paraminput'):
+        dv = pi.find('defaultValue')
+        inputs[pi.find('identifier').get('v')] = dv[0].get('v') if dv is not None and len(dv) else ''
+    size = {}
+    for prm in (g.find('baseParameters') if g.find('baseParameters') is not None else []):
+        rel = prm.find('relativeTo')
+        size[prm.find('name').get('v')] = '%s (%s)' % (value_of(prm), {'0': 'relative to input', '1': 'relative to parent',
+                                                                         '2': 'absolute'}.get(rel.get('v') if rel is not None else '', 'absolute'))
+    for opt in g.iter('option'):
+        if opt.find('name') is not None and opt.find('name').get('v') == 'defaultParentSize':
+            size['defaultParentSize'] = opt.find('value').get('v')
+    return {'nodes': nodes, 'inputs': inputs, 'size': size}
+
+
+def _diff_models(old, new, show_positions):
+    out = []
+    on, nn = old['nodes'], new['nodes']
+    added = [i for i in nn if i not in on]
+    removed = [i for i in on if i not in nn]
+    for i in added:
+        out.append('+ node %s %s' % (i, nn[i]['kind']))
+    for i in removed:
+        out.append('- node %s %s' % (i, on[i]['kind']))
+    moved = 0
+    for i in (i for i in nn if i in on):
+        a, b = on[i], nn[i]
+        for name in sorted(set(a['params']) | set(b['params'])):
+            va, vb = a['params'].get(name, '(default)'), b['params'].get(name, '(default)')
+            if va != vb:
+                out.append('~ node %s %s: %s %s -> %s' % (i, b['kind'], name, va, vb))
+        for port, src in sorted(b['links'] - a['links']):
+            out.append('~ node %s %s: link %s <- %s added' % (i, b['kind'], port, src))
+        for port, src in sorted(a['links'] - b['links']):
+            out.append('~ node %s %s: link %s <- %s removed' % (i, b['kind'], port, src))
+        if a['pos'] != b['pos']:
+            moved += 1
+            if show_positions:
+                out.append('~ node %s %s: moved %s -> %s' % (i, b['kind'], a['pos'], b['pos']))
+    for name in sorted(set(old['inputs']) | set(new['inputs'])):
+        va, vb = old['inputs'].get(name), new['inputs'].get(name)
+        if va is None:
+            out.append('+ graph input %s = %s' % (name, vb))
+        elif vb is None:
+            out.append('- graph input %s' % name)
+        elif va != vb:
+            out.append('~ graph input %s: %s -> %s' % (name, va, vb))
+    for name in sorted(set(old['size']) | set(new['size'])):
+        if old['size'].get(name) != new['size'].get(name):
+            out.append('~ graph %s: %s -> %s' % (name, old['size'].get(name), new['size'].get(name)))
+    summary = '%d added, %d removed, %d changed line(s), %d node(s) moved' % (
+        len(added), len(removed), len([l for l in out if l.startswith('~') and 'moved' not in l]), moved)
+    return summary, out
+
+
+@server.tool()
+def diff_graph(graph: str | None = None, against: str = 'saved', show_positions: bool = False) -> str:
+    """Show what changed in a graph: nodes added/removed, parameter changes, links
+    added/removed, exposed inputs and size. against: 'saved' (the package's file on disk),
+    'latest' (newest snapshot), a snapshot label, or a .sbs path. The live graph is read
+    without modifying it. Positions are only counted unless show_positions=True."""
+    tmp_dir = tempfile.mkdtemp(prefix='sd_diff_')
+    try:
+        info = _copy_package(graph, os.path.join(tmp_dir, 'live.sbs'))
+        gid = info['GRAPH']
+        if against == 'saved':
+            ref = info.get('PACKAGE')
+            if not ref or not os.path.exists(ref):
+                raise ToolError('the package has never been saved; diff against a snapshot instead')
+        elif against == 'latest':
+            snaps = _snapshots(gid)
+            if not snaps:
+                raise ToolError('no snapshots for %s; take one with snapshot_graph' % gid)
+            ref = snaps[-1]
+        elif against.endswith('.sbs'):
+            ref = os.path.abspath(os.path.expanduser(against))
+        else:
+            matches = [p for p in _snapshots(gid) if _safe_name(against) in os.path.basename(p)]
+            if not matches:
+                raise ToolError('no snapshot matching %r; see list_snapshots' % against)
+            ref = matches[-1]
+        summary, lines = _diff_models(_graph_model(ref, gid), _graph_model(os.path.join(tmp_dir, 'live.sbs'), gid),
+                                      show_positions)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    head = '%s (live) vs %s: %s' % (gid, ref, summary)
+    if lines:
+        return head + '\n' + '\n'.join(lines)
+    moved_only = not summary.endswith(' 0 node(s) moved')
+    return head + ('\nOnly node positions differ (show_positions=True lists them).' if moved_only else '\nNo differences.')
+
+
+@server.tool()
+def arrange_graph(graph: str | None = None, node_ids: list[str] | None = None,
+                  spacing: list[float] | None = None) -> str:
+    """Tidy a graph: left-to-right columns by data flow, ordered to reduce crossing links,
+    outputs in the last column. Only positions change (connections are never touched).
+    node_ids: arrange just these nodes, from their current top-left. spacing: [dx, dy]
+    (default [200, 150]). One undo step."""
+    return _edit('arrange_graph(%r, %r, %r)' % (graph, node_ids, tuple(spacing or (200.0, 150.0))),
+                 'Claude: arrange graph')
+
+
+@server.tool()
+def add_frame(node_ids: list[str], title: str, graph: str | None = None, color: list[float] | None = None,
+              description: str | None = None) -> str:
+    """Draw a titled frame around nodes (e.g. one per section of a material). color: [r, g, b(, a)]
+    0..1. description: text shown in the frame. One undo step."""
+    return _edit('add_frame(%r, %r, %r, %r, %r)' % (graph, node_ids, title, color, description),
+                 'Claude: add frame ' + title)
+
+
+@server.tool()
+def add_comment(text: str, graph: str | None = None, node_id: str | None = None,
+                position: list[float] | None = None) -> str:
+    """Add a comment to a graph: attached to node_id, or free-standing at position [x, y].
+    One undo step."""
+    return _edit('add_comment(%r, %r, %r, %r)' % (graph, text, node_id, position), 'Claude: add comment')
 
 
 DESIGNER_APP = {

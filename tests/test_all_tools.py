@@ -244,6 +244,39 @@ async def run(scratch):
                 t = text(await c('remove_graph_input', {'input_id': 'Samples', **G}))
                 check('remove_graph_input', 'unbinds + keeps value', 'kept value 16' in t and 'removed graph input' in t, t)
 
+                # --- snapshots, diff, layout, frames
+                t = text(await c('snapshot_graph', {'label': 'before tweak', **G}))
+                check('snapshot_graph', 'saved', 'snapshot of %s saved' % TEST_GRAPH in t, t)
+                snap_path = t.split('saved: ', 1)[1].strip()
+                t = text(await c('list_snapshots', G))
+                check('list_snapshots', 'lists it', snap_path in t, '')
+                await c('set_params', {'node_id': lv, 'params': {'levelinhigh': [0.8] * 4}, **G})
+                tmp_node = added_id(text(await c('add_node', {'definition': 'blur', **G})))
+                t = text(await c('diff_graph', {'against': 'latest', **G}))
+                check('diff_graph', 'sees param change + new node', 'levelinhigh' in t and '+ node %s blur' % tmp_node in t, t.splitlines()[0])
+                t = text(await c('diff_graph', {'against': 'before tweak', **G}))
+                check('diff_graph', 'by label', 'levelinhigh' in t, '')
+                await c('delete_nodes', {'node_ids': [tmp_node], **G})
+                await c('set_params', {'node_id': lv, 'params': {'levelinhigh': [1.0] * 4}, **G})   # undo the tweak
+                t = text(await c('diff_graph', {'against': 'latest', **G}))
+                check('diff_graph', 'no differences after reverting', 'No differences' in t or 'Only node positions' in t, t.splitlines()[-1])
+                os.remove(snap_path)
+                if not os.listdir(os.path.dirname(snap_path)):
+                    os.rmdir(os.path.dirname(snap_path))
+                t = text(await c('arrange_graph', G))
+                check('arrange_graph', 'columns by data flow', 'arranged' in t and 'column' in t, t)
+                t = text(await c('describe_graph', G))
+                xs = {l.split()[0]: int(re.search(r'@\((-?\d+),', l).group(1)) for l in t.splitlines() if '@(' in l}
+                check('arrange_graph', 'upstream left of downstream', xs[clouds] < xs[slope] < xs[lv] < xs[out], str(xs))
+                t = text(await c('add_frame', {'node_ids': [clouds, slope], 'title': 'Shape', 'color': [0.2, 0.4, 0.8], **G}))
+                check('add_frame', 'frame drawn', "frame 'Shape' around 2 node(s)" in t, t)
+                t = text(await c('add_comment', {'text': 'self-test note', 'node_id': lv, **G}))
+                check('add_comment', 'attached comment', 'comment added on node' in t, t)
+                t = text(await c('describe_graph', G))
+                check('describe_graph', 'lists frames + comments', "frames: 'Shape'" in t and 'comments: 1' in t, t.splitlines()[1])
+                t = text(await c('describe_node', {'definition': 'bevel'}))
+                check('describe_node', 'library slider range', 'range -1.0..1.0' in t, '')
+
                 # --- editor + screenshots
                 t = text(await c('open_graph', {'graph': TEST_GRAPH, 'node_id': slope}))
                 check('open_graph', 'open + focus', 'focused node' in t, t)

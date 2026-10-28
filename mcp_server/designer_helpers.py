@@ -72,6 +72,12 @@ def describe_graph(identifier=None, node_ids=None, include_params=False, limit=4
         print('$outputsize (log2): %d x %d' % (size.x, size.y))
     except (Exception, APIException):
         pass
+    try:
+        frames, comments = graph_objects_summary(g)
+        if frames or comments:
+            print('frames: %s | comments: %d' % (', '.join(repr(f) for f in frames) or '-', comments))
+    except (Exception, APIException):
+        pass
     if node_ids:
         wanted = set(str(i) for i in node_ids)
         nodes = [n for n in nodes if n.getIdentifier() in wanted]
@@ -115,6 +121,42 @@ def _load_library(path):
     return _PM.loadUserPackage(path)
 
 
+def _slider_range(node, prop_id):
+    """'range a..b step c' from a library graph's input annotations ('' for atomic nodes,
+    whose ranges the API doesn't expose)."""
+    ref = node.getReferencedResource()
+    if ref is None or prop_id.startswith('$'):
+        return ''
+    try:
+        rprop = ref.getPropertyFromId(prop_id, SDPropertyCategory.Input)
+        if rprop is None:
+            return ''
+        values = {}
+        for key in ('min', 'max', 'step', 'clamp'):
+            v = ref.getPropertyAnnotationValueFromId(rprop, key)
+            values[key] = fmt(v) if v is not None else None
+    except (Exception, APIException):
+        return ''
+    if values['min'] is None and values['max'] is None:
+        return ''
+    text = 'range %s..%s' % (values['min'], values['max'])
+    if values['step'] not in (None, 0):
+        text += ' step %s' % (round(values['step'], 4) if isinstance(values['step'], float) else values['step'])
+    if values['clamp']:
+        text += ' (clamped)'
+    return text
+
+
+def _short_description(prop):
+    import re
+    try:
+        desc = prop.getDescription() or ''
+    except (Exception, APIException):
+        return ''
+    desc = re.sub(r'<[^>]+>', '', desc).strip()
+    return (desc[:157] + '...') if len(desc) > 160 else desc
+
+
 def describe_node(definition):
     """definition: atomic name ('levels' or 'sbs::compositing::levels') or library
     '<package file>[/<graph id>]' (e.g. 'tile_generator', 'hbao.sbs/hbao')."""
@@ -145,7 +187,13 @@ def describe_node(definition):
                 line += ' "%s"' % label
             if not prop.isConnectable():
                 line += ' default=%r' % (fmt(node.getPropertyValue(prop)),)
+                slider = _slider_range(node, prop.getId())
+                if slider:
+                    line += ' ' + slider
             print(line)
+            desc = _short_description(prop)
+            if desc:
+                print('      ' + desc)
             if isinstance(ptype, SDTypeEnum):
                 print('      enum: ' + ', '.join('%s=%s' % (e.getId(), fmt(e.getDefaultValue()))
                                                for e in ptype.getEnumerators()))
@@ -522,6 +570,23 @@ def _process_events(n=10):
         QtWidgets.QApplication.instance().processEvents()
 
 
+def _fit_graph_view():
+    """Trigger the graph view's own 'Fit in view (selection)' (F); with nothing selected it fits
+    the whole graph. Returns False if the action can't be found."""
+    from PySide6 import QtWidgets
+    mw = _APP.getQtForPythonUIMgr().getMainWindow()
+    dock = _visible_dock(mw, _PANEL_AREAS['graph'])
+    if dock is None:
+        return False
+    for bar in dock.findChildren(QtWidgets.QToolBar):
+        for action in bar.actions():
+            if action.text() == 'Fit in view (selection)':
+                action.trigger()
+                _process_events()
+                return True
+    return False
+
+
 def open_graph(identifier, node_id=None):
     """Open a graph in Designer's graph editor; optionally centre the view on a node."""
     g = find_graph(identifier)
@@ -529,6 +594,9 @@ def open_graph(identifier, node_id=None):
     ui.openResourceInEditor(g)
     _process_events()
     print('opened', g.getIdentifier())
+    if not node_id:
+        if _fit_graph_view():
+            print('fitted the whole graph in view')
     if node_id:
         node = _target(g, node_id)
         views = [ui.getGraphViewIDAt(i) for i in range(ui.getGraphViewIDCount())]
@@ -816,3 +884,144 @@ def sweep_param(identifier, node_id, param, values, out_dir, view_node=None, out
     finally:
         target.setPropertyValue(prop, original)
         print('restored %s.%s to %r' % (node_id or 'graph', param, original_text))
+
+
+# ---------------------------------------------------------------- snapshots
+def save_package_copy(identifier, path):
+    """Write a copy of the graph's package to `path` without changing the package's own file
+    path or saved state (saveCopyOfPackageAs)."""
+    g = find_graph(identifier)
+    pkg = g.getPackage()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    _PM.saveCopyOfPackageAs(pkg, path)
+    print('COPY=' + path)
+    print('PACKAGE=' + (pkg.getFilePath() or ''))
+    print('GRAPH=' + g.getIdentifier())
+
+
+# ---------------------------------------------------------------- layout, frames, comments
+_NODE_SIZE = 96.0   # graph-view size of a node; positions are node centres
+
+
+def _links(g, nodes):
+    """(upstream_id, downstream_id) pairs between the given nodes."""
+    ids = {n.getIdentifier() for n in nodes}
+    pairs = set()
+    for n in nodes:
+        for prop in n.getProperties(SDPropertyCategory.Input):
+            if not prop.isConnectable():
+                continue
+            for c in n.getPropertyConnections(prop):
+                other, _ = _other_end(c)
+                if other.getIdentifier() in ids:
+                    pairs.add((other.getIdentifier(), n.getIdentifier()))
+    return pairs
+
+
+def arrange_graph(identifier, node_ids=None, spacing=(200.0, 150.0)):
+    """Layered left-to-right layout by data flow. Only positions change, never connections.
+    With node_ids, only those nodes are arranged, starting at their current top-left corner."""
+    from sd.api.sdbasetypes import float2
+    g = find_graph(identifier)
+    nodes = list(g.getNodes())
+    if node_ids:
+        wanted = {str(i) for i in node_ids}
+        nodes = [n for n in nodes if n.getIdentifier() in wanted]
+    if not nodes:
+        raise RuntimeError('no nodes to arrange')
+    by_id = {n.getIdentifier(): n for n in nodes}
+    pairs = _links(g, nodes)
+    preds = {i: [a for a, b in pairs if b == i] for i in by_id}
+    succs = {i: [b for a, b in pairs if a == i] for i in by_id}
+    # layer = longest path from a source (iterative, cycle-safe)
+    layer = {i: 0 for i in by_id}
+    for _ in range(len(by_id)):
+        changed = False
+        for a, b in pairs:
+            if layer[b] < layer[a] + 1:
+                layer[b] = layer[a] + 1
+                changed = True
+        if not changed:
+            break
+    # outputs go to the last column
+    last = max(layer.values())
+    for i, n in by_id.items():
+        if n.getDefinition().getId() == 'sbs::compositing::output':
+            layer[i] = last
+    columns = {}
+    for i in sorted(by_id, key=lambda i: (by_id[i].getPosition().y, by_id[i].getPosition().x)):
+        columns.setdefault(layer[i], []).append(i)
+    # barycentre ordering to reduce crossings: a few sweeps in both directions
+    order = {i: k for col in columns.values() for k, i in enumerate(col)}
+    for sweep in range(4):
+        keys = sorted(columns) if sweep % 2 == 0 else sorted(columns, reverse=True)
+        for L in keys:
+            neigh = preds if sweep % 2 == 0 else succs
+            def bary(i):
+                ns = neigh[i]
+                return sum(order[j] for j in ns) / len(ns) if ns else order[i]
+            columns[L].sort(key=bary)
+            for k, i in enumerate(columns[L]):
+                order[i] = k
+    xs = [n.getPosition().x for n in nodes]
+    ys = [n.getPosition().y for n in nodes]
+    x0, y0 = min(xs), min(ys)
+    dx, dy = spacing
+    tallest = max(len(c) for c in columns.values())
+    for L, col in columns.items():
+        top = y0 + (tallest - len(col)) * dy / 2.0     # centre each column vertically
+        for k, i in enumerate(col):
+            by_id[i].setPosition(float2(x0 + L * dx, top + k * dy))
+    print('arranged %d node(s) into %d column(s), %d link(s); spacing %dx%d' % (
+        len(nodes), len(columns), len(pairs), dx, dy))
+
+
+def add_frame(identifier, node_ids, title, color=None, description=None, margin=40.0):
+    from sd.api.sdbasetypes import float2, ColorRGBA
+    from sd.api.sdgraphobjectframe import SDGraphObjectFrame
+    g = find_graph(identifier)
+    nodes = [_target(g, i) for i in node_ids]
+    if not nodes:
+        raise RuntimeError('add_frame needs at least one node')
+    half = _NODE_SIZE / 2.0
+    xs = [n.getPosition().x for n in nodes]
+    ys = [n.getPosition().y for n in nodes]
+    left, right = min(xs) - half - margin, max(xs) + half + margin
+    top, bottom = min(ys) - half - margin - 30.0, max(ys) + half + margin   # room for the title bar
+    frame = SDGraphObjectFrame.sNew(g)
+    frame.setTitle(title)
+    frame.setPosition(float2(left, top))
+    frame.setSize(float2(right - left, bottom - top))
+    if color:
+        c = list(color) + [1.0] * (4 - len(color))
+        frame.setColor(ColorRGBA(*map(float, c[:4])))
+    if description:
+        frame.setDescription(description)
+    print('frame %r around %d node(s) at (%d, %d) size %dx%d' % (
+        title, len(nodes), left, top, right - left, bottom - top))
+
+
+def add_comment(identifier, text, node_id=None, position=None):
+    from sd.api.sdbasetypes import float2
+    from sd.api.sdgraphobjectcomment import SDGraphObjectComment
+    g = find_graph(identifier)
+    if node_id:
+        comment = SDGraphObjectComment.sNewAsChild(_target(g, node_id))
+    else:
+        comment = SDGraphObjectComment.sNew(g)
+        if position:
+            comment.setPosition(float2(float(position[0]), float(position[1])))
+    comment.setDescription(text)
+    print('comment added' + (' on node %s' % node_id if node_id else ''))
+
+
+def graph_objects_summary(g):
+    from sd.api.sdgraphobjectframe import SDGraphObjectFrame
+    from sd.api.sdgraphobjectcomment import SDGraphObjectComment
+    frames, comments = [], 0
+    for obj in g.getGraphObjects():
+        if isinstance(obj, SDGraphObjectFrame):
+            frames.append(obj.getTitle())
+        elif isinstance(obj, SDGraphObjectComment):
+            comments += 1
+    return frames, comments
