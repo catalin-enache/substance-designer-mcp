@@ -480,6 +480,163 @@ def apply_edits(ops: list[dict], graph: str | None = None) -> str:
     return _edit('apply_edits(%r, %r)' % (graph, ops), 'Claude: apply %d edits' % len(ops))
 
 
+def _to_display(data, layout):
+    """Decoded pixels (0..1 floats) -> 8-bit RGB PIL image for previews."""
+    rgb = data[:, :, :3] if layout == 'RGBA' else np.repeat(data[:, :, :1], 3, axis=2)
+    return PILImage.fromarray((np.clip(rgb, 0, 1) * 255 + 0.5).astype(np.uint8), 'RGB')
+
+
+def _channel_summary(data, layout):
+    names = 'RGBA' if layout == 'RGBA' else 'L'
+    return '  '.join('%s %.3f..%.3f (mean %.3f)' % (n, data[:, :, i].min(), data[:, :, i].max(),
+                                                     data[:, :, i].mean()) for i, n in enumerate(names))
+
+
+@server.tool()
+def sweep_param(node_id: str, param: str, values: list, graph: str | None = None,
+                view_node: str | None = None, output: str | None = None, tile_size: int = 256) -> list:
+    """Try several values of one parameter and see them side by side: returns a labelled image
+    strip plus per-value channel ranges, then restores the original value. node_id='graph' with
+    param=<input id> sweeps an exposed graph input (then view_node is required). view_node: the
+    node to look at (default: the swept node), e.g. the final output while sweeping an early
+    node. Values use the same rules as set_params. Net effect on the graph: none."""
+    from PIL import ImageDraw
+    tmp_dir = tempfile.mkdtemp(prefix='sd_sweep_')
+    try:
+        text = _bridge(_with_undo(_helpers_call('sweep_param(%r, %r, %r, %r, %r, %r, %r)' % (
+            graph, node_id, param, values, tmp_dir, view_node, output)), 'Claude: sweep ' + param),
+            '<sweep_param>', 600)
+        metas = [json.loads(m) for m in re.findall(r'SWEEP=(\{.*\})', text)]
+        if not metas:
+            raise ToolError(text.strip().splitlines()[-1] if text.strip() else 'sweep produced nothing')
+        tiles, lines = [], ['%s.%s sweep (%s):' % (node_id, param, re.search(r'restored .*', text).group(0)
+                                                     if 'restored' in text else 'original NOT restored!')]
+        for meta in metas:
+            with open(os.path.join(tmp_dir, '%d.raw' % meta['index']), 'rb') as f:
+                data, layout = _decode_pixels(f.read(), meta)
+            lines.append('%s = %r: %s' % (param, meta['value'], _channel_summary(data, layout)))
+            im = _to_display(data, layout)
+            im.thumbnail((tile_size, tile_size))
+            label = '%s = %s' % (param, meta['value'])
+            tile = PILImage.new('RGB', (im.width, im.height + 18), (30, 30, 30))
+            tile.paste(im, (0, 18))
+            ImageDraw.Draw(tile).text((4, 3), label[:48], fill=(230, 230, 230))
+            tiles.append(tile)
+        if 'restored' not in text:
+            lines.append('WARNING: the original value may not have been restored:\n' + text[-1500:])
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    gap = 6
+    sheet = PILImage.new('RGB', (sum(t.width for t in tiles) + gap * (len(tiles) - 1),
+                                 max(t.height for t in tiles)), 'white')
+    x = 0
+    for t in tiles:
+        sheet.paste(t, (x, 0))
+        x += t.width + gap
+    buf = io.BytesIO()
+    sheet.save(buf, format='PNG')
+    return ['\n'.join(lines), Image(data=buf.getvalue(), format='png')]
+
+
+def _seam_report(data, axis_name, seam_axis):
+    """Compare the wrap-around seam with typical neighbour steps along one axis."""
+    a = np.moveaxis(data, seam_axis, 0)                 # axis 0 = direction across the seam
+    steps = np.abs(np.diff(a, axis=0))                  # all interior neighbour differences
+    seam = np.abs(a[0] - a[-1])                         # first vs last line (they meet when tiled)
+    interior_mean = float(steps.mean())
+    seam_mean = float(seam.mean())
+    ratio = seam_mean / interior_mean if interior_mean > 1e-9 else (0.0 if seam_mean < 1e-9 else float('inf'))
+    worst = float(seam.max())
+    per_pos = seam.max(axis=-1)                         # worst channel per position along the seam
+    worst_at = int(np.argmax(per_pos))
+    verdict = ('tiles seamlessly' if ratio <= 1.5 else 'probably fine' if ratio <= 3
+               else 'VISIBLE SEAM')
+    where = 'row' if axis_name == 'horizontal' else 'column'
+    return ('%s tiling (left/right edges): seam step %.4f vs typical %.4f (ratio %.2f), worst %.4f at %s %d: %s'
+            if axis_name == 'horizontal' else
+            '%s tiling (top/bottom edges): seam step %.4f vs typical %.4f (ratio %.2f), worst %.4f at %s %d: %s') % (
+        axis_name.capitalize(), seam_mean, interior_mean, ratio, worst, where, worst_at, verdict)
+
+
+@server.tool()
+def check_tiling(node_id: str, graph: str | None = None, output: str | None = None,
+                 axis: str = 'both') -> str:
+    """Measure whether a node's output tiles: compares the jump across the wrap-around seam
+    (left/right edges for 'horizontal', top/bottom for 'vertical') with the typical jump between
+    neighbouring pixels. Ratio ~1 = seamless; above ~3 a seam is likely visible. axis:
+    'horizontal', 'vertical' or 'both' (trim sheets usually only need horizontal)."""
+    if axis not in ('horizontal', 'vertical', 'both'):
+        raise ToolError("axis must be 'horizontal', 'vertical' or 'both'")
+    tmp_dir = tempfile.mkdtemp(prefix='sd_tile_')
+    raw_path = os.path.join(tmp_dir, 'pixels.raw')
+    try:
+        text = _bridge(_with_undo(_helpers_call('dump_node_pixels(%r, %r, %r, %r)' % (
+            node_id, raw_path, graph, output)), 'Claude: check tiling'), '<check_tiling>', 300)
+        found = re.search(r'PIXELS=(\{.*\})', text)
+        if not found or not os.path.exists(raw_path):
+            raise ToolError(text.strip().splitlines()[-1] if text.strip() else 'no pixel data')
+        meta = json.loads(found.group(1))
+        with open(raw_path, 'rb') as f:
+            data, _ = _decode_pixels(f.read(), meta)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    lines = ['%s: %dx%d %s' % (meta['node'], meta['width'], meta['height'], meta['format'])]
+    if axis in ('horizontal', 'both'):
+        lines.append(_seam_report(data, 'horizontal', 1))
+    if axis in ('vertical', 'both'):
+        lines.append(_seam_report(data, 'vertical', 0))
+    return '\n'.join(lines)
+
+
+def _designer_log_path():
+    if os.environ.get('SD_DESIGNER_LOG'):
+        return os.environ['SD_DESIGNER_LOG']
+    if sys.platform == 'darwin':
+        base = os.path.expanduser('~/Library/Application Support/Adobe/Adobe Substance 3D Designer')
+    elif sys.platform == 'win32':
+        base = os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Adobe', 'Adobe Substance 3D Designer')
+    else:
+        base = os.path.expanduser('~/.local/share/Adobe/Adobe Substance 3D Designer')
+    logs = []
+    for root, _dirs, files in os.walk(base):
+        if 'log.txt' in files:
+            logs.append(os.path.join(root, 'log.txt'))
+    return max(logs, key=os.path.getmtime) if logs else None
+
+
+@server.tool()
+def read_designer_log(lines: int = 60, contains: str | None = None, errors_only: bool = False,
+                      since_last_start: bool = True) -> str:
+    """Read the end of Designer's log, where every plugin/Python traceback lands. contains:
+    case-insensitive text to filter on (e.g. 'sd_bridge', 'Traceback'). errors_only: only
+    [ERROR]/[WARNING] lines. since_last_start: ignore lines from before Designer's last start.
+    Override the location with SD_DESIGNER_LOG."""
+    path = _designer_log_path()
+    if not path or not os.path.exists(path):
+        raise ToolError('Designer log not found; set SD_DESIGNER_LOG to its path')
+    with open(path, encoding='utf-8', errors='replace') as f:
+        content = f.read().splitlines()
+    if since_last_start:
+        content = content[_last_start(content):]
+    if errors_only:
+        content = [l for l in content if '[ERROR]' in l or '[WARNING]' in l]
+    if contains:
+        needle = contains.lower()
+        content = [l for l in content if needle in l.lower()]
+    tail = content[-lines:] if lines > 0 else content
+    header = '%s (%d matching line%s, showing %d)' % (path, len(content), '' if len(content) == 1 else 's', len(tail))
+    return header + '\n' + '\n'.join(tail)
+
+
+def _last_start(lines):
+    """Index of the most recent Designer start-up: Designer logs "Python SDK Version" exactly
+    once per start, just before plugins load. 0 if not found."""
+    for i in range(len(lines) - 1, -1, -1):
+        if 'Python SDK Version' in lines[i]:
+            return i
+    return 0
+
+
 DESIGNER_APP = {
     'darwin': '/Applications/Adobe Substance 3D Designer/Adobe Substance 3D Designer.app',
     'win32': r'C:\Program Files\Adobe\Adobe Substance 3D Designer\Adobe Substance 3D Designer.exe',

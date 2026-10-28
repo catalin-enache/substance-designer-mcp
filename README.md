@@ -25,13 +25,14 @@ node look wrong?", "expose the wear amount and render three variations", or "sho
 material in the 3D view". [examples/build_dwarf_trimsheet.py](examples/build_dwarf_trimsheet.py)
 is a full example: a 2048² stone + wood trim sheet built entirely through this bridge.
 
-## Tools (29)
+## Tools (32)
 
 | Area | Tools |
 |---|---|
-| Connection | `designer_status`, `launch_designer` (starts Designer and waits for it), `cancel_designer_job` |
+| Connection | `designer_status`, `launch_designer` (starts Designer and waits for it), `cancel_designer_job`, `read_designer_log` |
 | Finding nodes | `search_nodes` (built-in nodes and Designer's whole library), `describe_node` (parameters, types, dropdown values) |
-| Inspecting | `describe_graph`, `list_graph_inputs`, `preview_node` (image of any node), `node_stats` (exact pixel numbers) |
+| Inspecting | `describe_graph`, `list_graph_inputs`, `preview_node` (image of any node), `node_stats` (exact pixel numbers), `check_tiling` (does it tile seamlessly?) |
+| Tuning | `sweep_param` (try several values of a parameter side by side; the original value is restored) |
 | Viewing | `screenshot_designer` (window, graph, 2D view, 3D view, panels; only Designer is captured, never other apps), `open_graph` (open a graph, centred on a node) |
 | Editing | `add_node`, `set_params`, `connect`, `disconnect`, `move_nodes`, `delete_nodes`, `apply_edits` (many edits at once), `create_graph`, `set_graph_size` |
 | Controls | `expose_param`, `remove_graph_input` (turn node parameters into graph inputs) |
@@ -113,6 +114,7 @@ after a Designer update.
 |---|---|---|
 | `SD_DESIGNER_BIN_DIR` | macOS: `/Applications/Adobe Substance 3D Designer/Adobe Substance 3D Designer.app/Contents/MacOS`; Windows: `C:\Program Files\Adobe\Adobe Substance 3D Designer` | finding `sbscooker` / `sbsrender` |
 | `SD_DESIGNER_APP` | macOS: `/Applications/Adobe Substance 3D Designer/Adobe Substance 3D Designer.app`; Windows: `C:\Program Files\Adobe\Adobe Substance 3D Designer\Adobe Substance 3D Designer.exe` | `launch_designer` |
+| `SD_DESIGNER_LOG` | newest `log.txt` in Designer's settings folder (see Troubleshooting) | `read_designer_log` |
 | `SD_BRIDGE_PORT` | `9877` | plugin, MCP server and CLI client (set the same value for all three) |
 
 Pass them when registering: `claude mcp add --scope user -e SD_DESIGNER_BIN_DIR="D:\Adobe\Designer" substance-designer -- ...`
@@ -159,7 +161,7 @@ Then delete the `sd_bridge` folder from the plugin directory, `~/.sd_bridge_toke
 | MCP shows `Failed to connect` | Run `<venv python> mcp_server/server.py` by hand to see the error (usually Python too old or the venv missing). |
 | New tools don't show up in Claude Code | Reconnect `substance-designer` in `/mcp`, or restart Claude Code. |
 
-Designer log (every plugin traceback ends up here):
+Designer log (every plugin traceback ends up here; Claude can read it with `read_designer_log`):
 - macOS: `~/Library/Application Support/Adobe/Adobe Substance 3D Designer/<version>/log.txt`
 - Windows: under `%LOCALAPPDATA%\Adobe\Adobe Substance 3D Designer\` (version subfolder).
   The same messages appear in Designer's Console window.

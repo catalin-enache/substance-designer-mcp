@@ -36,7 +36,11 @@ Parameters are in each tool's description; this is when to reach for which.
   `screenshot_designer` (what the user sees: window, graph, 2D, 3D, panels), `open_graph`
   (open a graph and centre on a node first, so the user and screenshots see it).
 - **Measure:** `node_stats` (exact min/max/mean/std, regions, sampled pixels). Prefer numbers
-  over eyeballing.
+  over eyeballing. `check_tiling` measures the wrap-around seam per axis (ratio ≈ 1 seamless,
+  > 3 visible); trim sheets only need horizontal.
+- **Tune a value:** `sweep_param` instead of edit-rebuild-look loops: several values of one
+  parameter (or of an exposed graph input) side by side with numbers, original restored
+  afterwards. Use `view_node` to watch the final output while sweeping an early node.
 - **Edit:** one-off `add_node` / `set_params` / `connect` / `disconnect` / `move_nodes` /
   `delete_nodes`; several changes at once with `apply_edits` (one call, one undo step, refs for new
   nodes); new graph with `create_graph`; controls with `expose_param` / `remove_graph_input`;
@@ -48,8 +52,9 @@ Parameters are in each tool's description; this is when to reach for which.
   params, size override, formats); `preview_maps` to look at rendered files.
 
 **Loop:** search/describe → build (script or `apply_edits`) → `describe_graph` + `preview_node`
-on intermediate nodes → `node_stats` to check the numbers → render/export → `preview_maps` → fix
-→ repeat. Look at the result before telling the user something works.
+on intermediate nodes → `sweep_param` to pick values → `node_stats` / `check_tiling` to check the
+numbers → render/export → `preview_maps` → fix → repeat. Look at the result before telling the
+user something works.
 
 **Self-test:** `mcp_server/venv/bin/python tests/test_all_tools.py` exercises every tool over MCP
 on a temporary graph (exit 0 = all passed). Run it after changing the server, plugin or helpers.
@@ -82,10 +87,10 @@ substance-designer-mcp/
   and need a **Designer restart** by the user (never hot-reload; see below).
 - The bridge token file (README.md, Security) gives code execution in Designer: **never print,
   log or send its contents anywhere.**
-- Environment variables `SD_DESIGNER_BIN_DIR`, `SD_DESIGNER_APP`, `SD_BRIDGE_PORT`: see README.md,
+- Environment variables `SD_DESIGNER_BIN_DIR`, `SD_DESIGNER_APP`, `SD_DESIGNER_LOG`, `SD_BRIDGE_PORT`: see README.md,
   Configuration. A port change must be made for the plugin and the server alike.
 - **When tools fail:** match the symptom in README.md, Troubleshooting. As an agent, first try
-  `launch_designer`, then read the Designer log. If the bridge accepts connections but never
+  `launch_designer`, then `read_designer_log`. If the bridge accepts connections but never
   answers, or a tool is missing in Claude Code, only the user can fix it (restart Designer /
   reconnect `/mcp`), so tell them.
 - The repository is public on GitHub. Commit and push only when the user asks.
@@ -117,8 +122,13 @@ substance-designer-mcp/
   In scripts: `pkgMgr.loadUserPackage(path)` (check `getPackages()` first to reuse an open one),
   `pkg.findResourceFromUrl('<graph id>')`, `graph.newInstanceNode(resource)`.
   Use `search_nodes` / `describe_node` to find names and ids instead of parsing XML.
-- Python tracebacks from plugins land in the Designer log (location: README.md, Troubleshooting).
-  Read it when the bridge misbehaves or a plugin change doesn't seem to load.
+- Python tracebacks from plugins land in the Designer log: use `read_designer_log` (filters:
+  `contains`, `errors_only`; by default only since the last start, detected by the
+  "Python SDK Version" line Designer logs once per start). Read it when the bridge misbehaves or
+  a plugin change doesn't seem to load.
+- Harmless log noise: creating an exposed input logs "No output node defined" and "Some Get
+  nodes don't have a variable name" for the moment between creating the function node and
+  naming it. The exposure still works.
 
 ## sd API gotchas
 

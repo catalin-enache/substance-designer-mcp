@@ -771,3 +771,48 @@ def apply_edits(identifier, ops):
             raise RuntimeError('op %d (%s) failed: %s. Ops 0-%d were applied; Ctrl+Z on this graph '
                                'reverts the whole batch.' % (i, kind, e, i - 1))
     print('applied %d op(s); refs: %s' % (len(ops), refs))
+
+
+# ---------------------------------------------------------------- parameter sweep
+def sweep_param(identifier, node_id, param, values, out_dir, view_node=None, output=None):
+    """Set `param` on `node_id` (or graph input when node_id == 'graph') to each value, dump the
+    raw pixels of `view_node` (default: the same node) per value, then restore the original."""
+    import ctypes
+    import json
+    g = find_graph(identifier)
+    target = _target(g, node_id)
+    prop = target.getPropertyFromId(param, SDPropertyCategory.Input)
+    if prop is None or prop.isConnectable():
+        raise RuntimeError('%r is not a parameter of %s; see describe_node / list_graph_inputs'
+                           % (param, node_id))
+    if node_id not in (None, '', 'graph'):
+        try:
+            driven = target.getPropertyGraph(prop)
+        except (Exception, APIException):
+            driven = None
+        if driven is not None:
+            raise RuntimeError('%s.%s is driven by a graph input or function; sweep the graph input '
+                               'instead (node_id="graph", param=<input id>, see list_graph_inputs)'
+                               % (node_id, param))
+    view = _target(g, view_node or node_id) if (view_node or node_id not in (None, '', 'graph')) else None
+    if view is None:
+        raise RuntimeError('sweeping a graph input needs view_node (the node to look at)')
+    original = target.getPropertyValue(prop)
+    original_text = fmt(original)
+    try:
+        for i, value in enumerate(values):
+            target.setPropertyValue(prop, _make_value(prop, value))
+
+            def use(texture, out_prop, i=i, value=value):
+                size = texture.getSize()
+                pitch = texture.getRowPitch()
+                with open(os.path.join(out_dir, '%d.raw' % i), 'wb') as f:
+                    f.write(ctypes.string_at(texture.getPixelBufferAddress(), pitch * size.y))
+                print('SWEEP=' + json.dumps({'index': i, 'value': fmt(target.getPropertyValue(prop)),
+                                             'width': size.x, 'height': size.y, 'pitch': pitch,
+                                             'bpp': texture.getBytesPerPixel(),
+                                             'format': str(texture.getPixelFormat()).split('.')[-1]}))
+            _with_node_texture(g, view, output, use)
+    finally:
+        target.setPropertyValue(prop, original)
+        print('restored %s.%s to %r' % (node_id or 'graph', param, original_text))

@@ -179,6 +179,29 @@ async def run(scratch):
                 check('node_stats', 'exact known colour', 'R=0.2000, G=0.4000, B=0.6000, A=0.8000' in t, t.splitlines()[-1])
                 await c('delete_nodes', {'node_ids': [uni], **G})
 
+                # --- parameter sweep, tiling, log
+                before = text(await c('describe_graph', {'node_ids': [clouds], 'include_params': True, **G}))
+                r_ = await c('sweep_param', {'node_id': clouds, 'param': 'scale', 'values': [1, 4, 16],
+                                             'view_node': slope, 'tile_size': 128, **G})
+                sweep_text = text(r_)
+                images = [x for x in r_.content if x.type == 'image']
+                after = text(await c('describe_graph', {'node_ids': [clouds], 'include_params': True, **G}))
+                check('sweep_param', '3 values + image', len(images) == 1 and sweep_text.count('scale = ') == 3, sweep_text.splitlines()[0])
+                check('sweep_param', 'original restored', 'restored' in sweep_text and before == after, '')
+                r_ = await c('sweep_param', {'node_id': lv, 'param': 'nope', 'values': [1], **G})
+                check('sweep_param', 'error on bad param', r_.is_error and 'not a parameter' in text(r_), text(r_))
+                t = text(await c('check_tiling', {'node_id': clouds, **G}))
+                check('check_tiling', 'tileable noise passes both axes', t.count('tiles seamlessly') == 2, t)
+                grad = added_id(text(await c('add_node', {'definition': 'gradient_linear_1', **G})))
+                t = text(await c('check_tiling', {'node_id': grad, 'axis': 'vertical', **G}))
+                check('check_tiling', 'vertical gradient has a seam', 'VISIBLE SEAM' in t, t.splitlines()[-1])
+                await c('delete_nodes', {'node_ids': [grad], **G})
+                t = text(await c('read_designer_log', {'contains': 'sd_bridge', 'lines': 5}))
+                check('read_designer_log', 'finds bridge start', 'listening on' in t, t.splitlines()[0])
+                t = text(await c('read_designer_log', {'errors_only': True, 'lines': 3}))
+                check('read_designer_log', 'errors_only filter', 'matching line' in t and all(
+                    ('[ERROR]' in l or '[WARNING]' in l) for l in t.splitlines()[1:]), t.splitlines()[0])
+
                 # --- batch edits
                 t = text(await c('apply_edits', {'ops': [
                     {'op': 'add', 'definition': 'uniform', 'ref': 'u', 'position': [-300, 300],
@@ -214,6 +237,10 @@ async def run(scratch):
                 t = text(await c('list_graph_inputs', G))
                 check('list_graph_inputs', 'inputs + users', "floor (float4)" in t and "label='Floor'" in t
                       and '%s.leveloutlow' % lv in t and 'Samples' in t, t)
+                r_ = await c('sweep_param', {'node_id': 'graph', 'param': 'floor', 'values': [[0.1] * 4, [0.9] * 4],
+                                             'view_node': lv, 'tile_size': 96, **G})
+                means = [float(m) for m in re.findall(r'L [0-9.]+\.\.[0-9.]+ \(mean ([0-9.]+)\)', text(r_))]
+                check('sweep_param', 'graph input changes output', len(means) == 2 and means[1] > means[0] + 0.3, text(r_))
                 t = text(await c('remove_graph_input', {'input_id': 'Samples', **G}))
                 check('remove_graph_input', 'unbinds + keeps value', 'kept value 16' in t and 'removed graph input' in t, t)
 
