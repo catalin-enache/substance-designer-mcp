@@ -54,6 +54,13 @@ def added_id(t):
     return re.search(r'added (\d+)', t).group(1)
 
 
+def _mean_png(path):
+    from PIL import Image
+    import numpy as np
+    a = np.array(Image.open(path)).astype(float)
+    return float(a.mean() / (65535.0 if a.max() > 255 else 255.0))
+
+
 def clipboard_fingerprint():
     """Hash of the clipboard (never printed). None where we can't read it (non-macOS)."""
     if sys.platform != 'darwin':
@@ -164,6 +171,52 @@ async def run(scratch):
                 t = text(await c('delete_nodes', {'node_ids': [tmp], **G}))
                 check('delete_nodes', 'one node', 'deleted %s blur' % tmp in t, t)
 
+                # --- pixel statistics
+                t = text(await c('node_stats', {'node_id': lv, 'points': [[0, 0]], 'region': [0, 0, 64, 64], **G}))
+                check('node_stats', 'stats + region + point', 'min' in t and 'pixel (0,0)' in t and 'region' in t, t.splitlines()[0])
+                uni = added_id(text(await c('add_node', {'definition': 'uniform', 'params': {'outputcolor': [0.2, 0.4, 0.6, 0.8]}, **G})))
+                t = text(await c('node_stats', {'node_id': uni, 'points': [[1, 1]], **G}))
+                check('node_stats', 'exact known colour', 'R=0.2000, G=0.4000, B=0.6000, A=0.8000' in t, t.splitlines()[-1])
+                await c('delete_nodes', {'node_ids': [uni], **G})
+
+                # --- batch edits
+                t = text(await c('apply_edits', {'ops': [
+                    {'op': 'add', 'definition': 'uniform', 'ref': 'u', 'position': [-300, 300],
+                     'params': {'colorswitch': False, 'outputcolor': [0.5, 0.5, 0.5, 1]}},
+                    {'op': 'add', 'definition': 'blend', 'ref': 'b', 'params': {'blendingmode': 'multiply'}},
+                    {'op': 'connect', 'from': 'u', 'to': 'b', 'input': 'source'},
+                    {'op': 'connect', 'from': slope, 'to': 'b', 'input': 'destination'},
+                    {'op': 'move', 'node': 'b', 'position': [0, 300]},
+                    {'op': 'set', 'node': 'b', 'params': {'opacitymult': 0.5}},
+                ], **G}))
+                check('apply_edits', '6 ops with refs', 'applied 6 op(s)' in t, t.splitlines()[-1])
+                batch_blend = re.search(r"'b': '(\d+)'", t).group(1)
+                r_ = await c('apply_edits', {'ops': [
+                    {'op': 'add', 'definition': 'levels', 'ref': 'x'},
+                    {'op': 'connect', 'from': 'x', 'to': batch_blend, 'input': 'nope'},
+                ], **G})
+                check('apply_edits', 'stops at failing op', r_.is_error and 'op 1 (connect) failed' in text(r_), text(r_))
+                t = text(await c('describe_graph', G))
+                x_ids = [l.split()[0] for l in t.splitlines() if ' levels ' in l and l.split()[0] != lv]
+                await c('delete_nodes', {'node_ids': x_ids + [batch_blend] + [l.split()[0] for l in t.splitlines()
+                                         if ' uniform ' in l], **G})
+
+                # --- exposed inputs and graph size
+                t = text(await c('set_graph_size', {'size_log2': 9, 'overridable': True, **G}))
+                check('set_graph_size', 'overridable 512', 'overridable, default 512 px' in t, t)
+                t = text(await c('expose_param', {'node_id': lv, 'param': 'leveloutlow', 'input_id': 'floor',
+                                                  'label': 'Floor', 'default': [0.25] * 4, 'min': 0, 'max': 1, **G}))
+                check('expose_param', 'float4 with range', "graph input 'floor'" in t, t)
+                t = text(await c('expose_param', {'node_id': slope, 'param': 'Samples', **G}))
+                check('expose_param', 'int, defaults to current value', "'Samples'" in t and 'default 16' in t, t)
+                r_ = await c('expose_param', {'node_id': lv, 'param': 'leveloutlow', 'input_id': 'floor', **G})
+                check('expose_param', 'error on duplicate input', r_.is_error and 'already has an input' in text(r_), text(r_))
+                t = text(await c('list_graph_inputs', G))
+                check('list_graph_inputs', 'inputs + users', "floor (float4)" in t and "label='Floor'" in t
+                      and '%s.leveloutlow' % lv in t and 'Samples' in t, t)
+                t = text(await c('remove_graph_input', {'input_id': 'Samples', **G}))
+                check('remove_graph_input', 'unbinds + keeps value', 'kept value 16' in t and 'removed graph input' in t, t)
+
                 # --- editor + screenshots
                 t = text(await c('open_graph', {'graph': TEST_GRAPH, 'node_id': slope}))
                 check('open_graph', 'open + focus', 'focused node' in t, t)
@@ -181,6 +234,11 @@ async def run(scratch):
                     skip('screenshot_designer', '3d', 'no 3D View visible in Designer')
                 else:
                     same = before is None or clipboard_fingerprint() == before
+                    if not same:
+                        # the user may have copied something meanwhile: measure again around a second capture
+                        before = clipboard_fingerprint()
+                        r_ = await c('screenshot_designer', {'panel': '3d', 'max_size': 700})
+                        same = clipboard_fingerprint() == before
                     check('screenshot_designer', '3d' + (' + clipboard kept' if before else ''), is_image(r_) and same,
                           '' if is_image(r_) else text(r_))
                 r_ = await c('screenshot_designer', {'panel': 'foo'})
@@ -199,6 +257,18 @@ async def run(scratch):
                 render_dir = os.path.join(scratch, 'render')
                 t = text(await c('render_sbs', {'sbs_path': sbs, 'output_dir': render_dir, 'outputs': ['height']}))
                 check('render_sbs', 'png', 'height.png  512x512' in t, t)
+                t = text(await c('sbsar_info', {'sbs_path': sbs}))
+                check('sbsar_info', 'exposed input + size', 'INPUT floor FLOAT4' in t and 'INPUT $outputsize' in t, '')
+                means = []
+                for v in (0.1, 0.9):
+                    d = os.path.join(scratch, 'floor_%s' % v)
+                    t = text(await c('render_sbs', {'sbs_path': sbs, 'output_dir': d, 'size_log2': 7,
+                                                    'params': {'floor': [v] * 4}}))
+                    means.append(t)
+                check('render_sbs', 'size override 128', 'height.png  128x128' in means[0], means[0])
+                check('render_sbs', 'exposed param changes output',
+                      _mean_png(os.path.join(scratch, 'floor_0.1', 'height.png')) + 0.3
+                      < _mean_png(os.path.join(scratch, 'floor_0.9', 'height.png')), '')
                 t = text(await c('render_sbs', {'sbs_path': sbs, 'output_dir': render_dir, 'output_format': 'exr',
                                                 'params': {'nope': 1}}))
                 check('render_sbs', 'exr + unexposed warning', 'height.exr' in t and "input 'nope' is not exposed" in t, t)

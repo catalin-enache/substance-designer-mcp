@@ -375,6 +375,111 @@ def search_nodes(query: str, limit: int = 30, include_hidden: bool = False) -> s
     return '\n'.join(out[:limit]) + more
 
 
+_PIXEL_TYPES = {'8': (np.uint8, 255.0), '16': (np.uint16, 65535.0), '16F': (np.float16, 1.0), '32F': (np.float32, 1.0)}
+
+
+def _decode_pixels(raw, meta):
+    """Raw Designer pixel buffer -> float array (H, W, C), values normalised to 0..1 for ints."""
+    fmt_name = meta['format']                       # e.g. RGBA16, LUM8, RGBA32F
+    channels = 4 if fmt_name.startswith('RGBA') else 1
+    depth = fmt_name[4:] if channels == 4 else fmt_name[3:]
+    if depth not in _PIXEL_TYPES:
+        raise ToolError('unsupported pixel format %s' % fmt_name)
+    dtype, scale = _PIXEL_TYPES[depth]
+    rows = np.frombuffer(raw, dtype=np.uint8).reshape(meta['height'], meta['pitch'])
+    rows = rows[:, :meta['width'] * meta['bpp']].copy()
+    data = rows.view(dtype).reshape(meta['height'], meta['width'], channels).astype(np.float64)
+    return data / scale, ('RGBA' if channels == 4 else 'L')
+
+
+@server.tool()
+def node_stats(node_id: str, graph: str | None = None, output: str | None = None,
+               region: list[int] | None = None, points: list[list[int]] | None = None) -> str:
+    """Exact pixel statistics of any node's output (computed in Designer, read from the raw
+    buffer, so 16-bit/float precision is kept). Per channel: min, max, mean, std.
+    region: [x0, y0, x1, y1] in pixels to restrict the stats. points: [[x, y], ...] pixel
+    values to sample. Values are 0..1 for integer formats. Use it to verify results numerically."""
+    tmp_dir = tempfile.mkdtemp(prefix='sd_px_')
+    raw_path = os.path.join(tmp_dir, 'pixels.raw')
+    try:
+        text = _bridge(_with_undo(_helpers_call('dump_node_pixels(%r, %r, %r, %r)' % (
+            node_id, raw_path, graph, output)), 'Claude: node stats'), '<node_stats>', 300)
+        found = re.search(r'PIXELS=(\{.*\})', text)
+        if not found or not os.path.exists(raw_path):
+            raise ToolError(text.strip().splitlines()[-1] if text.strip() else 'no pixel data')
+        meta = json.loads(found.group(1))
+        with open(raw_path, 'rb') as f:
+            data, layout = _decode_pixels(f.read(), meta)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    h, w, _ = data.shape
+    lines = ['%s: %dx%d %s' % (meta['node'], w, h, meta['format'])]
+    area = data
+    if region:
+        x0, y0, x1, y1 = region
+        area = data[max(0, y0):min(h, y1), max(0, x0):min(w, x1)]
+        lines.append('region [%d,%d,%d,%d] (%dx%d px)' % (x0, y0, x1, y1, area.shape[1], area.shape[0]))
+    names = 'RGBA' if layout == 'RGBA' else 'L'
+    for ch, name in enumerate(names):
+        a = area[:, :, ch]
+        lines.append('%s: min %.4f  max %.4f  mean %.4f  std %.4f' % (name, a.min(), a.max(), a.mean(), a.std()))
+    for x, y in points or []:
+        if 0 <= x < w and 0 <= y < h:
+            lines.append('pixel (%d,%d): %s' % (x, y, ', '.join('%s=%.4f' % (n, v) for n, v in zip(names, data[y, x]))))
+        else:
+            lines.append('pixel (%d,%d): outside the %dx%d image' % (x, y, w, h))
+    return '\n'.join(lines)
+
+
+@server.tool()
+def expose_param(node_id: str, param: str, graph: str | None = None, input_id: str | None = None,
+                 label: str | None = None, default: float | int | bool | str | list[float] | None = None,
+                 min: float | None = None, max: float | None = None, step: float | None = None,
+                 group: str | None = None) -> str:
+    """Expose a node parameter as a graph input (same type as the parameter; enums become ints),
+    like Designer's own "Expose" action. The input starts at the parameter's current value
+    unless `default` is given; min/max/step/group set the slider. The input then shows up in
+    sbsar_info and can be set with render_sbs(params=...). One undo step."""
+    return _edit('expose_param(%r, %r, %r, %r, %r, %r, %r, %r, %r, %r)' % (
+        graph, node_id, param, input_id, label, default, min, max, step, group), 'Claude: expose ' + param)
+
+
+@server.tool()
+def list_graph_inputs(graph: str | None = None) -> str:
+    """List a graph's exposed inputs (type, value, label/min/max, which node parameters they
+    drive) and whether its output size is fixed or overridable."""
+    return _checked(_bridge(_helpers_call('list_graph_inputs(%r)' % graph), timeout=60))
+
+
+@server.tool()
+def remove_graph_input(input_id: str, graph: str | None = None) -> str:
+    """Delete an exposed graph input. Parameters it drove keep its current value. One undo step."""
+    return _edit('remove_graph_input(%r, %r)' % (graph, input_id), 'Claude: remove input ' + input_id)
+
+
+@server.tool()
+def set_graph_size(size_log2: int, graph: str | None = None, overridable: bool = True) -> str:
+    """Set the graph's output size to 2^size_log2. overridable=True (default) makes the size
+    follow the parent with that default, so render_sbs(size_log2=...) can override it;
+    False fixes it. One undo step."""
+    return _edit('set_graph_size(%r, %d, %r)' % (graph, size_log2, overridable), 'Claude: set graph size')
+
+
+@server.tool()
+def apply_edits(ops: list[dict], graph: str | None = None) -> str:
+    """Run several edits in one call and one undo step. Each op is a dict:
+    {"op": "add", "definition": "levels", "ref": "lv", "position"?: [x, y], "params"?: {...}}
+    {"op": "set", "node": "lv", "params": {...}}            (node: a ref, a node id, or "graph")
+    {"op": "connect", "from": "a", "to": "lv", "input": "input1", "output"?: "..."}
+    {"op": "disconnect", "node": "lv", "input": "input1"}
+    {"op": "move", "node": "lv", "position": [x, y]}
+    {"op": "delete", "node": "lv"}
+    {"op": "expose", "node": "lv", "param": "...", "input_id"?, "label"?, "default"?, "min"?, "max"?}
+    Refs let later ops use nodes added earlier in the batch. Stops at the first failing op
+    (earlier ops stay applied; Ctrl+Z on the graph reverts the whole batch)."""
+    return _edit('apply_edits(%r, %r)' % (graph, ops), 'Claude: apply %d edits' % len(ops))
+
+
 DESIGNER_APP = {
     'darwin': '/Applications/Adobe Substance 3D Designer/Adobe Substance 3D Designer.app',
     'win32': r'C:\Program Files\Adobe\Adobe Substance 3D Designer\Adobe Substance 3D Designer.exe',
@@ -449,10 +554,18 @@ def render_sbs(sbs_path: str, output_dir: str, size_log2: int | None = None, gra
     for name in outputs or []:
         cmd += ['--input-graph-output', name]
     values = dict(params or {})
-    if size_log2:
-        values['$outputsize'] = [size_log2, size_log2]
     # sbsrender silently ignores values for inputs the graph doesn't expose, so warn up front
     exposed = _exposed_inputs(sbsar)
+    notes = []
+    if size_log2:
+        values['$outputsize'] = [size_log2, size_log2]
+    elif '$outputsize' in exposed and '$outputsize' not in values:
+        # An overridable graph renders at sbsrender's own 256 px default unless told otherwise;
+        # use the graph's default parent size from the .sbs so the result matches Designer
+        default = _default_parent_log2(sbs_path, graph)
+        if default:
+            values['$outputsize'] = [default, default]
+            notes.append('size: using the graph\'s default parent size, %d px (from the .sbs)' % 2 ** default)
     warnings = ['WARNING: input %r is not exposed by this .sbsar, so the value is ignored%s'
                 % (key, ' (graph output size is fixed; expose $outputsize or make it relative '
                         'to parent to allow size overrides)' if key == '$outputsize' else '')
@@ -469,7 +582,29 @@ def render_sbs(sbs_path: str, output_dir: str, size_log2: int | None = None, gra
         raise ToolError('sbsrender produced no files (check graph/output names with sbsar_info).\n'
                         + render.stdout[-2000:])
     lines = ['%s  %s' % (f, _image_size(os.path.join(output_dir, f))) for f in files]
-    return '\n'.join(warnings + ['Rendered %d file(s) to %s:' % (len(files), output_dir)] + lines)
+    return '\n'.join(warnings + notes + ['Rendered %d file(s) to %s:' % (len(files), output_dir)] + lines)
+
+
+def _default_parent_log2(sbs_path, graph=None):
+    """The graph's defaultParentSize option ("9x9" = 512 px) from a .sbs, or None."""
+    path = os.path.abspath(os.path.expanduser(sbs_path))
+    if not path.endswith('.sbs') or not os.path.exists(path):
+        return None
+    try:
+        root = ET.parse(path).getroot()
+    except ET.ParseError:
+        return None
+    wanted = graph.split('://')[-1] if graph else None
+    for g in root.iter('graph'):
+        ident = g.find('identifier')
+        if wanted and (ident is None or ident.get('v') != wanted):
+            continue
+        for option in g.iter('option'):
+            name = option.find('name')
+            if name is not None and name.get('v') == 'defaultParentSize':
+                width = option.find('value').get('v').split('x')[0]
+                return int(width) if width.isdigit() else None
+    return None
 
 
 def _exposed_inputs(sbsar):

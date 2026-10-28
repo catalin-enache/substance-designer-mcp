@@ -153,11 +153,10 @@ def describe_node(definition):
         _PM.unloadUserPackage(tmp)
 
 
-def save_node_output(node_id, out_path, identifier=None, output=None):
-    g = find_graph(identifier)
-    node = g.getNodeFromId(str(node_id))
-    if node is None:
-        raise RuntimeError('node %s not found in graph %s' % (node_id, g.getIdentifier()))
+def _with_node_texture(g, node, output, use):
+    """Compute the graph and call use(texture, output_property) for one node output. Designer
+    only computes nodes that feed an output node, so a temporary output node is attached when
+    needed and removed afterwards."""
     outs = list(node.getProperties(SDPropertyCategory.Output))
     if output:
         outs = [p for p in outs if p.getId() == output]
@@ -170,21 +169,48 @@ def save_node_output(node_id, out_path, identifier=None, output=None):
     temp_output = None
     try:
         if texture is None:
-            # Designer only computes nodes that feed an output node: attach a temporary one
             temp_output = g.newNode('sbs::compositing::output')
             node.newPropertyConnectionFromId(outs[0].getId(), temp_output, 'inputNodeOutput')
             g.compute()
             value = node.getPropertyValue(outs[0])
             texture = value.get() if value is not None else None
         if texture is None:
-            raise RuntimeError('node %s produced no texture (are its inputs connected?)' % node_id)
-        texture.save(out_path)
+            raise RuntimeError('node %s produced no texture (are its inputs connected?)' % node.getIdentifier())
+        return use(texture, outs[0])
     finally:
         if temp_output is not None:
             g.deleteNode(temp_output)
-    size = texture.getSize()
-    print('%s %s.%s %dx%d %s' % (node_id, node_kind(node), outs[0].getId(), size.x, size.y,
-                                 texture.getPixelFormat()))
+
+
+def save_node_output(node_id, out_path, identifier=None, output=None):
+    g = find_graph(identifier)
+    node = _target(g, node_id)
+
+    def use(texture, prop):
+        texture.save(out_path)
+        size = texture.getSize()
+        print('%s %s.%s %dx%d %s' % (node_id, node_kind(node), prop.getId(), size.x, size.y,
+                                     texture.getPixelFormat()))
+    _with_node_texture(g, node, output, use)
+
+
+def dump_node_pixels(node_id, out_path, identifier=None, output=None):
+    """Write the node's raw pixel buffer to out_path and print its layout as JSON (for node_stats)."""
+    import ctypes
+    import json
+    g = find_graph(identifier)
+    node = _target(g, node_id)
+
+    def use(texture, prop):
+        size = texture.getSize()
+        pitch = texture.getRowPitch()
+        with open(out_path, 'wb') as f:
+            f.write(ctypes.string_at(texture.getPixelBufferAddress(), pitch * size.y))
+        print('PIXELS=' + json.dumps({'width': size.x, 'height': size.y, 'pitch': pitch,
+                                      'bpp': texture.getBytesPerPixel(),
+                                      'format': str(texture.getPixelFormat()).split('.')[-1],
+                                      'node': '%s %s.%s' % (node_id, node_kind(node), prop.getId())}))
+    _with_node_texture(g, node, output, use)
 
 
 # ---------------------------------------------------------------- screenshots
@@ -452,6 +478,7 @@ def add_node(graph_id, definition, position=None, params=None):
     print('outputs:', [p.getId() for p in node.getProperties(SDPropertyCategory.Output)])
     if params:
         set_params(graph_id, node.getIdentifier(), params)
+    return node.getIdentifier()
 
 
 def connect(graph_id, from_node, to_node, to_input, from_output=None):
@@ -557,3 +584,190 @@ def list_atomic():
     finally:
         if tmp is not None:
             _PM.unloadUserPackage(tmp)
+
+
+# ---------------------------------------------------------------- graph inputs (exposed params)
+_GETTERS = {'float': 'get_float1', 'float2': 'get_float2', 'float3': 'get_float3', 'float4': 'get_float4',
+            'ColorRGBA': 'get_float4', 'int': 'get_integer1', 'int2': 'get_integer2',
+            'int3': 'get_integer3', 'int4': 'get_integer4', 'bool': 'get_bool', 'string': 'get_string'}
+
+
+def _graph_inputs(g):
+    return [p for p in g.getProperties(SDPropertyCategory.Input) if not p.getId().startswith('$')]
+
+
+def _set_annotation(g, prop, key, value):
+    from sd.api.sdvaluebool import SDValueBool
+    from sd.api.sdvaluefloat import SDValueFloat
+    from sd.api.sdvaluestring import SDValueString
+    if isinstance(value, bool):
+        v = SDValueBool.sNew(value)
+    elif isinstance(value, (int, float)):
+        v = SDValueFloat.sNew(float(value))
+    else:
+        v = SDValueString.sNew(str(value))
+    g.setPropertyAnnotationValueFromId(prop, key, v)
+
+
+def expose_param(identifier, node_id, param, input_id=None, label=None, default=None,
+                 minimum=None, maximum=None, step=None, group=None):
+    """Create a graph input with the parameter's own type and drive the parameter from it."""
+    from sd.api.sdtypeint import SDTypeInt
+    from sd.api.sdvaluestring import SDValueString
+    g = find_graph(identifier)
+    node = _target(g, node_id)
+    prop = node.getPropertyFromId(param, SDPropertyCategory.Input)
+    if prop is None or prop.isConnectable():
+        raise RuntimeError('%r is not a parameter of node %s; see describe_node' % (param, node_id))
+    ptype = prop.getType()
+    is_enum = isinstance(ptype, SDTypeEnum)
+    type_id = 'int' if is_enum else ptype.getId()
+    getter = _GETTERS.get(type_id)
+    if getter is None:
+        raise RuntimeError('parameters of type %s cannot be exposed by this tool' % type_id)
+    input_id = input_id or param
+    if g.getPropertyFromId(input_id, SDPropertyCategory.Input) is not None:
+        raise RuntimeError('graph already has an input %r; pick another input_id' % input_id)
+    current = node.getPropertyValue(prop)
+    inp = g.newProperty(input_id, SDTypeInt.sNew() if is_enum else ptype, SDPropertyCategory.Input)
+    if is_enum:
+        from sd.api.sdvalueint import SDValueInt
+        g.setPropertyValue(inp, SDValueInt.sNew(int(current.get())))
+    else:
+        g.setPropertyValue(inp, current)          # start from the node's current value
+    if default is not None:
+        g.setPropertyValue(inp, _make_value(inp, default))
+    _set_annotation(g, inp, 'label', label or input_id.replace('_', ' ').capitalize())
+    for key, value in (('min', minimum), ('max', maximum), ('step', step), ('group', group)):
+        if value is not None:
+            _set_annotation(g, inp, key, value)
+    fg = node.getPropertyGraph(prop) or node.newPropertyGraph(prop, 'SDSBSFunctionGraph')
+    for n in list(fg.getNodes()):
+        fg.deleteNode(n)
+    get = fg.newNode('sbs::function::' + getter)
+    get.setInputPropertyValueFromId('__constant__', SDValueString.sNew(input_id))
+    fg.setOutputNode(get, True)
+    print('exposed %s.%s as graph input %r (%s, default %r)' % (
+        node_id, param, input_id, type_id, fmt(g.getPropertyValue(inp))))
+
+
+def _input_users(g):
+    """input id -> ['node.param', ...] for parameters driven by a get_* function."""
+    users = {}
+    for node in g.getNodes():
+        for prop in node.getProperties(SDPropertyCategory.Input):
+            if prop.isConnectable():
+                continue
+            try:
+                fg = node.getPropertyGraph(prop)
+            except (Exception, APIException):
+                fg = None
+            if fg is None:
+                continue
+            for fnode in fg.getNodes():
+                if '::get_' in fnode.getDefinition().getId():
+                    name = fmt(fnode.getInputPropertyValueFromId('__constant__'))
+                    users.setdefault(name, []).append('%s.%s' % (node.getIdentifier(), prop.getId()))
+    return users
+
+
+def list_graph_inputs(identifier=None):
+    g = find_graph(identifier)
+    size_prop = g.getPropertyFromId('$outputsize', SDPropertyCategory.Input)
+    method = g.getPropertyInheritanceMethod(size_prop)
+    if method == method.__class__.RelativeToParent:
+        print('size: overridable, default %d px' % g.getDefaultParentSize().x)
+    else:
+        print('size: fixed, log2 %s' % (fmt(g.getPropertyValue(size_prop)),))
+    users = _input_users(g)
+    inputs = _graph_inputs(g)
+    if not inputs:
+        print('no exposed inputs')
+    for inp in inputs:
+        notes = []
+        for key in ('label', 'min', 'max', 'step', 'group'):
+            try:
+                v = fmt(g.getPropertyAnnotationValueFromId(inp, key))
+            except (Exception, APIException):
+                v = None
+            if v not in (None, ''):
+                notes.append('%s=%r' % (key, v))
+        print('%s (%s) = %r  %s  drives: %s' % (inp.getId(), inp.getType().getId(),
+              fmt(g.getPropertyValue(inp)), ' '.join(notes), ', '.join(users.get(inp.getId(), [])) or '-'))
+
+
+def remove_graph_input(identifier, input_id):
+    """Delete a graph input; parameters it drove keep their current value as a constant."""
+    g = find_graph(identifier)
+    inp = g.getPropertyFromId(input_id, SDPropertyCategory.Input)
+    if inp is None or input_id.startswith('$'):
+        raise RuntimeError('graph has no exposed input %r' % input_id)
+    value = g.getPropertyValue(inp)
+    for ref in _input_users(g).get(input_id, []):
+        nid, pid = ref.split('.', 1)
+        node = g.getNodeFromId(nid)
+        prop = node.getPropertyFromId(pid, SDPropertyCategory.Input)
+        node.deletePropertyGraph(prop)
+        try:
+            node.setPropertyValue(prop, value)
+        except (Exception, APIException):
+            pass
+        print('unbound %s (kept value %r)' % (ref, fmt(node.getPropertyValue(prop))))
+    g.deleteProperty(inp)
+    print('removed graph input', input_id)
+
+
+def set_graph_size(identifier, size_log2, overridable=True):
+    """overridable: size follows the parent (render_sbs size_log2 / $outputsize can change it),
+    with 2^size_log2 as default. Otherwise the size is fixed."""
+    from sd.api.sdbasetypes import int2
+    from sd.api.sdproperty import SDPropertyInheritanceMethod
+    from sd.api.sdvalueint2 import SDValueInt2
+    g = find_graph(identifier)
+    prop = g.getPropertyFromId('$outputsize', SDPropertyCategory.Input)
+    if overridable:
+        g.setPropertyInheritanceMethod(prop, SDPropertyInheritanceMethod.RelativeToParent)
+        g.setDefaultParentSize(int2(2 ** size_log2, 2 ** size_log2))
+        g.setPropertyValue(prop, SDValueInt2.sNew(int2(0, 0)))
+        print('size: overridable, default %d px' % g.getDefaultParentSize().x)
+    else:
+        g.setPropertyInheritanceMethod(prop, SDPropertyInheritanceMethod.Absolute)
+        g.setPropertyValue(prop, SDValueInt2.sNew(int2(size_log2, size_log2)))
+        print('size: fixed %d px' % 2 ** size_log2)
+
+
+# ---------------------------------------------------------------- batch edits
+def apply_edits(identifier, ops):
+    """Run a list of edit operations in order. 'ref' names a node added earlier in the batch;
+    node fields accept a ref, a node id, or 'graph'. Stops at the first failing op."""
+    g = find_graph(identifier)
+    gid = g.getIdentifier()
+    refs = {}
+    node = lambda value: refs.get(value, value)
+    for i, op in enumerate(ops):
+        kind = op.get('op')
+        try:
+            if kind == 'add':
+                new_id = add_node(gid, op['definition'], op.get('position'), op.get('params'))
+                if op.get('ref'):
+                    refs[op['ref']] = new_id
+                    print('  ref %r = %s' % (op['ref'], new_id))
+            elif kind == 'set':
+                set_params(gid, node(op['node']), op['params'])
+            elif kind == 'connect':
+                connect(gid, node(op['from']), node(op['to']), op['input'], op.get('output'))
+            elif kind == 'disconnect':
+                disconnect(gid, node(op['node']), op['input'])
+            elif kind == 'move':
+                move_nodes(gid, {node(op['node']): op['position']})
+            elif kind == 'delete':
+                delete_nodes(gid, [node(op['node'])])
+            elif kind == 'expose':
+                expose_param(gid, node(op['node']), op['param'], op.get('input_id'), op.get('label'),
+                             op.get('default'), op.get('min'), op.get('max'), op.get('step'), op.get('group'))
+            else:
+                raise RuntimeError('unknown op %r (add, set, connect, disconnect, move, delete, expose)' % kind)
+        except (Exception, APIException) as e:
+            raise RuntimeError('op %d (%s) failed: %s. Ops 0-%d were applied; Ctrl+Z on this graph '
+                               'reverts the whole batch.' % (i, kind, e, i - 1))
+    print('applied %d op(s); refs: %s' % (len(ops), refs))
