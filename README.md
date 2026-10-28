@@ -25,7 +25,7 @@ node look wrong?", "expose the wear amount and render three variations", or "sho
 material in the 3D view". [examples/build_dwarf_trimsheet.py](examples/build_dwarf_trimsheet.py)
 is a full example: a 2048² stone + wood trim sheet built entirely through this bridge.
 
-## Tools (38)
+## Tools (39)
 
 | Area | Tools |
 |---|---|
@@ -34,7 +34,7 @@ is a full example: a 2048² stone + wood trim sheet built entirely through this 
 | Inspecting | `describe_graph`, `list_graph_inputs`, `preview_node` (image of any node), `node_stats` (exact pixel numbers), `check_tiling` (does it tile seamlessly?) |
 | Tuning | `sweep_param` (try several values of a parameter side by side; the original value is restored) |
 | Safety | `snapshot_graph`, `list_snapshots`, `diff_graph` (what changed vs the saved file or a snapshot) |
-| Readability | `arrange_graph` (tidy layout by data flow), `add_frame`, `add_comment` |
+| Readability | `arrange_graph` (tidy layout by data flow), `add_frame`, `add_comment`, `set_link_display` (show wires as portals to hide clutter; saves and reloads the package after a snapshot) |
 | Viewing | `screenshot_designer` (window, graph, 2D view, 3D view, panels; only Designer is captured, never other apps), `open_graph` (open a graph, centred on a node) |
 | Editing | `add_node`, `set_params`, `connect`, `disconnect`, `move_nodes`, `delete_nodes`, `apply_edits` (many edits at once), `create_graph`, `set_graph_size` |
 | Controls | `expose_param`, `remove_graph_input` (turn node parameters into graph inputs) |

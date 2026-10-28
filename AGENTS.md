@@ -30,6 +30,8 @@ Parameters are in each tool's description; this is when to reach for which.
 - **Find and understand nodes:** `search_nodes` (name/label/category/description across the 29 atomic
   nodes and the **whole** library; returns the exact `definition`), then `describe_node` for
   connector ids, parameter types and **enum values**. Never guess ids or enum numbers.
+  `describe_node` also shows library slider ranges (`range a..b step c`) and every parameter's
+  description, so pick values inside the range.
 - **Inspect a graph:** `describe_graph` (ids, links as `input<-srcId.output`, non-default params,
   frames/comments), `list_graph_inputs` (exposed inputs and what they drive).
 - **Safety net:** `snapshot_graph` before risky or large changes to a user's graph (a full .sbs
@@ -52,8 +54,15 @@ Parameters are in each tool's description; this is when to reach for which.
   size with `set_graph_size`.
 - **Make graphs readable** (do this for every graph you build or restructure): `arrange_graph`
   (columns by data flow, positions only), then `add_frame` per logical section and `add_comment`
-  for non-obvious choices. `describe_node` shows library slider ranges (`range a..b step c`) and
-  every parameter's description, so pick values inside the range.
+  for non-obvious choices.
+  - **Use portals when the wires get too cluttered.** Check with `screenshot_designer('graph')`
+    after `open_graph`. Signs of clutter: one output fanning out to many nodes, wires crossing
+    sections or the whole graph, or a bundle of lines you can't follow. Then run
+    `set_link_display(mode='portal')`, typically `fanout_at_least=4` plus `longer_than=1000`,
+    take another screenshot, and keep short local wires visible so each section still reads.
+    On the trim sheet this hid 85 of 253 wires (58 from one shared gradient) with identical
+    output. Portals are a display change only, but the tool saves and reloads the package, so
+    tell the user.
 - **Bigger logic:** `run_designer_script` (script on disk, preferred for anything long) or
   `execute_designer_code`. Both time out (`timeout_s`); `cancel_designer_job` aborts.
 - **Output:** `save_package`; `export_outputs` (straight from Designer, live unsaved state,
@@ -190,6 +199,14 @@ substance-designer-mcp/
   `prop.getDescription()`.
 - Fit the graph view: the graph dock's toolbar action "Fit in view (selection)" (shortcut F)
   fits everything when nothing is selected (`open_graph` without a node does this).
+- **Portals** are a per-connection display flag, `<displayType v="1"/>` inside the
+  `<connection>` element in the .sbs (no flag = normal wire). Any connection can be a portal; Dot
+  nodes (`passthrough`) are just optional reroute points. The sd API can't read or set it, so
+  `set_link_display` uses the **file-level edit pattern**: snapshot, save the package, edit the
+  .sbs XML, reload the package, reopen the graph in a separate call (reopening in the same call as
+  the reload can leave the graph panel empty). Reloading resets that package's undo history.
+  Use the same pattern for other things the API can't do, always with a snapshot and a
+  `diff_graph` plus `node_stats` check that the output is unchanged.
 - `pkgMgr.saveCopyOfPackageAs(pkg, path)` writes a copy without changing the package's path or
   saved state (what snapshots use); `savePackageAs` does change them.
 - UI: current graph via `getQtForPythonUIMgr().getCurrentGraph()`; editor control via
@@ -250,4 +267,5 @@ substance-designer-mcp/
 wood trim sheet (11 horizontal strips, tileable in U), outputting baseColor, normal (OpenGL),
 roughness, metallic, height and AO. A good template for band and tile helpers, type-safe
 parameter setting, and rebuild-safe package handling. (Its size is fixed; call
-`set_graph_size(overridable=True)` afterwards if you need size overrides.)
+`set_graph_size(overridable=True)` afterwards if you need size overrides. Re-running it builds a
+fresh graph, so portals, frames and layout changes made afterwards are lost; reapply them.)

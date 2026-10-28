@@ -310,6 +310,12 @@ async def run(scratch):
                 check('save_package', 'save as', os.path.exists(sbs), t)
                 t = text(await c('save_package', {'graph_or_path': TEST_GRAPH}))
                 check('save_package', 'save in place', 'saved' in t, t)
+                t = text(await c('set_link_display', {'mode': 'portal', 'from_nodes': [clouds], **G}))
+                check('set_link_display', 'portals from a node', 'changed to portal' in t and 'reloaded' in t, t.split(';')[0])
+                t = text(await c('diff_graph', {'against': 'latest', **G}))
+                check('set_link_display', 'diff shows display only', 'shown as portal' in t and '0 added, 0 removed' in t, t.splitlines()[0])
+                t = text(await c('set_link_display', {'mode': 'wire', 'from_nodes': [clouds], **G}))
+                check('set_link_display', 'back to wires', 'changed to wire' in t, t.split(';')[0])
                 t = text(await c('export_outputs', {'graph': TEST_GRAPH, 'output_dir': os.path.join(scratch, 'export')}))
                 check('export_outputs', 'from Designer', 'height.png  512x512' in t, t)
                 t = text(await c('sbsar_info', {'sbs_path': sbs}))
@@ -346,6 +352,8 @@ async def run(scratch):
                 check('run_designer_script', '__file__ + sd', 'script file True' in t, t)
             finally:
                 print('\ncleanup:', text(await c('execute_designer_code', {'code': CLEAN})).strip())
+                shutil.rmtree(os.path.join(os.environ.get('SD_SNAPSHOT_DIR') or os.path.join(
+                    os.path.expanduser('~'), '.sd_mcp', 'snapshots'), TEST_GRAPH), ignore_errors=True)
                 if user_graph and user_graph != TEST_GRAPH:
                     await c('open_graph', {'graph': user_graph})
                     print('reopened your graph:', user_graph)

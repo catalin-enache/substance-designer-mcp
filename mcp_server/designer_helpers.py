@@ -1025,3 +1025,34 @@ def graph_objects_summary(g):
         elif isinstance(obj, SDGraphObjectComment):
             comments += 1
     return frames, comments
+
+
+# ---------------------------------------------------------------- reload (for file-level edits)
+def package_file_of(identifier):
+    """Save the graph's package in place and report its file (for edits the API can't make)."""
+    g = find_graph(identifier)
+    pkg = g.getPackage()
+    path = pkg.getFilePath()
+    if not path:
+        raise RuntimeError('the package has never been saved; save it with save_package(save_as=...) first')
+    _PM.savePackage(pkg)
+    current = _APP.getQtForPythonUIMgr().getCurrentGraph()
+    print('FILE=' + path)
+    print('GRAPH=' + g.getIdentifier())
+    print('OPEN=' + ('1' if current is not None and current.getIdentifier() == g.getIdentifier() else '0'))
+
+
+def reload_package(path, graph_to_open=None):
+    """Close every open copy of the package at `path` and load it again from disk."""
+    norm = os.path.normpath(path)
+    for p in list(_PM.getUserPackages()):
+        if os.path.normpath(p.getFilePath() or '') == norm:
+            _PM.unloadUserPackage(p)
+    pkg = _PM.loadUserPackage(path)
+    print('reloaded', path)
+    if graph_to_open:
+        g = pkg.findResourceFromUrl(graph_to_open)
+        if g is not None:
+            _APP.getUIMgr().openResourceInEditor(g)
+            _process_events()
+            _fit_graph_view()

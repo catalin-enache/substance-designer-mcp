@@ -721,12 +721,15 @@ def _graph_model(sbs_path, graph_id):
         # atomic and library (instance) nodes store parameters the same way
         params = {prm.find('name').get('v'): value_of(prm)
                   for prm in (impl.iter('parameter') if impl is not None else [])}
-        links = set()
+        links, display = set(), {}
         conns = n.find('connections')
         for c in (conns if conns is not None else []):
-            links.add((c.find('identifier').get('v'), c.find('connRef').get('v')))
+            key = (c.find('identifier').get('v'), c.find('connRef').get('v'))
+            links.add(key)
+            dt = c.find('displayType')
+            display[key] = 'portal' if dt is not None and dt.get('v') == '1' else 'wire'
         pos = n.find('GUILayout/gpos')
-        nodes[uid] = {'kind': kind, 'params': params, 'links': links,
+        nodes[uid] = {'kind': kind, 'params': params, 'links': links, 'display': display,
                       'pos': pos.get('v') if pos is not None else ''}
     inputs = {}
     for pi in g.iter('paraminput'):
@@ -763,6 +766,10 @@ def _diff_models(old, new, show_positions):
             out.append('~ node %s %s: link %s <- %s added' % (i, b['kind'], port, src))
         for port, src in sorted(a['links'] - b['links']):
             out.append('~ node %s %s: link %s <- %s removed' % (i, b['kind'], port, src))
+        for key in sorted(a['links'] & b['links']):
+            if a['display'].get(key) != b['display'].get(key):
+                out.append('~ node %s %s: link %s <- %s shown as %s (was %s)' % (
+                    i, b['kind'], key[0], key[1], b['display'].get(key), a['display'].get(key)))
         if a['pos'] != b['pos']:
             moved += 1
             if show_positions:
@@ -779,7 +786,7 @@ def _diff_models(old, new, show_positions):
         if old['size'].get(name) != new['size'].get(name):
             out.append('~ graph %s: %s -> %s' % (name, old['size'].get(name), new['size'].get(name)))
     summary = '%d added, %d removed, %d changed line(s), %d node(s) moved' % (
-        len(added), len(removed), len([l for l in out if l.startswith('~') and 'moved' not in l]), moved)
+        len(added), len(removed), len([l for l in out if l.startswith('~') and ': moved ' not in l]), moved)
     return summary, out
 
 
@@ -846,6 +853,79 @@ def add_comment(text: str, graph: str | None = None, node_id: str | None = None,
     """Add a comment to a graph: attached to node_id, or free-standing at position [x, y].
     One undo step."""
     return _edit('add_comment(%r, %r, %r, %r)' % (graph, text, node_id, position), 'Claude: add comment')
+
+
+_DISPLAY = {'portal': '1', 'wire': None}
+
+
+@server.tool()
+def set_link_display(graph: str | None = None, mode: str = 'portal', from_nodes: list[str] | None = None,
+                     fanout_at_least: int | None = None, longer_than: float | None = None,
+                     links: list[list[str]] | None = None) -> str:
+    """Show connections as portals (hidden wires with a symbol at each end) or as normal wires, to
+    reduce wire clutter. Pick links by any of: from_nodes (all outgoing links of these nodes),
+    fanout_at_least (all links from outputs that feed at least N inputs), longer_than (links
+    longer than this distance in graph units; nodes are ~96 wide), links ([[to_node, input], ...]).
+    mode: 'portal' or 'wire'. Designer's API can't do this, so the tool takes a snapshot, saves the
+    package, edits the .sbs and reloads it (the package's undo history is reset; the graph is
+    reopened). The package must have been saved to a file once."""
+    if mode not in _DISPLAY:
+        raise ToolError("mode must be 'portal' or 'wire'")
+    if not (from_nodes or fanout_at_least or longer_than or links):
+        raise ToolError('choose links with from_nodes, fanout_at_least, longer_than or links')
+    text = _bridge(_helpers_call('package_file_of(%r)' % graph), timeout=120)
+    info = dict(re.findall(r'^(FILE|GRAPH|OPEN)=(.*)$', text, re.M))
+    if 'FILE' not in info:
+        raise ToolError(text.strip().splitlines()[-1] if text.strip() else 'could not save the package')
+    path, gid = info['FILE'], info['GRAPH']
+    snap = snapshot_graph(gid, 'before ' + mode + 's')
+    tree = ET.parse(path)
+    g = next(x for x in tree.getroot().iter('graph') if x.find('identifier') is not None
+             and x.find('identifier').get('v') == gid)
+    nodes = {n.find('uid').get('v'): n for n in g.find('compNodes')}
+    def pos(uid):
+        gp = nodes[uid].find('GUILayout/gpos') if uid in nodes else None
+        return [float(v) for v in gp.get('v').split()[:2]] if gp is not None else None
+    conns = []                                   # (downstream uid, connection element, source uid, source output)
+    for uid, n in nodes.items():
+        for c in n.iter('connection'):
+            out = c.find('connRefOutput')
+            conns.append((uid, c, c.find('connRef').get('v'), out.get('v') if out is not None else ''))
+    fanout = {}
+    for _, _, src, out in conns:
+        fanout[(src, out)] = fanout.get((src, out), 0) + 1
+    wanted_links = {(str(a), str(b)) for a, b in (links or [])}
+    chosen = []
+    for down, c, src, out in conns:
+        port = c.find('identifier').get('v')
+        pick = (from_nodes and src in {str(x) for x in from_nodes}) \
+            or (fanout_at_least and fanout[(src, out)] >= fanout_at_least) \
+            or ((down, port) in wanted_links)
+        if not pick and longer_than:
+            a, b = pos(src), pos(down)
+            pick = a is not None and b is not None and ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5 > longer_than
+        if pick:
+            chosen.append((down, c, src, port))
+    changed = 0
+    for down, c, src, port in chosen:
+        dt = c.find('displayType')
+        if _DISPLAY[mode] is None:
+            if dt is not None:
+                c.remove(dt)
+                changed += 1
+        else:
+            if dt is None:
+                dt = ET.SubElement(c, 'displayType')
+            if dt.get('v') != _DISPLAY[mode]:
+                dt.set('v', _DISPLAY[mode])
+                changed += 1
+    if changed:
+        tree.write(path, encoding='UTF-8', xml_declaration=True)
+    _checked(_bridge(_helpers_call('reload_package(%r, %r)' % (path, None)), timeout=180))
+    if info.get('OPEN') == '1':
+        open_graph(gid)   # reopen in a separate call so the editor has settled after the reload
+    return ('%d of %d selected link(s) changed to %s in %s (of %d links in the graph); package saved and '
+            'reloaded. %s' % (changed, len(chosen), mode, gid, len(conns), snap))
 
 
 DESIGNER_APP = {
