@@ -24,3 +24,7 @@ python3 install.py                              # copies the plugin, creates the
 # restart Designer, then:
 mcp_server/venv/bin/python tests/test_all_tools.py   # end-to-end self-test
 ```
+
+## License
+
+MIT, see [LICENSE](LICENSE). Not affiliated with or endorsed by Adobe; Substance 3D Designer is a trademark of Adobe.
