@@ -1,0 +1,8 @@
+{
+  "metadata_format_version": "1",
+  "name": "SD Bridge (local script runner)",
+  "version": "0.1.0",
+  "author": "catalinenache",
+  "min_designer_version": "14.1.0",
+  "platform": "any"
+}

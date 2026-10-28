@@ -1,0 +1,7 @@
+# Python environment created by install.py
+mcp_server/venv/
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
