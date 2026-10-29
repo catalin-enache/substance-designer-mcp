@@ -1,8 +1,7 @@
 """
 Installer for the Substance Designer bridge plugin + MCP server (macOS and Windows).
 
-    python install.py                 # copy plugin, create venv, register with Claude Code
-    python install.py --no-register   # skip `claude mcp add`
+    python install.py                 # copy plugin, create venv (registration: see the README)
     python install.py --plugins-dir PATH   # custom Designer user-plugin folder
 
 Run it with a Python 3.10+ interpreter. Re-running is safe (it updates in place).
@@ -60,7 +59,6 @@ def remove_old_plugin(plugins_dir):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--plugins-dir', default=default_plugins_dir())
-    ap.add_argument('--no-register', action='store_true')
     args = ap.parse_args()
 
     if sys.version_info < (3, 10):
@@ -84,23 +82,12 @@ def main():
                            os.path.join(HERE, 'mcp_server', 'requirements.txt')])
     print('[2/3] MCP server environment ready:', venv)
 
-    # 3. Register with Claude Code
+    # 3. Registration: never global. This repo's .mcp.json registers the server for this folder
+    # (Claude Code asks once to approve it); other folders opt in one by one.
     server = os.path.join(HERE, 'mcp_server', 'server.py')
-    # the path `which` found: on Windows that may be npm's claude.cmd, which CreateProcess
-    # won't find from a bare 'claude'
-    claude = shutil.which('claude')
-    cmd = [claude or 'claude', 'mcp', 'add', '--scope', 'user', SERVER_NAME, '--', py, server]
-    if args.no_register or not claude:
-        print('[3/3] Register manually with:\n     ', subprocess.list2cmdline(cmd))
-    elif subprocess.call([claude, 'mcp', 'get', SERVER_NAME],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0:
-        # re-adding would drop environment variables set with -e at registration
-        print('[3/3] MCP server "%s" is already registered; left as it is. To re-register:\n'
-              '      claude mcp remove %s -s user, then re-run this installer' % (SERVER_NAME, SERVER_NAME))
-    else:
-        subprocess.check_call(cmd)
-        print('[3/3] Registered MCP server "%s" (user scope)' % SERVER_NAME)
-
+    print('[3/3] Not registered globally. In this folder, .mcp.json registers it: start `claude` here and\n'
+          '      approve "substance-designer" when asked. To use it in another folder, run there:\n'
+          '      %s' % subprocess.list2cmdline(['claude', 'mcp', 'add', '--scope', 'local', SERVER_NAME, '--', py, server]))
     print('\nDone. Restart Substance Designer so it loads the plugin, then restart Claude Code.')
 
 

@@ -174,7 +174,9 @@ Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `-c COD
   The API can't read or set the flag, so `set_link_display` uses the **file-level edit
   pattern**: snapshot the live graph and copy the saved file, decide on the copy (no change → no
   save), save, edit the .sbs XML, reload the package, reopen the graph in a separate call
-  (reopening in the reload's call can leave the graph panel empty). Use the same pattern for
+  (reopening in the reload's call can leave the graph panel empty; once, in about ten self-test
+  runs, Designer crashed as the graph view reopened after a reload, so warn the user and save
+  their work first). Use the same pattern for
   other things the API can't do, with a `diff_graph` plus `node_stats` check afterwards.
 
 ## Designer UI (Qt)
@@ -301,6 +303,11 @@ new ideas there.
   takes it from its own folder. To rename: change `PLUGIN` there, rename both `plugin/<name>`
   folders, update README.md/AGENTS.md, and add the old name to `install.py`'s clean-up of old
   copies. `tests/unit/test_constants.py` fails on anything missed.
+- **Registration is per folder, never global** (README.md, "Where the tools are available"):
+  this repo's committed `.mcp.json`, or `claude mcp add --scope local` in another folder. The
+  installer never registers. `.mcp.json` must not contain `${`: Claude Code expands those itself
+  (it once rewrote a shell default away), so its `sh -c` command uses plain `$VARS`
+  (`tests/unit/test_mcp_json.py`).
 - **The bridge protocol** (plugin docstring): the plugin sends a nonce, the client answers with
   HMAC(token, nonce), so the token never crosses the socket. `server.py`, `client/sd_run.py`
   and the self-test's `raw_request` all speak it; change them together with the plugin.

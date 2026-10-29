@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "substance-designer": {
+      "type": "stdio",
+      "command": "sh",
+      "args": ["-c", "d=$CLAUDE_PROJECT_DIR; [ -n \"$d\" ] || d=$(git rev-parse --show-toplevel 2>/dev/null || pwd); cd \"$d\" && exec mcp_server/venv/bin/python mcp_server/server.py"]
+    }
+  }
+}

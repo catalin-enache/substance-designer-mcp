@@ -31,7 +31,7 @@ def _run(module, monkeypatch, *args):
 def test_copies_the_plugin(install, monkeypatch, tmp_path, capsys):
     module, calls = install
     monkeypatch.setattr(module.shutil, 'which', lambda name: None)
-    _run(module, monkeypatch, '--plugins-dir', str(tmp_path), '--no-register')
+    _run(module, monkeypatch, '--plugins-dir', str(tmp_path))
     src = PLUGIN_DIR
     cmp = filecmp.dircmp(src, str(tmp_path / PLUGIN), ignore=['__pycache__'])
     assert not (cmp.left_only or cmp.diff_files)
@@ -39,8 +39,6 @@ def test_copies_the_plugin(install, monkeypatch, tmp_path, capsys):
     assert not (tmp_path / PLUGIN / PLUGIN / '__pycache__').exists()
     # requirements installed into the project venv; nothing registered
     assert any('-r' in c and c[-1].endswith(os.path.join('mcp_server', 'requirements.txt')) for c in calls)
-    assert not any(c[0] == 'claude' for c in calls)
-    assert 'Register manually with' in capsys.readouterr().out
 
 
 def test_rerun_updates_in_place(install, monkeypatch, tmp_path):
@@ -49,35 +47,19 @@ def test_rerun_updates_in_place(install, monkeypatch, tmp_path):
     stale = tmp_path / PLUGIN / PLUGIN / '__init__.py'
     stale.parent.mkdir(parents=True)
     stale.write_text('old')
-    _run(module, monkeypatch, '--plugins-dir', str(tmp_path), '--no-register')
+    _run(module, monkeypatch, '--plugins-dir', str(tmp_path))
     with open(os.path.join(PLUGIN_PACKAGE_DIR, '__init__.py')) as f:
         assert stale.read_text() == f.read()
 
 
-CLAUDE = r'C:\Users\me\AppData\Roaming\npm\claude.cmd' if sys.platform == 'win32' else '/usr/local/bin/claude'
-
-
-def test_registers_with_the_claude_that_which_found(install, monkeypatch, tmp_path):
+def test_never_registers_globally(install, monkeypatch, tmp_path, capsys):
+    # registration is per folder: this repo's .mcp.json, or `claude mcp add --scope local` elsewhere
     module, calls = install
-    monkeypatch.setattr(module.shutil, 'which', lambda name: CLAUDE)
-    monkeypatch.setattr(module.subprocess, 'call', lambda cmd, **kw: calls.append(cmd) or 1)   # not registered yet
+    monkeypatch.setattr(module.shutil, 'which', lambda name: '/usr/local/bin/claude')
     _run(module, monkeypatch, '--plugins-dir', str(tmp_path))
-    add = next(c for c in calls if c[1:3] == ['mcp', 'add'])
-    assert add[0] == CLAUDE                                  # the full path, so a .cmd shim works on Windows
-    assert add[3:6] == ['--scope', 'user', 'substance-designer']
-    assert add[-1] == os.path.join(ROOT, 'mcp_server', 'server.py')
-    assert not any(c[1:3] == ['mcp', 'remove'] for c in calls)
-
-
-def test_rerun_keeps_an_existing_registration(install, monkeypatch, tmp_path, capsys):
-    # removing and re-adding would drop environment variables set with -e
-    module, calls = install
-    monkeypatch.setattr(module.shutil, 'which', lambda name: CLAUDE)
-    monkeypatch.setattr(module.subprocess, 'call', lambda cmd, **kw: calls.append(cmd) or 0)   # already registered
-    _run(module, monkeypatch, '--plugins-dir', str(tmp_path))
-    assert [CLAUDE, 'mcp', 'get', 'substance-designer'] in calls
-    assert not any(c[1:3] in (['mcp', 'add'], ['mcp', 'remove']) for c in calls)
-    assert 'already registered' in capsys.readouterr().out
+    assert not any('claude' in os.path.basename(str(c[0])) for c in calls)
+    out = capsys.readouterr().out
+    assert 'Not registered globally' in out and '.mcp.json' in out and '--scope local' in out
 
 
 def _old_plugin(root, name):
@@ -94,7 +76,7 @@ def test_removes_this_projects_old_plugin_and_token(install, monkeypatch, tmp_pa
     token.write_text('x' * 64)
     monkeypatch.setattr(module, 'OLD_TOKEN', str(token))
     old = _old_plugin(tmp_path, 'SD Bridge (local script runner)')
-    _run(module, monkeypatch, '--plugins-dir', str(tmp_path), '--no-register')
+    _run(module, monkeypatch, '--plugins-dir', str(tmp_path))
     assert not old.exists() and not token.exists()
     assert (tmp_path / PLUGIN / PLUGIN / '__init__.py').exists()
 
@@ -106,5 +88,5 @@ def test_leaves_someone_elses_sd_bridge_alone(install, monkeypatch, tmp_path):
     token.write_text('x' * 64)
     monkeypatch.setattr(module, 'OLD_TOKEN', str(token))
     other = _old_plugin(tmp_path, 'Some other bridge')
-    _run(module, monkeypatch, '--plugins-dir', str(tmp_path), '--no-register')
+    _run(module, monkeypatch, '--plugins-dir', str(tmp_path))
     assert other.exists() and token.exists()

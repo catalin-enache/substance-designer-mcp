@@ -102,7 +102,7 @@ changes to your graphs, Claude can take a snapshot and afterwards show you exact
 
 - Substance 3D Designer 16 (tested on 16.0.7; 14.1 or newer should work, untested)
 - Python **3.10+** (only for the MCP server; the plugin uses Designer's own Python)
-- Claude Code (`claude` command) for automatic registration, or any MCP client
+- Claude Code (`claude` command), or any MCP client
 
 ## Install
 
@@ -128,9 +128,8 @@ The installer:
    there and is this project's, the installer removes it and its token, since two copies
    loaded together fight over the port.
 2. Creates `mcp_server/venv` and installs `mcp`, `pillow` and `numpy`.
-3. Registers the server with Claude Code (user scope). If it is already registered, it leaves
-   that registration (and any `-e` variables you added) as it is. With `--no-register` it prints
-   the command instead, so you can run it yourself or adapt it for another MCP client.
+3. Does **not** register the server globally: it prints how to register it per folder (see
+   **Where the tools are available** below).
 
 **After updating this folder** (`git pull`), re-run the installer and restart Designer: the
 plugin and the server must be the same version (an older plugin answers every request with
@@ -141,7 +140,24 @@ Then:
 1. **Restart Substance Designer** (the plugin loads at startup). Don't also load it from
    Tools > Plugin Manager; a second copy can't open the port and stays inactive.
 2. Check Designer's console (Windows > Console) for `[sd_claude_bridge_kve] v3 listening on 127.0.0.1:9877`.
-3. **Restart Claude Code** and run `claude mcp list`: it should show `substance-designer: … ✔ Connected`.
+3. **Start `claude` in this folder** and approve `substance-designer` when asked (once). Then
+   `claude mcp list` here shows `substance-designer: … ✔ Connected`.
+
+### Where the tools are available
+
+The server is never registered globally, so sessions in other folders don't start it or spend
+context on it:
+
+- **This folder:** the committed [`.mcp.json`](.mcp.json) registers it for Claude Code started
+  here or in any subfolder (it runs `sh`, so macOS and Linux). Claude Code asks once to approve
+  it; `claude mcp reset-project-choices` resets that choice.
+- **Another folder** (for example a material project): run this there once, with this folder's
+  absolute paths (the installer prints the exact command):
+  ```bash
+  claude mcp add --scope local substance-designer -- <this folder>/mcp_server/venv/bin/python <this folder>/mcp_server/server.py
+  ```
+  `--scope local` keeps it to that folder and to you. On Windows use this form in this folder
+  too (`mcp_server\venv\Scripts\python.exe`), since `.mcp.json` needs `sh`.
 
 <details>
 <summary>Manual install (without install.py)</summary>
@@ -152,10 +168,7 @@ Then:
    python3 -m venv mcp_server/venv                                  # Windows: py -3 -m venv mcp_server\venv
    mcp_server/venv/bin/pip install -r mcp_server/requirements.txt   # Windows: mcp_server\venv\Scripts\pip ...
    ```
-3. Register it:
-   ```bash
-   claude mcp add --scope user substance-designer -- <abs path to venv python> <abs path to mcp_server/server.py>
-   ```
+3. Registration: as in **Where the tools are available**.
 </details>
 
 ## Self-test
@@ -202,7 +215,9 @@ mcp_server/venv/bin/python -m pytest
 | `SD_SNAPSHOT_DIR` | `~/.sd_mcp/snapshots` | where `snapshot_graph` keeps snapshots (one folder per graph; safe to delete) |
 | `SD_BRIDGE_PORT` | `9877` | plugin, MCP server and CLI client (set the same value for all three; the plugin reads it from Designer's environment, so start Designer from a shell where it is set, or set it system-wide) |
 
-Pass them when registering: `claude mcp add --scope user -e SD_DESIGNER_BIN_DIR="D:\Adobe\Designer" substance-designer -- ...`
+Set them in your shell before starting `claude`, add an `"env": {...}` block to your own copy of
+the `.mcp.json` entry, or pass them when registering a folder:
+`claude mcp add --scope local -e SD_DESIGNER_BIN_DIR="D:\Adobe\Designer" substance-designer -- ...`
 
 ## Using it without MCP
 
@@ -233,11 +248,8 @@ python client/sd_run.py --cancel              # abort the running script
 
 ## Uninstall
 
-```bash
-claude mcp remove substance-designer -s user
-```
-
-Then delete the `sd_claude_bridge_kve` folder from the plugin directory, `~/.sd_claude_bridge_kve_token`, and this folder.
+In each folder where you registered it with `--scope local`, run
+`claude mcp remove substance-designer -s local`. Then delete the `sd_claude_bridge_kve` folder from the plugin directory, `~/.sd_claude_bridge_kve_token`, and this folder.
 
 ## Troubleshooting
 
