@@ -178,7 +178,9 @@ Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `-c COD
   `node_align_tools` plugin, which adds a toolbar to each new graph view, while the old views
   were still being torn down (crash dump in Designer's `Sentry-Crashpad/completed`). Returning
   to Designer's event loop between the steps lets the teardown finish; 300 stress reloads since
-  have been clean. If it recurs, read the newest dump's crashing module first. Use the same pattern for
+  have been clean. If it recurs, read the newest dump's crashing module first. A package whose
+graphs were **never opened in a view** has nothing to tear down, so a script that builds one can
+save, edit and reload it in a single call (the example script does, for its portals). Use the same pattern for
   other things the API can't do, with a `diff_graph` plus `node_stats` check afterwards.
 
 ## Designer UI (Qt)
@@ -250,9 +252,11 @@ Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `-c COD
 `examples/build_dwarf_trimsheet.py`: a complete config-driven generator for a 2048² stone +
 wood trim sheet (11 horizontal strips, tileable in U), outputting baseColor, normal (OpenGL),
 roughness, metallic, height and AO. A good template for band and tile helpers, type-safe
-parameter setting, and rebuild-safe package handling. Its size is fixed (call
-`set_graph_size(overridable=True)` afterwards for size overrides), and re-running it builds a
-fresh graph, so portals, frames and layout changes made afterwards are lost. The self-test
+parameter setting, and rebuild-safe package handling, and for a generator that leaves a readable
+graph: nodes grouped into sections as they are built, laid out by data flow inside each section,
+one titled frame per section (its description carries the notes), portals for long links
+between sections, and an overridable size (2048 by default). Re-running it builds a fresh graph,
+so edits made afterwards are lost; change the script instead. The self-test
 builds a copy with its `OUT_SBS = ...` and `GRAPH_ID = ...` lines rewritten, so keep each of
 those assignments on one line.
 

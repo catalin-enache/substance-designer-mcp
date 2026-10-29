@@ -933,9 +933,24 @@ async def run(scratch):
                     example = os.path.join(scratch, 'build_example.py')
                     with open(example, 'w') as f:
                         f.write(source)
-                    t = text(await c('run_designer_script', {'path': example, 'timeout_s': 300}))
+                    t = text_build = text(await c('run_designer_script', {'path': example, 'timeout_s': 300}))
                     check(E, 'builds and saves', 'Saved trim sheet to' in t and 'ERROR' not in t
-                          and os.path.isfile(example_sbs), t[-300:])
+                          and 'WARNING' not in t and os.path.isfile(example_sbs), t[-300:])
+                    # the readable-graph finish (ROADMAP item, now in the script): a frame per
+                    # section, overridable size, portals written into the saved file
+                    t = text(await c('execute_designer_code', {'code': GRAPH_OF % EXAMPLE_GRAPH + (
+                        "from sd.api.sdgraphobjectframe import SDGraphObjectFrame\n"
+                        "from sd.api.sdproperty import SDPropertyCategory\n"
+                        "p=g.getPropertyFromId('$outputsize', SDPropertyCategory.Input)\n"
+                        "print('FRAMES=%d SIZE=%s PARENT=%d' % (sum(isinstance(o, SDGraphObjectFrame) for o in g.getGraphObjects()),"
+                        " g.getPropertyInheritanceMethod(p).name, g.getDefaultParentSize().x))")}))
+                    check(E, 'frames per section, overridable 2048 size', 'FRAMES=17 SIZE=RelativeToParent PARENT=2048' in t, t)
+                    with open(example_sbs, encoding='utf-8') as f:
+                        portals = len(re.findall(r'<displayType v="1"\s*/>', f.read()))
+                    reported = re.search(r'(\d+) of (\d+) links as portals', text_build)
+                    check(E, 'long links between sections saved as portals',
+                          reported is not None and portals == int(reported.group(1)) > 0, '%d in the file; %s' % (
+                              portals, reported.group(0) if reported else 'no count printed'))
                     await c('open_graph', {'graph': EXAMPLE_GRAPH})   # so you can see it
                     t = text(await c('export_outputs', {'graph': EXAMPLE_GRAPH, 'output_dir': os.path.join(scratch, 'example_maps')}))
                     names = ('basecolor', 'normal', 'roughness', 'metallic', 'height', 'ambientocclusion')
