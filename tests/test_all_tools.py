@@ -21,6 +21,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import filecmp
+import json
+import socket
 
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
@@ -28,6 +31,9 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 BUNDLE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVER = os.path.join(BUNDLE, 'mcp_server', 'server.py')
 TEST_GRAPH = 'mcp_selftest'
+SAVED_GRAPH = 'mcp_selftest_saved'          # create_graph(save_path=...)
+EXAMPLE_GRAPH = 'mcp_selftest_trimsheet'    # examples/build_dwarf_trimsheet.py, renamed
+PORT = int(os.environ.get('SD_BRIDGE_PORT', '9877'))
 PARAMS = StdioServerParameters(command=sys.executable, args=[SERVER])
 
 results = {}
@@ -70,6 +76,45 @@ def pixel_values(t):
             for x, y, vals in re.findall(r'pixel \((\d+),(\d+)\): (.*)', t)}
 
 
+def raw_request(request):
+    """One request straight to the bridge, bypassing the MCP server (for the security checks)."""
+    with socket.create_connection(('127.0.0.1', PORT), timeout=10) as sock:
+        sock.sendall(json.dumps(request).encode('utf-8'))
+        sock.shutdown(socket.SHUT_WR)
+        data = b''
+        while chunk := sock.recv(65536):
+            data += chunk
+    return json.loads(data.decode('utf-8'))
+
+
+def lan_address():
+    """This machine's non-loopback IPv4 address, or None (a UDP connect sends no packets)."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as u:
+            u.connect(('192.0.2.1', 9))
+            ip = u.getsockname()[0]
+        return None if ip.startswith('127.') or ip == '0.0.0.0' else ip
+    except OSError:
+        return None
+
+
+def sd_run(*args, timeout=60):
+    return subprocess.run([sys.executable, os.path.join(BUNDLE, 'client', 'sd_run.py'), *args],
+                          capture_output=True, text=True, timeout=timeout)
+
+
+def image_size(r):
+    from PIL import Image
+    import io
+    img = next(x for x in r.content if x.type == 'image')
+    return Image.open(io.BytesIO(base64.b64decode(img.data))).size
+
+
+def positions(t):
+    """describe_graph text -> {node id: (x, y)}"""
+    return {i: (float(x), float(y)) for i, x, y in re.findall(r'^(\d+) \S+ @\((-?[\d.]+),(-?[\d.]+)\)', t, re.M)}
+
+
 def clipboard_fingerprint():
     """Hash of the clipboard (never printed). None where we can't read it (non-macOS)."""
     if sys.platform != 'darwin':
@@ -81,8 +126,8 @@ def clipboard_fingerprint():
 
 CLEAN = ("import sd\npm=sd.getContext().getSDApplication().getPackageMgr()\nn=0\n"
          "for p in list(pm.getUserPackages()):\n"
-         "    if any(r.getIdentifier()=='%s' for r in p.getChildrenResources(False)):\n"
-         "        pm.unloadUserPackage(p); n+=1\nprint('removed', n)" % TEST_GRAPH)
+         "    if any(r.getIdentifier() in %r for r in p.getChildrenResources(False)):\n"
+         "        pm.unloadUserPackage(p); n+=1\nprint('removed', n)" % ((TEST_GRAPH, SAVED_GRAPH, EXAMPLE_GRAPH),))
 # Undo/Redo via Designer's Edit menu, scheduled to run after this call's own undo group closes
 UNDO_REDO = ("import sd\nfrom PySide6.QtCore import QTimer\nfrom PySide6.QtWidgets import QApplication, QMenu\n"
              "g=sd.getContext().getSDApplication().getQtForPythonUIMgr().getCurrentGraph()\n"
@@ -142,11 +187,71 @@ async def run(scratch):
                 t = text(await job)
                 check('cancel_designer_job', 'running job', 'running: True' in cancel_text and 'cancelled by client' in t, cancel_text)
 
+                # --- security (README, Security): token required, loopback only, private token file
+                B = 'bridge security'
+                for name, req in (('wrong token', {'token': 'x' * 64, 'cmd': 'status'}),
+                                  ('no token', {'cmd': 'status'}),
+                                  ('code with wrong token', {'token': 'nope', 'code': "print('SHOULD NOT RUN')"})):
+                    reply = raw_request(req)
+                    check(B, 'refuses ' + name, not reply['ok'] and reply.get('error') == 'invalid token'
+                          and 'SHOULD NOT RUN' not in reply.get('output', ''), str(reply))
+                ip = lan_address()
+                if ip is None:
+                    skip(B, 'not reachable from the network', 'no non-loopback address on this machine')
+                else:
+                    try:
+                        socket.create_connection((ip, PORT), timeout=3).close()
+                        reachable = True
+                    except OSError:
+                        reachable = False
+                    check(B, 'not reachable from the network', not reachable, 'tried %s:%d' % (ip, PORT))
+                token_file = os.path.expanduser('~/.sd_bridge_token')
+                if sys.platform == 'win32':
+                    skip(B, 'token file owner-only', 'POSIX permissions only')
+                else:
+                    mode = os.stat(token_file).st_mode & 0o777
+                    check(B, 'token file owner-only', mode & 0o077 == 0, oct(mode))
+
+                # --- MCP resource and the fallback command-line client
+                res = await s.read_resource('designer://agents-guide')
+                check('mcp resource', 'agents-guide serves AGENTS.md',
+                      res.contents[0].text.startswith('# AGENTS.md'), res.contents[0].text[:40])
+                r = sd_run('--status')
+                check('sd_run.py', '--status', r.returncode == 0 and 'sd_bridge' in r.stdout, r.stdout + r.stderr)
+                r = sd_run('-c', 'print(6 * 7)')
+                check('sd_run.py', '-c code', r.returncode == 0 and r.stdout.strip() == '42', r.stdout + r.stderr)
+                cli_script = os.path.join(scratch, 'cli_probe.py')
+                with open(cli_script, 'w') as f:
+                    f.write("import sd\nprint('cli', __file__.endswith('cli_probe.py'), sd.getContext().getSDApplication().getVersion())\n")
+                r = sd_run(cli_script)
+                check('sd_run.py', 'script file', r.returncode == 0 and 'cli True' in r.stdout, r.stdout + r.stderr)
+                r = sd_run('-c', 'while True: pass', '--timeout', '2')
+                check('sd_run.py', '--timeout aborts', r.returncode == 1 and 'timed out' in r.stderr, r.stderr[-200:])
+                r = sd_run('--cancel')
+                check('sd_run.py', '--cancel when idle', r.returncode == 0, r.stdout + r.stderr)
+
+                # --- the installed plugin is this repo's (README, Install: re-run install.py after changes)
+                t = text(await c('execute_designer_code', {'code': "import sys\nprint('PLUGIN=' + sys.modules['sd_bridge'].__file__)"}))
+                found = re.search(r'PLUGIN=(.*)', t)
+                if found:
+                    installed = os.path.dirname(found.group(1).strip())
+                    cmp = filecmp.dircmp(os.path.join(BUNDLE, 'plugin', 'sd_bridge', 'sd_bridge'), installed,
+                                         ignore=['__pycache__'])
+                    stale = cmp.diff_files + cmp.left_only
+                    check('install.py', 'installed plugin matches the repo', not stale,
+                          '%s differ in %s (re-run install.py, restart Designer)' % (stale, installed) if stale else installed)
+                else:
+                    check('install.py', 'installed plugin matches the repo', False, t)
+
                 # --- discovery
                 t = text(await c('search_nodes', {'query': 'slope blur'}))
                 check('search_nodes', 'library hit', 'slope_blur.sbs/slope_blur_grayscale_2' in t, t.splitlines()[0])
                 t = text(await c('search_nodes', {'query': 'levels', 'limit': 2}))
                 check('search_nodes', 'atomic ranked first', t.startswith('atomic   levels'), t.splitlines()[0])
+                hidden = "definition='3d_texture_jump_flood'"            # hideInLibrary=1 in Designer 16
+                shown = text(await c('search_nodes', {'query': 'jump flood'}))
+                all_ = text(await c('search_nodes', {'query': 'jump flood', 'include_hidden': True}))
+                check('search_nodes', 'include_hidden adds hidden graphs', hidden not in shown and hidden in all_, all_)
                 t = text(await c('describe_node', {'definition': 'blend'}))
                 check('describe_node', 'atomic enum', 'max=5' in t, '')
                 t = text(await c('describe_node', {'definition': 'slope_blur.sbs/slope_blur_grayscale_2'}))
@@ -155,6 +260,9 @@ async def run(scratch):
                 # --- build a temporary graph with the edit tools
                 t = text(await c('create_graph', {'name': TEST_GRAPH, 'size_log2': 9}))
                 check('create_graph', '512 px', '(512 px)' in t, t)
+                saved_sbs = os.path.join(scratch, SAVED_GRAPH + '.sbs')
+                t = text(await c('create_graph', {'name': SAVED_GRAPH, 'save_path': saved_sbs, 'size_log2': 8}))
+                check('create_graph', 'save_path writes the .sbs', os.path.isfile(saved_sbs), t)
                 G = {'graph': TEST_GRAPH}
                 await c('open_graph', {'graph': TEST_GRAPH})   # so you can watch the nodes appear
                 t = text(await c('add_node', {'definition': 'noise_clouds_2.sbs/clouds_2', 'params': {'scale': 4}, **G}))
@@ -271,6 +379,8 @@ async def run(scratch):
                 t = text(await c('read_designer_log', {'errors_only': True, 'lines': 3}))
                 check('read_designer_log', 'errors_only filter', 'matching line' in t and all(
                     ('[ERROR]' in l or '[WARNING]' in l) for l in t.splitlines()[1:]), t.splitlines()[0])
+                t = text(await c('read_designer_log', {'lines': 5, 'since_last_start': False}))
+                check('read_designer_log', 'whole log', 'log.txt' in t, t.splitlines()[0])
 
                 # --- batch edits
                 t = text(await c('apply_edits', {'ops': [
@@ -297,6 +407,9 @@ async def run(scratch):
                 # --- exposed inputs and graph size
                 t = text(await c('set_graph_size', {'size_log2': 9, 'overridable': True, **G}))
                 check('set_graph_size', 'overridable 512', 'overridable, default 512 px' in t, t)
+                t = text(await c('set_graph_size', {'size_log2': 9, 'overridable': False, **G}))
+                check('set_graph_size', 'fixed 512', 'size: fixed' in t, t)
+                await c('set_graph_size', {'size_log2': 9, 'overridable': True, **G})   # render checks need it
                 t = text(await c('expose_param', {'node_id': lv, 'param': 'leveloutlow', 'input_id': 'floor',
                                                   'label': 'Floor', 'default': [0.25] * 4, 'min': 0, 'max': 1, **G}))
                 check('expose_param', 'float4 with range', "graph input 'floor'" in t, t)
@@ -307,6 +420,12 @@ async def run(scratch):
                 t = text(await c('list_graph_inputs', G))
                 check('list_graph_inputs', 'inputs + users', "floor (float4)" in t and "label='Floor'" in t
                       and '%s.leveloutlow' % lv in t and 'Samples' in t, t)
+                await c('expose_param', {'node_id': slope, 'param': 'Intensity', 'input_id': 'slope_amount',
+                                         'group': 'Shape', 'step': 0.5, 'min': 0, 'max': 20, **G})
+                t = text(await c('list_graph_inputs', G))
+                line = next((l for l in t.splitlines() if l.startswith('slope_amount')), '')
+                check('expose_param', 'group + step', "group='Shape'" in line and 'step=0.5' in line, line)
+                await c('remove_graph_input', {'input_id': 'slope_amount', **G})
                 r_ = await c('sweep_param', {'node_id': 'graph', 'param': 'floor', 'values': [[0.1] * 4, [0.9] * 4],
                                              'view_node': lv, 'tile_size': 96, **G})
                 means = [float(m) for m in re.findall(r'L [0-9.]+\.\.[0-9.]+ \(mean ([0-9.]+)\)', text(r_))]
@@ -342,8 +461,25 @@ async def run(scratch):
                 check('add_frame', 'frame drawn', "frame 'Shape' around 2 node(s)" in t, t)
                 t = text(await c('add_comment', {'text': 'self-test note', 'node_id': lv, **G}))
                 check('add_comment', 'attached comment', 'comment added on node' in t, t)
+                t = text(await c('add_comment', {'text': 'free note', 'position': [0, -300], **G}))
+                check('add_comment', 'free-standing at a position', t.strip() == 'comment added', t)
+                await c('add_frame', {'node_ids': [lv], 'title': 'Described', 'description': 'why this frame', **G})
+                t = text(await c('execute_designer_code', {'code': (
+                    "import sd\nfrom sd.api.sdgraphobjectframe import SDGraphObjectFrame\n"
+                    "g=[r for p in sd.getContext().getSDApplication().getPackageMgr().getUserPackages() "
+                    "for r in p.getChildrenResources(False) if r.getIdentifier()=='%s'][0]\n"
+                    "print([o.getDescription() for o in g.getGraphObjects() if isinstance(o, SDGraphObjectFrame) "
+                    "and o.getTitle()=='Described'])") % TEST_GRAPH}))
+                check('add_frame', 'description stored', "['why this frame']" in t, t)
+                await c('arrange_graph', {'node_ids': [clouds, slope], 'spacing': [300, 150], **G})
+                xs = positions(text(await c('describe_graph', G)))
+                check('arrange_graph', 'node_ids + spacing', abs(xs[slope][0] - xs[clouds][0] - 300) < 1, str(xs))
+                await c('arrange_graph', G)
+                t = text(await c('describe_graph', {'limit': 2, **G}))
+                check('describe_graph', 'limit', re.search(r'\.\.\. \d+ more nodes', t) is not None, t.splitlines()[-1])
                 t = text(await c('describe_graph', G))
-                check('describe_graph', 'lists frames + comments', "frames: 'Shape'" in t and 'comments: 1' in t, t.splitlines()[1])
+                check('describe_graph', 'lists frames + comments', "frames: 'Shape', 'Described'" in t and 'comments: 2' in t,
+                      next((l for l in t.splitlines() if 'frames' in l), t.splitlines()[1]))
                 t = text(await c('describe_node', {'definition': 'bevel'}))
                 check('describe_node', 'library slider range', 'range -1.0..1.0' in t, '')
 
@@ -382,6 +518,32 @@ async def run(scratch):
                 check(F, 'normal inversedy=True is OpenGL', gl[1] < 0.497 and dx[1] > 0.503 and abs(gl[1] + dx[1] - 1) < 0.002,
                       'OpenGL G=%.3f, DirectX G=%.3f' % (gl[1], dx[1]))
                 await c('delete_nodes', {'node_ids': [grad, nrm], **G})
+
+                # --- a node with several outputs (bevel: height, normal)
+                bev = added_id(text(await c('add_node', {'definition': 'bevel', 'position': [-400, 300], **G})))
+                await c('connect', {'from_node': clouds, 'to_node': bev, 'to_input': 'input', **G})
+                lvn = added_id(text(await c('add_node', {'definition': 'levels', 'position': [-200, 300], **G})))
+                t = text(await c('connect', {'from_node': bev, 'to_node': lvn, 'to_input': 'input1', 'from_output': 'normal', **G}))
+                t2 = text(await c('describe_graph', {'node_ids': [lvn], **G}))
+                check('connect', 'from_output picks the output', 'input1<-%s.normal' % bev in t2, t2)
+                r_ = await c('preview_node', {'node_id': bev, 'output': 'normal', 'max_size': 128, **G})
+                check('preview_node', 'output + max_size', is_image(r_) and max(image_size(r_)) <= 128,
+                      str(image_size(r_)) if is_image(r_) else text(r_))
+                t = text(await c('node_stats', {'node_id': bev, 'output': 'normal', **G}))
+                check('node_stats', 'output picks the output', '%s instance:bevel.normal' % bev in t and 'B:' in t, t.splitlines()[0])
+                t = text(await c('check_tiling', {'node_id': bev, 'output': 'height', 'axis': 'horizontal', **G}))
+                check('check_tiling', 'output + one axis', '.height' in t and 'Horizontal' in t and 'Vertical' not in t, t)
+                r_ = await c('sweep_param', {'node_id': clouds, 'param': 'scale', 'values': [2, 8], 'view_node': bev,
+                                             'output': 'normal', 'tile_size': 64, **G})
+                t = text(r_)
+                check('sweep_param', 'view_node + output', 'restored %s.scale' % clouds in t and t.count('scale = ') == 2
+                      and any(x.type == 'image' for x in r_.content), t)
+                r_ = await c('compare_to_reference', {'node_id': bev, 'output': 'normal', 'reference_path': png,
+                                                      'reference_region': [0, 0, 32, 16], 'tile_size': 128, **G})
+                t = text(r_)
+                check('compare_to_reference', 'output + reference_region', '.normal' in t.splitlines()[0]
+                      and '(32x16)' in t.splitlines()[0], t.splitlines()[0])
+                await c('delete_nodes', {'node_ids': [bev, lvn], **G})
 
                 # --- editor + screenshots
                 t = text(await c('open_graph', {'graph': TEST_GRAPH, 'node_id': slope}))
@@ -434,6 +596,12 @@ async def run(scratch):
                 check('save_package', 'save as', os.path.exists(sbs), t)
                 t = text(await c('save_package', {'graph_or_path': TEST_GRAPH}))
                 check('save_package', 'save in place', 'saved' in t, t)
+                xs = positions(text(await c('describe_graph', G)))
+                await c('move_nodes', {'positions': {clouds: [xs[clouds][0] + 50, xs[clouds][1]]}, **G})
+                t = text(await c('diff_graph', {'against': sbs, 'show_positions': True, **G}))
+                check('diff_graph', 'against a .sbs path, with positions', '1 node(s) moved' in t
+                      and '~ node %s' % clouds in t and 'moved' in t, t)
+                await c('move_nodes', {'positions': {clouds: list(xs[clouds])}, **G})
                 t = text(await c('import_bitmap', {'path': png, 'embed': 'copy', 'name': 'selftest_copy', **G}))
                 copied = re.search(r'selftest_copy \(copy\): (.*)', t)
                 check('import_bitmap', 'copy into <package>.resources, named', copied is not None and os.path.isfile(copied.group(1))
@@ -448,6 +616,22 @@ async def run(scratch):
                 check('set_link_display', 'output unchanged', stats_after == stats_before, stats_after)
                 t = text(await c('set_link_display', {'mode': 'wire', 'from_nodes': [clouds], **G}))
                 check('set_link_display', 'back to wires', 'changed to wire' in t, t.split(';')[0])
+                # automatic selection, as AGENTS.md recommends: clouds feeds 3 inputs once this blend is in
+                tb = added_id(text(await c('add_node', {'definition': 'blend', 'position': [-400, -300], **G})))
+                for port in ('source', 'destination'):
+                    await c('connect', {'from_node': clouds, 'to_node': tb, 'to_input': port, **G})
+                for args, expect in (({'mode': 'portal', 'fanout_at_least': 3}, '3 of 3 selected link(s) changed to portal'),
+                                     ({'mode': 'wire', 'fanout_at_least': 3}, '3 of 3 selected link(s) changed to wire'),
+                                     ({'mode': 'portal', 'links': [[lv, 'input1']]}, '1 of 1 selected link(s) changed to portal'),
+                                     ({'mode': 'wire', 'links': [[lv, 'input1']]}, '1 of 1 selected link(s) changed to wire')):
+                    t = text(await c('set_link_display', {**args, **G}))
+                    check('set_link_display', ', '.join('%s=%s' % kv for kv in args.items()), expect in t, t.split(';')[0])
+                t = text(await c('set_link_display', {'mode': 'portal', 'longer_than': 1, **G}))
+                counts = re.search(r'(\d+) of (\d+) selected link\(s\) changed to portal in \S+ \(of (\d+) links', t)
+                check('set_link_display', 'longer_than=1 picks every link', counts is not None
+                      and counts.group(1) == counts.group(2) == counts.group(3), t.split(';')[0])
+                await c('set_link_display', {'mode': 'wire', 'longer_than': 1, **G})
+                await c('delete_nodes', {'node_ids': [tb], **G})
                 t = text(await c('export_outputs', {'graph': TEST_GRAPH, 'output_dir': os.path.join(scratch, 'export')}))
                 check('export_outputs', 'from Designer', 'height.png  512x512' in t, t)
                 t = text(await c('sbsar_info', {'sbs_path': sbs}))
@@ -463,6 +647,12 @@ async def run(scratch):
                 worst = np.abs(exported - rendered).max() if exported.shape == rendered.shape else -1
                 check('export_outputs', 'matches render_sbs within 16-bit rounding', 0 <= worst <= 8,
                       'max difference %d/65535, %d pixel(s) differ' % (worst, int((exported != rendered).sum())))
+                t = text(await c('export_outputs', {'graph': TEST_GRAPH, 'output_dir': os.path.join(scratch, 'export_exr'),
+                                                    'outputs': ['height'], 'file_format': 'exr'}))
+                check('export_outputs', 'subset + exr', 'height.exr' in t
+                      and os.path.isfile(os.path.join(scratch, 'export_exr', 'height.exr')), t)
+                r_ = await c('export_outputs', {'graph': TEST_GRAPH, 'output_dir': os.path.join(scratch, 'none'), 'outputs': ['nope']})
+                check('export_outputs', 'error on unknown output', r_.is_error and 'no outputs exported' in text(r_), text(r_))
                 t = text(await c('sbsar_info', {'sbs_path': sbs}))
                 check('sbsar_info', 'exposed input + size', 'INPUT floor FLOAT4' in t and 'INPUT $outputsize' in t, '')
                 means = []
@@ -482,6 +672,38 @@ async def run(scratch):
                 check('preview_maps', 'side by side', is_image(r_), '')
                 r_ = await c('preview_maps', {'map_dir': render_dir, 'names': ['height'], 'crop': [0, 0, 128, 128]})
                 check('preview_maps', 'crop', is_image(r_), '')
+
+                # --- README's full example: examples/build_dwarf_trimsheet.py, renamed so it can't touch
+                # a trim sheet you have open (it closes earlier builds of its graph id) and saved to scratch
+                E = 'example script'
+                with open(os.path.join(BUNDLE, 'examples', 'build_dwarf_trimsheet.py')) as f:
+                    source = f.read()
+                example_sbs = os.path.join(scratch, 'example', EXAMPLE_GRAPH + '.sbs')
+                source, n_out = re.subn(r'^OUT_SBS = .*$', 'OUT_SBS = %r' % example_sbs, source, flags=re.M)
+                source, n_id = re.subn(r'^GRAPH_ID = .*$', 'GRAPH_ID = %r' % EXAMPLE_GRAPH, source, flags=re.M)
+                if (n_out, n_id) != (1, 1):
+                    check(E, 'output path and graph id can be redirected', False, 'OUT_SBS/GRAPH_ID lines changed?')
+                else:
+                    example = os.path.join(scratch, 'build_example.py')
+                    with open(example, 'w') as f:
+                        f.write(source)
+                    t = text(await c('run_designer_script', {'path': example, 'timeout_s': 300}))
+                    check(E, 'builds and saves', 'Saved trim sheet to' in t and 'ERROR' not in t
+                          and os.path.isfile(example_sbs), t[-300:])
+                    await c('open_graph', {'graph': EXAMPLE_GRAPH})   # so you can see it
+                    t = text(await c('export_outputs', {'graph': EXAMPLE_GRAPH, 'output_dir': os.path.join(scratch, 'example_maps')}))
+                    names = ('basecolor', 'normal', 'roughness', 'metallic', 'height', 'ambientocclusion')
+                    check(E, '6 maps at 2048', 'exported 6 file(s)' in t and all('%s.png  2048x2048' % m in t for m in names), t)
+                    t = text(await c('execute_designer_code', {'code': (
+                        "import sd\ng=[r for p in sd.getContext().getSDApplication().getPackageMgr().getUserPackages() "
+                        "for r in p.getChildrenResources(False) if r.getIdentifier()=='%s'][0]\n"
+                        "print(' '.join('%%s=%%s' %% (n.getAnnotationPropertyValueFromId('identifier').get(), n.getIdentifier()) "
+                        "for n in g.getOutputNodes()))") % EXAMPLE_GRAPH}))
+                    outs = dict(re.findall(r'(\w+)=(\d+)', t))
+                    t = text(await c('check_tiling', {'node_id': outs.get('basecolor', '?'), 'graph': EXAMPLE_GRAPH, 'axis': 'horizontal'}))
+                    ratio = re.search(r'ratio ([\d.]+)', t)
+                    check(E, 'tiles horizontally (trim sheet)', ratio is not None and float(ratio.group(1)) <= 3, t.splitlines()[-1])
+                    await c('open_graph', {'graph': TEST_GRAPH})
 
                 # --- script runner
                 script = os.path.join(scratch, 'probe_script.py')

@@ -149,7 +149,7 @@ Then:
 
 ## Self-test
 
-Check every tool end to end against the real Designer (about a minute). If Designer isn't
+Check every tool end to end against the real Designer (about a minute and a half). If Designer isn't
 running, the self-test starts it and closes it again at the end; if it is running, it's left open:
 
 ```bash
@@ -161,7 +161,11 @@ It builds a temporary graph (`mcp_selftest`), checks every tool including error 
 the graph and reopens the graph you had open. It doesn't touch your packages. To check that
 one change is one undo step it triggers Undo and Redo, but only while its own graph is the one
 in the editor; it skips that check otherwise. It also re-checks the Designer behaviour the
-agent notes rely on ("designer facts"), so a Designer update that changes it shows up. The 3D screenshot check is skipped if no 3D View is visible; the clipboard check runs
+agent notes rely on ("designer facts"), so a Designer update that changes it shows up, and it
+checks the Security promises below (wrong or missing token refused, not reachable from the
+network, private token file), the command-line client, that the plugin Designer loaded matches
+this repo (re-run `install.py` if not), and that the example trim sheet still builds (a renamed
+copy, so a trim sheet you have open is never touched). The 3D screenshot check is skipped if no 3D View is visible; the clipboard check runs
 on macOS only. Exit code 0 means everything passed. Run it after installing, after updates, and
 after a Designer update.
 

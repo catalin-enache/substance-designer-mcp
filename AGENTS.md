@@ -92,7 +92,8 @@ user something works.
 **Self-test:** `mcp_server/venv/bin/python tests/test_all_tools.py` exercises every tool over MCP
 on a temporary graph (exit 0 = all passed). Its "designer facts" checks re-measure the Designer
 behaviour this file states (enum ids, connector ids, gradient and normal conventions, sd API
-quirks); when you add such a fact, add a check there too. Run it after changing the server, plugin or helpers.
+quirks); when you add such a fact, add a check there too. It also passes every documented tool
+parameter at least once; a new parameter needs a check, not just a docstring line. Run it after changing the server, plugin or helpers.
 Also run `mcp_server/venv/bin/python -m pytest` (`tests/unit`, no Designer needed): it
 fails if a tool is missing from README's Tools table/count or has no check in the self-test.
 Add unit tests there for new pure-Python code (server-side parsing, maths, image handling).
@@ -298,3 +299,5 @@ roughness, metallic, height and AO. A good template for band and tile helpers, t
 parameter setting, and rebuild-safe package handling. (Its size is fixed; call
 `set_graph_size(overridable=True)` afterwards if you need size overrides. Re-running it builds a
 fresh graph, so portals, frames and layout changes made afterwards are lost; reapply them.)
+The self-test builds a copy with its `OUT_SBS = ...` and `GRAPH_ID = ...` lines rewritten, so
+keep each of those assignments on one line.
