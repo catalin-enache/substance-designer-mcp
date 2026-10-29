@@ -22,17 +22,16 @@ a rough guess: S = under an hour, M = a few hours, L = a day or more.
 | 7 | **Function graph / Pixel Processor editing** | Custom maths inside materials currently needs hand-written scripts | Tools to create function graphs on parameters or in Pixel Processors: add function nodes, connect, set constants, set the output node (the `expose_param` code already builds a minimal function graph) | L |
 | 8 | **Slider ranges for atomic nodes** | `describe_node` shows ranges only for library nodes; the API exposes none for the 29 atomic nodes | Curate a small table of sensible ranges for the commonly used atomic parameters (levels, blend opacity, warp intensity, blur, normal intensity...), clearly marked as recommendations | S |
 | 9 | **3D view inside window screenshots** | In `screenshot_designer('window')` the 3D area is black | Composite the `3d` render into the window capture at the 3D dock's position | S |
-| 10 | **Self-test: undo check** | Undo grouping was verified by hand; the self-test skips it because Undo acts on the focused document | Run the check only when no user graph is open in the editor (detect it first), otherwise report it as skipped | S |
-| 11 | **Large-graph output limits** | `describe_graph` / `diff_graph` on very large graphs can return very long text | Paging (`offset` / `limit`) and per-section summaries | S |
-| 12 | **Edge-local tiling metric** | `check_tiling` compares the seam with the *average* step over the whole image, so a seamless pattern whose steepest part sits on the edge scores too high (a sine: ratio 1.58, "probably fine") | Compare the seam with the steps right next to it (columns 0→1 and W-2→W-1, per row), keep the global ratio as a fallback; update the unit test in `tests/unit/test_pixels.py` | S |
+| 10 | **Large-graph output limits** | `describe_graph` / `diff_graph` on very large graphs can return very long text | Paging (`offset` / `limit`) and per-section summaries | S |
+| 11 | **Edge-local tiling metric** | `check_tiling` compares the seam with the *average* step over the whole image, so a seamless pattern whose steepest part sits on the edge scores too high (a sine: ratio 1.58, "probably fine") | Compare the seam with the steps right next to it (columns 0→1 and W-2→W-1, per row), keep the global ratio as a fallback; update the unit test in `tests/unit/test_pixels.py` | S |
 
 ## Needs the user or other machines
 
 | # | Item | Why | What's needed |
 |---|---|---|---|
-| 13 | **Test on Windows** | Paths, installer, log location and plugin folder are written for Windows but untested | Someone with Windows and Designer runs `install.py` and the self-test, and reports the failures |
-| 14 | **Test on other Designer versions** | Only Designer 16.0.7 is tested; 15.x reportedly hangs on unknown node ids, which the server already guards against | Run the self-test on Designer 14.x / 15.x and note differences in AGENTS.md |
-| 15 | **Releases** | Users currently clone `main` | Version numbers, a CHANGELOG, tagged GitHub releases; maybe a one-line install command |
+| 12 | **Test on Windows** | Paths, installer, log location and plugin folder are written for Windows but untested | Someone with Windows and Designer runs `install.py` and the self-test, and reports the failures |
+| 13 | **Test on other Designer versions** | Only Designer 16.0.7 is tested; 15.x reportedly hangs on unknown node ids, which the server already guards against | Run the self-test on Designer 14.x / 15.x and note differences in AGENTS.md |
+| 14 | **Releases** | Users currently clone `main` | Version numbers, a CHANGELOG, tagged GitHub releases; maybe a one-line install command |
 
 ## Ideas, not yet decided
 

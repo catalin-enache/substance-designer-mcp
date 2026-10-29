@@ -6,7 +6,9 @@ End-to-end self-test of every substance-designer MCP tool, over a real stdio MCP
 
 Needs Designer running with the sd_bridge plugin. Everything that changes state happens in a
 temporary graph ("mcp_selftest") that is removed at the end; the graph you had open in the
-editor is reopened. It never triggers Undo (that would act on the document in focus).
+editor is reopened. It triggers Undo/Redo only while the self-test graph is the one in the editor
+(Undo acts on the document in focus), checks that exactly its own step was undone, and redoes at
+once if not. "designer facts" checks the Designer behaviour AGENTS.md documents.
 The 3D screenshot is skipped if no 3D View is visible. Exits with code 1 if any check fails.
 """
 import asyncio
@@ -61,6 +63,12 @@ def _mean_png(path):
     return float(a.mean() / (65535.0 if a.max() > 255 else 255.0))
 
 
+def pixel_values(t):
+    """'pixel (x,y): R=0.1, G=0.2' lines -> {(x, y): [0.1, 0.2]}"""
+    return {(int(x), int(y)): [float(v) for v in re.findall(r'=(-?[\d.]+)', vals)]
+            for x, y, vals in re.findall(r'pixel \((\d+),(\d+)\): (.*)', t)}
+
+
 def clipboard_fingerprint():
     """Hash of the clipboard (never printed). None where we can't read it (non-macOS)."""
     if sys.platform != 'darwin':
@@ -74,6 +82,27 @@ CLEAN = ("import sd\npm=sd.getContext().getSDApplication().getPackageMgr()\nn=0\
          "for p in list(pm.getUserPackages()):\n"
          "    if any(r.getIdentifier()=='%s' for r in p.getChildrenResources(False)):\n"
          "        pm.unloadUserPackage(p); n+=1\nprint('removed', n)" % TEST_GRAPH)
+# Undo/Redo via Designer's Edit menu, scheduled to run after this call's own undo group closes
+UNDO_REDO = ("import sd\nfrom PySide6.QtCore import QTimer\nfrom PySide6.QtWidgets import QApplication, QMenu\n"
+             "g=sd.getContext().getSDApplication().getQtForPythonUIMgr().getCurrentGraph()\n"
+             "if g is None or g.getIdentifier()!='%s':\n    print('NOT_FOCUSED')\nelse:\n"
+             "    acts=[a for w in QApplication.instance().allWidgets() if isinstance(w, QMenu) and w.title()=='&Edit'\n"
+             "          for a in w.actions() if a.text()=='%s' and a.isEnabled()]\n"
+             "    if acts:\n        QTimer.singleShot(0, acts[0].trigger)\n        print('SCHEDULED')\n"
+             "    else:\n        print('NO_ACTION')")
+NODE_EXISTS = ("import sd\nfrom PySide6.QtWidgets import QApplication\n"
+               "for _ in range(20):\n    QApplication.processEvents()\n"
+               "g=[r for p in sd.getContext().getSDApplication().getPackageMgr().getUserPackages() "
+               "for r in p.getChildrenResources(False) if r.getIdentifier()=='%s'][0]\n"
+               "print('EXISTS=%%s' %% (g.getNodeFromId('%s') is not None))")
+FACTS = ("import sd\nfrom sd.api.apiexception import APIException\nfrom sd.api.sdproperty import SDPropertyCategory\n"
+         "g=[r for p in sd.getContext().getSDApplication().getPackageMgr().getUserPackages() "
+         "for r in p.getChildrenResources(False) if r.getIdentifier()=='%s'][0]\n"
+         "print('ATOMIC=%%d' %% len(g.getNodeDefinitions()))\n"
+         "print('APIEXC_BASE_ONLY=%%s' %% (issubclass(APIException, BaseException) and not issubclass(APIException, Exception)))\n"
+         "n=g.getNodeFromId('%s')\nc=n.getPropertyConnections(n.getPropertyFromId('input1', SDPropertyCategory.Input))[0]\n"
+         "print('QUERIED_SIDE=%%s' %% (c.getOutputPropertyNode().getIdentifier()=='%s' and "
+         "c.getInputPropertyNode().getIdentifier()=='%s' and c.getOutputProperty().getId()=='input1'))")
 CURRENT_GRAPH = ("import sd\ng=sd.getContext().getSDApplication().getQtForPythonUIMgr().getCurrentGraph()\n"
                  "print('CURRENT=' + (g.getIdentifier() if g else ''))")
 
@@ -302,11 +331,65 @@ async def run(scratch):
                 t = text(await c('describe_node', {'definition': 'bevel'}))
                 check('describe_node', 'library slider range', 'range -1.0..1.0' in t, '')
 
+                # --- Designer facts that AGENTS.md relies on (fail if a Designer update changes them)
+                F = 'designer facts'
+                t = text(await c('describe_node', {'definition': 'blend'}))
+                check(F, 'blend mode ids', 'copy=0, add=1, substract=2, multiply=3, addsub=4, max=5, min=6, '
+                      'switch=7, divide=8, overlay=9, screen=10, softlight=11' in t, '')
+                check(F, '$format ids', '8_bits_per_channel=0, 16_bits_per_channel=1, hdr_low_precision=2, '
+                      'hdr_high_precision=3' in t, '')
+                for definition, ins, outs in [('bevel', ['input'], ['height', 'normal']),
+                                              ('tile_generator', [], ['TileGenerator']),
+                                              ('hbao', ['input'], ['output']),
+                                              ('curvature_smooth', ['input'], ['height'])]:
+                    t = text(await c('describe_node', {'definition': definition}))
+                    out_line = re.search(r'output connector ids: (.*)', t)
+                    ok = (out_line is not None and all("'%s'" % o in out_line.group(1) for o in outs)
+                          and all(re.search(r'^\s+%s\s+CONNECTOR' % i, t, re.M) for i in ins))
+                    check(F, '%s connectors' % definition, ok, out_line.group(0) if out_line else t[:150])
+                t = text(await c('execute_designer_code', {'code': FACTS % (TEST_GRAPH, lv, lv, slope)}))
+                check(F, '29 atomic nodes', 'ATOMIC=29' in t, t)
+                check(F, 'APIException is not an Exception', 'APIEXC_BASE_ONLY=True' in t, t)
+                check(F, 'connections reported from queried side', 'QUERIED_SIDE=True' in t, t)
+                grad = added_id(text(await c('add_node', {'definition': 'gradient_linear_1', 'position': [-600, 600], **G})))
+                nrm = added_id(text(await c('add_node', {'definition': 'normal', 'position': [-400, 600],
+                                                         'params': {'intensity': 5.0, 'inversedy': True}, **G})))
+                await c('connect', {'from_node': grad, 'to_node': nrm, 'to_input': 'input1', **G})
+                px = pixel_values(text(await c('node_stats', {'node_id': grad, 'points': [[0, 0], [511, 0], [0, 511], [300, 511]], **G})))
+                check(F, 'gradient_linear_1: 1 at top, 0 at bottom', min(px[(0, 0)][0], px[(511, 0)][0]) > 0.99
+                      and max(px[(0, 511)][0], px[(300, 511)][0]) < 0.01, str(px))
+                # height rises towards the top: OpenGL (Y up) normals lean down there, so green < 0.5
+                gl = pixel_values(text(await c('node_stats', {'node_id': nrm, 'points': [[256, 256]], **G})))[(256, 256)]
+                await c('set_params', {'node_id': nrm, 'params': {'inversedy': False}, **G})
+                dx = pixel_values(text(await c('node_stats', {'node_id': nrm, 'points': [[256, 256]], **G})))[(256, 256)]
+                # a full-height ramp is a gentle slope (G about 0.49 vs 0.51); the sign is what matters
+                check(F, 'normal inversedy=True is OpenGL', gl[1] < 0.497 and dx[1] > 0.503 and abs(gl[1] + dx[1] - 1) < 0.002,
+                      'OpenGL G=%.3f, DirectX G=%.3f' % (gl[1], dx[1]))
+                await c('delete_nodes', {'node_ids': [grad, nrm], **G})
+
                 # --- editor + screenshots
                 t = text(await c('open_graph', {'graph': TEST_GRAPH, 'node_id': slope}))
                 check('open_graph', 'open + focus', 'focused node' in t, t)
                 r_ = await c('open_graph', {'graph': 'no_such_graph'})
                 check('open_graph', 'error on unknown graph', r_.is_error and 'not found' in text(r_), '')
+
+                # --- one tool call = one undo step (only acts while the self-test graph is in the editor)
+                ub = added_id(text(await c('add_node', {'definition': 'blur', 'position': [0, 400], **G})))
+                t = text(await c('execute_designer_code', {'code': UNDO_REDO % (TEST_GRAPH, 'Undo')}))
+                if 'SCHEDULED' not in t:
+                    skip('add_node', 'one undo step', 'self-test graph not in focus or Undo unavailable (%s)' % t.strip())
+                else:
+                    gone = 'EXISTS=False' in text(await c('execute_designer_code', {'code': NODE_EXISTS % (TEST_GRAPH, ub)}))
+                    if not gone:
+                        # Undo hit some other step: put it back at once
+                        await c('execute_designer_code', {'code': UNDO_REDO % (TEST_GRAPH, 'Redo')})
+                        await c('execute_designer_code', {'code': NODE_EXISTS % (TEST_GRAPH, ub)})
+                    check('add_node', 'one Undo removes the added node', gone, '')
+                    if gone:
+                        await c('execute_designer_code', {'code': UNDO_REDO % (TEST_GRAPH, 'Redo')})
+                        back = 'EXISTS=True' in text(await c('execute_designer_code', {'code': NODE_EXISTS % (TEST_GRAPH, ub)}))
+                        check('add_node', 'Redo restores it', back, '')
+                await c('delete_nodes', {'node_ids': [ub], **G})
                 for panel in ('window', 'graph', '2d', 'parameters', 'explorer'):
                     r_ = await c('screenshot_designer', {'panel': panel, 'max_size': 700})
                     if not is_image(r_) and 'not visible' in text(r_):
@@ -335,10 +418,18 @@ async def run(scratch):
                 check('save_package', 'save as', os.path.exists(sbs), t)
                 t = text(await c('save_package', {'graph_or_path': TEST_GRAPH}))
                 check('save_package', 'save in place', 'saved' in t, t)
+                t = text(await c('import_bitmap', {'path': png, 'embed': 'copy', 'name': 'selftest_copy', **G}))
+                copied = re.search(r'selftest_copy \(copy\): (.*)', t)
+                check('import_bitmap', 'copy into <package>.resources, named', copied is not None and os.path.isfile(copied.group(1))
+                      and os.path.dirname(copied.group(1)) == os.path.join(scratch, TEST_GRAPH + '.resources'), t)
+                await c('delete_nodes', {'node_ids': [added_id(t)], **G})
+                stats_before = text(await c('node_stats', {'node_id': lv, **G}))
                 t = text(await c('set_link_display', {'mode': 'portal', 'from_nodes': [clouds], **G}))
                 check('set_link_display', 'portals from a node', 'changed to portal' in t and 'reloaded' in t, t.split(';')[0])
                 t = text(await c('diff_graph', {'against': 'latest', **G}))
                 check('set_link_display', 'diff shows display only', 'shown as portal' in t and '0 added, 0 removed' in t, t.splitlines()[0])
+                stats_after = text(await c('node_stats', {'node_id': lv, **G}))
+                check('set_link_display', 'output unchanged', stats_after == stats_before, stats_after)
                 t = text(await c('set_link_display', {'mode': 'wire', 'from_nodes': [clouds], **G}))
                 check('set_link_display', 'back to wires', 'changed to wire' in t, t.split(';')[0])
                 t = text(await c('export_outputs', {'graph': TEST_GRAPH, 'output_dir': os.path.join(scratch, 'export')}))
@@ -348,6 +439,14 @@ async def run(scratch):
                 render_dir = os.path.join(scratch, 'render')
                 t = text(await c('render_sbs', {'sbs_path': sbs, 'output_dir': render_dir, 'outputs': ['height']}))
                 check('render_sbs', 'png', 'height.png  512x512' in t, t)
+                from PIL import Image
+                import numpy as np
+                exported = np.array(Image.open(os.path.join(scratch, 'export', 'height.png'))).astype(int)
+                rendered = np.array(Image.open(os.path.join(render_dir, 'height.png'))).astype(int)
+                # same up to the last 16-bit step (seen: 27 of 262144 pixels off by <= 3/65535)
+                worst = np.abs(exported - rendered).max() if exported.shape == rendered.shape else -1
+                check('export_outputs', 'matches render_sbs within 16-bit rounding', 0 <= worst <= 8,
+                      'max difference %d/65535, %d pixel(s) differ' % (worst, int((exported != rendered).sum())))
                 t = text(await c('sbsar_info', {'sbs_path': sbs}))
                 check('sbsar_info', 'exposed input + size', 'INPUT floor FLOAT4' in t and 'INPUT $outputsize' in t, '')
                 means = []

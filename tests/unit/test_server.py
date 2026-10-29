@@ -59,3 +59,9 @@ def test_designer_self_test_covers_every_tool():
     called = set(re.findall(r"c\('(\w+)'", selftest))
     missing = sorted(set(tools) - called)
     assert not missing, 'tools without a check in tests/test_all_tools.py: %s' % missing
+
+
+def test_screenshots_never_grab_the_screen():
+    # QScreen.grabWindow copies the screen area on macOS, capturing other apps (AGENTS.md, Screenshots)
+    for name in ('designer_helpers.py', 'server.py'):
+        assert 'grabWindow' not in _read('mcp_server', name)

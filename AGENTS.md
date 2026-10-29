@@ -79,7 +79,8 @@ Parameters are in each tool's description; this is when to reach for which.
 - **Bigger logic:** `run_designer_script` (script on disk, preferred for anything long) or
   `execute_designer_code`. Both time out (`timeout_s`); `cancel_designer_job` aborts.
 - **Output:** `save_package`; `export_outputs` (straight from Designer, live unsaved state,
-  pixel-identical to the cooked render); `sbsar_info` + `render_sbs` (cooked .sbsar, exposed
+  same as the cooked render up to 16-bit rounding: the self-test sees a few pixels off by
+  <= 3/65535); `sbsar_info` + `render_sbs` (cooked .sbsar, exposed
   params, size override, formats); `preview_maps` to look at rendered files.
 
 **Loop:** search/describe → build (script or `apply_edits`) → `describe_graph` + `preview_node`
@@ -88,7 +89,9 @@ numbers → render/export → `preview_maps` → fix → repeat. Look at the res
 user something works.
 
 **Self-test:** `mcp_server/venv/bin/python tests/test_all_tools.py` exercises every tool over MCP
-on a temporary graph (exit 0 = all passed). Run it after changing the server, plugin or helpers.
+on a temporary graph (exit 0 = all passed). Its "designer facts" checks re-measure the Designer
+behaviour this file states (enum ids, connector ids, gradient and normal conventions, sd API
+quirks); when you add such a fact, add a check there too. Run it after changing the server, plugin or helpers.
 Also run `mcp_server/venv/bin/python -m pytest` (`tests/unit`, no Designer needed): it
 fails if a tool is missing from README's Tools table/count or has no check in the self-test.
 Add unit tests there for new pure-Python code (server-side parsing, maths, image handling).
@@ -123,8 +126,8 @@ README.md, **How it works**. Agent-specific notes:
 ## Undo, timeouts, plugin lifecycle
 
 - Each code run and each edit tool is wrapped in one Designer undo transaction
-  (`SDHistoryUtils.UndoGroup`), so Ctrl+Z reverts a whole run (verified: 3 added nodes
-  removed by one Undo, restored by one Redo).
+  (`SDHistoryUtils.UndoGroup`), so Ctrl+Z reverts a whole run (the self-test checks this: one
+  Undo removes a node added by `add_node`, one Redo restores it).
 - Undo history is **per document**: Edit > Undo (and Ctrl+Z) reverts the last step of the
   graph in focus. **Never trigger Undo yourself while one of the user's graphs is open in the
   editor**; it hits their document. (It happened once; an immediate Redo restored it, which a
@@ -173,7 +176,7 @@ README.md, **How it works**. Agent-specific notes:
   `getDefaultValue()` or `SDValueEnum.sFromValueId(type, id)`). `set_params` converts for you.
 - `$format` enum ids: `8_bits_per_channel`, `16_bits_per_channel`, `hdr_low_precision`,
   `hdr_high_precision` (type `sbs::compositing::format`).
-- Blend modes: copy 0, add 1, subtract 2, multiply 3, addsub 4, max 5, min 6, switch 7,
+- Blend modes: copy 0, add 1, subtract 2 (enum id spelled `substract`), multiply 3, addsub 4, max 5, min 6, switch 7,
   divide 8, overlay 9, screen 10, softlight 11. **Don't trust third-party tables**: one public
   SD MCP lists 4 = Max / 5 = Min / 6 = Difference, which is wrong (there is no Difference).
   Read enums with `describe_node`.

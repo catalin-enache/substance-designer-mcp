@@ -157,8 +157,10 @@ mcp_server\venv\Scripts\python tests\test_all_tools.py   # Windows
 ```
 
 It builds a temporary graph (`mcp_selftest`), checks every tool including error cases, removes
-the graph and reopens the graph you had open. It never triggers Undo and doesn't touch your
-packages. The 3D screenshot check is skipped if no 3D View is visible; the clipboard check runs
+the graph and reopens the graph you had open. It doesn't touch your packages. To check that
+one change is one undo step it triggers Undo and Redo, but only while its own graph is the one
+in the editor; it skips that check otherwise. It also re-checks the Designer behaviour the
+agent notes rely on ("designer facts"), so a Designer update that changes it shows up. The 3D screenshot check is skipped if no 3D View is visible; the clipboard check runs
 on macOS only. Exit code 0 means everything passed. Run it after installing, after updates, and
 after a Designer update.
 
