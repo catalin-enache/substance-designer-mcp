@@ -36,8 +36,10 @@ Parameters are in each tool's description; this is when to reach for which.
   ambiguous unless one of them is open in the editor.
 - **Safety net:** `snapshot_graph`, `list_snapshots`, `diff_graph` (see the rules).
 - **Look:** `preview_node` (any node, even ones not feeding an output), `screenshot_designer`
-  (what the user sees), `open_graph` (open and centre on a node first, so the user and
-  screenshots see it).
+  (what the user sees), `open_graph` (open the graph first, so the user and screenshots see
+  it; `frame=` or `node_ids=` zooms the view to one section). Screenshots cost about
+  width × height / 750 tokens: keep `max_size` small, `crop` to the part you need, and zoom
+  with `open_graph` rather than taking a big shot of the whole graph.
 - **Measure:** `node_stats` (exact numbers; prefer them over eyeballing), `check_tiling`
   (trim sheets only need horizontal), `compare_to_reference` for tones against a reference
   image (`import_bitmap` it too if you want it in the graph). Compare **like with like**: a
@@ -185,6 +187,9 @@ save, edit and reload it in a single call (the example script does, for its port
 
 ## Designer UI (Qt)
 
+- The graph editor's node view is a `QGraphicsView` inside the `areaB_` dock (the dock adds a
+  title bar and two toolbar rows above it); its **scene coordinates are graph units**, so
+  `fitInView(QRectF(x, y, w, h))` frames a part of the graph (`open_graph(frame=...)` does).
 - Current graph: `getQtForPythonUIMgr().getCurrentGraph()`; editor control via
   **`app.getUIMgr()`**: `openResourceInEditor(graph)`, `focusGraphNode(graphViewID, node)` (ids
   via `getGraphViewIDCount/At`, `getGraphFromGraphViewID`), `getGraphNodeBBox`,

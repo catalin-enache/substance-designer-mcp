@@ -358,10 +358,24 @@ def _save_3d_render(mw, out_path):
         app.processEvents()
 
 
+def _graph_view(mw):
+    """The graph editor's node view (a QGraphicsView in the graph dock; its scene coordinates
+    are graph units), or None. The dock's title bar and toolbars are not part of it. The
+    caller keeps `mw` (the main window) referenced while using the view, or PySide reports
+    its wrappers as already deleted."""
+    from PySide6 import QtWidgets
+    dock = _visible_dock(mw, _PANEL_AREAS['graph'])
+    if dock is None:
+        return None
+    views = [v for v in dock.findChildren(QtWidgets.QGraphicsView) if v.isVisible()]
+    return max(views, key=lambda v: v.width() * v.height()) if views else None
+
+
 def save_screenshot(panel, out_path):
     """Render one of Designer's own widgets to PNG with QWidget.grab(), or the 3D view via its
     own render. Screen/window grabs are deliberately not used: on macOS they copy whatever
-    covers Designer, i.e. other apps."""
+    covers Designer, i.e. other apps. 'graph' is the node view alone, without the dock's
+    title bar and toolbars."""
     from PySide6 import QtWidgets
     mw = _APP.getQtForPythonUIMgr().getMainWindow()
     if panel == '3d':
@@ -382,6 +396,8 @@ def save_screenshot(panel, out_path):
                                    'open_graph closes it')
             raise RuntimeError('panel %r is not visible in Designer (open it via the Windows menu)' % panel)
         widget = docks[0]
+        if panel == 'graph':
+            widget = _graph_view(mw) or widget
     QtWidgets.QApplication.instance().processEvents()
     pixmap = widget.grab()
     if not pixmap.save(out_path):
@@ -730,14 +746,67 @@ def leave_home_screen():
     print('closed the Home screen')
 
 
-def open_graph(identifier, node_id=None):
-    """Open a graph in Designer's graph editor; optionally centre the view on a node."""
+def _fit_area(g, node_ids=None, frame=None, rect=None):
+    """(x, y, w, h) in graph units: a frame (by title), the nodes' bounding box, or rect."""
+    if frame is not None:
+        from sd.api.sdgraphobjectframe import SDGraphObjectFrame
+        frames = [o for o in g.getGraphObjects() if isinstance(o, SDGraphObjectFrame)]
+        found = [f for f in frames if f.getTitle() == frame] or \
+                [f for f in frames if f.getTitle().lower() == str(frame).lower()]
+        if len(found) != 1:
+            raise RuntimeError('%s frame titled %r; frames: %s' % (
+                'more than one' if found else 'no', frame, ', '.join(repr(f.getTitle()) for f in frames) or 'none'))
+        pos, size = found[0].getPosition(), found[0].getSize()
+        return pos.x, pos.y, size.x, size.y, 'frame %r' % found[0].getTitle()
+    if node_ids:
+        nodes = [_target(g, i) for i in node_ids]
+        xs = [n.getPosition().x for n in nodes]
+        ys = [n.getPosition().y for n in nodes]
+        half = _NODE_SIZE / 2.0
+        return (min(xs) - half, min(ys) - half, max(xs) - min(xs) + _NODE_SIZE, max(ys) - min(ys) + _NODE_SIZE,
+                '%d node(s)' % len(nodes))
+    x, y, w, h = (float(v) for v in rect)
+    if w <= 0 or h <= 0:
+        raise RuntimeError('rect is [x, y, width, height] with a positive width and height')
+    return x, y, w, h, 'rect'
+
+
+FIT_MAX_ZOOM = 1.0   # 100 %: a node at its normal size, never larger
+FIT_PADDING = 0.05   # of the fitted area, on every side
+
+
+def _fit_view_to(g, node_ids=None, frame=None, rect=None):
+    from PySide6.QtCore import QRectF, Qt
+    x, y, w, h, what = _fit_area(g, node_ids, frame, rect)
+    mw = _APP.getQtForPythonUIMgr().getMainWindow()   # keeps the view's wrappers alive
+    view = _graph_view(mw)
+    if view is None:
+        raise RuntimeError('the graph view is not visible in Designer')
+    pad = max(w, h) * FIT_PADDING + 20.0
+    area = QRectF(x - pad, y - pad, w + 2 * pad, h + 2 * pad)
+    view.fitInView(area, Qt.KeepAspectRatio)
+    if view.transform().m11() > FIT_MAX_ZOOM:
+        view.resetTransform()
+        view.scale(FIT_MAX_ZOOM, FIT_MAX_ZOOM)
+        view.centerOn(area.center())
+    _process_events()
+    seen = view.mapToScene(view.viewport().rect()).boundingRect()
+    print('fitted %s: zoom %d%%, visible %d,%d to %d,%d' % (
+        what, round(view.transform().m11() * 100), seen.left(), seen.top(), seen.right(), seen.bottom()))
+
+
+def open_graph(identifier, node_id=None, node_ids=None, frame=None, rect=None):
+    """Open a graph in Designer's graph editor; fit the view to a frame, nodes or a rectangle,
+    or centre it on one node; by default fit the whole graph."""
     g = find_graph(identifier)
     leave_home_screen()  # otherwise the graph opens behind it
     ui = _APP.getUIMgr()
     ui.openResourceInEditor(g)
     _process_events()
     print('opened', g.getIdentifier())
+    if node_ids or frame is not None or rect is not None:
+        _fit_view_to(g, node_ids, frame, rect)
+        return
     if not node_id:
         if _fit_graph_view():
             print('fitted the whole graph in view')

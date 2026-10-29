@@ -723,6 +723,55 @@ async def run(scratch):
                 r_ = await c('open_graph', {'graph': 'no_such_graph'})
                 check('open_graph', 'error on unknown graph', r_.is_error and 'not found' in text(r_), '')
 
+                def visible(t):
+                    m = re.search(r'zoom (\d+)%, visible (-?\d+),(-?\d+) to (-?\d+),(-?\d+)', t)
+                    return (int(m.group(1)), [int(v) for v in m.groups()[1:]]) if m else (None, None)
+
+                def contains(box, points):
+                    return box is not None and bool(points) and all(
+                        box[0] <= x <= box[2] and box[1] <= y <= box[3] for x, y in points)
+
+                t = text(await c('execute_designer_code', {'code': GRAPH_OF % TEST_GRAPH + (
+                    "from sd.api.sdgraphobjectframe import SDGraphObjectFrame\n"
+                    "f=[o for o in g.getGraphObjects() if isinstance(o, SDGraphObjectFrame) and o.getTitle()=='Shape'][0]\n"
+                    "p,s=f.getPosition(),f.getSize()\nprint('FRAME=%d,%d,%d,%d' % (p.x, p.y, p.x+s.x, p.y+s.y))")}))
+                fx0, fy0, fx1, fy1 = [int(v) for v in re.search(r'FRAME=(-?\d+),(-?\d+),(-?\d+),(-?\d+)', t).groups()]
+                t = text(await c('open_graph', {'graph': TEST_GRAPH, 'frame': 'shape'}))   # title, any case
+                zoom, box = visible(t)
+                check('open_graph', 'frame fits in view', "fitted frame 'Shape'" in t and zoom is not None
+                      and zoom <= 100 and contains(box, [(fx0, fy0), (fx1, fy1)]), t)
+                shape_nodes = [clouds, slope]
+                points = [(float(x), float(y)) for x, y in re.findall(
+                    r'^\d+ \S+ @\((-?[\d.]+),(-?[\d.]+)\)', text(await c('describe_graph', {'node_ids': shape_nodes, **G})), re.M)]
+                t = text(await c('open_graph', {'graph': TEST_GRAPH, 'node_ids': shape_nodes}))
+                zoom, box = visible(t)
+                check('open_graph', 'node_ids fit their bounding box', 'fitted 2 node(s)' in t and len(points) == 2
+                      and contains(box, points), t)
+                t = text(await c('open_graph', {'graph': TEST_GRAPH, 'rect': [0, 0, 10, 10]}))
+                zoom, box = visible(t)
+                check('open_graph', 'rect, zoom capped at 100%', zoom == 100 and contains(box, [(0, 0), (10, 10)]), t)
+                r_ = await c('open_graph', {'graph': TEST_GRAPH, 'frame': 'no such frame'})
+                check('open_graph', 'error on unknown frame lists the frames', r_.is_error and "'Shape'" in text(r_), text(r_))
+                # 'graph' captures the node view alone (no title bar, no toolbars); crop takes a part of it
+                full = await c('screenshot_designer', {'panel': 'graph', 'max_size': 4000})
+                t = text(await c('execute_designer_code', {'code': (
+                    "from PySide6.QtWidgets import QApplication, QGraphicsView, QDockWidget\n"
+                    "d=[w for w in QApplication.instance().allWidgets() if isinstance(w, QDockWidget) "
+                    "and w.objectName().startswith('areaB_') and w.isVisible()][0]\n"
+                    "v=max((x for x in d.findChildren(QGraphicsView) if x.isVisible()), key=lambda x: x.width()*x.height())\n"
+                    "r=v.devicePixelRatioF()\nprint('VIEW=%d,%d DOCK=%d,%d' % (round(v.width()*r), round(v.height()*r), "
+                    "round(d.width()*r), round(d.height()*r)))")}))
+                sizes = re.search(r'VIEW=(\d+),(\d+) DOCK=(\d+),(\d+)', t)
+                view_size = (int(sizes.group(1)), int(sizes.group(2))) if sizes else None
+                check('screenshot_designer', 'graph is the node view, without toolbars', is_image(full) and sizes
+                      and image_size(full) == view_size and int(sizes.group(4)) > view_size[1],
+                      '%s vs %s' % (image_size(full) if is_image(full) else text(full), t.strip()))
+                part = await c('screenshot_designer', {'panel': 'graph', 'max_size': 4000, 'crop': [0, 0, 0.5, 0.25]})
+                check('screenshot_designer', 'crop', is_image(part) and view_size is not None and image_size(part) == (
+                    round(view_size[0] * 0.5), round(view_size[1] * 0.25)), str(image_size(part)) if is_image(part) else text(part))
+                r_ = await c('screenshot_designer', {'panel': 'graph', 'crop': [0.5, 0, 0.2, 1]})
+                check('screenshot_designer', 'error on a bad crop', r_.is_error and 'left < right' in text(r_), text(r_))
+
                 # --- one tool call = one undo step (only acts while the self-test graph is in the editor)
                 ub = added_id(text(await c('add_node', {'definition': 'blur', 'position': [0, 400], **G})))
                 t = text(await c('execute_designer_code', {'code': UNDO_REDO % (TEST_GRAPH, 'Undo')}))
@@ -951,6 +1000,10 @@ async def run(scratch):
                     check(E, 'long links between sections saved as portals',
                           reported is not None and portals == int(reported.group(1)) > 0, '%d in the file; %s' % (
                               portals, reported.group(0) if reported else 'no count printed'))
+                    # a section larger than the view: fitting it zooms out below 100 %
+                    t = text(await c('open_graph', {'graph': EXAMPLE_GRAPH, 'frame': 'K: wood planks'}))
+                    m = re.search(r'zoom (\d+)%', t)
+                    check('open_graph', 'a large frame zooms out to fit', m is not None and 5 < int(m.group(1)) < 100, t)
                     await c('open_graph', {'graph': EXAMPLE_GRAPH})   # so you can see it
                     t = text(await c('export_outputs', {'graph': EXAMPLE_GRAPH, 'output_dir': os.path.join(scratch, 'example_maps')}))
                     names = ('basecolor', 'normal', 'roughness', 'metallic', 'height', 'ambientocclusion')

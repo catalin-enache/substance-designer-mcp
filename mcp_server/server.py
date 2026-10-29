@@ -279,11 +279,20 @@ def preview_node(node_id: str, graph: str | None = None, output: str | None = No
 
 
 @_tool()
-def screenshot_designer(panel: str = 'window', max_size: int = 1400) -> Image:
+def screenshot_designer(panel: str = 'window', max_size: int = 1000,
+                        crop: list[float] | None = None) -> Image:
     """Capture Designer's own UI (never other apps): panel = window, graph, 2d, 3d, explorer,
     parameters, library or console. Shows what the user sees (node layout, 2D view, properties).
-    '3d' returns the 3D view's own render (material on the mesh); the user's clipboard is
-    restored afterwards. Inside 'window' the 3D view appears black."""
+    'graph' is the node view alone (no title bar or toolbars); open_graph(frame=... / node_ids=...)
+    zooms it to a section first. '3d' returns the 3D view's own render (material on the mesh);
+    the user's clipboard is restored afterwards. Inside 'window' the 3D view appears black.
+    crop: [left, top, right, bottom] as fractions 0-1 of the panel, applied before max_size.
+    An image costs about width x height / 750 tokens (1000 x 700 is about 930), so keep
+    max_size small and crop to what you need."""
+    if crop is not None:
+        if len(crop) != 4 or not all(0.0 <= float(v) <= 1.0 for v in crop) \
+                or not (crop[0] < crop[2] and crop[1] < crop[3]):
+            raise ToolError('crop is [left, top, right, bottom] as fractions 0-1, with left < right and top < bottom')
     tmp_dir = tempfile.mkdtemp(prefix='sd_shot_')
     out_path = os.path.join(tmp_dir, 'shot.png')
     try:
@@ -291,6 +300,9 @@ def screenshot_designer(panel: str = 'window', max_size: int = 1400) -> Image:
         if not os.path.exists(out_path):
             raise ToolError(text.strip().splitlines()[-1] if text.strip() else 'screenshot failed')
         im = PILImage.open(out_path).convert('RGB')
+        if crop is not None:
+            w, h = im.size
+            im = im.crop((round(crop[0] * w), round(crop[1] * h), round(crop[2] * w), round(crop[3] * h)))
         im.thumbnail((max_size, max_size))
         buf = io.BytesIO()
         im.save(buf, format='PNG')
@@ -376,11 +388,18 @@ def import_bitmap(path: str, graph: str | None = None, embed: str = 'link',
 
 
 @_tool()
-def open_graph(graph: str, node_id: str | None = None) -> str:
+def open_graph(graph: str, node_id: str | None = None, node_ids: list[str] | None = None,
+               frame: str | None = None, rect: list[float] | None = None) -> str:
     """Open a graph in Designer's graph editor (so the user and screenshot_designer see it;
-    closes Designer's Home screen if it is showing).
-    Without node_id the whole graph is fitted in view; with node_id the view centres on that node."""
-    return _checked(_bridge(_helpers_call('open_graph(%r, %r)' % (graph, node_id)), timeout=60))
+    closes Designer's Home screen if it is showing). By default the whole graph is fitted in
+    view. To look at one section, fit the view to a frame (its title), to node_ids (their
+    bounding box) or to rect ([x, y, width, height] in graph units), with a little padding and
+    at most 100 % zoom. node_id centres the view on one node (Designer's own focus, zoomed in
+    close). Prints the zoom and the visible area in graph units."""
+    if rect is not None and len(rect) != 4:
+        raise ToolError('rect is [x, y, width, height] in graph units')
+    return _checked(_bridge(_helpers_call('open_graph(%r, %r, %r, %r, %r)' % (
+        graph, node_id, node_ids, frame, rect)), timeout=60))
 
 
 @_tool()

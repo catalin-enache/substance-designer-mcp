@@ -86,7 +86,7 @@ saved file (details: [AGENTS.md](AGENTS.md), Portals).
 | Tuning | `sweep_param` (try several values of a parameter side by side; the original value is restored) |
 | Safety | `snapshot_graph`, `list_snapshots`, `diff_graph` (what changed vs the saved file or a snapshot) |
 | Readability | `arrange_graph` (tidy layout by data flow), `add_frame`, `add_comment`, `set_link_display` (show wires as portals to hide clutter; saves and reloads the package after a snapshot) |
-| Viewing | `screenshot_designer` (window, graph, 2D view, 3D view, panels; only Designer is captured, never other apps), `open_graph` (open a graph, centred on a node) |
+| Viewing | `screenshot_designer` (window, graph, 2D view, 3D view, panels; only Designer is captured, never other apps), `open_graph` (open a graph, fitted whole, zoomed to a frame, nodes or rectangle, or centred on a node) |
 | Editing | `add_node`, `import_bitmap` (image file as a Bitmap node), `set_params`, `connect`, `disconnect`, `move_nodes`, `delete_nodes`, `apply_edits` (many edits at once), `create_graph`, `set_graph_size` |
 | Controls | `expose_param`, `remove_graph_input` (turn node parameters into graph inputs) |
 | Scripting | `execute_designer_code`, `run_designer_script` (with timeout) |
