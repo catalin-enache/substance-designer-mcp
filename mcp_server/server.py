@@ -5,6 +5,7 @@ Talks to the sd_bridge plugin running inside Designer (127.0.0.1:9877, token in
 ~/.sd_bridge_token) and wraps Designer's sbscooker / sbsrender command-line tools.
 """
 import contextlib
+import functools
 import hashlib
 import hmac
 import io
@@ -62,11 +63,46 @@ def _agent_guide():
         return 'AGENTS.md not found next to mcp_server/.'
 
 
-server = MCPServer(
-    name='substance-designer',
-    # The full agent notes ship with the server so every client gets them
-    instructions=_agent_guide(),
-)
+# Claude Code cuts a server's instructions at 4,096 characters (measured: AGENTS.md arrived cut
+# there), so the instructions only point to get_guide(), whose result arrives in full.
+INSTRUCTIONS = (
+    'Tools for driving the user\'s running Adobe Substance 3D Designer. Before using any other tool '
+    'from this server, call get_guide() and read the whole result: it is the full guide (AGENTS.md), '
+    'with the rules that protect the user\'s work (Undo, the bridge token, quitting Designer, '
+    'snapshots) and the sd API pitfalls. Then tell the user in one line that you have read the '
+    'Designer guide. (These instructions are short because MCP clients cut long ones; the guide is '
+    'delivered through get_guide() instead.)')
+GUIDE_NOT_READ = ('NOTE: the Designer guide has not been read in this session. Call get_guide() and '
+                  'read it before going on: it has the rules that protect the user\'s work.')
+
+server = MCPServer(name='substance-designer', instructions=INSTRUCTIONS)
+_session = {'guide_read': False}   # one server process per client session (stdio)
+
+
+def _tool():
+    """server.tool(), plus a reminder at the top of text results until get_guide() was called."""
+    register = server.tool()
+
+    def decorate(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            result = fn(*args, **kwargs)
+            if not _session['guide_read'] and isinstance(result, str):
+                return GUIDE_NOT_READ + '\n\n' + result
+            return result
+        return register(wrapper)
+    return decorate
+
+
+@server.tool()
+def get_guide() -> str:
+    """The full guide for agents driving Substance Designer (AGENTS.md): rules that protect the
+    user's work, which tool to use when, sd API and Designer pitfalls, verified facts. Call it
+    first in every session, read all of it, then tell the user you have read it."""
+    _session['guide_read'] = True
+    guide = _agent_guide()
+    return guide + ('\n\n---\nEnd of the Designer guide (%d characters, complete). Now tell the user in '
+                    'one line that you have read the Designer guide, then continue.' % len(guide))
 
 
 @server.resource('designer://agents-guide', name='agents-guide', mime_type='text/markdown',
@@ -141,7 +177,7 @@ def _bridge(code, path=None, timeout=None):
     return text or '(no output)'
 
 
-@server.tool()
+@_tool()
 def designer_status() -> str:
     """Report Designer's version, the bridge state (idle/running) and the open user packages."""
     bridge = _send({'cmd': 'status'}, wait=10)
@@ -156,14 +192,14 @@ def designer_status() -> str:
     )
 
 
-@server.tool()
+@_tool()
 def cancel_designer_job() -> str:
     """Abort the script currently running in Designer (and drop queued ones). Takes effect the
     next time Python code runs, so one long C++ call (e.g. graph.compute()) finishes first."""
     return _send({'cmd': 'cancel'}, wait=10).get('output', '')
 
 
-@server.tool()
+@_tool()
 def execute_designer_code(code: str, undo_label: str = 'Claude: code', timeout_s: int = 120) -> str:
     """Run Python inside Substance Designer (full `sd` API) and return printed output and errors.
     All changes form one undo step named `undo_label` (Ctrl+Z in Designer reverts them).
@@ -173,7 +209,7 @@ def execute_designer_code(code: str, undo_label: str = 'Claude: code', timeout_s
     return _bridge(_with_undo(code, undo_label), '<execute_designer_code>', timeout_s)
 
 
-@server.tool()
+@_tool()
 def run_designer_script(path: str, timeout_s: int = 600) -> str:
     """Run a Python file inside Substance Designer; `__file__` is set to its absolute path.
     All changes form one undo step named after the file. Aborted after `timeout_s` seconds
@@ -185,7 +221,7 @@ def run_designer_script(path: str, timeout_s: int = 600) -> str:
         return _bridge(_with_undo(f.read(), 'Claude: ' + os.path.basename(path)), path, timeout_s)
 
 
-@server.tool()
+@_tool()
 def describe_graph(graph: str | None = None, node_ids: list[str] | None = None,
                    include_params: bool = False, limit: int = 400) -> str:
     """List a graph's nodes: id, type (atomic name or instance:<library graph>), position and
@@ -196,7 +232,7 @@ def describe_graph(graph: str | None = None, node_ids: list[str] | None = None,
     return _checked(_bridge(_helpers_call('describe_graph(%r, %r, %r, %d)' % (graph, node_ids, include_params, limit)), timeout=60))
 
 
-@server.tool()
+@_tool()
 def describe_node(definition: str) -> str:
     """Show a node type's connectors and parameters (ids, types, labels, defaults, enum values).
     `definition`: atomic name ('levels', 'blend', 'sbs::compositing::normal') or library package
@@ -204,7 +240,7 @@ def describe_node(definition: str) -> str:
     return _checked(_bridge(_helpers_call('describe_node(%r)' % definition), timeout=60))
 
 
-@server.tool()
+@_tool()
 def preview_node(node_id: str, graph: str | None = None, output: str | None = None,
                  max_size: int = 512) -> Image:
     """Compute the graph in Designer and return the image produced by one node (any node, not
@@ -228,7 +264,7 @@ def preview_node(node_id: str, graph: str | None = None, output: str | None = No
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-@server.tool()
+@_tool()
 def screenshot_designer(panel: str = 'window', max_size: int = 1400) -> Image:
     """Capture Designer's own UI (never other apps): panel = window, graph, 2d, 3d, explorer,
     parameters, library or console. Shows what the user sees (node layout, 2D view, properties).
@@ -249,7 +285,7 @@ def screenshot_designer(panel: str = 'window', max_size: int = 1400) -> Image:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-@server.tool()
+@_tool()
 def save_package(graph_or_path: str | None = None, save_as: str | None = None) -> str:
     """Save an open package from Designer. graph_or_path: a graph identifier or the package's
     file path (default: graph open in the UI). save_as: new absolute .sbs path (required for
@@ -257,7 +293,7 @@ def save_package(graph_or_path: str | None = None, save_as: str | None = None) -
     return _checked(_bridge(_helpers_call('save_package(%r, %r)' % (graph_or_path, save_as)), timeout=120))
 
 
-@server.tool()
+@_tool()
 def export_outputs(graph: str, output_dir: str, outputs: list[str] | None = None,
                    file_format: str = 'png') -> str:
     """Compute a graph inside Designer and save its output nodes' textures directly (no
@@ -272,7 +308,7 @@ def _edit(call, label):
     return _checked(_bridge(_with_undo(HELPERS + '\n\n' + call + '\n', label), '<quick edit>', 60))
 
 
-@server.tool()
+@_tool()
 def add_node(definition: str, graph: str | None = None, position: list[float] | None = None,
              params: dict | None = None) -> str:
     """Add a node and return its id. definition: atomic ('levels', 'blend') or library
@@ -282,7 +318,7 @@ def add_node(definition: str, graph: str | None = None, position: list[float] | 
                  'Claude: add ' + definition)
 
 
-@server.tool()
+@_tool()
 def set_params(node_id: str, params: dict, graph: str | None = None) -> str:
     """Set parameters on a node (node_id 'graph' = the graph itself, e.g. $outputsize).
     Values are converted to the parameter's type: numbers, bools, lists for vectors/colors
@@ -290,7 +326,7 @@ def set_params(node_id: str, params: dict, graph: str | None = None) -> str:
     return _edit('set_params(%r, %r, %r)' % (graph, node_id, params), 'Claude: set params on ' + node_id)
 
 
-@server.tool()
+@_tool()
 def connect(from_node: str, to_node: str, to_input: str, from_output: str | None = None,
             graph: str | None = None) -> str:
     """Connect from_node's output (default: its first) to to_node's input connector
@@ -299,19 +335,19 @@ def connect(from_node: str, to_node: str, to_input: str, from_output: str | None
                  'Claude: connect')
 
 
-@server.tool()
+@_tool()
 def disconnect(node_id: str, input_id: str, graph: str | None = None) -> str:
     """Remove the connection(s) going into node_id's input connector. One undo step."""
     return _edit('disconnect(%r, %r, %r)' % (graph, node_id, input_id), 'Claude: disconnect')
 
 
-@server.tool()
+@_tool()
 def delete_nodes(node_ids: list[str], graph: str | None = None) -> str:
     """Delete nodes (and their connections) from a graph. One undo step."""
     return _edit('delete_nodes(%r, %r)' % (graph, node_ids), 'Claude: delete nodes')
 
 
-@server.tool()
+@_tool()
 def import_bitmap(path: str, graph: str | None = None, embed: str = 'link',
                   position: list[float] | None = None, name: str | None = None) -> str:
     """Add an image file (png, jpg, tga, exr, tif, psd...) to a graph as a Bitmap node and return
@@ -325,7 +361,7 @@ def import_bitmap(path: str, graph: str | None = None, embed: str = 'link',
                  'Claude: import bitmap')
 
 
-@server.tool()
+@_tool()
 def open_graph(graph: str, node_id: str | None = None) -> str:
     """Open a graph in Designer's graph editor (so the user and screenshot_designer see it;
     closes Designer's Home screen if it is showing).
@@ -333,14 +369,14 @@ def open_graph(graph: str, node_id: str | None = None) -> str:
     return _checked(_bridge(_helpers_call('open_graph(%r, %r)' % (graph, node_id)), timeout=60))
 
 
-@server.tool()
+@_tool()
 def create_graph(name: str, save_path: str | None = None, size_log2: int = 11) -> str:
     """Create a new package with one empty compositing graph (output size 2^size_log2,
     default 2048). save_path: optional .sbs path to save it to. One undo step."""
     return _edit('create_graph(%r, %r, %d)' % (name, save_path, size_log2), 'Claude: create graph ' + name)
 
 
-@server.tool()
+@_tool()
 def move_nodes(positions: dict[str, list[float]], graph: str | None = None) -> str:
     """Move nodes: {"node_id": [x, y], ...}. One undo step."""
     return _edit('move_nodes(%r, %r)' % (graph, positions), 'Claude: move nodes')
@@ -380,7 +416,7 @@ def _library_index():
     return _LIBRARY_CACHE
 
 
-@server.tool()
+@_tool()
 def search_nodes(query: str, limit: int = 30, include_hidden: bool = False) -> str:
     """Find node types by name, label, category or description, across atomic nodes and
     Designer's whole node library (not just loaded packages). Results show the `definition`
@@ -468,7 +504,7 @@ def _node_pixels(node_id, graph, output, tool):
     return data, layout, meta
 
 
-@server.tool()
+@_tool()
 def node_stats(node_id: str, graph: str | None = None, output: str | None = None,
                region: list[int] | None = None, points: list[list[int]] | None = None) -> str:
     """Exact pixel statistics of any node's output (computed in Designer, read from the raw
@@ -494,7 +530,7 @@ def node_stats(node_id: str, graph: str | None = None, output: str | None = None
     return '\n'.join(lines)
 
 
-@server.tool()
+@_tool()
 def expose_param(node_id: str, param: str, graph: str | None = None, input_id: str | None = None,
                  label: str | None = None, default: float | int | bool | str | list[float] | None = None,
                  min: float | None = None, max: float | None = None, step: float | None = None,
@@ -508,14 +544,14 @@ def expose_param(node_id: str, param: str, graph: str | None = None, input_id: s
         graph, node_id, param, input_id, label, default, min, max, step, group), 'Claude: expose ' + param)
 
 
-@server.tool()
+@_tool()
 def list_graph_inputs(graph: str | None = None) -> str:
     """List a graph's exposed inputs (type, value, label/min/max, which node parameters they
     drive) and whether its output size is fixed or overridable."""
     return _checked(_bridge(_helpers_call('list_graph_inputs(%r)' % graph), timeout=60))
 
 
-@server.tool()
+@_tool()
 def remove_graph_input(input_id: str, graph: str | None = None) -> str:
     """Delete an exposed graph input. Parameters bound to it (as expose_param does) keep its
     current value. Refuses, changing nothing, while a larger function (an expression, a Pixel
@@ -523,7 +559,7 @@ def remove_graph_input(input_id: str, graph: str | None = None) -> str:
     return _edit('remove_graph_input(%r, %r)' % (graph, input_id), 'Claude: remove input ' + input_id)
 
 
-@server.tool()
+@_tool()
 def set_graph_size(size_log2: int, graph: str | None = None, overridable: bool = True) -> str:
     """Set the graph's output size to 2^size_log2. overridable=True (default) makes the size
     follow the parent with that default, so render_sbs(size_log2=...) can override it;
@@ -531,7 +567,7 @@ def set_graph_size(size_log2: int, graph: str | None = None, overridable: bool =
     return _edit('set_graph_size(%r, %d, %r)' % (graph, size_log2, overridable), 'Claude: set graph size')
 
 
-@server.tool()
+@_tool()
 def apply_edits(ops: list[dict], graph: str | None = None) -> str:
     """Run several edits in one call and one undo step. Each op is a dict:
     {"op": "add", "definition": "levels", "ref": "lv", "position"?: [x, y], "params"?: {...}}
@@ -581,7 +617,7 @@ def _channel_summary(data, layout):
                                                      data[:, :, i].mean()) for i, n in enumerate(names))
 
 
-@server.tool()
+@_tool()
 def sweep_param(node_id: str, param: str, values: list, graph: str | None = None,
                 view_node: str | None = None, output: str | None = None, tile_size: int = 256) -> list:
     """Try several values of one parameter and see them side by side: returns a labelled image
@@ -635,7 +671,7 @@ def _seam_report(data, axis_name, seam_axis):
         axis_name.capitalize(), seam_mean, interior_mean, ratio, worst, where, worst_at, verdict)
 
 
-@server.tool()
+@_tool()
 def check_tiling(node_id: str, graph: str | None = None, output: str | None = None,
                  axis: str = 'both') -> str:
     """Measure whether a node's output tiles: compares the jump across the wrap-around seam
@@ -779,7 +815,7 @@ def _histogram_tile(node_luma, ref_luma, width, height, bins=64):
     return im
 
 
-@server.tool()
+@_tool()
 def compare_to_reference(node_id: str, reference_path: str, graph: str | None = None,
                          output: str | None = None, region: list[int] | None = None,
                          reference_region: list[int] | None = None, aligned: bool = False,
@@ -833,7 +869,7 @@ def _designer_log_path():
     return max(logs, key=os.path.getmtime) if logs else None
 
 
-@server.tool()
+@_tool()
 def read_designer_log(lines: int = 60, contains: str | None = None, errors_only: bool = False,
                       since_last_start: bool = True) -> str:
     """Read the end of Designer's log, where every plugin/Python traceback lands. contains:
@@ -881,7 +917,7 @@ def _copy_package(graph, path):
     return found
 
 
-@server.tool()
+@_tool()
 def snapshot_graph(graph: str | None = None, label: str | None = None) -> str:
     """Save a snapshot of a graph's package (a full .sbs copy) before risky work. It doesn't
     change the open package, its file or its saved state. Compare later with diff_graph; the
@@ -920,7 +956,7 @@ def _snapshots(graph_id):
     return sorted(os.path.join(folder, f) for f in os.listdir(folder) if f.endswith('.sbs'))
 
 
-@server.tool()
+@_tool()
 def list_snapshots(graph: str | None = None) -> str:
     """List saved snapshots (newest last). graph: graph identifier (default: all graphs)."""
     graphs = [_safe_name(graph)] if graph else (sorted(os.listdir(SNAPSHOT_DIR)) if os.path.isdir(SNAPSHOT_DIR) else [])
@@ -1049,7 +1085,7 @@ def _diff_models(old, new, show_positions):
     return summary, out
 
 
-@server.tool()
+@_tool()
 def diff_graph(graph: str | None = None, against: str = 'saved', show_positions: bool = False) -> str:
     """Show what changed in a graph: nodes added/removed, parameter changes, links
     added/removed, exposed inputs and size. against: 'saved' (the package's file on disk),
@@ -1087,7 +1123,7 @@ def diff_graph(graph: str | None = None, against: str = 'saved', show_positions:
     return head + ('\nOnly node positions differ (show_positions=True lists them).' if moved_only else '\nNo differences.')
 
 
-@server.tool()
+@_tool()
 def arrange_graph(graph: str | None = None, node_ids: list[str] | None = None,
                   spacing: list[float] | None = None) -> str:
     """Tidy a graph: left-to-right columns by data flow, ordered to reduce crossing links,
@@ -1098,7 +1134,7 @@ def arrange_graph(graph: str | None = None, node_ids: list[str] | None = None,
                  'Claude: arrange graph')
 
 
-@server.tool()
+@_tool()
 def add_frame(node_ids: list[str], title: str, graph: str | None = None, color: list[float] | None = None,
               description: str | None = None) -> str:
     """Draw a titled frame around nodes (e.g. one per section of a material). color: [r, g, b(, a)]
@@ -1107,7 +1143,7 @@ def add_frame(node_ids: list[str], title: str, graph: str | None = None, color: 
                  'Claude: add frame ' + title)
 
 
-@server.tool()
+@_tool()
 def add_comment(text: str, graph: str | None = None, node_id: str | None = None,
                 position: list[float] | None = None) -> str:
     """Add a comment to a graph: attached to node_id, or free-standing at position [x, y].
@@ -1118,7 +1154,7 @@ def add_comment(text: str, graph: str | None = None, node_id: str | None = None,
 _DISPLAY = {'portal': '1', 'wire': None}
 
 
-@server.tool()
+@_tool()
 def set_link_display(graph: str | None = None, mode: str = 'portal', from_nodes: list[str] | None = None,
                      fanout_at_least: int | None = None, longer_than: float | None = None,
                      links: list[list[str]] | None = None) -> str:
@@ -1211,7 +1247,7 @@ DESIGNER_APP = {
 }
 
 
-@server.tool()
+@_tool()
 def launch_designer(wait_s: int = 180) -> str:
     """Start Substance Designer if it isn't running and wait until the sd_bridge plugin answers.
     When it starts Designer it also closes the Home screen, so the editor panels are visible.
@@ -1254,7 +1290,7 @@ def _designer_running():
                           capture_output=True).returncode == 0
 
 
-@server.tool()
+@_tool()
 def quit_designer(discard_unsaved: bool = False, wait_s: int = 60) -> str:
     """Close Substance Designer and wait until its process has exited (for example to restart it
     after a plugin change, with launch_designer). Refuses while any open package has unsaved
@@ -1292,7 +1328,7 @@ def _value_arg(value):
     return str(value)
 
 
-@server.tool()
+@_tool()
 def render_sbs(sbs_path: str, output_dir: str, size_log2: int | None = None, graph: str | None = None,
                outputs: list[str] | None = None, params: dict[str, float | int | bool | list[float]] | None = None,
                output_format: str = 'png') -> str:
@@ -1470,7 +1506,7 @@ def _cooked(sbs_path):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-@server.tool()
+@_tool()
 def sbsar_info(sbs_path: str) -> str:
     """List graphs, exposed inputs (with types) and outputs of a .sbs/.sbsar, i.e. what
     render_sbs can take as graph/outputs/params. A .sbs is cooked in a temporary folder."""
@@ -1492,7 +1528,7 @@ def _load_8bit(path):
     return im.convert('RGB')
 
 
-@server.tool()
+@_tool()
 def preview_maps(map_dir: str, names: list[str] | None = None, tile_size: int = 384,
                  crop: list[int] | None = None) -> Image:
     """Return a side-by-side preview of rendered maps (PNG files in map_dir). `names` picks

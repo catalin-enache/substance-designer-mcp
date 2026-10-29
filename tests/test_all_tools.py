@@ -184,8 +184,20 @@ async def run(scratch):
             init = await s.initialize()
             c = lambda name, args=None: s.call_tool(name, args or {})
             tools = sorted(t.name for t in (await s.list_tools()).tools)
-            print('server instructions: %d chars (AGENTS.md: %s); tools: %d\n' % (
-                len(init.instructions or ''), (init.instructions or '').startswith('# AGENTS.md'), len(tools)))
+            print('server instructions: %d chars; tools: %d\n' % (len(init.instructions or ''), len(tools)))
+            # --- the guide: short instructions point to get_guide(); a reminder until it is called
+            instructions = init.instructions or ''
+            check('get_guide', 'instructions fit (4,096 chars) and point to it',
+                  len(instructions) < 4096 and 'get_guide()' in instructions, '%d chars' % len(instructions))
+            t = text(await c('list_snapshots', {'graph': 'no_such_graph'}))
+            check('get_guide', 'reminder before it is called', t.startswith('NOTE: the Designer guide has not been read'), t)
+            with open(os.path.join(BUNDLE, 'AGENTS.md'), encoding='utf-8') as f:
+                agents_md = f.read()
+            t = text(await c('get_guide'))
+            check('get_guide', 'returns all of AGENTS.md, asks to confirm', t.startswith(agents_md)
+                  and 'tell the user' in t.splitlines()[-1], '%d chars' % len(t))
+            t = text(await c('list_snapshots', {'graph': 'no_such_graph'}))
+            check('get_guide', 'no reminder afterwards', t == 'No snapshots for no_such_graph.', t)
             was_running = not (await c('designer_status')).is_error
             t = text(await c('launch_designer', {'wait_s': 240}))
             check('launch_designer', 'already running' if was_running else 'started from closed',

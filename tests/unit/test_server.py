@@ -39,9 +39,9 @@ def _tools():
     return TOOLS
 
 
-def test_server_starts_and_serves_agents_md():
+def test_server_starts_and_points_to_the_guide():
     instructions, tools = _tools()
-    assert instructions.startswith('# AGENTS.md')
+    assert 'get_guide()' in instructions and 'get_guide' in tools
     assert len(tools) > 30
     assert all(desc.strip() for desc in tools.values()), 'every tool needs a docstring'
 

@@ -11,6 +11,13 @@ sys.path.insert(0, os.path.join(ROOT, 'mcp_server'))
 import server  # noqa: E402  (importing doesn't start the server or contact Designer)
 
 
+@pytest.fixture(autouse=True)
+def guide_read(monkeypatch):
+    """Tool results start with a reminder until get_guide() was called; tests compare exact
+    results, so they run as a session that has read the guide (test_guide.py covers the rest)."""
+    monkeypatch.setitem(server._session, 'guide_read', True)
+
+
 @pytest.fixture
 def sbs_path():
     return os.path.join(FIXTURES, 'two_graphs.sbs')
