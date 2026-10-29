@@ -21,6 +21,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import filecmp
 import json
 import socket
@@ -212,6 +214,34 @@ async def run(scratch):
                     mode = os.stat(token_file).st_mode & 0o777
                     check(B, 'token file owner-only', mode & 0o077 == 0, oct(mode))
 
+                # --- cancel aborts the running job and drops queued ones (two raw clients + sd_run.py --cancel)
+                with open(token_file) as f:
+                    token = f.read().strip()                      # used, never printed
+                replies = {}
+                def job(name, req):
+                    replies[name] = raw_request({**req, 'token': token})
+                def bridge_status():
+                    return raw_request({'token': token, 'cmd': 'status'})['output']
+                def wait_for(text_part):
+                    for _ in range(100):
+                        if text_part in bridge_status():
+                            return True
+                        time.sleep(0.05)
+                    return False
+                long_job = threading.Thread(target=job, args=('long', {'code': 'import time\nwhile True:\n    time.sleep(0.05)', 'timeout': 30}))
+                long_job.start()
+                wait_for('running')
+                queued_job = threading.Thread(target=job, args=('queued', {'code': "print('QUEUED RAN')"}))
+                queued_job.start()
+                wait_for('1 queued')
+                r = sd_run('--cancel')
+                long_job.join(20)
+                queued_job.join(20)
+                check('cancel_designer_job', 'drops queued jobs', 'running: True, queued dropped: 1' in r.stdout
+                      and 'cancel' in replies.get('long', {}).get('error', '')
+                      and 'cancelled before start' in replies.get('queued', {}).get('error', '')
+                      and 'QUEUED RAN' not in replies.get('queued', {}).get('output', ''), r.stdout + str(replies)[:200])
+
                 # --- MCP resource and the fallback command-line client
                 res = await s.read_resource('designer://agents-guide')
                 check('mcp resource', 'agents-guide serves AGENTS.md',
@@ -265,6 +295,10 @@ async def run(scratch):
                 check('create_graph', 'save_path writes the .sbs', os.path.isfile(saved_sbs), t)
                 G = {'graph': TEST_GRAPH}
                 await c('open_graph', {'graph': TEST_GRAPH})   # so you can watch the nodes appear
+                r_ = await c('diff_graph', {'against': 'saved', **G})
+                check('diff_graph', 'error: never saved', r_.is_error and 'never been saved' in text(r_), text(r_))
+                r_ = await c('diff_graph', {'against': 'latest', 'graph': SAVED_GRAPH})
+                check('diff_graph', 'error: no snapshots yet', r_.is_error and 'no snapshots for' in text(r_), text(r_))
                 t = text(await c('add_node', {'definition': 'noise_clouds_2.sbs/clouds_2', 'params': {'scale': 4}, **G}))
                 check('add_node', 'library + param', 'instance:clouds_2' in t and '-> 4' in t, t)
                 clouds = added_id(t)
@@ -371,6 +405,8 @@ async def run(scratch):
                 t = text(await c('check_tiling', {'node_id': clouds, **G}))
                 check('check_tiling', 'tileable noise passes both axes', t.count('tiles seamlessly') == 2, t)
                 grad = added_id(text(await c('add_node', {'definition': 'gradient_linear_1', **G})))
+                r_ = await c('check_tiling', {'node_id': grad, 'axis': 'diagonal', **G})
+                check('check_tiling', 'error on bad axis', r_.is_error and "axis must be" in text(r_), text(r_))
                 t = text(await c('check_tiling', {'node_id': grad, 'axis': 'vertical', **G}))
                 check('check_tiling', 'vertical gradient has a seam', 'VISIBLE SEAM' in t, t.splitlines()[-1])
                 await c('delete_nodes', {'node_ids': [grad], **G})
@@ -439,6 +475,10 @@ async def run(scratch):
                 snap_path = t.split('saved: ', 1)[1].strip()
                 t = text(await c('list_snapshots', G))
                 check('list_snapshots', 'lists it', snap_path in t, '')
+                t = text(await c('list_snapshots'))
+                check('list_snapshots', 'all graphs', snap_path in t, t[:200])
+                r_ = await c('diff_graph', {'against': 'no such label', **G})
+                check('diff_graph', 'error: unknown snapshot label', r_.is_error and 'no snapshot matching' in text(r_), text(r_))
                 await c('set_params', {'node_id': lv, 'params': {'levelinhigh': [0.8] * 4}, **G})
                 tmp_node = added_id(text(await c('add_node', {'definition': 'blur', **G})))
                 t = text(await c('diff_graph', {'against': 'latest', **G}))
@@ -568,7 +608,37 @@ async def run(scratch):
                         back = 'EXISTS=True' in text(await c('execute_designer_code', {'code': NODE_EXISTS % (TEST_GRAPH, ub)}))
                         check('add_node', 'Redo restores it', back, '')
                 await c('delete_nodes', {'node_ids': [ub], **G})
-                for panel in ('window', 'graph', '2d', 'parameters', 'explorer'):
+                t = text(await c('execute_designer_code', {'undo_label': 'self-test: two nodes', 'code': (
+                    "import sd\nfrom sd.api.sdbasetypes import float2\n"
+                    "g=[r for p in sd.getContext().getSDApplication().getPackageMgr().getUserPackages() "
+                    "for r in p.getChildrenResources(False) if r.getIdentifier()=='%s'][0]\nids=[]\n"
+                    "for i in range(2):\n    n=g.newNode('sbs::compositing::blur'); n.setPosition(float2(200*i, 500)); ids.append(n.getIdentifier())\n"
+                    "print('IDS=' + ','.join(ids))") % TEST_GRAPH}))
+                two = re.search(r'IDS=(\d+),(\d+)', t).groups()
+                t = text(await c('execute_designer_code', {'code': UNDO_REDO % (TEST_GRAPH, 'Undo')}))
+                if 'SCHEDULED' not in t:
+                    skip('execute_designer_code', 'one undo step', 'self-test graph not in focus or Undo unavailable')
+                else:
+                    states = [('EXISTS=True' in text(await c('execute_designer_code', {'code': NODE_EXISTS % (TEST_GRAPH, i)}))) for i in two]
+                    if any(states):
+                        await c('execute_designer_code', {'code': UNDO_REDO % (TEST_GRAPH, 'Redo')})
+                    check('execute_designer_code', 'one Undo reverts the whole run', not any(states), str(states))
+                    if not any(states):
+                        await c('execute_designer_code', {'code': UNDO_REDO % (TEST_GRAPH, 'Redo')})
+                        states = [('EXISTS=True' in text(await c('execute_designer_code', {'code': NODE_EXISTS % (TEST_GRAPH, i)}))) for i in two]
+                        check('execute_designer_code', 'one Redo restores it', all(states), str(states))
+                await c('delete_nodes', {'node_ids': list(two), **G})
+                if not was_running:
+                    # our own instance, so its layout doesn't matter: show the console (hidden by default)
+                    await c('execute_designer_code', {'code': (
+                        "from PySide6.QtWidgets import QApplication, QMenu\n"
+                        "for w in QApplication.instance().allWidgets():\n"
+                        "    if isinstance(w, QMenu) and w.title() == '&Windows':\n"
+                        "        w.aboutToShow.emit()\n"
+                        "        for a in w.actions():\n"
+                        "            if a.text() == 'Console' and not a.isChecked(): a.trigger()\n"
+                        "        break\nQApplication.processEvents()")})
+                for panel in ('window', 'graph', '2d', 'parameters', 'explorer', 'library', 'console'):
                     r_ = await c('screenshot_designer', {'panel': panel, 'max_size': 700})
                     if not is_image(r_) and 'not visible' in text(r_):
                         skip('screenshot_designer', panel, 'panel not visible in Designer')
@@ -596,6 +666,8 @@ async def run(scratch):
                 check('save_package', 'save as', os.path.exists(sbs), t)
                 t = text(await c('save_package', {'graph_or_path': TEST_GRAPH}))
                 check('save_package', 'save in place', 'saved' in t, t)
+                t = text(await c('save_package', {'graph_or_path': sbs}))
+                check('save_package', 'by file path', 'saved %s' % sbs in t, t)
                 xs = positions(text(await c('describe_graph', G)))
                 await c('move_nodes', {'positions': {clouds: [xs[clouds][0] + 50, xs[clouds][1]]}, **G})
                 t = text(await c('diff_graph', {'against': sbs, 'show_positions': True, **G}))
@@ -608,6 +680,10 @@ async def run(scratch):
                       and os.path.dirname(copied.group(1)) == os.path.join(scratch, TEST_GRAPH + '.resources'), t)
                 await c('delete_nodes', {'node_ids': [added_id(t)], **G})
                 stats_before = text(await c('node_stats', {'node_id': lv, **G}))
+                r_ = await c('set_link_display', {'mode': 'dotted', 'from_nodes': [clouds], **G})
+                check('set_link_display', 'error on bad mode', r_.is_error and "mode must be" in text(r_), text(r_))
+                r_ = await c('set_link_display', {'mode': 'portal', **G})
+                check('set_link_display', 'error without a selection', r_.is_error and 'choose links' in text(r_), text(r_))
                 t = text(await c('set_link_display', {'mode': 'portal', 'from_nodes': [clouds], **G}))
                 check('set_link_display', 'portals from a node', 'changed to portal' in t and 'reloaded' in t, t.split(';')[0])
                 t = text(await c('diff_graph', {'against': 'latest', **G}))
@@ -668,6 +744,21 @@ async def run(scratch):
                 t = text(await c('render_sbs', {'sbs_path': sbs, 'output_dir': render_dir, 'output_format': 'exr',
                                                 'params': {'nope': 1}}))
                 check('render_sbs', 'exr + unexposed warning', 'height.exr' in t and "input 'nope' is not exposed" in t, t)
+                sbsar = os.path.splitext(sbs)[0] + '.sbsar'
+                t = text(await c('sbsar_info', {'sbs_path': sbsar}))
+                check('sbsar_info', 'reads a .sbsar', 'OUTPUT height' in t, t.splitlines()[0] if t else '')
+                t = text(await c('render_sbs', {'sbs_path': sbsar, 'output_dir': os.path.join(scratch, 'from_sbsar'),
+                                                'graph': TEST_GRAPH, 'output_format': 'tga'}))
+                check('render_sbs', 'from a .sbsar, graph, tga', re.search(r'height\.tga  \d+x\d+', t) is not None, t)
+                # cooking drops the graph's default parent size: a .sbsar keeps 256 px, and says so
+                check('render_sbs', '.sbsar: own default size, stated', 'height.tga  256x256' in t
+                      and "the .sbsar's own default, 256 px" in t, t)
+                t = text(await c('render_sbs', {'sbs_path': sbsar, 'output_dir': os.path.join(scratch, 'from_sbsar_512'), 'size_log2': 9}))
+                check('render_sbs', '.sbsar with size_log2', 'height.png  512x512' in t, t.splitlines()[-1])
+                r_ = await c('render_sbs', {'sbs_path': sbsar, 'output_dir': os.path.join(scratch, 'nope'), 'graph': 'no_such_graph'})
+                check('render_sbs', 'error on unknown graph', r_.is_error, text(r_)[:150])
+                r_ = await c('preview_maps', {'map_dir': os.path.join(scratch, 'export')})
+                check('preview_maps', 'all maps in a folder', is_image(r_), '' if is_image(r_) else text(r_))
                 r_ = await c('preview_maps', {'map_dir': render_dir, 'names': ['height'], 'tile_size': 256})
                 check('preview_maps', 'side by side', is_image(r_), '')
                 r_ = await c('preview_maps', {'map_dir': render_dir, 'names': ['height'], 'crop': [0, 0, 128, 128]})
@@ -722,10 +813,44 @@ async def run(scratch):
                 if was_running:
                     skip('quit_designer', 'closes Designer', 'Designer was already running, so it is left open')
                 else:
-                    # our own instance: nothing of the user's can be lost
+                    # our own instance: nothing of the user's can be lost. First make the window
+                    # ignore Close (as a blocking dialog would): quit_designer must time out, then
+                    # its quit() fallback ends Designer anyway.
+                    await c('execute_designer_code', {'code': (
+                        "import sys\nfrom PySide6.QtCore import QObject, QEvent\nfrom PySide6.QtWidgets import QApplication\n"
+                        "class _KeepOpen(QObject):\n    def eventFilter(self, obj, event):\n"
+                        "        if event.type() == QEvent.Type.Close:\n            event.ignore()\n            return True\n"
+                        "        return False\n"
+                        "sys._selftest_keep_open = _KeepOpen()\n"
+                        "for w in QApplication.instance().topLevelWidgets():\n"
+                        "    if w.isVisible(): w.installEventFilter(sys._selftest_keep_open)\nprint('ignoring Close')")})
+                    r_ = await c('quit_designer', {'discard_unsaved': True, 'wait_s': 2})
+                    check('quit_designer', 'times out when the window stays open', r_.is_error
+                          and 'still running after 2s' in text(r_), text(r_))
+                    deadline = time.time() + 30
+                    while time.time() < deadline and not (await c('designer_status')).is_error:
+                        time.sleep(1)
+                    time.sleep(3)
+                    gone = (await c('designer_status')).is_error
+                    if sys.platform != 'win32':
+                        gone = gone and subprocess.run(['pgrep', '-f', 'MacOS/Adobe Substance 3D Designer( |$)'],
+                                                       capture_output=True).returncode != 0
+                    check('quit_designer', 'exit() fallback ends it anyway', gone, '')
+                    t = text(await c('launch_designer', {'wait_s': 240}))
+                    check('launch_designer', 'starts again after a quit', 'Designer started in' in t and 'ERROR' not in t, t)
+                    # the realistic blocker: a modal dialog (its own event loop) must not stop quitting
+                    await c('execute_designer_code', {'code': (
+                        "from PySide6.QtCore import QTimer\nfrom PySide6.QtWidgets import QMessageBox\n"
+                        "QTimer.singleShot(0, lambda: QMessageBox.information(None, 'sd_mcp self-test', "
+                        "'A modal dialog; quit_designer must still close Designer.'))")})
+                    time.sleep(1)
+                    modal = text(await c('execute_designer_code', {'code': (
+                        "from PySide6.QtWidgets import QApplication\n"
+                        "print('MODAL=' + type(QApplication.instance().activeModalWidget()).__name__)")}))
                     t = text(await c('quit_designer', {'discard_unsaved': True}))
                     gone = (await c('designer_status')).is_error
-                    check('quit_designer', 'closes the Designer it started', 'Designer quit after' in t and gone, t)
+                    check('quit_designer', 'closes the Designer it started, with a modal dialog open',
+                          'MODAL=QMessageBox' in modal and 'Designer quit after' in t and gone, modal + t)
     return tools
 
 

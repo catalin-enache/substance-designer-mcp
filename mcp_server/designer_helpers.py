@@ -630,10 +630,11 @@ def quit_designer(discard_unsaved=False):
     from PySide6.QtWidgets import QApplication
     qt_app = QApplication.instance()
     # getMainWindow() is a hidden QMainWindow; the window the user sees is another top-level
-    # widget. Close the visible ones (Designer's normal shutdown), with quit() as a fallback.
+    # widget. Close the visible ones (Designer's normal shutdown). Fallback: exit(), which stops
+    # the event loops; quit() would not, as Qt 6 cancels it when a window refuses to close.
     # Deferred, so the bridge can still send this reply.
     QTimer.singleShot(300, lambda: [w.close() for w in qt_app.topLevelWidgets() if w.isVisible()])
-    QTimer.singleShot(5000, qt_app.quit)
+    QTimer.singleShot(5000, lambda: qt_app.exit(0))
     print('closing Designer')
 
 

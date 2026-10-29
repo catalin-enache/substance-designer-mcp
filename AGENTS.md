@@ -24,6 +24,12 @@ about Designer), add a short hint where it belongs, in the same change:
 proposing improvements, add new ideas there, and when you finish an item delete it from ROADMAP.md in
 the same change (git history keeps the record).
 
+**Every new feature or fix comes with a test, in the same change.** A tool, a parameter or a
+documented behaviour gets a check in the live self-test (`tests/test_all_tools.py`, against the
+real Designer); pure-Python logic gets a unit test in `tests/unit`. A bug fix gets a test that
+fails without the fix. A claim in these docs without a test is a guess: test it or remove it.
+Both suites must pass before the change is done (Working on this project).
+
 Keep each fact in **one** place and link to it from elsewhere instead of copying it. Fix or
 delete hints that turn out to be wrong rather than adding a contradicting one. Run the self-test
 before calling a change done.
@@ -221,6 +227,8 @@ README.md, **How it works**. Agent-specific notes:
 - `getQtForPythonUIMgr().getMainWindow()` is a **hidden** QMainWindow; closing it does nothing.
   The window the user sees is another top-level widget (`QStackedWidget` titled "Adobe Substance
   3D Designer"); closing the visible top-level widgets quits Designer normally (`quit_designer`).
+  If a window refuses to close (a dialog), Qt 6's `QApplication.quit()` gives up too; `exit(0)`
+  stops the event loops regardless, which is `quit_designer`'s fallback after 5 s.
   `SDPackage.isModified()` tells whether a package has unsaved changes.
 - That visible widget is a 2-page stack: the main window (page 0) and the **Home screen**
   (page 1, current after a fresh start). While Home shows, every dock reports `isVisible()`
@@ -271,6 +279,11 @@ README.md, **How it works**. Agent-specific notes:
   **parent** size, and a non-zero relative offset is applied on top. Without an override
   sbsrender assumes a 256 px parent, so `render_sbs` reads the graph's `defaultParentSize` from
   the .sbs and passes it. `render_sbs` prints each file's size, so check it.
+- **A cooked .sbsar forgets the default parent size:** sbscooker writes `$outputsize` default
+  `8,8` (256 px) whatever the graph's `defaultParentSize` (no cooker option changes it), so a
+  .sbsar renders at 256 px here and in other Substance apps unless a size is set. `render_sbs`
+  on a .sbsar says so (it reads the default from the archive's .xml with the system `tar`);
+  pass `size_log2` or render the .sbs.
 - Pixel precision: grayscale 16-bit PNGs load in PIL as `I;16` (normalise by 65535), but PIL
   loads 16-bit **RGBA** PNGs as 8-bit. For exact values use `node_stats`, which reads the raw
   buffer: RGBA or single-channel (`LUM*`), little-endian, uint8 / uint16 / float16 / float32 per

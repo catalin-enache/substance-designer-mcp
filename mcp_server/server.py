@@ -1207,7 +1207,8 @@ def render_sbs(sbs_path: str, output_dir: str, size_log2: int | None = None, gra
                outputs: list[str] | None = None, params: dict[str, float | int | bool | list[float]] | None = None,
                output_format: str = 'png') -> str:
     """Cook a .sbs (or take a .sbsar) and render outputs to files named after the output nodes.
-    size_log2: output size override (11 = 2048). graph: graph identifier inside the package
+    size_log2: output size override (11 = 2048). Without it a .sbs renders at the graph's default
+    parent size (as in Designer) and a .sbsar at its own stored default (often 256 px). graph: graph identifier inside the package
     (default: every graph). outputs: output identifiers to render (default: all).
     params: exposed input values, e.g. {"wear": 0.5, "tint": [1, 0.8, 0.6]}.
     output_format: png, tga, exr, jpg, ... Use sbsar_info to list graphs/inputs/outputs."""
@@ -1238,6 +1239,11 @@ def render_sbs(sbs_path: str, output_dir: str, size_log2: int | None = None, gra
         if default:
             values['$outputsize'] = [default, default]
             notes.append('size: using the graph\'s default parent size, %d px (from the .sbs)' % 2 ** default)
+        elif sbs_path.endswith('.sbsar'):
+            cooked = _sbsar_default_log2(sbsar, graph)
+            notes.append('size: the .sbsar\'s own default%s; the cooker doesn\'t keep the graph\'s default '
+                         'parent size, so pass size_log2 (or render the .sbs) for another size'
+                         % (', %d px' % 2 ** cooked if cooked else ''))
     warnings = ['WARNING: input %r is not exposed by this .sbsar, so the value is ignored%s'
                 % (key, ' (graph output size is fixed; expose $outputsize or make it relative '
                         'to parent to allow size overrides)' if key == '$outputsize' else '')
@@ -1276,6 +1282,31 @@ def _default_parent_log2(sbs_path, graph=None):
             if name is not None and name.get('v') == 'defaultParentSize':
                 width = option.find('value').get('v').split('x')[0]
                 return int(width) if width.isdigit() else None
+    return None
+
+
+def _sbsar_default_log2(sbsar, graph=None):
+    """Default $outputsize (log2) stored in a .sbsar, or None. A .sbsar is a 7-zip archive whose
+    .xml description lists each input's default; the system tar (bsdtar on macOS and Windows 10+)
+    can read it."""
+    tar = shutil.which('tar')
+    if not tar:
+        return None
+    listing = subprocess.run([tar, '-tf', sbsar], capture_output=True, text=True)
+    wanted = graph.split('://')[-1] if graph else None
+    for member in [m for m in listing.stdout.splitlines() if m.endswith('.xml')] if listing.returncode == 0 else []:
+        xml = subprocess.run([tar, '-xOf', sbsar, member], capture_output=True).stdout
+        try:
+            root = ET.fromstring(xml)
+        except ET.ParseError:
+            continue
+        for g in root.iter('graph'):
+            if wanted and g.get('pkgurl', '').split('://')[-1] != wanted:
+                continue
+            for inp in g.iter('input'):
+                if inp.get('identifier') == '$outputsize':
+                    width = inp.get('default', '').split(',')[0]
+                    return int(width) if width.isdigit() else None
     return None
 
 

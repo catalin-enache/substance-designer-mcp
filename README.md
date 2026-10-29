@@ -149,7 +149,7 @@ Then:
 
 ## Self-test
 
-Check every tool end to end against the real Designer (about a minute and a half). If Designer isn't
+Check every tool end to end against the real Designer (about two minutes). If Designer isn't
 running, the self-test starts it and closes it again at the end; if it is running, it's left open:
 
 ```bash

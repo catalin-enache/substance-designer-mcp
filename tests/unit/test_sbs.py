@@ -90,3 +90,13 @@ def test_default_parent_log2_not_an_sbs(tmp_path, sbs_path):
 
 def test_fixture_is_well_formed(sbs_path):
     assert [g.find('identifier').get('v') for g in ET.parse(sbs_path).getroot().iter('graph')] == ['alpha', 'beta']
+
+
+def test_sbsar_default_size(sbs_path):
+    # cooked by sbscooker from a graph with an overridable size and a 512 px (9x9) default parent
+    # size: the .sbsar keeps 256 px (8), not 512
+    sbsar = sbs_path.replace('two_graphs.sbs', 'overridable_512.sbsar')
+    assert server._sbsar_default_log2(sbsar) == 8
+    assert server._sbsar_default_log2(sbsar, 'pkg://probe_size') == 8
+    assert server._sbsar_default_log2(sbsar, 'other') is None
+    assert server._sbsar_default_log2(sbs_path) is None                  # not an archive
