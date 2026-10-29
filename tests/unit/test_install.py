@@ -1,4 +1,5 @@
-"""install.py, with everything that would change this machine (pip, venv, claude) intercepted."""
+"""install.py, with everything that would change this machine (pip, venv, claude, the user's
+skills folder) intercepted."""
 import filecmp
 import importlib.util
 import os
@@ -11,10 +12,12 @@ from project_constants import PLUGIN, PLUGIN_DIR, PLUGIN_PACKAGE_DIR
 
 
 @pytest.fixture
-def install(monkeypatch):
+def install(monkeypatch, tmp_path_factory):
     spec = importlib.util.spec_from_file_location('install', os.path.join(ROOT, 'install.py'))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    skills = str(tmp_path_factory.mktemp('skills'))
+    monkeypatch.setattr(module, 'default_skills_dir', lambda: skills)
     calls = []
     monkeypatch.setattr(module.subprocess, 'check_call', lambda cmd, **kw: calls.append(cmd))
     monkeypatch.setattr(module.subprocess, 'call', lambda cmd, **kw: calls.append(cmd))
@@ -90,3 +93,56 @@ def test_leaves_someone_elses_sd_bridge_alone(install, monkeypatch, tmp_path):
     other = _old_plugin(tmp_path, 'Some other bridge')
     _run(module, monkeypatch, '--plugins-dir', str(tmp_path))
     assert other.exists() and token.exists()
+
+
+def _skill(module):
+    return os.path.join(module.default_skills_dir(), module.SERVER_NAME, 'SKILL.md')
+
+
+def test_adds_the_skill_with_this_folders_paths(install, monkeypatch, tmp_path, capsys):
+    module, _ = install
+    _run(module, monkeypatch, '--plugins-dir', str(tmp_path))
+    with open(_skill(module), encoding='utf-8') as f:
+        text = f.read()
+    # frontmatter Claude Code reads: name + a description that says when to load it
+    head = text.split('---')[1]
+    assert 'name: substance-designer\n' in head and 'description: ' in head and 'Substance 3D Designer' in head
+    assert module.SKILL_MARKER in text
+    assert os.path.join(ROOT, 'mcp_server', 'server.py') in text and '--scope local' in text
+    assert os.path.join(ROOT, 'uninstall.py') in text
+    assert 'Claude Code skill added' in capsys.readouterr().out
+
+
+def test_rerun_replaces_its_own_skill(install, monkeypatch, tmp_path):
+    module, _ = install
+    os.makedirs(os.path.dirname(_skill(module)))
+    with open(_skill(module), 'w', encoding='utf-8') as f:
+        f.write('stale\n' + module.SKILL_MARKER)
+    _run(module, monkeypatch, '--plugins-dir', str(tmp_path))
+    with open(_skill(module), encoding='utf-8') as f:
+        assert 'stale' not in f.read()
+
+
+def test_leaves_someone_elses_skill_alone(install, monkeypatch, tmp_path, capsys):
+    module, _ = install
+    os.makedirs(os.path.dirname(_skill(module)))
+    with open(_skill(module), 'w', encoding='utf-8') as f:
+        f.write('my own skill')
+    _run(module, monkeypatch, '--plugins-dir', str(tmp_path))
+    with open(_skill(module), encoding='utf-8') as f:
+        assert f.read() == 'my own skill'
+    assert 'left as it is' in capsys.readouterr().out
+
+
+def test_no_skill_flag(install, monkeypatch, tmp_path):
+    module, _ = install
+    _run(module, monkeypatch, '--plugins-dir', str(tmp_path), '--no-skill')
+    assert not os.path.exists(os.path.dirname(_skill(module)))
+
+
+def test_skills_dir_follows_claude_config_dir(monkeypatch, tmp_path):
+    spec = importlib.util.spec_from_file_location('install_env', os.path.join(ROOT, 'install.py'))
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)
+    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path))
+    assert fresh.default_skills_dir() == os.path.join(str(tmp_path), 'skills')

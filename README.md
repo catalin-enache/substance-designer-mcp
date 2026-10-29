@@ -48,7 +48,7 @@ There are two programs, plus Designer's own command-line tools:
 | **Designer helpers** (`mcp_server/designer_helpers.py`) | Sent to Designer with each request | The library of functions that actually do the work inside Designer: describing nodes, editing graphs, computing previews, layout, exposing inputs and so on. It's re-sent with every call, so updating it never needs a Designer restart. |
 | **sbscooker / sbsrender** | Separate processes | Designer's own tools for compiling a saved `.sbs` into `.sbsar` and rendering its outputs, independently of the open Designer. |
 | **CLI client** (`client/sd_run.py`) | Your terminal | The same connection to the plugin without MCP, for running scripts by hand. |
-| `install.py`, `tests/` | Your terminal | Installation, the end-to-end self-test, and unit tests that need no Designer (`tests/unit`). |
+| `install.py`, `uninstall.py`, `tests/` | Your terminal | Installation (including the Claude Code skill that tells sessions in other folders about the server), clean removal, the end-to-end self-test, and unit tests that need no Designer (`tests/unit`). |
 
 **One tool call, step by step** (`preview_node`, "show me this node's image"):
 
@@ -130,6 +130,10 @@ The installer:
 2. Creates `mcp_server/venv` and installs `mcp`, `pillow` and `numpy`.
 3. Does **not** register the server globally: it prints how to register it per folder (see
    **Where the tools are available** below).
+4. Adds a small Claude Code skill, `~/.claude/skills/substance-designer/SKILL.md` (in
+   `$CLAUDE_CONFIG_DIR/skills` if you set that), so sessions in other folders know the server
+   exists and offer to enable it there. `--no-skill` skips it. A `substance-designer` skill you
+   wrote yourself is left alone.
 
 **After updating this folder** (`git pull`), re-run the installer and restart Designer: the
 plugin and the server must be the same version (an older plugin answers every request with
@@ -158,6 +162,11 @@ context on it:
   ```
   `--scope local` keeps it to that folder and to you. On Windows use this form in this folder
   too (`mcp_server\venv\Scripts\python.exe`), since `.mcp.json` needs `sh`.
+
+  You don't have to remember this: the installer's skill is visible in every folder (only its
+  one-line description, a few dozen tokens). Ask for Designer work in a folder without the
+  server and Claude offers to run the command, then asks you to restart with `claude --continue`
+  (new MCP servers load when a session starts).
 
 <details>
 <summary>Manual install (without install.py)</summary>
@@ -248,8 +257,18 @@ python client/sd_run.py --cancel              # abort the running script
 
 ## Uninstall
 
-In each folder where you registered it with `--scope local`, run
-`claude mcp remove substance-designer -s local`. Then delete the `sd_claude_bridge_kve` folder from the plugin directory, `~/.sd_claude_bridge_kve_token`, and this folder.
+```bash
+python3 uninstall.py --dry-run   # macOS; Windows: py -3 uninstall.py --dry-run. Shows what it would remove
+python3 uninstall.py             # lists it again, asks, then removes it (--yes to skip the question)
+```
+
+It removes the `sd_claude_bridge_kve` plugin from Designer's plugin folder (and the old `sd_bridge`
+one), `~/.sd_claude_bridge_kve_token`, the skill, `mcp_server/venv`, and this server's registration in
+every folder where you ran `claude mcp add --scope local` (found in Claude Code's
+`~/.claude.json`, removed with `claude mcp remove` in each folder). A plugin, skill or
+registration with the same name that isn't this project's is reported and left alone. Your graph
+snapshots (`~/.sd_mcp/snapshots`) stay unless you pass `--remove-snapshots`. Pass
+`--plugins-dir` if you installed with it. Then restart Designer and delete this folder.
 
 ## Troubleshooting
 

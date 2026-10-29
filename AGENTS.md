@@ -307,7 +307,9 @@ new ideas there.
   copies. `tests/unit/test_constants.py` fails on anything missed.
 - **Registration is per folder, never global** (README.md, "Where the tools are available"):
   this repo's committed `.mcp.json`, or `claude mcp add --scope local` in another folder. The
-  installer never registers. `.mcp.json` must not contain `${`: Claude Code expands those itself
+  installer never registers; it writes a user skill (`skill_text` in `install.py`) that tells
+  sessions elsewhere how to register, and `uninstall.py` removes the skill, the plugin, the token
+  and every folder's local registration (only entries that run this repo's `server.py`). `.mcp.json` must not contain `${`: Claude Code expands those itself
   (it once rewrote a shell default away), so its `sh -c` command uses plain `$VARS`
   (`tests/unit/test_mcp_json.py`).
 - **The bridge protocol** (plugin docstring): the plugin sends a nonce, the client answers with
