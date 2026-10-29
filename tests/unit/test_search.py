@@ -50,8 +50,8 @@ def test_all_words_must_match():
 
 def test_hidden_entries():
     assert server.search_nodes('secret') == "No node types match 'secret'."
-    assert "definition='secret'" not in server.search_nodes('secret', include_hidden=True)
-    assert 'Secret levels' in server.search_nodes('secret', include_hidden=True)
+    shown = server.search_nodes('secret', include_hidden=True)
+    assert "definition='secret.sbs/secret_levels'" in shown and 'Secret levels' in shown
 
 
 def test_limit():

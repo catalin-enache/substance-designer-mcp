@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Hand-made fixture in Designer 16's .sbs shape: graph "alpha" (gradient -> blend -> output,
-     one exposed input, portal on the output link) and graph "beta" (empty, other parent size). -->
+     one exposed input, portal on the output link, a function graph on a blend parameter) and
+     graph "beta" (empty, size left at its default, other parent size). -->
 <package>
   <identifier v="Unsaved Package"/>
   <formatVersion v="1.1.0.202502"/>
@@ -40,7 +41,12 @@
               <filter v="blend"/>
               <parameters>
                 <parameter><name v="blendingmode"/><relativeTo v="0"/><paramValue><constantValueInt32 v="6"/></paramValue></parameter>
-                <parameter><name v="opacitymult"/><relativeTo v="0"/><paramValue><dynamicValue><rootnode v="1"/></dynamicValue></paramValue></parameter>
+                <parameter><name v="opacitymult"/><relativeTo v="0"/><paramValue><dynamicValue><rootnode v="2"/>
+                  <paramNodes>
+                    <!-- a function graph on the parameter: its links are not graph links -->
+                    <paramNode><uid v="1"/><function v="get_float1"/></paramNode>
+                    <paramNode><uid v="2"/><connections><connection><identifier v="a"/><connRef v="1"/></connection></connections><function v="mul"/></paramNode>
+                  </paramNodes></dynamicValue></paramValue></parameter>
               </parameters>
             </compFilter>
           </compImplementation>

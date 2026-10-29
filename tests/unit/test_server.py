@@ -23,10 +23,13 @@ async def _list_tools():
         async with ClientSession(r, w) as s:
             init = await s.initialize()
             tools = (await s.list_tools()).tools
+            global SCHEMAS
+            SCHEMAS = {t.name: set((t.input_schema or {}).get('properties', {})) for t in tools}
             return init.instructions or '', {t.name: t.description or '' for t in tools}
 
 
 TOOLS = None
+SCHEMAS = {}
 
 
 def _tools():
@@ -65,3 +68,35 @@ def test_screenshots_never_grab_the_screen():
     # QScreen.grabWindow copies the screen area on macOS, capturing other apps (AGENTS.md, Screenshots)
     for name in ('designer_helpers.py', 'server.py'):
         assert 'grabWindow' not in _read('mcp_server', name)
+
+
+def _selftest_calls():
+    """{tool: set of argument names} for every c('tool', {...}) call in the live self-test;
+    **G counts as 'graph'."""
+    import ast
+    calls = {}
+    for node in ast.walk(ast.parse(_read('tests', 'test_all_tools.py'))):
+        if isinstance(node, ast.Call) and getattr(node.func, 'id', None) == 'c' and node.args \
+                and isinstance(node.args[0], ast.Constant):
+            names = calls.setdefault(node.args[0].value, set())
+            if len(node.args) > 1 and getattr(node.args[1], 'id', None) == 'G':   # c('tool', G)
+                names.add('graph')
+            if len(node.args) > 1 and isinstance(node.args[1], ast.Dict):
+                for key in node.args[1].keys:
+                    names.add('graph' if key is None else key.value if isinstance(key, ast.Constant) else '?')
+    return calls
+
+
+def test_every_tool_parameter_is_exercised_live():
+    # AGENTS.md: a new parameter needs a check, not just a docstring line
+    _tools()
+    calls = _selftest_calls()
+    missing = sorted('%s(%s)' % (tool, p) for tool, params in SCHEMAS.items() for p in params
+                     if p not in calls.get(tool, set()))
+    assert not missing, 'parameters never passed by tests/test_all_tools.py: %s' % missing
+
+
+def test_every_apply_edits_op_is_exercised_live():
+    ops = set(re.findall(r"\{'op': '(\w+)'", _read('tests', 'test_all_tools.py')))
+    documented = set(re.findall(r'\{"op": "(\w+)"', _read('mcp_server', 'server.py')))
+    assert documented and documented <= ops, 'apply_edits ops never run live: %s' % sorted(documented - ops)

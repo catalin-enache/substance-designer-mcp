@@ -53,11 +53,27 @@ def test_rerun_updates_in_place(install, monkeypatch, tmp_path):
         assert stale.read_text() == f.read()
 
 
-def test_registers_with_claude_code(install, monkeypatch, tmp_path):
+CLAUDE = r'C:\Users\me\AppData\Roaming\npm\claude.cmd' if sys.platform == 'win32' else '/usr/local/bin/claude'
+
+
+def test_registers_with_the_claude_that_which_found(install, monkeypatch, tmp_path):
     module, calls = install
-    monkeypatch.setattr(module.shutil, 'which', lambda name: '/usr/local/bin/claude')
+    monkeypatch.setattr(module.shutil, 'which', lambda name: CLAUDE)
+    monkeypatch.setattr(module.subprocess, 'call', lambda cmd, **kw: calls.append(cmd) or 1)   # not registered yet
     _run(module, monkeypatch, '--plugins-dir', str(tmp_path))
-    assert ['claude', 'mcp', 'remove', 'substance-designer', '-s', 'user'] in calls
-    add = next(c for c in calls if c[:3] == ['claude', 'mcp', 'add'])
+    add = next(c for c in calls if c[1:3] == ['mcp', 'add'])
+    assert add[0] == CLAUDE                                  # the full path, so a .cmd shim works on Windows
     assert add[3:6] == ['--scope', 'user', 'substance-designer']
     assert add[-1] == os.path.join(ROOT, 'mcp_server', 'server.py')
+    assert not any(c[1:3] == ['mcp', 'remove'] for c in calls)
+
+
+def test_rerun_keeps_an_existing_registration(install, monkeypatch, tmp_path, capsys):
+    # removing and re-adding would drop environment variables set with -e
+    module, calls = install
+    monkeypatch.setattr(module.shutil, 'which', lambda name: CLAUDE)
+    monkeypatch.setattr(module.subprocess, 'call', lambda cmd, **kw: calls.append(cmd) or 0)   # already registered
+    _run(module, monkeypatch, '--plugins-dir', str(tmp_path))
+    assert [CLAUDE, 'mcp', 'get', 'substance-designer'] in calls
+    assert not any(c[1:3] in (['mcp', 'add'], ['mcp', 'remove']) for c in calls)
+    assert 'already registered' in capsys.readouterr().out

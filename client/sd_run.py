@@ -7,6 +7,8 @@ Usage:
     python sd_run.py --cancel
 """
 import argparse
+import hashlib
+import hmac
 import json
 import os
 import socket
@@ -17,9 +19,19 @@ TOKEN_FILE = os.path.expanduser('~/.sd_bridge_token')
 
 
 def send(request, wait):
+    """One request over the bridge protocol (see the plugin's docstring): the token never
+    crosses the socket, only HMAC(token, nonce)."""
     with open(TOKEN_FILE) as f:
-        request['token'] = f.read().strip()
+        token = f.read().strip()
     with socket.create_connection(('127.0.0.1', PORT), timeout=wait) as s:
+        hello = b''
+        while not hello.endswith(b'\n'):
+            chunk = s.recv(1024)
+            if not chunk:
+                raise ConnectionError('the bridge closed the connection')
+            hello += chunk
+        nonce = json.loads(hello.decode('utf-8'))['nonce']
+        request['auth'] = hmac.new(token.encode('utf-8'), nonce.encode('utf-8'), hashlib.sha256).hexdigest()
         s.sendall(json.dumps(request).encode('utf-8'))
         s.shutdown(socket.SHUT_WR)
         data = b''
@@ -47,7 +59,7 @@ def main():
             code, path = args.code, None
         elif args.script:
             path = os.path.abspath(args.script)
-            with open(path) as f:
+            with open(path, encoding='utf-8') as f:
                 code = f.read()
         else:
             ap.error('give a script, -c CODE, --status or --cancel')
@@ -55,6 +67,8 @@ def main():
         if args.timeout:
             request['timeout'] = args.timeout
         reply = send(request, wait=(args.timeout or 900) + 60)
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(errors='replace')   # a cp1252 console can't print everything
     sys.stdout.write(reply['output'])
     if reply['output'] and not reply['output'].endswith('\n'):
         sys.stdout.write('\n')

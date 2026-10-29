@@ -14,21 +14,48 @@ _APP = sd.getContext().getSDApplication()
 _PM = _APP.getPackageMgr()
 
 
+def _current_graph():
+    try:
+        return _APP.getQtForPythonUIMgr().getCurrentGraph()
+    except (Exception, APIException):
+        return None
+
+
+def _is_library_package(pkg):
+    """Library packages loaded for describe_node/add_node count as user packages too."""
+    lib = os.path.normcase(os.path.join(_APP.getPath(SDApplicationPath.DefaultResourcesDir), 'packages'))
+    return os.path.normcase(os.path.dirname(pkg.getFilePath() or '')) == lib
+
+
 def find_graph(identifier=None):
-    """Graph by identifier among open user packages; default: graph shown in the UI."""
+    """Compositing graph by identifier among the user's open packages (library packages
+    excluded); default: the graph shown in the UI. A graph object is returned as is, so a batch
+    keeps editing the graph it started on. Several open graphs with the same identifier (every
+    new graph is "New_Graph") are ambiguous unless one of them is open in the UI."""
+    if isinstance(identifier, SDSBSCompGraph):
+        return identifier
+    current = _current_graph()
     if not identifier:
-        try:
-            g = _APP.getQtForPythonUIMgr().getCurrentGraph()
-        except (Exception, APIException):
-            g = None
-        if g is None:
+        if current is None:
             raise RuntimeError('No graph identifier given and no graph is open in the UI.')
-        return g
-    for p in _PM.getUserPackages():
-        for r in p.getChildrenResources(True):
-            if r.getIdentifier() == identifier and isinstance(r, SDSBSCompGraph):
-                return r
-    raise RuntimeError('Graph %r not found in open user packages.' % identifier)
+        if not isinstance(current, SDSBSCompGraph):
+            raise RuntimeError('The graph open in the UI (%s) is not a compositing graph; pass graph=<id>.'
+                               % current.getIdentifier())
+        return current
+    matches = [r for p in _PM.getUserPackages() if not _is_library_package(p)
+               for r in p.getChildrenResources(True)
+               if r.getIdentifier() == identifier and isinstance(r, SDSBSCompGraph)]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise RuntimeError('Graph %r not found in open user packages.' % identifier)
+    for g in matches:
+        if current is not None and g.getIdentifier() == current.getIdentifier() \
+                and g.getPackage().getUID() == current.getPackage().getUID():
+            return g
+    raise RuntimeError('%d open graphs are named %r (packages: %s); open the one you mean in Designer '
+                       'or close the others.' % (len(matches), identifier, ', '.join(
+                           g.getPackage().getFilePath() or 'never saved' for g in matches)))
 
 
 def fmt(value):
@@ -456,23 +483,36 @@ def _make_value(prop, value):
                            ', '.join('%s=%s' % (eid, ev.get()) for eid, ev in options)))
     tid = ptype.getId()
     seq = list(value) if isinstance(value, (list, tuple)) else None
+    def as_bool(v):
+        if isinstance(v, str):
+            if v.strip().lower() not in ('true', 'false', '1', '0', 'yes', 'no', 'on', 'off'):
+                raise RuntimeError('%s expects true or false, got %r' % (prop.getId(), v))
+            return v.strip().lower() in ('true', '1', 'yes', 'on')
+        return bool(v)
+
+    def as_int(v):
+        if isinstance(v, float) and not v.is_integer():
+            raise RuntimeError('%s is an integer parameter; %r is not a whole number' % (prop.getId(), v))
+        return int(v)
     builders = {
-        'bool': lambda: SDValueBool.sNew(bool(value)),
-        'int': lambda: SDValueInt.sNew(int(value)),
+        'bool': lambda: SDValueBool.sNew(as_bool(value)),
+        'int': lambda: SDValueInt.sNew(as_int(value)),
         'float': lambda: SDValueFloat.sNew(float(value)),
         'string': lambda: SDValueString.sNew(str(value)),
         'float2': lambda: SDValueFloat2.sNew(float2(*map(float, seq))),
         'float3': lambda: SDValueFloat3.sNew(float3(*map(float, seq))),
         'float4': lambda: SDValueFloat4.sNew(float4(*map(float, seq))),
-        'int2': lambda: SDValueInt2.sNew(int2(*map(int, seq))),
-        'int3': lambda: SDValueInt3.sNew(int3(*map(int, seq))),
-        'int4': lambda: SDValueInt4.sNew(int4(*map(int, seq))),
+        'int2': lambda: SDValueInt2.sNew(int2(*map(as_int, seq))),
+        'int3': lambda: SDValueInt3.sNew(int3(*map(as_int, seq))),
+        'int4': lambda: SDValueInt4.sNew(int4(*map(as_int, seq))),
         'ColorRGBA': lambda: SDValueColorRGBA.sNew(ColorRGBA(*map(float, (seq + [1.0])[:4]))),
     }
     if tid not in builders:
         raise RuntimeError('%s: unsupported parameter type %s' % (prop.getId(), tid))
     if tid[-1].isdigit() and (seq is None or len(seq) != int(tid[-1])):
         raise RuntimeError('%s expects %s values' % (prop.getId(), tid[-1]))
+    if tid == 'ColorRGBA' and (seq is None or len(seq) not in (3, 4)):
+        raise RuntimeError('%s expects a colour [r, g, b] or [r, g, b, a]' % prop.getId())
     return builders[tid]()
 
 
@@ -487,13 +527,14 @@ def set_params(graph_id, node_id, params):
         if prop.isConnectable():
             raise RuntimeError('%r is an input connector; use connect' % pid)
         before = fmt(target.getPropertyValue(prop))
+        new_value = _make_value(prop, value)   # validate before changing anything
         if pid.startswith('$') and hasattr(target, 'setPropertyInheritanceMethod'):
             # $outputsize/$format etc. only take effect when not inherited
             try:
                 target.setPropertyInheritanceMethod(prop, SDPropertyInheritanceMethod.Absolute)
             except (Exception, APIException):
                 pass
-        target.setPropertyValue(prop, _make_value(prop, value))
+        target.setPropertyValue(prop, new_value)
         print('%s.%s: %r -> %r' % (node_id or 'graph', pid, before, fmt(target.getPropertyValue(prop))))
 
 
@@ -741,10 +782,11 @@ def move_nodes(identifier, positions):
 
 
 def list_atomic():
-    g = find_graph(None) if _APP.getQtForPythonUIMgr().getCurrentGraph() else None
+    g = _current_graph()
+    if not isinstance(g, SDSBSCompGraph):     # a function graph lists sbs::function::* instead
+        g = None
     tmp = None
     if g is None:
-        from sd.api.sbs.sdsbscompgraph import SDSBSCompGraph
         tmp = _PM.newUserPackage()
         g = SDSBSCompGraph.sNew(tmp)
     try:
@@ -799,31 +841,47 @@ def expose_param(identifier, node_id, param, input_id=None, label=None, default=
     input_id = input_id or param
     if g.getPropertyFromId(input_id, SDPropertyCategory.Input) is not None:
         raise RuntimeError('graph already has an input %r; pick another input_id' % input_id)
-    current = node.getPropertyValue(prop)
-    inp = g.newProperty(input_id, SDTypeInt.sNew() if is_enum else ptype, SDPropertyCategory.Input)
+    try:
+        existing = node.getPropertyGraph(prop)
+    except (Exception, APIException):
+        existing = None
+    if existing is not None and len(existing.getNodes()):
+        raise RuntimeError('%s.%s is already driven by a function; replacing it would lose that logic. '
+                           'Edit the function by hand, or remove its graph input first.' % (node_id, param))
+    from sd.api.sdvalueint import SDValueInt
+    value = _make_value(prop, default) if default is not None else node.getPropertyValue(prop)  # validate first
     if is_enum:
-        from sd.api.sdvalueint import SDValueInt
-        g.setPropertyValue(inp, SDValueInt.sNew(int(current.get())))
-    else:
-        g.setPropertyValue(inp, current)          # start from the node's current value
-    if default is not None:
-        g.setPropertyValue(inp, _make_value(inp, default))
-    _set_annotation(g, inp, 'label', label or input_id.replace('_', ' ').capitalize())
-    for key, value in (('min', minimum), ('max', maximum), ('step', step), ('group', group)):
-        if value is not None:
-            _set_annotation(g, inp, key, value)
-    fg = node.getPropertyGraph(prop) or node.newPropertyGraph(prop, 'SDSBSFunctionGraph')
-    for n in list(fg.getNodes()):
-        fg.deleteNode(n)
-    get = fg.newNode('sbs::function::' + getter)
-    get.setInputPropertyValueFromId('__constant__', SDValueString.sNew(input_id))
-    fg.setOutputNode(get, True)
+        value = SDValueInt.sNew(int(value.get()))
+    inp = g.newProperty(input_id, SDTypeInt.sNew() if is_enum else ptype, SDPropertyCategory.Input)
+    try:
+        g.setPropertyValue(inp, value)
+        _set_annotation(g, inp, 'label', label or input_id.replace('_', ' ').capitalize())
+        for key, val in (('min', minimum), ('max', maximum), ('step', step), ('group', group)):
+            if val is not None:
+                _set_annotation(g, inp, key, val)
+        fg = existing or node.newPropertyGraph(prop, 'SDSBSFunctionGraph')
+        get = fg.newNode('sbs::function::' + getter)
+        get.setInputPropertyValueFromId('__constant__', SDValueString.sNew(input_id))
+        fg.setOutputNode(get, True)
+    except (Exception, APIException):
+        g.deleteProperty(inp)   # don't leave an input that drives nothing
+        raise
     print('exposed %s.%s as graph input %r (%s, default %r)' % (
         node_id, param, input_id, type_id, fmt(g.getPropertyValue(inp))))
 
 
-def _input_users(g):
-    """input id -> ['node.param', ...] for parameters driven by a get_* function."""
+def _plain_binding(fg):
+    """The input id if this function graph is exactly what expose_param builds (one get_* node),
+    else None: a hand-written expression or a Pixel Processor function."""
+    nodes = list(fg.getNodes())
+    if len(nodes) == 1 and '::get_' in nodes[0].getDefinition().getId():
+        return fmt(nodes[0].getInputPropertyValueFromId('__constant__'))
+    return None
+
+
+def _input_users(g, plain_only=False):
+    """input id -> ['node.param', ...] for parameters whose function reads it (with plain_only,
+    only those that are nothing but that read)."""
     users = {}
     for node in g.getNodes():
         for prop in node.getProperties(SDPropertyCategory.Input):
@@ -835,10 +893,15 @@ def _input_users(g):
                 fg = None
             if fg is None:
                 continue
+            ref = '%s.%s' % (node.getIdentifier(), prop.getId())
+            if plain_only:
+                name = _plain_binding(fg)
+                if name is not None:
+                    users.setdefault(name, []).append(ref)
+                continue
             for fnode in fg.getNodes():
                 if '::get_' in fnode.getDefinition().getId():
-                    name = fmt(fnode.getInputPropertyValueFromId('__constant__'))
-                    users.setdefault(name, []).append('%s.%s' % (node.getIdentifier(), prop.getId()))
+                    users.setdefault(fmt(fnode.getInputPropertyValueFromId('__constant__')), []).append(ref)
     return users
 
 
@@ -868,13 +931,20 @@ def list_graph_inputs(identifier=None):
 
 
 def remove_graph_input(identifier, input_id):
-    """Delete a graph input; parameters it drove keep their current value as a constant."""
+    """Delete a graph input; parameters bound to it (as expose_param does) keep its current
+    value as a constant. Refuses while a larger function (an expression, a Pixel Processor) still
+    reads it, since removing the input would break that function."""
     g = find_graph(identifier)
     inp = g.getPropertyFromId(input_id, SDPropertyCategory.Input)
     if inp is None or input_id.startswith('$'):
         raise RuntimeError('graph has no exposed input %r' % input_id)
+    plain = _input_users(g, plain_only=True).get(input_id, [])
+    other = [ref for ref in _input_users(g).get(input_id, []) if ref not in plain]
+    if other:
+        raise RuntimeError('input %r is read inside the functions of %s; edit those by hand first '
+                           '(nothing was changed)' % (input_id, ', '.join(other)))
     value = g.getPropertyValue(inp)
-    for ref in _input_users(g).get(input_id, []):
+    for ref in plain:
         nid, pid = ref.split('.', 1)
         node = g.getNodeFromId(nid)
         prop = node.getPropertyFromId(pid, SDPropertyCategory.Input)
@@ -882,7 +952,10 @@ def remove_graph_input(identifier, input_id):
         try:
             node.setPropertyValue(prop, value)
         except (Exception, APIException):
-            pass
+            try:   # an int input bound to an enum parameter
+                node.setPropertyValue(prop, _make_value(prop, fmt(value)))
+            except (Exception, APIException) as e:
+                print('WARNING: %s keeps its previous value; could not set %r (%s)' % (ref, fmt(value), e))
         print('unbound %s (kept value %r)' % (ref, fmt(node.getPropertyValue(prop))))
     g.deleteProperty(inp)
     print('removed graph input', input_id)
@@ -912,7 +985,7 @@ def apply_edits(identifier, ops):
     """Run a list of edit operations in order. 'ref' names a node added earlier in the batch;
     node fields accept a ref, a node id, or 'graph'. Stops at the first failing op."""
     g = find_graph(identifier)
-    gid = g.getIdentifier()
+    gid = g      # the object, so every op edits this graph even if another has the same name
     refs = {}
     node = lambda value: refs.get(value, value)
     for i, op in enumerate(ops):
@@ -945,8 +1018,11 @@ def apply_edits(identifier, ops):
             else:
                 raise RuntimeError('unknown op %r (add, bitmap, set, connect, disconnect, move, delete, expose)' % kind)
         except (Exception, APIException) as e:
-            raise RuntimeError('op %d (%s) failed: %s. Ops 0-%d were applied; Ctrl+Z on this graph '
-                               'reverts the whole batch.' % (i, kind, e, i - 1))
+            done = 'ops 0-%d were applied' % (i - 1) if i else 'no earlier op was applied'
+            raise RuntimeError('op %d (%s) failed: %s. %s%s; Ctrl+Z on this graph reverts the whole '
+                               'batch.' % (i, kind, e, done, ' (its node was added before the failure)'
+                                           if kind in ('add', 'bitmap') and refs.get(op.get('ref')) is None
+                                           and op.get('params') else ''))
     print('applied %d op(s); refs: %s' % (len(ops), refs))
 
 
@@ -976,6 +1052,12 @@ def sweep_param(identifier, node_id, param, values, out_dir, view_node=None, out
         raise RuntimeError('sweeping a graph input needs view_node (the node to look at)')
     original = target.getPropertyValue(prop)
     original_text = fmt(original)
+    inherit = None
+    if param.startswith('$') and hasattr(target, 'getPropertyInheritanceMethod'):
+        # like set_params: $outputsize/$format only take effect when not inherited
+        from sd.api.sdproperty import SDPropertyInheritanceMethod
+        inherit = target.getPropertyInheritanceMethod(prop)
+        target.setPropertyInheritanceMethod(prop, SDPropertyInheritanceMethod.Absolute)
     try:
         for i, value in enumerate(values):
             target.setPropertyValue(prop, _make_value(prop, value))
@@ -992,6 +1074,8 @@ def sweep_param(identifier, node_id, param, values, out_dir, view_node=None, out
             _with_node_texture(g, view, output, use)
     finally:
         target.setPropertyValue(prop, original)
+        if inherit is not None:
+            target.setPropertyInheritanceMethod(prop, inherit)
         print('restored %s.%s to %r' % (node_id or 'graph', param, original_text))
 
 
@@ -1137,14 +1221,15 @@ def graph_objects_summary(g):
 
 
 # ---------------------------------------------------------------- reload (for file-level edits)
-def package_file_of(identifier):
-    """Save the graph's package in place and report its file (for edits the API can't make)."""
+def package_file_of(identifier, save=False):
+    """Report the graph's package file (for edits the API can't make); with save, save it first."""
     g = find_graph(identifier)
     pkg = g.getPackage()
     path = pkg.getFilePath()
     if not path:
-        raise RuntimeError('the package has never been saved; save it with save_package(save_as=...) first')
-    _PM.savePackage(pkg)
+        raise RuntimeError('the package has never been saved; save it first (the save_package tool, save_as=...)')
+    if save:
+        _PM.savePackage(pkg)
     current = _APP.getQtForPythonUIMgr().getCurrentGraph()
     print('FILE=' + path)
     print('GRAPH=' + g.getIdentifier())

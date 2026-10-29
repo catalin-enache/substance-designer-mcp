@@ -24,6 +24,8 @@ import tempfile
 import threading
 import time
 import filecmp
+import hashlib
+import hmac
 import json
 import socket
 
@@ -34,6 +36,7 @@ BUNDLE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVER = os.path.join(BUNDLE, 'mcp_server', 'server.py')
 TEST_GRAPH = 'mcp_selftest'
 SAVED_GRAPH = 'mcp_selftest_saved'          # create_graph(save_path=...)
+DUP_GRAPH = 'mcp_selftest_dup'              # two open graphs with the same identifier
 EXAMPLE_GRAPH = 'mcp_selftest_trimsheet'    # examples/build_dwarf_trimsheet.py, renamed
 PORT = int(os.environ.get('SD_BRIDGE_PORT', '9877'))
 PARAMS = StdioServerParameters(command=sys.executable, args=[SERVER])
@@ -78,9 +81,16 @@ def pixel_values(t):
             for x, y, vals in re.findall(r'pixel \((\d+),(\d+)\): (.*)', t)}
 
 
-def raw_request(request):
-    """One request straight to the bridge, bypassing the MCP server (for the security checks)."""
+def raw_request(request, token=None):
+    """One request straight to the bridge, bypassing the MCP server. With token, it answers the
+    plugin's challenge properly (HMAC of the nonce); without, the request is sent as given."""
     with socket.create_connection(('127.0.0.1', PORT), timeout=10) as sock:
+        hello = b''
+        while not hello.endswith(b'\n'):
+            hello += sock.recv(1024)
+        nonce = json.loads(hello)['nonce']
+        if token:
+            request = {**request, 'auth': hmac.new(token.encode(), nonce.encode(), hashlib.sha256).hexdigest()}
         sock.sendall(json.dumps(request).encode('utf-8'))
         sock.shutdown(socket.SHUT_WR)
         data = b''
@@ -129,7 +139,7 @@ def clipboard_fingerprint():
 CLEAN = ("import sd\npm=sd.getContext().getSDApplication().getPackageMgr()\nn=0\n"
          "for p in list(pm.getUserPackages()):\n"
          "    if any(r.getIdentifier() in %r for r in p.getChildrenResources(False)):\n"
-         "        pm.unloadUserPackage(p); n+=1\nprint('removed', n)" % ((TEST_GRAPH, SAVED_GRAPH, EXAMPLE_GRAPH),))
+         "        pm.unloadUserPackage(p); n+=1\nprint('removed', n)" % ((TEST_GRAPH, SAVED_GRAPH, EXAMPLE_GRAPH, DUP_GRAPH),))
 # Undo/Redo via Designer's Edit menu, scheduled to run after this call's own undo group closes
 UNDO_REDO = ("import sd\nfrom PySide6.QtCore import QTimer\nfrom PySide6.QtWidgets import QApplication, QMenu\n"
              "g=sd.getContext().getSDApplication().getQtForPythonUIMgr().getCurrentGraph()\n"
@@ -151,6 +161,11 @@ FACTS = ("import sd\nfrom sd.api.apiexception import APIException\nfrom sd.api.s
          "n=g.getNodeFromId('%s')\nc=n.getPropertyConnections(n.getPropertyFromId('input1', SDPropertyCategory.Input))[0]\n"
          "print('QUERIED_SIDE=%%s' %% (c.getOutputPropertyNode().getIdentifier()=='%s' and "
          "c.getInputPropertyNode().getIdentifier()=='%s' and c.getOutputProperty().getId()=='input1'))")
+GRAPH_OF = ("import sd\ng=[r for p in sd.getContext().getSDApplication().getPackageMgr().getUserPackages() "
+            "for r in p.getChildrenResources(False) if r.getIdentifier()=='%s'][0]\n")
+INHERIT = GRAPH_OF + ("from sd.api.sdproperty import SDPropertyCategory\nn=g.getNodeFromId('%s')\n"
+                      "p=n.getPropertyFromId('$outputsize', SDPropertyCategory.Input)\n"
+                      "print('INHERIT=%%s VALUE=%%s' %% (n.getPropertyInheritanceMethod(p).name, n.getPropertyValue(p).get()))")
 CURRENT_GRAPH = ("import sd\ng=sd.getContext().getSDApplication().getQtForPythonUIMgr().getCurrentGraph()\n"
                  "print('CURRENT=' + (g.getIdentifier() if g else ''))")
 
@@ -191,12 +206,24 @@ async def run(scratch):
 
                 # --- security (README, Security): token required, loopback only, private token file
                 B = 'bridge security'
-                for name, req in (('wrong token', {'token': 'x' * 64, 'cmd': 'status'}),
-                                  ('no token', {'cmd': 'status'}),
-                                  ('code with wrong token', {'token': 'nope', 'code': "print('SHOULD NOT RUN')"})):
+                token_file = os.path.expanduser('~/.sd_bridge_token')
+                with open(token_file) as f:
+                    token = f.read().strip()                      # used, never printed
+                for name, req in (('a wrong answer', {'auth': 'x' * 64, 'cmd': 'status'}),
+                                  ('no answer', {'cmd': 'status'}),
+                                  ('the token itself (old protocol)', {'token': token, 'cmd': 'status'}),
+                                  ('code with a wrong answer', {'auth': 'nope', 'code': "print('SHOULD NOT RUN')"})):
                     reply = raw_request(req)
                     check(B, 'refuses ' + name, not reply['ok'] and reply.get('error') == 'invalid token'
                           and 'SHOULD NOT RUN' not in reply.get('output', ''), str(reply))
+                reply = raw_request({'cmd': 'status'}, token)
+                check(B, 'accepts the right answer', reply['ok'] and 'sd_bridge v3' in reply['output'], reply['output'])
+                with socket.create_connection(('127.0.0.1', PORT), timeout=10) as sock:
+                    sock.recv(1024)
+                    sock.sendall(b'{not json')
+                    sock.shutdown(socket.SHUT_WR)
+                    garbage = json.loads(sock.recv(65536))
+                check(B, 'bad request gets no details', garbage == {'ok': False, 'output': '', 'error': 'bad request'}, str(garbage))
                 ip = lan_address()
                 if ip is None:
                     skip(B, 'not reachable from the network', 'no non-loopback address on this machine')
@@ -207,7 +234,6 @@ async def run(scratch):
                     except OSError:
                         reachable = False
                     check(B, 'not reachable from the network', not reachable, 'tried %s:%d' % (ip, PORT))
-                token_file = os.path.expanduser('~/.sd_bridge_token')
                 if sys.platform == 'win32':
                     skip(B, 'token file owner-only', 'POSIX permissions only')
                 else:
@@ -215,13 +241,11 @@ async def run(scratch):
                     check(B, 'token file owner-only', mode & 0o077 == 0, oct(mode))
 
                 # --- cancel aborts the running job and drops queued ones (two raw clients + sd_run.py --cancel)
-                with open(token_file) as f:
-                    token = f.read().strip()                      # used, never printed
                 replies = {}
                 def job(name, req):
-                    replies[name] = raw_request({**req, 'token': token})
+                    replies[name] = raw_request(req, token)
                 def bridge_status():
-                    return raw_request({'token': token, 'cmd': 'status'})['output']
+                    return raw_request({'cmd': 'status'}, token)['output']
                 def wait_for(text_part):
                     for _ in range(100):
                         if text_part in bridge_status():
@@ -317,10 +341,25 @@ async def run(scratch):
                 check('set_params', 'graph $outputsize', '(9, 9)' in t, t)
                 r_ = await c('set_params', {'node_id': lv, 'params': {'levelinlow': [1, 2]}, **G})
                 check('set_params', 'error on bad length', r_.is_error and 'expects 4' in text(r_), text(r_))
+                before = text(await c('execute_designer_code', {'code': INHERIT % (TEST_GRAPH, lv)}))
+                r_ = await c('set_params', {'node_id': lv, 'params': {'$outputsize': 11}, **G})
+                after = text(await c('execute_designer_code', {'code': INHERIT % (TEST_GRAPH, lv)}))
+                check('set_params', 'rejected value changes nothing (not even inheritance)',
+                      r_.is_error and 'expects 2' in text(r_) and 'INHERIT=' in before and before == after, before + after)
+                r_ = await c('set_params', {'node_id': slope, 'params': {'Samples': 16.5}, **G})
+                check('set_params', 'error on a fractional integer', r_.is_error and 'not a whole number' in text(r_), text(r_))
+                tmp_u = added_id(text(await c('add_node', {'definition': 'uniform', **G})))
+                r_ = await c('set_params', {'node_id': tmp_u, 'params': {'outputcolor': [1, 0.5]}, **G})
+                check('set_params', 'error on a 2-value colour', r_.is_error and 'expects a colour' in text(r_), text(r_))
+                t = text(await c('set_params', {'node_id': tmp_u, 'params': {'colorswitch': 'false'}, **G}))
+                check('set_params', "bool from the string 'false'", '-> False' in t, t)
+                await c('delete_nodes', {'node_ids': [tmp_u], **G})
+                linked = []
                 for a, b, port in [(clouds, slope, 'Source'), (clouds, slope, 'Effect'),
                                    (slope, lv, 'input1'), (lv, out, 'inputNodeOutput')]:
                     t = text(await c('connect', {'from_node': a, 'to_node': b, 'to_input': port, **G}))
-                check('connect', '4 links', 'connected' in t, t)
+                    linked.append('-> %s.%s' % (b, port) in t)
+                check('connect', '4 links', all(linked), str(linked))
                 r_ = await c('connect', {'from_node': clouds, 'to_node': lv, 'to_input': 'nope', **G})
                 check('connect', 'error on bad port', r_.is_error and 'connectors:' in text(r_), text(r_))
                 t = text(await c('execute_designer_code', {'code': (
@@ -338,7 +377,10 @@ async def run(scratch):
                     "import sd\nprint('MODIFIED=%%s' %% any(p.isModified() for p in sd.getContext().getSDApplication()"
                     ".getPackageMgr().getUserPackages() if any(r.getIdentifier()=='%s' for r in p.getChildrenResources(False))))"
                     % TEST_GRAPH)}))
-                if 'MODIFIED=True' in t:   # otherwise quit_designer could really close Designer
+                if was_running:
+                    # a regression here would close the user's Designer: only on our own instance
+                    skip('quit_designer', 'refuses with unsaved changes', 'Designer was already running (yours)')
+                elif 'MODIFIED=True' in t:   # otherwise quit_designer could really close Designer
                     r_ = await c('quit_designer')
                     still = not (await c('designer_status')).is_error
                     check('quit_designer', 'refuses with unsaved changes', r_.is_error and 'unsaved changes' in text(r_)
@@ -400,6 +442,11 @@ async def run(scratch):
                 after = text(await c('describe_graph', {'node_ids': [clouds], 'include_params': True, **G}))
                 check('sweep_param', '3 values + image', len(images) == 1 and sweep_text.count('scale = ') == 3, sweep_text.splitlines()[0])
                 check('sweep_param', 'original restored', 'restored' in sweep_text and before == after, '')
+                before = text(await c('execute_designer_code', {'code': INHERIT % (TEST_GRAPH, lv)}))
+                t = text(await c('sweep_param', {'node_id': lv, 'param': '$outputsize', 'values': [[7, 7], [8, 8]], **G}))
+                after = text(await c('execute_designer_code', {'code': INHERIT % (TEST_GRAPH, lv)}))
+                check('sweep_param', '$outputsize takes effect and is restored', '(128x128)' in t and '(256x256)' in t
+                      and before == after, t + before + after)
                 r_ = await c('sweep_param', {'node_id': lv, 'param': 'nope', 'values': [1], **G})
                 check('sweep_param', 'error on bad param', r_.is_error and 'not a parameter' in text(r_), text(r_))
                 t = text(await c('check_tiling', {'node_id': clouds, **G}))
@@ -427,8 +474,12 @@ async def run(scratch):
                     {'op': 'connect', 'from': slope, 'to': 'b', 'input': 'destination'},
                     {'op': 'move', 'node': 'b', 'position': [0, 300]},
                     {'op': 'set', 'node': 'b', 'params': {'opacitymult': 0.5}},
+                    {'op': 'disconnect', 'node': 'b', 'input': 'destination'},
+                    {'op': 'expose', 'node': 'b', 'param': 'opacitymult', 'input_id': 'batch_opacity', 'max': 1},
                 ], **G}))
-                check('apply_edits', '6 ops with refs', 'applied 6 op(s)' in t, t.splitlines()[-1])
+                check('apply_edits', '8 ops with refs', 'applied 8 op(s)' in t and "removed 1 connection(s) into" in t
+                      and "graph input 'batch_opacity'" in t, t.splitlines()[-1])
+                await c('remove_graph_input', {'input_id': 'batch_opacity', **G})
                 batch_blend = re.search(r"'b': '(\d+)'", t).group(1)
                 r_ = await c('apply_edits', {'ops': [
                     {'op': 'add', 'definition': 'levels', 'ref': 'x'},
@@ -443,8 +494,12 @@ async def run(scratch):
                 # --- exposed inputs and graph size
                 t = text(await c('set_graph_size', {'size_log2': 9, 'overridable': True, **G}))
                 check('set_graph_size', 'overridable 512', 'overridable, default 512 px' in t, t)
+                await c('snapshot_graph', {'label': 'overridable size', **G})
                 t = text(await c('set_graph_size', {'size_log2': 9, 'overridable': False, **G}))
                 check('set_graph_size', 'fixed 512', 'size: fixed' in t, t)
+                t = text(await c('diff_graph', {'against': 'overridable size', **G}))
+                check('diff_graph', 'size labels (fixed is absolute)',
+                      '~ graph outputsize: (default: relative to parent) -> 9 9 (absolute)' in t, t)
                 await c('set_graph_size', {'size_log2': 9, 'overridable': True, **G})   # render checks need it
                 t = text(await c('expose_param', {'node_id': lv, 'param': 'leveloutlow', 'input_id': 'floor',
                                                   'label': 'Floor', 'default': [0.25] * 4, 'min': 0, 'max': 1, **G}))
@@ -462,6 +517,21 @@ async def run(scratch):
                 line = next((l for l in t.splitlines() if l.startswith('slope_amount')), '')
                 check('expose_param', 'group + step', "group='Shape'" in line and 'step=0.5' in line, line)
                 await c('remove_graph_input', {'input_id': 'slope_amount', **G})
+                await c('expose_param', {'node_id': lv, 'param': 'levelinmid', 'input_id': 'mid', **G})
+                extra = GRAPH_OF % TEST_GRAPH + (
+                    "from sd.api.sdproperty import SDPropertyCategory\nn=g.getNodeFromId('%s')\n"
+                    "p=n.getPropertyFromId('levelinmid', SDPropertyCategory.Input)\n") % lv
+                await c('execute_designer_code', {'code': extra + "n.getPropertyGraph(p).newNode('sbs::function::const_float1')\nprint('extra node')"})
+                r_ = await c('remove_graph_input', {'input_id': 'mid', **G})
+                still = 'mid (float4)' in text(await c('list_graph_inputs', G))
+                check('remove_graph_input', 'refuses while a larger function reads it', r_.is_error
+                      and 'read inside the functions' in text(r_) and still, text(r_))
+                r_ = await c('expose_param', {'node_id': lv, 'param': 'levelinmid', 'input_id': 'mid2', **G})
+                check('expose_param', 'refuses a parameter driven by a function', r_.is_error
+                      and 'already driven by a function' in text(r_), text(r_))
+                await c('execute_designer_code', {'code': extra + "n.deletePropertyGraph(p)\nprint('function removed')"})
+                t = text(await c('remove_graph_input', {'input_id': 'mid', **G}))
+                check('remove_graph_input', 'removes once nothing reads it', 'removed graph input mid' in t, t)
                 r_ = await c('sweep_param', {'node_id': 'graph', 'param': 'floor', 'values': [[0.1] * 4, [0.9] * 4],
                                              'view_node': lv, 'tile_size': 96, **G})
                 means = [float(m) for m in re.findall(r'L [0-9.]+\.\.[0-9.]+ \(mean ([0-9.]+)\)', text(r_))]
@@ -543,6 +613,40 @@ async def run(scratch):
                 check(F, '29 atomic nodes', 'ATOMIC=29' in t, t)
                 check(F, 'APIException is not an Exception', 'APIEXC_BASE_ONLY=True' in t, t)
                 check(F, 'connections reported from queried side', 'QUERIED_SIDE=True' in t, t)
+                # how a .sbs stores size inheritance (server._RELATIVE_TO): measure it
+                inherit_dir = os.path.join(scratch, 'inherit')
+                t = text(await c('execute_designer_code', {'code': (
+                    "import sd, os\nfrom sd.api.sbs.sdsbscompgraph import SDSBSCompGraph\n"
+                    "from sd.api.sdproperty import SDPropertyCategory, SDPropertyInheritanceMethod as M\n"
+                    "pm=sd.getContext().getSDApplication().getPackageMgr()\nos.makedirs(%r, exist_ok=True)\n"
+                    "for m in (M.Absolute, M.RelativeToInput, M.RelativeToParent):\n"
+                    "    pkg=pm.newUserPackage(); g=SDSBSCompGraph.sNew(pkg); g.setIdentifier('inherit_'+m.name)\n"
+                    "    n=g.newNode('sbs::compositing::blur')\n"
+                    "    g.setPropertyInheritanceMethod(g.getPropertyFromId('$outputsize', SDPropertyCategory.Input), m)\n"
+                    "    n.setPropertyInheritanceMethod(n.getPropertyFromId('$outputsize', SDPropertyCategory.Input), m)\n"
+                    "    pm.savePackageAs(pkg, os.path.join(%r, m.name + '.sbs')); pm.unloadUserPackage(pkg)\n"
+                    "print('saved')") % (inherit_dir, inherit_dir)}))
+                stored = {}
+                for name in ('Absolute', 'RelativeToInput', 'RelativeToParent'):
+                    import xml.etree.ElementTree as ET
+                    g_el = next(ET.parse(os.path.join(inherit_dir, name + '.sbs')).getroot().iter('graph'))
+                    graph_rel = [p.find('relativeTo').get('v') for p in g_el.find('baseParameters') or []]
+                    node_rel = [p.find('relativeTo').get('v') for p in g_el.iter('parameter') if p.find('name').get('v') == 'outputsize'
+                                and p not in list(g_el.find('baseParameters') or [])]
+                    stored[name] = (graph_rel, node_rel)
+                check(F, '.sbs size inheritance: 0 absolute, 1 parent, 2 input, defaults unstored',
+                      stored == {'Absolute': (['0'], ['0']), 'RelativeToInput': (['2'], []), 'RelativeToParent': ([], ['1'])},
+                      str(stored))
+                t = text(await c('execute_designer_code', {'code': GRAPH_OF % TEST_GRAPH + (
+                    "from sd.api.sdresourcebitmap import SDResourceBitmap\nfrom sd.api.sdresource import EmbedMethod\n"
+                    "from sd.api.apiexception import APIException\n"
+                    "try:\n    SDResourceBitmap.sNewFromFile(g.getPackage(), %r, EmbedMethod.BinaryEmbedded); print('EMBED=ok')\n"
+                    "except APIException as e:\n    print('EMBED=' + str(e))\n"
+                    "from sd.api.sdbasetypes import int2\nsaved=g.getDefaultParentSize()\n"
+                    "g.setDefaultParentSize(int2(256, 256)); print('PARENT=%%d' %% g.getDefaultParentSize().x)\n"
+                    "g.setDefaultParentSize(saved)") % png}))
+                check(F, 'bitmaps cannot be embedded (NotSupported)', 'EMBED=SDApiError.NotSupported' in t, t)
+                check(F, 'setDefaultParentSize takes pixels, not log2', 'PARENT=256' in t, t)
                 grad = added_id(text(await c('add_node', {'definition': 'gradient_linear_1', 'position': [-600, 600], **G})))
                 nrm = added_id(text(await c('add_node', {'definition': 'normal', 'position': [-400, 600],
                                                          'params': {'intensity': 5.0, 'inversedy': True}, **G})))
@@ -558,6 +662,16 @@ async def run(scratch):
                 check(F, 'normal inversedy=True is OpenGL', gl[1] < 0.497 and dx[1] > 0.503 and abs(gl[1] + dx[1] - 1) < 0.002,
                       'OpenGL G=%.3f, DirectX G=%.3f' % (gl[1], dx[1]))
                 await c('delete_nodes', {'node_ids': [grad, nrm], **G})
+
+                # --- graph lookup: same-named graphs are ambiguous; loaded library graphs aren't yours
+                await c('execute_designer_code', {'code': (
+                    "import sd\nfrom sd.api.sbs.sdsbscompgraph import SDSBSCompGraph\n"
+                    "pm=sd.getContext().getSDApplication().getPackageMgr()\n"
+                    "for _ in range(2):\n    SDSBSCompGraph.sNew(pm.newUserPackage()).setIdentifier('%s')") % DUP_GRAPH})
+                r_ = await c('describe_graph', {'graph': DUP_GRAPH})
+                check('describe_graph', 'error on two graphs with one name', r_.is_error and '2 open graphs are named' in text(r_), text(r_))
+                r_ = await c('describe_graph', {'graph': 'bevel'})        # bevel.sbs is loaded by now (describe_node)
+                check('describe_graph', 'library graphs are not user graphs', r_.is_error and 'not found' in text(r_), text(r_))
 
                 # --- a node with several outputs (bevel: height, normal)
                 bev = added_id(text(await c('add_node', {'definition': 'bevel', 'position': [-400, 300], **G})))
@@ -578,6 +692,9 @@ async def run(scratch):
                 t = text(r_)
                 check('sweep_param', 'view_node + output', 'restored %s.scale' % clouds in t and t.count('scale = ') == 2
                       and any(x.type == 'image' for x in r_.content), t)
+                per_value = [l.split(': ', 1)[1] for l in t.splitlines() if l.startswith('scale = ')]
+                check('sweep_param', 'a node feeding no output is recomputed per value',
+                      len(per_value) == 2 and per_value[0] != per_value[1], str(per_value))
                 r_ = await c('compare_to_reference', {'node_id': bev, 'output': 'normal', 'reference_path': png,
                                                       'reference_region': [0, 0, 32, 16], 'tile_size': 128, **G})
                 t = text(r_)
@@ -658,16 +775,23 @@ async def run(scratch):
                     check('screenshot_designer', '3d' + (' + clipboard kept' if before else ''), is_image(r_) and same,
                           '' if is_image(r_) else text(r_))
                 r_ = await c('screenshot_designer', {'panel': 'foo'})
-                check('screenshot_designer', 'error on bad panel', r_.is_error, '')
+                check('screenshot_designer', 'error on bad panel', r_.is_error and "unknown panel 'foo'" in text(r_), text(r_))
 
                 # --- save / export / render
                 sbs = os.path.join(scratch, TEST_GRAPH + '.sbs')
                 t = text(await c('save_package', {'graph_or_path': TEST_GRAPH, 'save_as': sbs}))
                 check('save_package', 'save as', os.path.exists(sbs), t)
-                t = text(await c('save_package', {'graph_or_path': TEST_GRAPH}))
-                check('save_package', 'save in place', 'saved' in t, t)
+                r_ = await c('save_package', {'graph_or_path': TEST_GRAPH})
+                t = text(r_)
+                check('save_package', 'save in place', not r_.is_error and 'saved %s' % sbs in t, t)
                 t = text(await c('save_package', {'graph_or_path': sbs}))
                 check('save_package', 'by file path', 'saved %s' % sbs in t, t)
+                state = GRAPH_OF % TEST_GRAPH + "p=g.getPackage()\nprint('STATE=%s %s' % (p.getFilePath(), p.isModified()))"
+                before = text(await c('execute_designer_code', {'code': state}))
+                await c('snapshot_graph', {'label': 'state check', **G})
+                after = text(await c('execute_designer_code', {'code': state}))
+                check('snapshot_graph', "leaves the package's file and saved state alone",
+                      'STATE=%s False' % sbs in before and before == after, before + after)
                 xs = positions(text(await c('describe_graph', G)))
                 await c('move_nodes', {'positions': {clouds: [xs[clouds][0] + 50, xs[clouds][1]]}, **G})
                 t = text(await c('diff_graph', {'against': sbs, 'show_positions': True, **G}))
@@ -690,18 +814,26 @@ async def run(scratch):
                 check('set_link_display', 'diff shows display only', 'shown as portal' in t and '0 added, 0 removed' in t, t.splitlines()[0])
                 stats_after = text(await c('node_stats', {'node_id': lv, **G}))
                 check('set_link_display', 'output unchanged', stats_after == stats_before, stats_after)
+                snap_dir = os.path.join(os.environ.get('SD_SNAPSHOT_DIR') or os.path.join(
+                    os.path.expanduser('~'), '.sd_mcp', 'snapshots'), TEST_GRAPH)
+                check('set_link_display', 'copies the saved file before saving over it',
+                      any(f.endswith('before_portals_file_on_disk.sbs') for f in os.listdir(snap_dir)), str(os.listdir(snap_dir)))
                 t = text(await c('set_link_display', {'mode': 'wire', 'from_nodes': [clouds], **G}))
                 check('set_link_display', 'back to wires', 'changed to wire' in t, t.split(';')[0])
+                t = text(await c('set_link_display', {'mode': 'wire', 'from_nodes': [clouds], **G}))
+                check('set_link_display', 'nothing to change: no save, no reload', 'nothing to do' in t, t)
                 # automatic selection, as AGENTS.md recommends: clouds feeds 3 inputs once this blend is in
                 tb = added_id(text(await c('add_node', {'definition': 'blend', 'position': [-400, -300], **G})))
                 for port in ('source', 'destination'):
                     await c('connect', {'from_node': clouds, 'to_node': tb, 'to_input': port, **G})
-                for args, expect in (({'mode': 'portal', 'fanout_at_least': 3}, '3 of 3 selected link(s) changed to portal'),
-                                     ({'mode': 'wire', 'fanout_at_least': 3}, '3 of 3 selected link(s) changed to wire'),
-                                     ({'mode': 'portal', 'links': [[lv, 'input1']]}, '1 of 1 selected link(s) changed to portal'),
-                                     ({'mode': 'wire', 'links': [[lv, 'input1']]}, '1 of 1 selected link(s) changed to wire')):
-                    t = text(await c('set_link_display', {**args, **G}))
-                    check('set_link_display', ', '.join('%s=%s' % kv for kv in args.items()), expect in t, t.split(';')[0])
+                t = text(await c('set_link_display', {'mode': 'portal', 'fanout_at_least': 3, **G}))
+                check('set_link_display', 'fanout_at_least=3 to portals', '3 of 3 selected link(s) changed to portal' in t, t.split(';')[0])
+                t = text(await c('set_link_display', {'mode': 'wire', 'fanout_at_least': 3, **G}))
+                check('set_link_display', 'fanout_at_least=3 back to wires', '3 of 3 selected link(s) changed to wire' in t, t.split(';')[0])
+                t = text(await c('set_link_display', {'mode': 'portal', 'links': [[lv, 'input1']], **G}))
+                check('set_link_display', 'links=[[node, input]] to portal', '1 of 1 selected link(s) changed to portal' in t, t.split(';')[0])
+                t = text(await c('set_link_display', {'mode': 'wire', 'links': [[lv, 'input1']], **G}))
+                check('set_link_display', 'links=[[node, input]] back to wire', '1 of 1 selected link(s) changed to wire' in t, t.split(';')[0])
                 t = text(await c('set_link_display', {'mode': 'portal', 'longer_than': 1, **G}))
                 counts = re.search(r'(\d+) of (\d+) selected link\(s\) changed to portal in \S+ \(of (\d+) links', t)
                 check('set_link_display', 'longer_than=1 picks every link', counts is not None
@@ -744,7 +876,15 @@ async def run(scratch):
                 t = text(await c('render_sbs', {'sbs_path': sbs, 'output_dir': render_dir, 'output_format': 'exr',
                                                 'params': {'nope': 1}}))
                 check('render_sbs', 'exr + unexposed warning', 'height.exr' in t and "input 'nope' is not exposed" in t, t)
-                sbsar = os.path.splitext(sbs)[0] + '.sbsar'
+                check('render_sbs', 'cooking leaves no .sbsar next to the .sbs',
+                      not os.path.exists(os.path.splitext(sbs)[0] + '.sbsar'), '')
+                sys.path.insert(0, os.path.join(BUNDLE, 'mcp_server'))
+                import server as mcp_server_module           # for the sbscooker path only
+                cooked = os.path.join(scratch, 'cooked')
+                os.makedirs(cooked, exist_ok=True)              # sbscooker needs the folder to exist
+                subprocess.run([mcp_server_module.SBSCOOKER, '--inputs', sbs, '--output-path', cooked],
+                               capture_output=True, timeout=300)
+                sbsar = os.path.join(cooked, TEST_GRAPH + '.sbsar')
                 t = text(await c('sbsar_info', {'sbs_path': sbsar}))
                 check('sbsar_info', 'reads a .sbsar', 'OUTPUT height' in t, t.splitlines()[0] if t else '')
                 t = text(await c('render_sbs', {'sbs_path': sbsar, 'output_dir': os.path.join(scratch, 'from_sbsar'),
@@ -756,7 +896,7 @@ async def run(scratch):
                 t = text(await c('render_sbs', {'sbs_path': sbsar, 'output_dir': os.path.join(scratch, 'from_sbsar_512'), 'size_log2': 9}))
                 check('render_sbs', '.sbsar with size_log2', 'height.png  512x512' in t, t.splitlines()[-1])
                 r_ = await c('render_sbs', {'sbs_path': sbsar, 'output_dir': os.path.join(scratch, 'nope'), 'graph': 'no_such_graph'})
-                check('render_sbs', 'error on unknown graph', r_.is_error, text(r_)[:150])
+                check('render_sbs', 'error on unknown graph', r_.is_error and 'no_such_graph' in text(r_), text(r_)[:150])
                 r_ = await c('preview_maps', {'map_dir': os.path.join(scratch, 'export')})
                 check('preview_maps', 'all maps in a folder', is_image(r_), '' if is_image(r_) else text(r_))
                 r_ = await c('preview_maps', {'map_dir': render_dir, 'names': ['height'], 'tile_size': 256})
@@ -791,6 +931,10 @@ async def run(scratch):
                         "print(' '.join('%%s=%%s' %% (n.getAnnotationPropertyValueFromId('identifier').get(), n.getIdentifier()) "
                         "for n in g.getOutputNodes()))") % EXAMPLE_GRAPH}))
                     outs = dict(re.findall(r'(\w+)=(\d+)', t))
+                    t = text(await c('execute_designer_code', {'code': GRAPH_OF % EXAMPLE_GRAPH + (
+                        "n=g.getNodeFromId(%r)\nu=n.getAnnotationPropertyValueFromId('usages').get()[0].get()\n"
+                        "print('USAGE=%%s %%s %%s' %% (u.getName(), u.getComponents(), u.getColorSpace()))") % outs.get('basecolor', '0')}))
+                    check('designer facts', 'output usages read back (baseColor RGBA sRGB)', 'USAGE=baseColor RGBA sRGB' in t, t)
                     t = text(await c('check_tiling', {'node_id': outs.get('basecolor', '?'), 'graph': EXAMPLE_GRAPH, 'axis': 'horizontal'}))
                     ratio = re.search(r'ratio ([\d.]+)', t)
                     check(E, 'tiles horizontally (trim sheet)', ratio is not None and float(ratio.group(1)) <= 3, t.splitlines()[-1])
@@ -815,7 +959,7 @@ async def run(scratch):
                 else:
                     # our own instance: nothing of the user's can be lost. First make the window
                     # ignore Close (as a blocking dialog would): quit_designer must time out, then
-                    # its quit() fallback ends Designer anyway.
+                    # its exit() fallback ends Designer anyway.
                     await c('execute_designer_code', {'code': (
                         "import sys\nfrom PySide6.QtCore import QObject, QEvent\nfrom PySide6.QtWidgets import QApplication\n"
                         "class _KeepOpen(QObject):\n    def eventFilter(self, obj, event):\n"

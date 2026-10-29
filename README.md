@@ -32,7 +32,7 @@ There are two programs, plus Designer's own command-line tools:
  (a separate Python 3.10+ process in mcp_server/venv, started by Claude Code)
       │                                         │
       │  JSON over TCP 127.0.0.1:9877            │  runs as needed
-      │  (secret token, code, timeout)           ▼
+      │  (token-signed request: code, timeout)   ▼
       ▼                                     sbscooker / sbsrender
  sd_bridge plugin                           (Designer's command-line tools:
  (inside Designer, in Designer's Python)     .sbs → .sbsar → image files)
@@ -43,7 +43,7 @@ There are two programs, plus Designer's own command-line tools:
 
 | Part | Runs where | What it does |
 |---|---|---|
-| **sd_bridge plugin** (`plugin/sd_bridge`) | Inside Designer, loaded at startup | A small, generic script runner. It listens on `127.0.0.1:9877`, checks the secret token, queues the Python code it receives, runs it on Designer's main thread (the only place the `sd` API may be used), and sends back the printed output or the error. It also enforces timeouts, answers `status` / `cancel` while a script runs, and knows nothing about MCP or the individual tools. |
+| **sd_bridge plugin** (`plugin/sd_bridge`) | Inside Designer, loaded at startup | A small, generic script runner. It listens on `127.0.0.1:9877`, checks that each request is signed with the secret token, queues the Python code it receives, runs it on Designer's main thread (the only place the `sd` API may be used), and sends back the printed output or the error. It also enforces timeouts, answers `status` / `cancel` while a script runs, and knows nothing about MCP or the individual tools. |
 | **MCP server** (`mcp_server/server.py`) | Its own process, started by Claude Code | Defines the 42 tools Claude sees and sends [AGENTS.md](AGENTS.md) to Claude as its instructions. Each tool does one or more of: send Python code to the plugin (most tools), run Designer's command-line tools (`render_sbs`, `sbsar_info`), or do the work itself outside Designer (decoding pixels, building preview images, comparing `.sbs` files, reading the log, editing files for portals). |
 | **Designer helpers** (`mcp_server/designer_helpers.py`) | Sent to Designer with each request | The library of functions that actually do the work inside Designer: describing nodes, editing graphs, computing previews, layout, exposing inputs and so on. It's re-sent with every call, so updating it never needs a Designer restart. |
 | **sbscooker / sbsrender** | Separate processes | Designer's own tools for compiling a saved `.sbs` into `.sbsar` and rendering its outputs, independently of the open Designer. |
@@ -54,7 +54,7 @@ There are two programs, plus Designer's own command-line tools:
 
 1. Claude calls the tool; the MCP server builds a small Python program: the helpers plus a call
    to the preview function, wrapped in a single undo step.
-2. The server sends it to the plugin with the token and a timeout.
+2. The server sends it to the plugin, signed with the token, with a timeout.
 3. The plugin queues it, and Designer's main thread runs it: the graph is computed and the node's
    pixels are written to a temporary file.
 4. The plugin replies with whatever the program printed (here, the image's size and format).
@@ -72,9 +72,9 @@ There are two programs, plus Designer's own command-line tools:
   libraries (`mcp`, `numpy`, `pillow`); the plugin needs nothing beyond what Designer ships.
 
 **When the API can't do something.** A few things aren't reachable through Designer's Python API,
-for example showing a connection as a portal. For those, the server takes a snapshot, saves the
-package, edits the `.sbs` file directly and reloads it in Designer, then checks that nothing else
-changed.
+for example showing a connection as a portal. For those, the server edits the saved `.sbs` file
+directly and reloads it in Designer, after keeping a snapshot of the graph and a copy of your
+saved file (details: [AGENTS.md](AGENTS.md), Portals).
 
 ## Tools (42)
 
@@ -93,12 +93,14 @@ changed.
 | Output | `save_package`, `export_outputs` (straight from Designer), `sbsar_info`, `render_sbs` (parameters, size, PNG/EXR…), `preview_maps` |
 
 Every change Claude makes through these tools is **one undo step** in Designer ("Claude: …"),
-so Ctrl+Z with that graph in focus reverts it. Undo history is per document. Before bigger
+so Ctrl+Z with that graph in focus reverts it. Undo history is per document. Two exceptions:
+`set_link_display` reloads the package, which clears its undo history (a snapshot is kept
+instead), and `quit_designer(discard_unsaved=True)` drops unsaved changes for good. Before bigger
 changes to your graphs, Claude can take a snapshot and afterwards show you exactly what changed.
 
 ## Requirements
 
-- Substance 3D Designer 14.1 or newer
+- Substance 3D Designer 16 (tested on 16.0.7; 14.1 or newer should work, untested)
 - Python **3.10+** (only for the MCP server; the plugin uses Designer's own Python)
 - Claude Code (`claude` command) for automatic registration, or any MCP client
 
@@ -122,14 +124,19 @@ The installer:
    **Edit > Preferences > Projects > Python > Plugin paths** in Designer and pass that folder:
    `python install.py --plugins-dir "<that folder>"`.
 2. Creates `mcp_server/venv` and installs `mcp`, `pillow` and `numpy`.
-3. Registers the server with Claude Code (user scope). With `--no-register` it prints the
-   command instead, so you can run it yourself or adapt it for another MCP client.
+3. Registers the server with Claude Code (user scope). If it is already registered, it leaves
+   that registration (and any `-e` variables you added) as it is. With `--no-register` it prints
+   the command instead, so you can run it yourself or adapt it for another MCP client.
+
+**After updating this folder** (`git pull`), re-run the installer and restart Designer: the
+plugin and the server must be the same version (an older plugin answers every request with
+"invalid token").
 
 Then:
 
 1. **Restart Substance Designer** (the plugin loads at startup). Don't also load it from
    Tools > Plugin Manager; a second copy can't open the port and stays inactive.
-2. Check Designer's console (Windows > Console) for `[sd_bridge] v2 listening on 127.0.0.1:9877`.
+2. Check Designer's console (Windows > Console) for `[sd_bridge] v3 listening on 127.0.0.1:9877`.
 3. **Restart Claude Code** and run `claude mcp list`: it should show `substance-designer: … ✔ Connected`.
 
 <details>
@@ -162,17 +169,19 @@ the graph and reopens the graph you had open. It doesn't touch your packages. To
 one change is one undo step it triggers Undo and Redo, but only while its own graph is the one
 in the editor; it skips that check otherwise. It also re-checks the Designer behaviour the
 agent notes rely on ("designer facts"), so a Designer update that changes it shows up, and it
-checks the Security promises below (wrong or missing token refused, not reachable from the
-network, private token file), the command-line client, that the plugin Designer loaded matches
+checks the Security promises below (unsigned, wrongly signed and old-style requests refused, not
+reachable from the network, private token file), the command-line client, that the plugin Designer loaded matches
 this repo (re-run `install.py` if not), and that the example trim sheet still builds (a renamed
 copy, so a trim sheet you have open is never touched). The 3D screenshot check is skipped if no 3D View is visible; the clipboard check runs
 on macOS only. Exit code 0 means everything passed. Run it after installing, after updates, and
 after a Designer update.
 
-**Unit tests (no Designer needed).** `tests/unit` tests the parts that run outside Designer
-(pixel decoding, the tiling metric, `.sbs` parsing and diffing, search ranking) and checks that
-the server starts and that this README and the self-test cover every tool. Run them after
-changing the server:
+**Unit tests (no Designer needed).** `tests/unit` tests everything that can run outside
+Designer: the plugin's server and authentication (with Qt replaced), the clients' protocol,
+pixel decoding, image comparison, the tiling metric, `.sbs` parsing, diffing and portal
+selection, render command building, search ranking, the installer, launch/quit edge cases,
+environment variables and log reading. It also checks that this README lists every tool and that
+the self-test exercises every tool, parameter and `apply_edits` op. Run them after any change:
 
 ```bash
 mcp_server/venv/bin/pip install pytest
@@ -187,7 +196,7 @@ mcp_server/venv/bin/python -m pytest
 | `SD_DESIGNER_APP` | macOS: `/Applications/Adobe Substance 3D Designer/Adobe Substance 3D Designer.app`; Windows: `C:\Program Files\Adobe\Adobe Substance 3D Designer\Adobe Substance 3D Designer.exe` | `launch_designer` |
 | `SD_DESIGNER_LOG` | newest `log.txt` in Designer's settings folder (see Troubleshooting) | `read_designer_log` |
 | `SD_SNAPSHOT_DIR` | `~/.sd_mcp/snapshots` | where `snapshot_graph` keeps snapshots (one folder per graph; safe to delete) |
-| `SD_BRIDGE_PORT` | `9877` | plugin, MCP server and CLI client (set the same value for all three) |
+| `SD_BRIDGE_PORT` | `9877` | plugin, MCP server and CLI client (set the same value for all three; the plugin reads it from Designer's environment, so start Designer from a shell where it is set, or set it system-wide) |
 
 Pass them when registering: `claude mcp add --scope user -e SD_DESIGNER_BIN_DIR="D:\Adobe\Designer" substance-designer -- ...`
 
@@ -204,10 +213,15 @@ python client/sd_run.py --cancel              # abort the running script
 ## Security
 
 - The plugin only listens on `127.0.0.1`, so other machines can't reach it.
-- Every request must carry the secret in `~/.sd_bridge_token` (Windows:
-  `%USERPROFILE%\.sd_bridge_token`), created by the plugin on first run (owner-only on macOS).
-  Anything that can read that file can run code inside Designer. To rotate it, delete the file
-  and restart Designer.
+- Every request must be signed with the secret in `~/.sd_bridge_token` (Windows:
+  `%USERPROFILE%\.sd_bridge_token`): the plugin sends a random challenge and the client answers
+  with an HMAC of it, so the secret itself never crosses the connection, and a program posing as
+  the plugin while Designer is closed learns nothing it can reuse.
+- The plugin creates the token on first run, owner-only on macOS (it also tightens an existing
+  file's permissions), and replaces an empty or truncated one. Anything that can read that file
+  can run code inside Designer. To rotate it, delete the file and restart Designer.
+- Requests are size- and time-limited, malformed ones get no details back, and on Windows the
+  port is bound exclusively so a second program can't share it.
 - Screenshots only ever capture Designer's own panels. The 3D view uses Designer's own render
   through the clipboard and puts back whatever was on your clipboard.
 - To turn the bridge off, disable it in Tools > Plugin Manager or delete the `sd_bridge`
@@ -227,6 +241,7 @@ Then delete the `sd_bridge` folder from the plugin directory, `~/.sd_bridge_toke
 |---|---|
 | `No bridge token found` | The plugin has never run. Restart Designer and check its console. |
 | `Designer is not reachable` | Designer isn't running, or the plugin failed to load. Check the Designer log. |
+| Every call returns `invalid token` | The plugin and the server are different versions (for example after `git pull`): re-run `install.py` and restart Designer. |
 | Bridge accepts connections but never answers | The plugin code was replaced while running (for example by a hot reload). Restart Designer. |
 | `Address already in use` in the Designer log | The plugin was loaded twice, or another app uses port 9877. Restart Designer, or change `SD_BRIDGE_PORT`. |
 | `sbscooker/sbsrender not found` | Set `SD_DESIGNER_BIN_DIR`. |

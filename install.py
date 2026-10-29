@@ -57,12 +57,18 @@ def main():
 
     # 3. Register with Claude Code
     server = os.path.join(HERE, 'mcp_server', 'server.py')
-    cmd = ['claude', 'mcp', 'add', '--scope', 'user', SERVER_NAME, '--', py, server]
-    if args.no_register or not shutil.which('claude'):
+    # the path `which` found: on Windows that may be npm's claude.cmd, which CreateProcess
+    # won't find from a bare 'claude'
+    claude = shutil.which('claude')
+    cmd = [claude or 'claude', 'mcp', 'add', '--scope', 'user', SERVER_NAME, '--', py, server]
+    if args.no_register or not claude:
         print('[3/3] Register manually with:\n     ', subprocess.list2cmdline(cmd))
+    elif subprocess.call([claude, 'mcp', 'get', SERVER_NAME],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0:
+        # re-adding would drop environment variables set with -e at registration
+        print('[3/3] MCP server "%s" is already registered; left as it is. To re-register:\n'
+              '      claude mcp remove %s -s user, then re-run this installer' % (SERVER_NAME, SERVER_NAME))
     else:
-        subprocess.call(['claude', 'mcp', 'remove', SERVER_NAME, '-s', 'user'],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.check_call(cmd)
         print('[3/3] Registered MCP server "%s" (user scope)' % SERVER_NAME)
 

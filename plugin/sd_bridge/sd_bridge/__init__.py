@@ -1,20 +1,26 @@
 """
 Local script runner for Substance 3D Designer.
 
-Listens on 127.0.0.1:PORT. A client sends one JSON request and receives one JSON reply.
-Every request must carry the token stored in TOKEN_FILE (mode 0600).
+Listens on 127.0.0.1:PORT. On connect the plugin sends one line, {"nonce": "<hex>"}. The client
+replies with one JSON request carrying "auth" = HMAC-SHA256(token, nonce) in hex, where the
+token is the secret in TOKEN_FILE (mode 0600), and closes its sending side. The plugin answers
+with one JSON reply. The token itself never crosses the socket, so a process squatting on the
+port while Designer is closed can't collect it.
 
-  run:    {"token", "code", "path"?, "timeout"?}  -> {"ok", "output", "error"}
+  run:    {"auth", "code", "path"?, "timeout"?}  -> {"ok", "output", "error"}
           Code runs on Designer's main thread. With "timeout" (seconds) the script is
           aborted once it exceeds that time.
-  cancel: {"token", "cmd": "cancel"}              -> {"ok", "output"}
+  cancel: {"auth", "cmd": "cancel"}              -> {"ok", "output"}
           Aborts the running script (and drops queued ones).
-  status: {"token", "cmd": "status"}              -> {"ok", "output"}
+  status: {"auth", "cmd": "status"}              -> {"ok", "output"}
 
 Aborting works by a trace hook checked while Python code runs, so a single long call
 into Designer's C++ (e.g. one graph.compute()) finishes before the abort takes effect.
+A job still queued when its client gives up waiting (QUEUE_WAIT) is dropped, never run late.
 """
 import contextlib
+import hashlib
+import hmac
 import io
 import json
 import os
@@ -30,8 +36,10 @@ from PySide6 import QtCore
 
 PORT = int(os.environ.get('SD_BRIDGE_PORT', '9877'))
 TOKEN_FILE = os.path.expanduser('~/.sd_bridge_token')
-TIMEOUT = 900
-VERSION = 2
+QUEUE_WAIT = 900          # seconds a job may wait for Designer before it is dropped
+READ_TIMEOUT = 30         # seconds to receive a whole request
+MAX_REQUEST = 64 << 20    # bytes
+VERSION = 3
 
 _server = None
 
@@ -41,12 +49,27 @@ class ScriptAborted(BaseException):
 
 
 def _load_token():
-    if not os.path.exists(TOKEN_FILE):
-        fd = os.open(TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    """The shared secret, created on first use. An empty or short file (a crash mid-write, a
+    user clearing it) is replaced, since an empty secret would match an empty answer."""
+    try:
+        with open(TOKEN_FILE) as f:
+            token = f.read().strip()
+    except FileNotFoundError:
+        token = ''
+    if len(token) < 32:
+        token = secrets.token_hex(32)
+        tmp = '%s.%d.tmp' % (TOKEN_FILE, os.getpid())
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, 'w') as f:
-            f.write(secrets.token_hex(32))
-    with open(TOKEN_FILE) as f:
-        return f.read().strip()
+            f.write(token)
+        os.replace(tmp, TOKEN_FILE)
+    if os.name == 'posix':
+        os.chmod(TOKEN_FILE, 0o600)   # an existing file may have been created with looser rights
+    return token
+
+
+def expected_auth(token, nonce):
+    return hmac.new(token.encode('utf-8'), nonce.encode('utf-8'), hashlib.sha256).hexdigest()
 
 
 def _make_tracer(deadline, cancel):
@@ -90,14 +113,35 @@ def _run(code, path, timeout, cancel):
     return result
 
 
+def _fail(error):
+    return {'ok': False, 'output': '', 'error': error}
+
+
+def _read_request(conn):
+    conn.settimeout(READ_TIMEOUT)
+    data = bytearray()
+    while True:
+        chunk = conn.recv(65536)
+        if not chunk:
+            return bytes(data)
+        data += chunk
+        if len(data) > MAX_REQUEST:
+            raise ValueError('request too large')
+
+
 class _Server:
     def __init__(self):
         self.token = _load_token()
         self.jobs = queue.Queue()
         self.cancel = threading.Event()
+        self.lock = threading.Lock()   # dequeuing a job and marking it running happen together
         self.busy_since = None
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if sys.platform == 'win32':
+            # SO_REUSEADDR on Windows would let a second socket bind the same port
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(('127.0.0.1', PORT))
         self.sock.listen(4)
         self.running = True
@@ -119,62 +163,82 @@ class _Server:
 
     def _control(self, cmd):
         if cmd == 'cancel':
-            dropped = 0
-            while True:
-                try:
-                    _, _, _, box, done = self.jobs.get_nowait()
-                except queue.Empty:
-                    break
-                box['result'] = {'ok': False, 'output': '', 'error': 'ScriptAborted: cancelled before start'}
-                done.set()
-                dropped += 1
-            running = self.busy_since is not None
-            if running:
-                self.cancel.set()
+            with self.lock:
+                dropped = 0
+                while True:
+                    try:
+                        _, _, _, box, done = self.jobs.get_nowait()
+                    except queue.Empty:
+                        break
+                    box['result'] = _fail('ScriptAborted: cancelled before start')
+                    done.set()
+                    dropped += 1
+                running = self.busy_since is not None
+                if running:
+                    self.cancel.set()
             return {'ok': True, 'output': 'cancel requested (running: %s, queued dropped: %d)' % (running, dropped),
                     'error': ''}
         if cmd == 'status':
             busy = 'idle' if self.busy_since is None else 'running for %.1fs' % (time.monotonic() - self.busy_since)
             return {'ok': True, 'output': 'sd_bridge v%d: %s, %d queued' % (VERSION, busy, self.jobs.qsize()),
                     'error': ''}
-        return {'ok': False, 'output': '', 'error': 'unknown cmd %r' % cmd}
+        return _fail('unknown cmd %r' % cmd)
 
     def _handle(self, conn):
         with conn:
             try:
-                data = b''
-                while True:
-                    chunk = conn.recv(65536)
-                    if not chunk:
-                        break
-                    data += chunk
-                req = json.loads(data.decode('utf-8'))
-                if not secrets.compare_digest(str(req.get('token', '')), self.token):
-                    reply = {'ok': False, 'output': '', 'error': 'invalid token'}
-                elif req.get('cmd'):
-                    # Control commands are answered from this thread, even while a script runs
-                    reply = self._control(req['cmd'])
+                nonce = secrets.token_hex(16)
+                conn.sendall(json.dumps({'nonce': nonce}).encode('utf-8') + b'\n')
+                try:
+                    req = json.loads(_read_request(conn).decode('utf-8'))
+                    if not isinstance(req, dict):
+                        raise ValueError
+                except (ValueError, UnicodeDecodeError, OSError):
+                    reply = _fail('bad request')   # no details before authentication
                 else:
-                    done = threading.Event()
-                    box = {}
-                    timeout = req.get('timeout')
-                    self.jobs.put((req.get('code', ''), req.get('path'), timeout, box, done))
-                    if done.wait(TIMEOUT):
-                        reply = box['result']
-                    else:
-                        reply = {'ok': False, 'output': '', 'error': 'timed out waiting for Designer'}
+                    reply = self._authorised(req, nonce)
             except Exception:
-                reply = {'ok': False, 'output': '', 'error': traceback.format_exc()}
-            conn.sendall(json.dumps(reply).encode('utf-8'))
+                reply = _fail('bad request')
+            try:
+                conn.sendall(json.dumps(reply).encode('utf-8'))
+            except OSError:
+                pass
+
+    def _authorised(self, req, nonce):
+        if not hmac.compare_digest(str(req.get('auth', '')), expected_auth(self.token, nonce)):
+            return _fail('invalid token')
+        if req.get('cmd'):
+            # Control commands are answered from this thread, even while a script runs
+            return self._control(req['cmd'])
+        timeout = req.get('timeout')
+        if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout < 0):
+            return _fail('timeout must be a number of seconds, got %r' % (timeout,))
+        code = req.get('code', '')
+        if not isinstance(code, str):
+            return _fail('code must be a string')
+        done = threading.Event()
+        box = {}
+        self.jobs.put((code, req.get('path'), timeout, box, done))
+        if not box.get('started') and not done.wait(QUEUE_WAIT):
+            with self.lock:
+                if not box.get('started'):
+                    box['abandoned'] = True   # _drain skips it: never run with nobody waiting
+                    return _fail('Designer was busy for %ds; the script was not run' % QUEUE_WAIT)
+        done.wait()   # started: it ends by itself, by its timeout or by a cancel
+        return box['result']
 
     def _drain(self):
         while True:
-            try:
-                code, path, timeout, box, done = self.jobs.get_nowait()
-            except queue.Empty:
-                return
-            self.cancel.clear()
-            self.busy_since = time.monotonic()
+            with self.lock:
+                try:
+                    code, path, timeout, box, done = self.jobs.get_nowait()
+                except queue.Empty:
+                    return
+                if box.get('abandoned'):
+                    continue
+                box['started'] = True
+                self.cancel.clear()
+                self.busy_since = time.monotonic()
             try:
                 box['result'] = _run(code, path, timeout, self.cancel)
             finally:
@@ -195,7 +259,7 @@ def initializeSDPlugin():
     try:
         _server = _Server()
     except OSError as e:
-        print('[sd_bridge] not started, port %d unavailable (%s); another instance is probably running' % (PORT, e))
+        print('[sd_bridge] not started: %s (port %d; is another instance running?)' % (e, PORT))
 
 
 def uninitializeSDPlugin():

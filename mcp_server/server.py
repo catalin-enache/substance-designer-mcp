@@ -4,6 +4,9 @@ MCP server for Adobe Substance 3D Designer.
 Talks to the sd_bridge plugin running inside Designer (127.0.0.1:9877, token in
 ~/.sd_bridge_token) and wraps Designer's sbscooker / sbsrender command-line tools.
 """
+import contextlib
+import hashlib
+import hmac
 import io
 import json
 import re
@@ -83,26 +86,47 @@ def _helpers_call(call):
     return HELPERS + '\n\n' + call + '\n'
 
 
+def _exchange(sock, token, request):
+    """The bridge protocol (plugin docstring): read the nonce line, answer with
+    HMAC(token, nonce) instead of the token itself, return the raw reply bytes."""
+    hello = b''
+    while not hello.endswith(b'\n'):
+        chunk = sock.recv(1024)
+        if not chunk:
+            raise ConnectionResetError('closed before the greeting')
+        hello += chunk
+    nonce = json.loads(hello.decode('utf-8'))['nonce']
+    auth = hmac.new(token.encode('utf-8'), nonce.encode('utf-8'), hashlib.sha256).hexdigest()
+    sock.sendall(json.dumps({**request, 'auth': auth}).encode('utf-8'))
+    sock.shutdown(socket.SHUT_WR)
+    data = b''
+    while chunk := sock.recv(65536):
+        data += chunk
+    return data
+
+
 def _send(request, wait):
     """Send one JSON request to the plugin and return its reply dict."""
     try:
         with open(TOKEN_FILE) as f:
-            request['token'] = f.read().strip()
+            token = f.read().strip()
     except FileNotFoundError:
         raise ToolError('No bridge token found. Is the sd_bridge plugin loaded in Designer?')
     try:
         with socket.create_connection(('127.0.0.1', PORT), timeout=wait) as s:
-            s.sendall(json.dumps(request).encode('utf-8'))
-            s.shutdown(socket.SHUT_WR)
-            data = b''
-            while chunk := s.recv(65536):
-                data += chunk
+            data = _exchange(s, token, request)
     except ConnectionRefusedError:
         raise ToolError('Designer is not reachable. Start Designer (the sd_bridge plugin loads on startup).')
     except socket.timeout:
         raise ToolError('No reply from Designer after %ds. It may be busy with a long call; '
                         'try cancel_designer_job or check Designer.' % wait)
-    return json.loads(data.decode('utf-8'))
+    except (OSError, ValueError, KeyError) as e:
+        # reset mid-quit or mid-start, or something that isn't the bridge on the port
+        raise ToolError('Designer is not reachable (%s: %s).' % (type(e).__name__, e))
+    try:
+        return json.loads(data.decode('utf-8'))
+    except ValueError:
+        raise ToolError('Designer closed the connection without a reply (it may be starting or quitting).')
 
 
 def _bridge(code, path=None, timeout=None):
@@ -143,7 +167,9 @@ def cancel_designer_job() -> str:
 def execute_designer_code(code: str, undo_label: str = 'Claude: code', timeout_s: int = 120) -> str:
     """Run Python inside Substance Designer (full `sd` API) and return printed output and errors.
     All changes form one undo step named `undo_label` (Ctrl+Z in Designer reverts them).
-    The script is aborted after `timeout_s` seconds (0 = no limit)."""
+    The script is aborted after `timeout_s` seconds (0 = no limit in Designer, but this
+    call stops waiting after about 16 minutes while the script keeps running; cancel_designer_job
+    stops it)."""
     return _bridge(_with_undo(code, undo_label), '<execute_designer_code>', timeout_s)
 
 
@@ -151,7 +177,9 @@ def execute_designer_code(code: str, undo_label: str = 'Claude: code', timeout_s
 def run_designer_script(path: str, timeout_s: int = 600) -> str:
     """Run a Python file inside Substance Designer; `__file__` is set to its absolute path.
     All changes form one undo step named after the file. Aborted after `timeout_s` seconds
-    (0 = no limit)."""
+    (0 = no limit in Designer, but this
+    call stops waiting after about 16 minutes while the script keeps running; cancel_designer_job
+    stops it)."""
     path = os.path.abspath(os.path.expanduser(path))
     with open(path) as f:
         return _bridge(_with_undo(f.read(), 'Claude: ' + os.path.basename(path)), path, timeout_s)
@@ -163,8 +191,9 @@ def describe_graph(graph: str | None = None, node_ids: list[str] | None = None,
     """List a graph's nodes: id, type (atomic name or instance:<library graph>), position and
     incoming connections (`input<-sourceNodeId.output`). `graph` is the graph identifier
     (default: the graph open in Designer's UI). `include_params` adds every parameter that
-    differs from its default. Use `node_ids` to focus on a few nodes."""
-    return _bridge(_helpers_call('describe_graph(%r, %r, %r, %d)' % (graph, node_ids, include_params, limit)), timeout=60)
+    differs from its default. Use `node_ids` to focus on a few nodes; `limit` caps how many
+    nodes are listed (the rest are counted)."""
+    return _checked(_bridge(_helpers_call('describe_graph(%r, %r, %r, %d)' % (graph, node_ids, include_params, limit)), timeout=60))
 
 
 @server.tool()
@@ -172,7 +201,7 @@ def describe_node(definition: str) -> str:
     """Show a node type's connectors and parameters (ids, types, labels, defaults, enum values).
     `definition`: atomic name ('levels', 'blend', 'sbs::compositing::normal') or library package
     '<file>[/<graph id>]' as found in Designer's packages folder ('tile_generator', 'hbao.sbs/hbao')."""
-    return _bridge(_helpers_call('describe_node(%r)' % definition), timeout=60)
+    return _checked(_bridge(_helpers_call('describe_node(%r)' % definition), timeout=60))
 
 
 @server.tool()
@@ -324,7 +353,7 @@ def _library_index():
     """Scan Designer's library packages once: graph id, label, category, description."""
     if 'entries' in _LIBRARY_CACHE:
         return _LIBRARY_CACHE
-    lines = _bridge(_helpers_call('list_atomic()'), timeout=60).splitlines()
+    lines = _checked(_bridge(_helpers_call('list_atomic()'), timeout=60)).splitlines()
     resources = [l.split('=', 1)[1] for l in lines if l.startswith('RESOURCES_DIR=')][0]
     atomic = [l.split('=', 1)[1] for l in lines if l.startswith('ATOMIC=')]
     pkg_dir = os.path.join(resources, 'packages')
@@ -407,6 +436,20 @@ def _decode_pixels(raw, meta):
     return data / scale, ('RGBA' if channels == 4 else 'L')
 
 
+def _crop(data, region, what):
+    """data[y0:y1, x0:x1] for region [x0, y0, x1, y1] in pixels, clamped to the image. An empty
+    or inverted region is an error (numpy would silently wrap negative coordinates)."""
+    h, w = data.shape[:2]
+    if len(region) != 4:
+        raise ToolError('%s must be [x0, y0, x1, y1]' % what)
+    x0, y0, x1, y1 = (int(v) for v in region)
+    x0, x1 = max(0, min(x0, w)), max(0, min(x1, w))
+    y0, y1 = max(0, min(y0, h)), max(0, min(y1, h))
+    if x1 <= x0 or y1 <= y0:
+        raise ToolError('%s %s is empty for the %dx%d image' % (what, list(region), w, h))
+    return data[y0:y1, x0:x1]
+
+
 def _node_pixels(node_id, graph, output, tool):
     """A node's output computed in Designer: (pixels 0..1 as (H, W, C) floats, 'RGBA' or 'L', meta)."""
     tmp_dir = tempfile.mkdtemp(prefix='sd_px_')
@@ -437,9 +480,8 @@ def node_stats(node_id: str, graph: str | None = None, output: str | None = None
     lines = ['%s: %dx%d %s' % (meta['node'], w, h, meta['format'])]
     area = data
     if region:
-        x0, y0, x1, y1 = region
-        area = data[max(0, y0):min(h, y1), max(0, x0):min(w, x1)]
-        lines.append('region [%d,%d,%d,%d] (%dx%d px)' % (x0, y0, x1, y1, area.shape[1], area.shape[0]))
+        area = _crop(data, region, 'region')
+        lines.append('region %s (%dx%d px)' % (list(region), area.shape[1], area.shape[0]))
     names = 'RGBA' if layout == 'RGBA' else 'L'
     for ch, name in enumerate(names):
         a = area[:, :, ch]
@@ -460,7 +502,8 @@ def expose_param(node_id: str, param: str, graph: str | None = None, input_id: s
     """Expose a node parameter as a graph input (same type as the parameter; enums become ints),
     like Designer's own "Expose" action. The input starts at the parameter's current value
     unless `default` is given; min/max/step/group set the slider. The input then shows up in
-    sbsar_info and can be set with render_sbs(params=...). One undo step."""
+    sbsar_info and can be set with render_sbs(params=...). Refuses a parameter that is already
+    driven by a function (replacing it would lose that logic). One undo step."""
     return _edit('expose_param(%r, %r, %r, %r, %r, %r, %r, %r, %r, %r)' % (
         graph, node_id, param, input_id, label, default, min, max, step, group), 'Claude: expose ' + param)
 
@@ -474,7 +517,9 @@ def list_graph_inputs(graph: str | None = None) -> str:
 
 @server.tool()
 def remove_graph_input(input_id: str, graph: str | None = None) -> str:
-    """Delete an exposed graph input. Parameters it drove keep its current value. One undo step."""
+    """Delete an exposed graph input. Parameters bound to it (as expose_param does) keep its
+    current value. Refuses, changing nothing, while a larger function (an expression, a Pixel
+    Processor) still reads the input. One undo step."""
     return _edit('remove_graph_input(%r, %r)' % (graph, input_id), 'Claude: remove input ' + input_id)
 
 
@@ -543,7 +588,8 @@ def sweep_param(node_id: str, param: str, values: list, graph: str | None = None
     strip plus per-value channel ranges, then restores the original value. node_id='graph' with
     param=<input id> sweeps an exposed graph input (then view_node is required). view_node: the
     node to look at (default: the swept node), e.g. the final output while sweeping an early
-    node. Values use the same rules as set_params. Net effect on the graph: none."""
+    node. Values use the same rules as set_params. The parameter ends where it started, but the
+    sweep is an undo step and marks the package as modified."""
     tmp_dir = tempfile.mkdtemp(prefix='sd_sweep_')
     try:
         text = _bridge(_with_undo(_helpers_call('sweep_param(%r, %r, %r, %r, %r, %r, %r)' % (
@@ -557,7 +603,8 @@ def sweep_param(node_id: str, param: str, values: list, graph: str | None = None
         for meta in metas:
             with open(os.path.join(tmp_dir, '%d.raw' % meta['index']), 'rb') as f:
                 data, layout = _decode_pixels(f.read(), meta)
-            lines.append('%s = %r: %s' % (param, meta['value'], _channel_summary(data, layout)))
+            lines.append('%s = %r (%dx%d): %s' % (param, meta['value'], meta['width'], meta['height'],
+                                                  _channel_summary(data, layout)))
             im = _to_display(data, layout)
             im.thumbnail((tile_size, tile_size))
             tiles.append(_labelled(im, '%s = %s' % (param, meta['value'])))
@@ -628,10 +675,7 @@ def _load_reference(path, region=None):
     else:
         data, layout = np.array(im.convert('RGBA')).astype(np.float64) / 255.0, 'RGBA'
     if region:
-        x0, y0, x1, y1 = region
-        data = data[max(0, y0):y1, max(0, x0):x1]
-        if not data.size:
-            raise ToolError('reference_region %s is empty for the %dx%d image' % (region, im.width, im.height))
+        data = _crop(data, region, 'reference_region')
     return data, layout
 
 
@@ -752,10 +796,7 @@ def compare_to_reference(node_id: str, reference_path: str, graph: str | None = 
     Returns the numbers and an image: node | reference | luma histograms | difference."""
     data, layout, meta = _node_pixels(node_id, graph, output, 'compare_to_reference')
     if region:
-        x0, y0, x1, y1 = region
-        data = data[max(0, y0):y1, max(0, x0):x1]
-        if not data.size:
-            raise ToolError('region %s is empty for the %dx%d node' % (region, meta['width'], meta['height']))
+        data = _crop(data, region, 'region')
     ref, ref_layout = _load_reference(reference_path, reference_region)
     lines, diff = _compare_report(data, layout, ref, ref_layout, aligned)
     lines.insert(0, '%s (%dx%d %s) vs %s (%dx%d)' % (meta['node'], data.shape[1], data.shape[0], meta['format'],
@@ -846,17 +887,30 @@ def snapshot_graph(graph: str | None = None, label: str | None = None) -> str:
     change the open package, its file or its saved state. Compare later with diff_graph; the
     snapshot .sbs can also be opened in Designer to recover anything. Snapshots live in
     ~/.sd_mcp/snapshots/<graph>/ (override with SD_SNAPSHOT_DIR)."""
-    stamp = time.strftime('%Y%m%d-%H%M%S')
     tmp = os.path.join(tempfile.mkdtemp(prefix='sd_snap_'), 'copy.sbs')
     try:
         info = _copy_package(graph, tmp)
-        folder = os.path.join(SNAPSHOT_DIR, _safe_name(info['GRAPH']))
-        os.makedirs(folder, exist_ok=True)
-        path = os.path.join(folder, stamp + ('-' + _safe_name(label) if label else '') + '.sbs')
+        path = _new_snapshot_path(info['GRAPH'], label)
         shutil.move(tmp, path)
     finally:
         shutil.rmtree(os.path.dirname(tmp), ignore_errors=True)
     return 'snapshot of %s saved: %s' % (info['GRAPH'], path)
+
+
+_SNAPSHOT_NAME = re.compile(r'^\d{8}-\d{6}(?:_\d+)?(?:-(.*))?\.sbs$')
+
+
+def _new_snapshot_path(graph_id, label=None):
+    """<SNAPSHOT_DIR>/<graph>/<YYYYmmdd-HHMMSS>[_n][-label].sbs, never overwriting one taken in
+    the same second."""
+    folder = os.path.join(SNAPSHOT_DIR, _safe_name(graph_id))
+    os.makedirs(folder, exist_ok=True)
+    stamp, tail = time.strftime('%Y%m%d-%H%M%S'), ('-' + _safe_name(label) if label else '') + '.sbs'
+    path, n = os.path.join(folder, stamp + tail), 1
+    while os.path.exists(path):
+        n += 1
+        path = os.path.join(folder, '%s_%d%s' % (stamp, n, tail))
+    return path
 
 
 def _snapshots(graph_id):
@@ -877,13 +931,26 @@ def list_snapshots(graph: str | None = None) -> str:
     return '\n'.join(lines) if lines else 'No snapshots%s.' % (' for ' + graph if graph else '')
 
 
-def _graph_model(sbs_path, graph_id):
-    """Parse one graph of a .sbs into comparable dicts."""
-    root = ET.parse(sbs_path).getroot()
+def _xml_graph(root, graph_id, where):
+    """The <graph> element with this identifier in a parsed .sbs."""
     g = next((x for x in root.iter('graph') if x.find('identifier') is not None
               and x.find('identifier').get('v') == graph_id), None)
     if g is None:
-        raise ToolError('graph %r not found in %s' % (graph_id, sbs_path))
+        raise ToolError('graph %r not found in %s' % (graph_id, where))
+    return g
+
+
+# How a .sbs stores a size parameter's inheritance (<relativeTo>). The file's numbers differ from
+# the sd API's SDPropertyInheritanceMethod (input 0, parent 1, absolute 2); measured in Designer 16
+# and re-checked by the self-test ("designer facts"). The default isn't stored at all: relative to
+# parent for a graph, relative to input for a node.
+_RELATIVE_TO = {'0': 'absolute', '1': 'relative to parent', '2': 'relative to input'}
+
+
+def _graph_model(sbs_path, graph_id):
+    """Parse one graph of a .sbs into comparable dicts."""
+    root = ET.parse(sbs_path).getroot()
+    g = _xml_graph(root, graph_id, sbs_path)
     def value_of(param):
         pv = param.find('paramValue')
         if pv is None or not len(pv):
@@ -912,7 +979,10 @@ def _graph_model(sbs_path, graph_id):
         links, display = set(), {}
         conns = n.find('connections')
         for c in (conns if conns is not None else []):
-            key = (c.find('identifier').get('v'), c.find('connRef').get('v'))
+            out = c.find('connRefOutput')
+            # which output of the source matters: bevel.height and bevel.normal are different links
+            src = c.find('connRef').get('v') + ('.' + out.get('v') if out is not None else '')
+            key = (c.find('identifier').get('v'), src)
             links.add(key)
             dt = c.find('displayType')
             display[key] = 'portal' if dt is not None and dt.get('v') == '1' else 'wire'
@@ -926,8 +996,9 @@ def _graph_model(sbs_path, graph_id):
     size = {}
     for prm in (g.find('baseParameters') if g.find('baseParameters') is not None else []):
         rel = prm.find('relativeTo')
-        size[prm.find('name').get('v')] = '%s (%s)' % (value_of(prm), {'0': 'relative to input', '1': 'relative to parent',
-                                                                         '2': 'absolute'}.get(rel.get('v') if rel is not None else '', 'absolute'))
+        size[prm.find('name').get('v')] = '%s (%s)' % (value_of(prm), _RELATIVE_TO.get(
+            rel.get('v') if rel is not None else '', 'relativeTo %s' % (rel.get('v') if rel is not None else '?')))
+    size.setdefault('outputsize', '(default: relative to parent)')
     for opt in g.iter('option'):
         if opt.find('name') is not None and opt.find('name').get('v') == 'defaultParentSize':
             size['defaultParentSize'] = opt.find('value').get('v')
@@ -1000,7 +1071,8 @@ def diff_graph(graph: str | None = None, against: str = 'saved', show_positions:
         elif against.endswith('.sbs'):
             ref = os.path.abspath(os.path.expanduser(against))
         else:
-            matches = [p for p in _snapshots(gid) if _safe_name(against) in os.path.basename(p)]
+            matches = [p for p in _snapshots(gid) if (_SNAPSHOT_NAME.match(os.path.basename(p)) or [None, None])[1]
+                       == _safe_name(against)]
             if not matches:
                 raise ToolError('no snapshot matching %r; see list_snapshots' % against)
             ref = matches[-1]
@@ -1054,9 +1126,11 @@ def set_link_display(graph: str | None = None, mode: str = 'portal', from_nodes:
     reduce wire clutter. Pick links by any of: from_nodes (all outgoing links of these nodes),
     fanout_at_least (all links from outputs that feed at least N inputs), longer_than (links
     longer than this distance in graph units; nodes are ~96 wide), links ([[to_node, input], ...]).
-    mode: 'portal' or 'wire'. Designer's API can't do this, so the tool takes a snapshot, saves the
+    mode: 'portal' or 'wire'. Designer's API can't do this, so the tool first takes a snapshot of
+    the graph and copies the package's saved file (both in the snapshot folder), then saves the
     package, edits the .sbs and reloads it (the package's undo history is reset; the graph is
-    reopened). The package must have been saved to a file once."""
+    reopened). If no selected link would change, nothing is saved or reloaded. The package must
+    have been saved to a file once."""
     if mode not in _DISPLAY:
         raise ToolError("mode must be 'portal' or 'wire'")
     if not (from_nodes or fanout_at_least or longer_than or links):
@@ -1064,19 +1138,51 @@ def set_link_display(graph: str | None = None, mode: str = 'portal', from_nodes:
     text = _bridge(_helpers_call('package_file_of(%r)' % graph), timeout=120)
     info = dict(re.findall(r'^(FILE|GRAPH|OPEN)=(.*)$', text, re.M))
     if 'FILE' not in info:
-        raise ToolError(text.strip().splitlines()[-1] if text.strip() else 'could not save the package')
+        raise ToolError(text.strip().splitlines()[-1] if text.strip() else 'could not find the package file')
     path, gid = info['FILE'], info['GRAPH']
+    # Before anything is written: a snapshot of the live graph, and a copy of the file on disk,
+    # which saving below replaces
     snap = snapshot_graph(gid, 'before ' + mode + 's')
+    live = snap.split('saved: ', 1)[1].strip()
+    if os.path.exists(path):
+        shutil.copy2(path, _new_snapshot_path(gid, 'before %ss (file on disk)' % mode))
+    chosen, total = _select_links(_xml_graph(ET.parse(live).getroot(), gid, live), mode, from_nodes,
+                                  fanout_at_least, longer_than, links)
+    if not chosen:
+        return ('0 of %d selected link(s) changed to %s in %s (of %d links in the graph); nothing to do, '
+                'package not saved or reloaded.' % (len(chosen), mode, gid, total))
+    _checked(_bridge(_helpers_call('package_file_of(%r, save=True)' % gid), timeout=120))
     tree = ET.parse(path)
-    g = next(x for x in tree.getroot().iter('graph') if x.find('identifier') is not None
-             and x.find('identifier').get('v') == gid)
+    picked, total = _select_links(_xml_graph(tree.getroot(), gid, path), mode, from_nodes,
+                                  fanout_at_least, longer_than, links)
+    for c in picked:
+        dt = c.find('displayType')
+        if _DISPLAY[mode] is None:
+            c.remove(dt)
+        else:
+            if dt is None:
+                dt = ET.SubElement(c, 'displayType')
+            dt.set('v', _DISPLAY[mode])
+    tree.write(path, encoding='UTF-8', xml_declaration=True)
+    _checked(_bridge(_helpers_call('reload_package(%r, %r)' % (path, None)), timeout=180))
+    if info.get('OPEN') == '1':
+        open_graph(gid)   # reopen in a separate call so the editor has settled after the reload
+    return ('%d of %d selected link(s) changed to %s in %s (of %d links in the graph); package saved and '
+            'reloaded. %s' % (len(picked), len(picked), mode, gid, total, snap))
+
+
+def _select_links(g, mode, from_nodes=None, fanout_at_least=None, longer_than=None, links=None):
+    """The <connection> elements of a <graph> that the selection picks and that would change
+    display mode, plus the total number of links. Only the graph's own links count (a node's
+    <connections>), not those inside function graphs on its parameters."""
     nodes = {n.find('uid').get('v'): n for n in g.find('compNodes')}
+
     def pos(uid):
         gp = nodes[uid].find('GUILayout/gpos') if uid in nodes else None
         return [float(v) for v in gp.get('v').split()[:2]] if gp is not None else None
     conns = []                                   # (downstream uid, connection element, source uid, source output)
     for uid, n in nodes.items():
-        for c in n.iter('connection'):
+        for c in n.findall('connections/connection'):
             out = c.find('connRefOutput')
             conns.append((uid, c, c.find('connRef').get('v'), out.get('v') if out is not None else ''))
     fanout = {}
@@ -1092,28 +1198,11 @@ def set_link_display(graph: str | None = None, mode: str = 'portal', from_nodes:
         if not pick and longer_than:
             a, b = pos(src), pos(down)
             pick = a is not None and b is not None and ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5 > longer_than
-        if pick:
-            chosen.append((down, c, src, port))
-    changed = 0
-    for down, c, src, port in chosen:
         dt = c.find('displayType')
-        if _DISPLAY[mode] is None:
-            if dt is not None:
-                c.remove(dt)
-                changed += 1
-        else:
-            if dt is None:
-                dt = ET.SubElement(c, 'displayType')
-            if dt.get('v') != _DISPLAY[mode]:
-                dt.set('v', _DISPLAY[mode])
-                changed += 1
-    if changed:
-        tree.write(path, encoding='UTF-8', xml_declaration=True)
-    _checked(_bridge(_helpers_call('reload_package(%r, %r)' % (path, None)), timeout=180))
-    if info.get('OPEN') == '1':
-        open_graph(gid)   # reopen in a separate call so the editor has settled after the reload
-    return ('%d of %d selected link(s) changed to %s in %s (of %d links in the graph); package saved and '
-            'reloaded. %s' % (changed, len(chosen), mode, gid, len(conns), snap))
+        current = dt.get('v') if dt is not None else None
+        if pick and current != _DISPLAY[mode]:
+            chosen.append(c)
+    return chosen, len(conns)
 
 
 DESIGNER_APP = {
@@ -1157,9 +1246,10 @@ def launch_designer(wait_s: int = 180) -> str:
 def _designer_running():
     """True while a Designer process exists (the bridge port closes before the process exits)."""
     if sys.platform == 'win32':
-        out = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq Adobe Substance 3D Designer.exe', '/NH'],
+        # CSV: the default table cuts image names to 25 characters
+        out = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq Adobe Substance 3D Designer.exe', '/FO', 'CSV', '/NH'],
                              capture_output=True, text=True).stdout
-        return 'Adobe Substance 3D Designer.exe' in out
+        return '"Adobe Substance 3D Designer.exe"' in out
     return subprocess.run(['pgrep', '-f', 'MacOS/Adobe Substance 3D Designer( |$)'],
                           capture_output=True).returncode == 0
 
@@ -1206,7 +1296,8 @@ def _value_arg(value):
 def render_sbs(sbs_path: str, output_dir: str, size_log2: int | None = None, graph: str | None = None,
                outputs: list[str] | None = None, params: dict[str, float | int | bool | list[float]] | None = None,
                output_format: str = 'png') -> str:
-    """Cook a .sbs (or take a .sbsar) and render outputs to files named after the output nodes.
+    """Cook a .sbs in a temporary folder (or take a .sbsar) and render outputs to files named after
+    the output nodes.
     size_log2: output size override (11 = 2048). Without it a .sbs renders at the graph's default
     parent size (as in Designer) and a .sbsar at its own stored default (often 256 px). graph: graph identifier inside the package
     (default: every graph). outputs: output identifiers to render (default: all).
@@ -1215,7 +1306,11 @@ def render_sbs(sbs_path: str, output_dir: str, size_log2: int | None = None, gra
     if not (SBSCOOKER and SBSRENDER):
         raise ToolError('sbscooker/sbsrender not found. Set SD_DESIGNER_BIN_DIR to the folder containing '
                         'them (the Designer install folder on Windows, .app/Contents/MacOS on macOS).')
-    sbsar = _cook(sbs_path)
+    with _cooked(sbs_path) as sbsar:
+        return _render_sbsar(sbsar, sbs_path, output_dir, size_log2, graph, outputs, params, output_format)
+
+
+def _render_sbsar(sbsar, sbs_path, output_dir, size_log2, graph, outputs, params, output_format):
     output_dir = os.path.abspath(os.path.expanduser(output_dir))
     os.makedirs(output_dir, exist_ok=True)
     cmd = [SBSRENDER, 'render', sbsar, '--output-path', output_dir,
@@ -1239,6 +1334,9 @@ def render_sbs(sbs_path: str, output_dir: str, size_log2: int | None = None, gra
         if default:
             values['$outputsize'] = [default, default]
             notes.append('size: using the graph\'s default parent size, %d px (from the .sbs)' % 2 ** default)
+        elif sbs_path.endswith('.sbs') and not graph and len(set(_default_parent_sizes(sbs_path).values())) > 1:
+            notes.append('size: the graphs in this package have different default sizes, so each renders at '
+                         'sbsrender\'s 256 px default; pass graph or size_log2')
         elif sbs_path.endswith('.sbsar'):
             cooked = _sbsar_default_log2(sbsar, graph)
             notes.append('size: the .sbsar\'s own default%s; the cooker doesn\'t keep the graph\'s default '
@@ -1251,7 +1349,7 @@ def render_sbs(sbs_path: str, output_dir: str, size_log2: int | None = None, gra
     for key, value in values.items():
         cmd += ['--set-value', '%s@%s' % (key, _value_arg(value))]
     before = _snapshot(output_dir)
-    render = subprocess.run(cmd, capture_output=True, text=True)
+    render = _run_tool(cmd, 900)
     if render.returncode != 0:
         raise ToolError('sbsrender failed:\n' + render.stdout[-3000:] + render.stderr[-3000:])
     after = _snapshot(output_dir)
@@ -1263,26 +1361,33 @@ def render_sbs(sbs_path: str, output_dir: str, size_log2: int | None = None, gra
     return '\n'.join(warnings + notes + ['Rendered %d file(s) to %s:' % (len(files), output_dir)] + lines)
 
 
-def _default_parent_log2(sbs_path, graph=None):
-    """The graph's defaultParentSize option ("9x9" = 512 px) from a .sbs, or None."""
+def _default_parent_sizes(sbs_path):
+    """{graph id: defaultParentSize as log2} from a .sbs ("9x9" = 512 px); {} if unreadable."""
     path = os.path.abspath(os.path.expanduser(sbs_path))
     if not path.endswith('.sbs') or not os.path.exists(path):
-        return None
+        return {}
     try:
         root = ET.parse(path).getroot()
     except ET.ParseError:
-        return None
-    wanted = graph.split('://')[-1] if graph else None
+        return {}
+    sizes = {}
     for g in root.iter('graph'):
         ident = g.find('identifier')
-        if wanted and (ident is None or ident.get('v') != wanted):
-            continue
         for option in g.iter('option'):
             name = option.find('name')
-            if name is not None and name.get('v') == 'defaultParentSize':
+            if ident is not None and name is not None and name.get('v') == 'defaultParentSize':
                 width = option.find('value').get('v').split('x')[0]
-                return int(width) if width.isdigit() else None
-    return None
+                if width.isdigit():
+                    sizes[ident.get('v')] = int(width)
+    return sizes
+
+
+def _default_parent_log2(sbs_path, graph=None):
+    """The default parent size (log2) of `graph`, or of every graph when they all agree; else None."""
+    sizes = _default_parent_sizes(sbs_path)
+    if graph:
+        return sizes.get(graph.split('://')[-1])
+    return next(iter(sizes.values())) if len(set(sizes.values())) == 1 else None
 
 
 def _sbsar_default_log2(sbsar, graph=None):
@@ -1292,10 +1397,16 @@ def _sbsar_default_log2(sbsar, graph=None):
     tar = shutil.which('tar')
     if not tar:
         return None
-    listing = subprocess.run([tar, '-tf', sbsar], capture_output=True, text=True)
+    try:
+        listing = subprocess.run([tar, '-tf', sbsar], capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        return None
     wanted = graph.split('://')[-1] if graph else None
     for member in [m for m in listing.stdout.splitlines() if m.endswith('.xml')] if listing.returncode == 0 else []:
-        xml = subprocess.run([tar, '-xOf', sbsar, member], capture_output=True).stdout
+        try:
+            xml = subprocess.run([tar, '-xOf', sbsar, member], capture_output=True, timeout=60).stdout
+        except subprocess.TimeoutExpired:
+            return None
         try:
             root = ET.fromstring(xml)
         except ET.ParseError:
@@ -1310,8 +1421,19 @@ def _sbsar_default_log2(sbsar, graph=None):
     return None
 
 
+def _run_tool(cmd, timeout):
+    """Run one of Designer's command-line tools; a hang becomes a ToolError, not a stuck server."""
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise ToolError('%s did not finish within %ds' % (os.path.basename(cmd[0]), timeout))
+
+
 def _exposed_inputs(sbsar):
-    info = subprocess.run([SBSRENDER, 'info', sbsar], capture_output=True, text=True).stdout
+    result = _run_tool([SBSRENDER, 'info', sbsar], 120)
+    if result.returncode != 0:
+        raise ToolError('sbsrender info failed:\n' + result.stdout[-2000:] + result.stderr[-2000:])
+    info = result.stdout
     return {line.split()[1] for line in info.splitlines() if line.strip().startswith('INPUT ')}
 
 
@@ -1329,25 +1451,33 @@ def _snapshot(folder):
             for st in [os.stat(os.path.join(folder, f))]}
 
 
-def _cook(sbs_path):
+@contextlib.contextmanager
+def _cooked(sbs_path):
+    """A .sbsar for this .sbs, cooked into a temporary folder (never next to the user's file,
+    where it would replace one of theirs); a .sbsar is used as it is."""
     path = os.path.abspath(os.path.expanduser(sbs_path))
     if path.endswith('.sbsar'):
-        return path
-    cook = subprocess.run([SBSCOOKER, '--inputs', path, '--output-path', os.path.dirname(path)],
-                          capture_output=True, text=True)
-    sbsar = os.path.splitext(path)[0] + '.sbsar'
-    if cook.returncode != 0 or not os.path.exists(sbsar):
-        raise ToolError('sbscooker failed:\n' + cook.stdout[-3000:] + cook.stderr[-3000:])
-    return sbsar
+        yield path
+        return
+    tmp = tempfile.mkdtemp(prefix='sd_cook_')
+    try:
+        cook = _run_tool([SBSCOOKER, '--inputs', path, '--output-path', tmp], 900)
+        sbsar = os.path.join(tmp, os.path.splitext(os.path.basename(path))[0] + '.sbsar')
+        if cook.returncode != 0 or not os.path.exists(sbsar):
+            raise ToolError('sbscooker failed:\n' + cook.stdout[-3000:] + cook.stderr[-3000:])
+        yield sbsar
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 @server.tool()
 def sbsar_info(sbs_path: str) -> str:
     """List graphs, exposed inputs (with types) and outputs of a .sbs/.sbsar, i.e. what
-    render_sbs can take as graph/outputs/params."""
+    render_sbs can take as graph/outputs/params. A .sbs is cooked in a temporary folder."""
     if not (SBSCOOKER and SBSRENDER):
         raise ToolError('sbscooker/sbsrender not found. Set SD_DESIGNER_BIN_DIR.')
-    info = subprocess.run([SBSRENDER, 'info', _cook(sbs_path)], capture_output=True, text=True)
+    with _cooked(sbs_path) as sbsar:
+        info = _run_tool([SBSRENDER, 'info', sbsar], 120)
     return info.stdout.strip() or info.stderr.strip()
 
 
@@ -1355,7 +1485,9 @@ def _load_8bit(path):
     im = PILImage.open(path)
     if im.mode.startswith('I'):
         a = np.array(im).astype('float32')
-        a = (a / (65535.0 if a.max() > 255 else 255.0) * 255).clip(0, 255).astype('uint8')
+        # a 16-bit PNG is 0..65535 however dark it is; plain 'I' has no fixed range
+        scale = 65535.0 if im.mode.startswith('I;16') or a.max() > 255 else 255.0
+        a = (a / scale * 255).clip(0, 255).astype('uint8')
         im = PILImage.fromarray(a)
     return im.convert('RGB')
 
