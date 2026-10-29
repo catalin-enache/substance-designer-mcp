@@ -1,4 +1,4 @@
-"""Send a Python file to the sd_bridge plugin running inside Substance 3D Designer.
+"""Send a Python file to the bridge plugin running inside Substance 3D Designer.
 
 Usage:
     python sd_run.py script.py [--timeout SECONDS]
@@ -15,7 +15,8 @@ import socket
 import sys
 
 PORT = int(os.environ.get('SD_BRIDGE_PORT', '9877'))
-TOKEN_FILE = os.path.expanduser('~/.sd_bridge_token')
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from project_constants import TOKEN_FILE  # noqa: E402  (the plugin's name lives there)
 
 
 def send(request, wait):

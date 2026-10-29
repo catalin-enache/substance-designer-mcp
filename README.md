@@ -34,7 +34,7 @@ There are two programs, plus Designer's own command-line tools:
       │  JSON over TCP 127.0.0.1:9877            │  runs as needed
       │  (token-signed request: code, timeout)   ▼
       ▼                                     sbscooker / sbsrender
- sd_bridge plugin                           (Designer's command-line tools:
+ sd_claude_bridge_kve plugin                (Designer's command-line tools:
  (inside Designer, in Designer's Python)     .sbs → .sbsar → image files)
       │  runs the code on Designer's main thread
       ▼
@@ -43,7 +43,7 @@ There are two programs, plus Designer's own command-line tools:
 
 | Part | Runs where | What it does |
 |---|---|---|
-| **sd_bridge plugin** (`plugin/sd_bridge`) | Inside Designer, loaded at startup | A small, generic script runner. It listens on `127.0.0.1:9877`, checks that each request is signed with the secret token, queues the Python code it receives, runs it on Designer's main thread (the only place the `sd` API may be used), and sends back the printed output or the error. It also enforces timeouts, answers `status` / `cancel` while a script runs, and knows nothing about MCP or the individual tools. |
+| **sd_claude_bridge_kve plugin** (`plugin/sd_claude_bridge_kve`) | Inside Designer, loaded at startup | A small, generic script runner. It listens on `127.0.0.1:9877`, checks that each request is signed with the secret token, queues the Python code it receives, runs it on Designer's main thread (the only place the `sd` API may be used), and sends back the printed output or the error. It also enforces timeouts, answers `status` / `cancel` while a script runs, and knows nothing about MCP or the individual tools. |
 | **MCP server** (`mcp_server/server.py`) | Its own process, started by Claude Code | Defines the 43 tools Claude sees. Its instructions to Claude are one short paragraph (MCP clients cut long ones; Claude Code at 4,096 characters): leave the Designer tools alone unless you ask for Designer work, and right before the first Designer tool call, call `get_guide()`, which returns the full [AGENTS.md](AGENTS.md). Sessions started for other things never load the guide. Each tool does one or more of: send Python code to the plugin (most tools), run Designer's command-line tools (`render_sbs`, `sbsar_info`), or do the work itself outside Designer (decoding pixels, building preview images, comparing `.sbs` files, reading the log, editing files for portals). |
 | **Designer helpers** (`mcp_server/designer_helpers.py`) | Sent to Designer with each request | The library of functions that actually do the work inside Designer: describing nodes, editing graphs, computing previews, layout, exposing inputs and so on. It's re-sent with every call, so updating it never needs a Designer restart. |
 | **sbscooker / sbsrender** | Separate processes | Designer's own tools for compiling a saved `.sbs` into `.sbsar` and rendering its outputs, independently of the open Designer. |
@@ -116,13 +116,17 @@ py -3 install.py            # Windows (PowerShell); or the full path to a Python
 
 The installer:
 
-1. Copies `plugin/sd_bridge` into Designer's user plugin folder:
+1. Copies `plugin/sd_claude_bridge_kve` into Designer's user plugin folder:
    - macOS: `~/Documents/Adobe/Adobe Substance 3D Designer/python/sduserplugins/`
    - Windows: `%USERPROFILE%\Documents\Adobe\Adobe Substance 3D Designer\python\sduserplugins\`
 
    If your Documents folder is redirected (OneDrive, for example), check
    **Edit > Preferences > Projects > Python > Plugin paths** in Designer and pass that folder:
    `python install.py --plugins-dir "<that folder>"`.
+
+   The plugin used to be called `sd_bridge` (token `~/.sd_bridge_token`). If that old copy is
+   there and is this project's, the installer removes it and its token, since two copies
+   loaded together fight over the port.
 2. Creates `mcp_server/venv` and installs `mcp`, `pillow` and `numpy`.
 3. Registers the server with Claude Code (user scope). If it is already registered, it leaves
    that registration (and any `-e` variables you added) as it is. With `--no-register` it prints
@@ -136,13 +140,13 @@ Then:
 
 1. **Restart Substance Designer** (the plugin loads at startup). Don't also load it from
    Tools > Plugin Manager; a second copy can't open the port and stays inactive.
-2. Check Designer's console (Windows > Console) for `[sd_bridge] v3 listening on 127.0.0.1:9877`.
+2. Check Designer's console (Windows > Console) for `[sd_claude_bridge_kve] v3 listening on 127.0.0.1:9877`.
 3. **Restart Claude Code** and run `claude mcp list`: it should show `substance-designer: … ✔ Connected`.
 
 <details>
 <summary>Manual install (without install.py)</summary>
 
-1. Copy `plugin/sd_bridge` (the folder containing `pluginInfo.json`) into the plugin folder above.
+1. Copy `plugin/sd_claude_bridge_kve` (the folder containing `pluginInfo.json`) into the plugin folder above.
 2. Create the environment:
    ```bash
    python3 -m venv mcp_server/venv                                  # Windows: py -3 -m venv mcp_server\venv
@@ -213,8 +217,8 @@ python client/sd_run.py --cancel              # abort the running script
 ## Security
 
 - The plugin only listens on `127.0.0.1`, so other machines can't reach it.
-- Every request must be signed with the secret in `~/.sd_bridge_token` (Windows:
-  `%USERPROFILE%\.sd_bridge_token`): the plugin sends a random challenge and the client answers
+- Every request must be signed with the secret in `~/.sd_claude_bridge_kve_token` (Windows:
+  `%USERPROFILE%\.sd_claude_bridge_kve_token`): the plugin sends a random challenge and the client answers
   with an HMAC of it, so the secret itself never crosses the connection, and a program posing as
   the plugin while Designer is closed learns nothing it can reuse.
 - The plugin creates the token on first run, owner-only on macOS (it also tightens an existing
@@ -224,7 +228,7 @@ python client/sd_run.py --cancel              # abort the running script
   port is bound exclusively so a second program can't share it.
 - Screenshots only ever capture Designer's own panels. The 3D view uses Designer's own render
   through the clipboard and puts back whatever was on your clipboard.
-- To turn the bridge off, disable it in Tools > Plugin Manager or delete the `sd_bridge`
+- To turn the bridge off, disable it in Tools > Plugin Manager or delete the `sd_claude_bridge_kve`
   folder from the plugin directory.
 
 ## Uninstall
@@ -233,7 +237,7 @@ python client/sd_run.py --cancel              # abort the running script
 claude mcp remove substance-designer -s user
 ```
 
-Then delete the `sd_bridge` folder from the plugin directory, `~/.sd_bridge_token`, and this folder.
+Then delete the `sd_claude_bridge_kve` folder from the plugin directory, `~/.sd_claude_bridge_kve_token`, and this folder.
 
 ## Troubleshooting
 

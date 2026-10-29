@@ -8,13 +8,20 @@ Installer for the Substance Designer bridge plugin + MCP server (macOS and Windo
 Run it with a Python 3.10+ interpreter. Re-running is safe (it updates in place).
 """
 import argparse
+import json
 import os
 import shutil
 import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from project_constants import PLUGIN, PLUGIN_DIR  # noqa: E402  (the plugin's name lives there)
 SERVER_NAME = 'substance-designer'
+# Before the rename the plugin was "sd_bridge" with its token in ~/.sd_bridge_token. Both copies
+# loaded together fight over the port, so an old copy of *this* plugin is removed.
+OLD_PLUGIN, OLD_PLUGIN_NAME = 'sd_bridge', 'SD Bridge (local script runner)'
+OLD_TOKEN = os.path.join(os.path.expanduser('~'), '.sd_bridge_token')
 
 
 def default_plugins_dir():
@@ -29,6 +36,27 @@ def venv_python(venv):
     return os.path.join(venv, 'bin', 'python')
 
 
+def remove_old_plugin(plugins_dir):
+    """Delete <plugins_dir>/sd_bridge and the old token, but only if that folder is this
+    project's plugin (its pluginInfo.json name); anything else called sd_bridge is left alone."""
+    old = os.path.join(plugins_dir, OLD_PLUGIN)
+    if not os.path.isdir(old):
+        return
+    try:
+        with open(os.path.join(old, 'pluginInfo.json'), encoding='utf-8') as f:
+            ours = json.load(f).get('name') == OLD_PLUGIN_NAME
+    except (OSError, ValueError):
+        ours = False
+    if not ours:
+        print('      Note: %s exists but is not this project\'s old plugin; left as it is.' % old)
+        return
+    shutil.rmtree(old)
+    print('      Removed the old plugin (renamed to %s): %s' % (PLUGIN, old))
+    if os.path.exists(OLD_TOKEN):
+        os.remove(OLD_TOKEN)
+        print('      Removed its old token file: %s' % OLD_TOKEN)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--plugins-dir', default=default_plugins_dir())
@@ -39,11 +67,12 @@ def main():
         sys.exit('Python 3.10+ is required (found %s)' % sys.version.split()[0])
 
     # 1. Designer plugin
-    src = os.path.join(HERE, 'plugin', 'sd_bridge')
-    dst = os.path.join(args.plugins_dir, 'sd_bridge')
+    src = PLUGIN_DIR
+    dst = os.path.join(args.plugins_dir, PLUGIN)
     os.makedirs(args.plugins_dir, exist_ok=True)
     shutil.copytree(src, dst, dirs_exist_ok=True, ignore=shutil.ignore_patterns('__pycache__'))
     print('[1/3] Plugin installed to', dst)
+    remove_old_plugin(args.plugins_dir)
 
     # 2. Virtual environment for the MCP server
     venv = os.path.join(HERE, 'mcp_server', 'venv')

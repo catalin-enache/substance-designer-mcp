@@ -33,6 +33,8 @@ from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
 BUNDLE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BUNDLE)
+from project_constants import PLUGIN, PLUGIN_PACKAGE_DIR, TOKEN_FILE  # noqa: E402
 SERVER = os.path.join(BUNDLE, 'mcp_server', 'server.py')
 TEST_GRAPH = 'mcp_selftest'
 SAVED_GRAPH = 'mcp_selftest_saved'          # create_graph(save_path=...)
@@ -219,7 +221,7 @@ async def run(scratch):
 
                 # --- security (README, Security): token required, loopback only, private token file
                 B = 'bridge security'
-                token_file = os.path.expanduser('~/.sd_bridge_token')
+                token_file = TOKEN_FILE
                 with open(token_file) as f:
                     token = f.read().strip()                      # used, never printed
                 for name, req in (('a wrong answer', {'auth': 'x' * 64, 'cmd': 'status'}),
@@ -230,7 +232,7 @@ async def run(scratch):
                     check(B, 'refuses ' + name, not reply['ok'] and reply.get('error') == 'invalid token'
                           and 'SHOULD NOT RUN' not in reply.get('output', ''), str(reply))
                 reply = raw_request({'cmd': 'status'}, token)
-                check(B, 'accepts the right answer', reply['ok'] and 'sd_bridge v3' in reply['output'], reply['output'])
+                check(B, 'accepts the right answer', reply['ok'] and '%s v3' % PLUGIN in reply['output'], reply['output'])
                 with socket.create_connection(('127.0.0.1', PORT), timeout=10) as sock:
                     sock.recv(1024)
                     sock.sendall(b'{not json')
@@ -284,7 +286,7 @@ async def run(scratch):
                 check('mcp resource', 'agents-guide serves AGENTS.md',
                       res.contents[0].text.startswith('# AGENTS.md'), res.contents[0].text[:40])
                 r = sd_run('--status')
-                check('sd_run.py', '--status', r.returncode == 0 and 'sd_bridge' in r.stdout, r.stdout + r.stderr)
+                check('sd_run.py', '--status', r.returncode == 0 and PLUGIN in r.stdout, r.stdout + r.stderr)
                 r = sd_run('-c', 'print(6 * 7)')
                 check('sd_run.py', '-c code', r.returncode == 0 and r.stdout.strip() == '42', r.stdout + r.stderr)
                 cli_script = os.path.join(scratch, 'cli_probe.py')
@@ -298,11 +300,11 @@ async def run(scratch):
                 check('sd_run.py', '--cancel when idle', r.returncode == 0, r.stdout + r.stderr)
 
                 # --- the installed plugin is this repo's (README, Install: re-run install.py after changes)
-                t = text(await c('execute_designer_code', {'code': "import sys\nprint('PLUGIN=' + sys.modules['sd_bridge'].__file__)"}))
+                t = text(await c('execute_designer_code', {'code': "import sys\nprint('PLUGIN=' + sys.modules[%r].__file__)" % PLUGIN}))
                 found = re.search(r'PLUGIN=(.*)', t)
                 if found:
                     installed = os.path.dirname(found.group(1).strip())
-                    cmp = filecmp.dircmp(os.path.join(BUNDLE, 'plugin', 'sd_bridge', 'sd_bridge'), installed,
+                    cmp = filecmp.dircmp(PLUGIN_PACKAGE_DIR, installed,
                                          ignore=['__pycache__'])
                     stale = cmp.diff_files + cmp.left_only
                     check('install.py', 'installed plugin matches the repo', not stale,
@@ -470,7 +472,7 @@ async def run(scratch):
                 t = text(await c('check_tiling', {'node_id': grad, 'axis': 'vertical', **G}))
                 check('check_tiling', 'vertical gradient has a seam', 'VISIBLE SEAM' in t, t.splitlines()[-1])
                 await c('delete_nodes', {'node_ids': [grad], **G})
-                t = text(await c('read_designer_log', {'contains': 'sd_bridge', 'lines': 5}))
+                t = text(await c('read_designer_log', {'contains': PLUGIN, 'lines': 5}))
                 check('read_designer_log', 'finds bridge start', 'listening on' in t, t.splitlines()[0])
                 t = text(await c('read_designer_log', {'errors_only': True, 'lines': 3}))
                 check('read_designer_log', 'errors_only filter', 'matching line' in t and all(

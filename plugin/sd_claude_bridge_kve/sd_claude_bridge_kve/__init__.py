@@ -35,7 +35,9 @@ import traceback
 from PySide6 import QtCore
 
 PORT = int(os.environ.get('SD_BRIDGE_PORT', '9877'))
-TOKEN_FILE = os.path.expanduser('~/.sd_bridge_token')
+# The name comes from this package's folder, so renaming the folders renames everything
+NAME = os.path.basename(os.path.dirname(os.path.abspath(__file__)))
+TOKEN_FILE = os.path.join(os.path.expanduser('~'), '.%s_token' % NAME)
 QUEUE_WAIT = 900          # seconds a job may wait for Designer before it is dropped
 READ_TIMEOUT = 30         # seconds to receive a whole request
 MAX_REQUEST = 64 << 20    # bytes
@@ -90,13 +92,13 @@ def _make_tracer(deadline, cancel):
 def _run(code, path, timeout, cancel):
     buf = io.StringIO()
     result = {'ok': True, 'output': '', 'error': ''}
-    scope = {'__name__': '__main__', '__file__': path or '<sd_bridge>'}
+    scope = {'__name__': '__main__', '__file__': path or '<%s>' % NAME}
     deadline = time.monotonic() + timeout if timeout else None
     started = time.monotonic()
     previous = sys.gettrace()
     try:
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
-            compiled = compile(code, path or '<sd_bridge>', 'exec')
+            compiled = compile(code, path or '<%s>' % NAME, 'exec')
             sys.settrace(_make_tracer(deadline, cancel))
             try:
                 exec(compiled, scope)
@@ -151,7 +153,7 @@ class _Server:
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self._drain)
         self.timer.start(100)
-        print('[sd_bridge] v%d listening on 127.0.0.1:%d' % (VERSION, PORT))
+        print('[%s] v%d listening on 127.0.0.1:%d' % (NAME, VERSION, PORT))
 
     def _accept_loop(self):
         while self.running:
@@ -180,7 +182,7 @@ class _Server:
                     'error': ''}
         if cmd == 'status':
             busy = 'idle' if self.busy_since is None else 'running for %.1fs' % (time.monotonic() - self.busy_since)
-            return {'ok': True, 'output': 'sd_bridge v%d: %s, %d queued' % (VERSION, busy, self.jobs.qsize()),
+            return {'ok': True, 'output': '%s v%d: %s, %d queued' % (NAME, VERSION, busy, self.jobs.qsize()),
                     'error': ''}
         return _fail('unknown cmd %r' % cmd)
 
@@ -259,7 +261,7 @@ def initializeSDPlugin():
     try:
         _server = _Server()
     except OSError as e:
-        print('[sd_bridge] not started: %s (port %d; is another instance running?)' % (e, PORT))
+        print('[%s] not started: %s (port %d; is another instance running?)' % (NAME, e, PORT))
 
 
 def uninitializeSDPlugin():

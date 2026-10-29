@@ -9,7 +9,7 @@ work; right before the first Designer tool call, call `get_guide()` and confirm 
 
 ## Rules that protect the user's work
 
-- **Never print, log or send the bridge token** (`~/.sd_bridge_token`): it gives code execution
+- **Never print, log or send the bridge token** (`~/.sd_claude_bridge_kve_token`): it gives code execution
   in Designer.
 - **Never trigger Undo while one of the user's graphs is open in the editor.** Undo is per
   document and hits theirs (it happened once; an immediate Redo restored it). See Undo below.
@@ -87,7 +87,7 @@ Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `-c COD
   runs, so one long C++ call (a huge `graph.compute()`) completes first. A script that catches
   `BaseException` swallows the abort, so don't do that. A job still queued after 15 minutes is
   dropped, never run late.
-- **Never hot-reload the sd_bridge plugin** (`importlib.reload` inside Designer): the running
+- **Never hot-reload the sd_claude_bridge_kve plugin** (`importlib.reload` inside Designer): the running
   server keeps references to the old module and the bridge breaks until Designer restarts.
 
 ## Environment facts
@@ -296,6 +296,11 @@ new ideas there.
   or test with a fresh MCP client such as the self-test). **Plugin** changes must be copied into
   Designer's plugin folder (re-run `install.py`; paths in README.md, Install) and need a
   **Designer restart** (with the user's OK: `quit_designer`, then `launch_designer`).
+- **The plugin's name** (`sd_claude_bridge_kve`, also its folder names and the token file
+  `~/.sd_claude_bridge_kve_token`) is defined once, in `project_constants.py`; the plugin itself
+  takes it from its own folder. To rename: change `PLUGIN` there, rename both `plugin/<name>`
+  folders, update README.md/AGENTS.md, and add the old name to `install.py`'s clean-up of old
+  copies. `tests/unit/test_constants.py` fails on anything missed.
 - **The bridge protocol** (plugin docstring): the plugin sends a nonce, the client answers with
   HMAC(token, nonce), so the token never crosses the socket. `server.py`, `client/sd_run.py`
   and the self-test's `raw_request` all speak it; change them together with the plugin.

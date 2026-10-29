@@ -7,6 +7,7 @@ import sys
 import pytest
 
 from conftest import ROOT
+from project_constants import PLUGIN, PLUGIN_DIR, PLUGIN_PACKAGE_DIR
 
 
 @pytest.fixture
@@ -31,11 +32,11 @@ def test_copies_the_plugin(install, monkeypatch, tmp_path, capsys):
     module, calls = install
     monkeypatch.setattr(module.shutil, 'which', lambda name: None)
     _run(module, monkeypatch, '--plugins-dir', str(tmp_path), '--no-register')
-    src = os.path.join(ROOT, 'plugin', 'sd_bridge')
-    cmp = filecmp.dircmp(src, str(tmp_path / 'sd_bridge'), ignore=['__pycache__'])
+    src = PLUGIN_DIR
+    cmp = filecmp.dircmp(src, str(tmp_path / PLUGIN), ignore=['__pycache__'])
     assert not (cmp.left_only or cmp.diff_files)
-    assert not cmp.subdirs['sd_bridge'].left_only and not cmp.subdirs['sd_bridge'].diff_files
-    assert not (tmp_path / 'sd_bridge' / 'sd_bridge' / '__pycache__').exists()
+    assert not cmp.subdirs[PLUGIN].left_only and not cmp.subdirs[PLUGIN].diff_files
+    assert not (tmp_path / PLUGIN / PLUGIN / '__pycache__').exists()
     # requirements installed into the project venv; nothing registered
     assert any('-r' in c and c[-1].endswith(os.path.join('mcp_server', 'requirements.txt')) for c in calls)
     assert not any(c[0] == 'claude' for c in calls)
@@ -45,11 +46,11 @@ def test_copies_the_plugin(install, monkeypatch, tmp_path, capsys):
 def test_rerun_updates_in_place(install, monkeypatch, tmp_path):
     module, _ = install
     monkeypatch.setattr(module.shutil, 'which', lambda name: None)
-    stale = tmp_path / 'sd_bridge' / 'sd_bridge' / '__init__.py'
+    stale = tmp_path / PLUGIN / PLUGIN / '__init__.py'
     stale.parent.mkdir(parents=True)
     stale.write_text('old')
     _run(module, monkeypatch, '--plugins-dir', str(tmp_path), '--no-register')
-    with open(os.path.join(ROOT, 'plugin', 'sd_bridge', 'sd_bridge', '__init__.py')) as f:
+    with open(os.path.join(PLUGIN_PACKAGE_DIR, '__init__.py')) as f:
         assert stale.read_text() == f.read()
 
 
@@ -77,3 +78,33 @@ def test_rerun_keeps_an_existing_registration(install, monkeypatch, tmp_path, ca
     assert [CLAUDE, 'mcp', 'get', 'substance-designer'] in calls
     assert not any(c[1:3] in (['mcp', 'add'], ['mcp', 'remove']) for c in calls)
     assert 'already registered' in capsys.readouterr().out
+
+
+def _old_plugin(root, name):
+    folder = root / 'sd_bridge'
+    (folder / 'sd_bridge').mkdir(parents=True)
+    (folder / 'pluginInfo.json').write_text('{"name": "%s"}' % name)
+    return folder
+
+
+def test_removes_this_projects_old_plugin_and_token(install, monkeypatch, tmp_path):
+    module, _ = install
+    monkeypatch.setattr(module.shutil, 'which', lambda name: None)
+    token = tmp_path / 'old_token'
+    token.write_text('x' * 64)
+    monkeypatch.setattr(module, 'OLD_TOKEN', str(token))
+    old = _old_plugin(tmp_path, 'SD Bridge (local script runner)')
+    _run(module, monkeypatch, '--plugins-dir', str(tmp_path), '--no-register')
+    assert not old.exists() and not token.exists()
+    assert (tmp_path / PLUGIN / PLUGIN / '__init__.py').exists()
+
+
+def test_leaves_someone_elses_sd_bridge_alone(install, monkeypatch, tmp_path):
+    module, _ = install
+    monkeypatch.setattr(module.shutil, 'which', lambda name: None)
+    token = tmp_path / 'old_token'
+    token.write_text('x' * 64)
+    monkeypatch.setattr(module, 'OLD_TOKEN', str(token))
+    other = _old_plugin(tmp_path, 'Some other bridge')
+    _run(module, monkeypatch, '--plugins-dir', str(tmp_path), '--no-register')
+    assert other.exists() and token.exists()

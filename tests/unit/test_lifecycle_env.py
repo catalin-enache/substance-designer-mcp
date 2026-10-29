@@ -7,6 +7,7 @@ import sys
 import pytest
 
 from conftest import ROOT, server
+from project_constants import PLUGIN, PLUGIN_PACKAGE_DIR
 
 
 def _no_bridge(request, wait):
@@ -79,17 +80,18 @@ def test_environment_overrides(tmp_path):
 
 def test_every_component_reads_the_port_variable():
     # a port change must be made for the plugin and the server alike (README, Configuration)
-    for parts in (('plugin', 'sd_bridge', 'sd_bridge', '__init__.py'), ('mcp_server', 'server.py'), ('client', 'sd_run.py')):
-        with open(os.path.join(ROOT, *parts)) as f:
-            assert "os.environ.get('SD_BRIDGE_PORT'" in f.read(), parts
+    for path in (os.path.join(PLUGIN_PACKAGE_DIR, '__init__.py'), os.path.join(ROOT, 'mcp_server', 'server.py'),
+                 os.path.join(ROOT, 'client', 'sd_run.py')):
+        with open(path) as f:
+            assert "os.environ.get('SD_BRIDGE_PORT'" in f.read(), path
 
 
 LOG = '''old run [ERROR] stale error
 [INFO] Python SDK Version 1.0
-[INFO] [sd_bridge] v2 listening on 127.0.0.1:9877
+[INFO] [%s] v2 listening on 127.0.0.1:9877
 [WARNING] something odd
 [ERROR] Traceback (most recent call last)
-[INFO] ready'''
+[INFO] ready''' % PLUGIN
 
 
 def test_read_log_from_sd_designer_log(monkeypatch, tmp_path):
@@ -101,7 +103,7 @@ def test_read_log_from_sd_designer_log(monkeypatch, tmp_path):
     assert body(server.read_designer_log(since_last_start=False)) == LOG.splitlines()
     assert body(server.read_designer_log(errors_only=True)) == ['[WARNING] something odd',
                                                                  '[ERROR] Traceback (most recent call last)']
-    assert body(server.read_designer_log(contains='SD_BRIDGE')) == ['[INFO] [sd_bridge] v2 listening on 127.0.0.1:9877']
+    assert body(server.read_designer_log(contains=PLUGIN.upper())) == ['[INFO] [%s] v2 listening on 127.0.0.1:9877' % PLUGIN]
     assert server.read_designer_log(lines=1).startswith('%s (5 matching lines, showing 1)' % log)
     monkeypatch.setenv('SD_DESIGNER_LOG', str(tmp_path / 'missing.txt'))
     with pytest.raises(server.ToolError, match='log not found'):

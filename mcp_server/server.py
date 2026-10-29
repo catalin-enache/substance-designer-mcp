@@ -1,8 +1,8 @@
 """
 MCP server for Adobe Substance 3D Designer.
 
-Talks to the sd_bridge plugin running inside Designer (127.0.0.1:9877, token in
-~/.sd_bridge_token) and wraps Designer's sbscooker / sbsrender command-line tools.
+Talks to the bridge plugin running inside Designer (127.0.0.1:9877; name and token file in
+project_constants.py) and wraps Designer's sbscooker / sbsrender command-line tools.
 """
 import contextlib
 import functools
@@ -26,7 +26,8 @@ from mcp.server.mcpserver import MCPServer, Image
 from mcp.server.mcpserver.exceptions import ToolError
 
 PORT = int(os.environ.get('SD_BRIDGE_PORT', '9877'))
-TOKEN_FILE = os.path.expanduser('~/.sd_bridge_token')
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from project_constants import PLUGIN, TOKEN_FILE  # noqa: E402  (the plugin's name lives there)
 
 # Folder holding sbscooker / sbsrender. Override with SD_DESIGNER_BIN_DIR.
 DEFAULT_BIN_DIRS = {
@@ -160,12 +161,12 @@ def _send(request, wait):
         with open(TOKEN_FILE) as f:
             token = f.read().strip()
     except FileNotFoundError:
-        raise ToolError('No bridge token found. Is the sd_bridge plugin loaded in Designer?')
+        raise ToolError('No bridge token found. Is the %s plugin loaded in Designer?' % PLUGIN)
     try:
         with socket.create_connection(('127.0.0.1', PORT), timeout=wait) as s:
             data = _exchange(s, token, request)
     except ConnectionRefusedError:
-        raise ToolError('Designer is not reachable. Start Designer (the sd_bridge plugin loads on startup).')
+        raise ToolError('Designer is not reachable. Start Designer (the %s plugin loads on startup).' % PLUGIN)
     except socket.timeout:
         raise ToolError('No reply from Designer after %ds. It may be busy with a long call; '
                         'try cancel_designer_job or check Designer.' % wait)
@@ -886,7 +887,7 @@ def _designer_log_path():
 def read_designer_log(lines: int = 60, contains: str | None = None, errors_only: bool = False,
                       since_last_start: bool = True) -> str:
     """Read the end of Designer's log, where every plugin/Python traceback lands. contains:
-    case-insensitive text to filter on (e.g. 'sd_bridge', 'Traceback'). errors_only: only
+    case-insensitive text to filter on (e.g. 'listening on', 'Traceback'). errors_only: only
     [ERROR]/[WARNING] lines. since_last_start: ignore lines from before Designer's last start.
     Override the location with SD_DESIGNER_LOG."""
     path = _designer_log_path()
@@ -1262,7 +1263,7 @@ DESIGNER_APP = {
 
 @_tool()
 def launch_designer(wait_s: int = 180) -> str:
-    """Start Substance Designer if it isn't running and wait until the sd_bridge plugin answers.
+    """Start Substance Designer if it isn't running and wait until the bridge plugin answers.
     When it starts Designer it also closes the Home screen, so the editor panels are visible.
     Override the app location with SD_DESIGNER_APP."""
     try:
@@ -1289,7 +1290,7 @@ def launch_designer(wait_s: int = 180) -> str:
         home = _bridge(_helpers_call('leave_home_screen()'), timeout=30).strip()
         return 'Designer started in %.0fs%s: %s' % (time.time() - started, ' (%s)' % home if home else '', status)
     raise ToolError('Designer did not answer within %ds. It may be showing a dialog, or the '
-                    'sd_bridge plugin did not load (check the Designer log).' % wait_s)
+                    '%s plugin did not load (check the Designer log).' % (wait_s, PLUGIN))
 
 
 @_tool()

@@ -1,4 +1,4 @@
-"""The sd_bridge plugin's server, run outside Designer: Qt's timer is replaced by a thread that
+"""The bridge plugin's server, run outside Designer: Qt's timer is replaced by a thread that
 drains the job queue, everything else (sockets, authentication, queue, timeouts) is real."""
 import hashlib
 import hmac
@@ -14,9 +14,10 @@ import types
 
 import pytest
 
-from conftest import ROOT, server
+from conftest import server
+from project_constants import PLUGIN_PACKAGE_DIR
 
-PLUGIN = os.path.join(ROOT, 'plugin', 'sd_bridge', 'sd_bridge', '__init__.py')
+PLUGIN = os.path.join(PLUGIN_PACKAGE_DIR, '__init__.py')
 
 
 class _FakeTimer:
@@ -35,7 +36,7 @@ def plugin(monkeypatch, tmp_path):
     qtcore = types.SimpleNamespace(QTimer=_FakeTimer)
     monkeypatch.setitem(sys.modules, 'PySide6', types.SimpleNamespace(QtCore=qtcore))
     monkeypatch.setitem(sys.modules, 'PySide6.QtCore', qtcore)
-    spec = importlib.util.spec_from_file_location('sd_bridge_under_test', PLUGIN)
+    spec = importlib.util.spec_from_file_location('bridge_plugin_under_test', PLUGIN)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module.TOKEN_FILE = str(tmp_path / 'token')
