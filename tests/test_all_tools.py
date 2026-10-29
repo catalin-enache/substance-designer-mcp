@@ -187,8 +187,9 @@ async def run(scratch):
             print('server instructions: %d chars; tools: %d\n' % (len(init.instructions or ''), len(tools)))
             # --- the guide: short instructions point to get_guide(); a reminder until it is called
             instructions = init.instructions or ''
-            check('get_guide', 'instructions fit (4,096 chars) and point to it',
-                  len(instructions) < 4096 and 'get_guide()' in instructions, '%d chars' % len(instructions))
+            check('get_guide', 'instructions fit (4,096 chars), guide on first use',
+                  len(instructions) < 4096 and 'Right before your first Designer tool call' in instructions,
+                  '%d chars' % len(instructions))
             t = text(await c('list_snapshots', {'graph': 'no_such_graph'}))
             check('get_guide', 'reminder before it is called', t.startswith('NOTE: the Designer guide has not been read'), t)
             with open(os.path.join(BUNDLE, 'AGENTS.md'), encoding='utf-8') as f:

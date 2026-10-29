@@ -3,8 +3,9 @@
 You have access to the user's **running** Substance 3D Designer through the
 `substance-designer` MCP server. These notes were learned the hard way; read them before writing
 `sd` scripts. (Served whole by the `get_guide` tool and the resource `designer://agents-guide`.
-The server's own instructions only say to call `get_guide()` first and confirm to the user,
-because MCP clients cut long instructions: Claude Code at 4,096 characters.)
+The server's own instructions are one short paragraph, because MCP clients cut long ones
+(Claude Code at 4,096 characters): leave these tools alone unless the user asks for Designer
+work; right before the first Designer tool call, call `get_guide()` and confirm to the user.)
 
 ## Rules that protect the user's work
 
@@ -255,9 +256,8 @@ those assignments on one line.
 
 How the plugin, server, helpers and command-line tools fit together: README.md, **How it
 works**. `server.py` loads this file from the folder above `mcp_server/`, so keep it there. Its
-instructions (`INSTRUCTIONS` in `server.py`) must stay under 4,096 characters, and every tool
-result starts with a reminder until `get_guide()` has been called in the session (a unit test
-checks both).
+instructions (`INSTRUCTIONS` in `server.py`) must stay under 4,096 characters, and every tool result starts with a reminder until `get_guide()`
+has been called in the session (unit tests check both).
 
 **Every new feature or fix comes with a test, in the same change.** A tool, a parameter or a
 documented behaviour gets a check in the live self-test (`tests/test_all_tools.py`, against the

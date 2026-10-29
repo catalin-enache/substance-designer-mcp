@@ -12,9 +12,13 @@ def _agents_md():
         return f.read()
 
 
-def test_instructions_fit_and_point_to_the_guide():
-    assert len(server.INSTRUCTIONS) < CLAUDE_CODE_LIMIT
-    assert 'get_guide()' in server.INSTRUCTIONS and 'tell the user' in server.INSTRUCTIONS
+def test_instructions_fit_and_ask_for_the_guide_on_first_use():
+    text = server.INSTRUCTIONS
+    assert len(text) < CLAUDE_CODE_LIMIT
+    # nothing up front: a session started for other work never loads the guide
+    assert 'Do not call get_guide() or any other tool from this server unless the user asks for work in Designer' in text
+    assert 'Right before your first Designer tool call in this session, call get_guide()' in text
+    assert 'tell the user' in text
 
 
 def test_get_guide_returns_all_of_agents_md(monkeypatch):

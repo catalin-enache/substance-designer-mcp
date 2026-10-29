@@ -64,16 +64,28 @@ def _agent_guide():
 
 
 # Claude Code cuts a server's instructions at 4,096 characters (measured: AGENTS.md arrived cut
-# there), so the instructions only point to get_guide(), whose result arrives in full.
+# there), so the instructions only point to get_guide(), whose result arrives in full. Claude Code
+# starts this server with every session, so the guide is read on first use: a session started for
+# other work never loads it.
 INSTRUCTIONS = (
-    'Tools for driving the user\'s running Adobe Substance 3D Designer. Before using any other tool '
-    'from this server, call get_guide() and read the whole result: it is the full guide (AGENTS.md), '
-    'with the rules that protect the user\'s work (Undo, the bridge token, quitting Designer, '
-    'snapshots) and the sd API pitfalls. Then tell the user in one line that you have read the '
-    'Designer guide. (These instructions are short because MCP clients cut long ones; the guide is '
-    'delivered through get_guide() instead.)')
+    'Tools for driving the user\'s Adobe Substance 3D Designer. Do not call get_guide() or any other '
+    'tool from this server unless the user asks for work in Designer. Right before your first '
+    'Designer tool call in this session, call get_guide() and read the whole result: it is the full '
+    'guide (AGENTS.md), with the rules that protect the user\'s work (Undo, the bridge token, '
+    'quitting Designer, snapshots) and the sd API pitfalls. Then tell the user in one line that you '
+    'have read the Designer guide, and continue (launch_designer starts Designer if it is not running).')
 GUIDE_NOT_READ = ('NOTE: the Designer guide has not been read in this session. Call get_guide() and '
                   'read it before going on: it has the rules that protect the user\'s work.')
+def _designer_running():
+    """True while a Designer process exists (the bridge port closes before the process exits)."""
+    if sys.platform == 'win32':
+        # CSV: the default table cuts image names to 25 characters
+        out = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq Adobe Substance 3D Designer.exe', '/FO', 'CSV', '/NH'],
+                             capture_output=True, text=True).stdout
+        return '"Adobe Substance 3D Designer.exe"' in out
+    return subprocess.run(['pgrep', '-f', 'MacOS/Adobe Substance 3D Designer( |$)'],
+                          capture_output=True).returncode == 0
+
 
 server = MCPServer(name='substance-designer', instructions=INSTRUCTIONS)
 _session = {'guide_read': False}   # one server process per client session (stdio)
@@ -98,7 +110,8 @@ def _tool():
 def get_guide() -> str:
     """The full guide for agents driving Substance Designer (AGENTS.md): rules that protect the
     user's work, which tool to use when, sd API and Designer pitfalls, verified facts. Call it
-    first in every session, read all of it, then tell the user you have read it."""
+    right before the first Designer tool call of a session (not otherwise), read all of it, then
+    tell the user you have read it."""
     _session['guide_read'] = True
     guide = _agent_guide()
     return guide + ('\n\n---\nEnd of the Designer guide (%d characters, complete). Now tell the user in '
@@ -1277,17 +1290,6 @@ def launch_designer(wait_s: int = 180) -> str:
         return 'Designer started in %.0fs%s: %s' % (time.time() - started, ' (%s)' % home if home else '', status)
     raise ToolError('Designer did not answer within %ds. It may be showing a dialog, or the '
                     'sd_bridge plugin did not load (check the Designer log).' % wait_s)
-
-
-def _designer_running():
-    """True while a Designer process exists (the bridge port closes before the process exits)."""
-    if sys.platform == 'win32':
-        # CSV: the default table cuts image names to 25 characters
-        out = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq Adobe Substance 3D Designer.exe', '/FO', 'CSV', '/NH'],
-                             capture_output=True, text=True).stdout
-        return '"Adobe Substance 3D Designer.exe"' in out
-    return subprocess.run(['pgrep', '-f', 'MacOS/Adobe Substance 3D Designer( |$)'],
-                          capture_output=True).returncode == 0
 
 
 @_tool()
