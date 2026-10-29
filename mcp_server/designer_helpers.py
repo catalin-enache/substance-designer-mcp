@@ -285,7 +285,8 @@ def _save_3d_render(mw, out_path):
     app = QtWidgets.QApplication.instance()
     dock = _visible_dock(mw, _PANEL_AREAS['3d'])
     if dock is None:
-        raise RuntimeError('the 3D View panel is not visible in Designer')
+        raise RuntimeError('the 3D View panel is not visible in Designer' + (
+            " (it's showing its Home screen; open_graph closes it)" if _home_screen() is not None else ''))
     bars = dock.findChildren(QtWidgets.QMenuBar)
     if not bars:
         raise RuntimeError('3D View menu bar not found')
@@ -349,6 +350,9 @@ def save_screenshot(panel, out_path):
         docks = [d for d in mw.findChildren(QtWidgets.QDockWidget)
                  if d.objectName().startswith(prefix) and d.isVisible()]
         if not docks:
+            if _home_screen() is not None:
+                raise RuntimeError('Designer is showing its Home screen, which hides the panels; '
+                                   'open_graph closes it')
             raise RuntimeError('panel %r is not visible in Designer (open it via the Windows menu)' % panel)
         widget = docks[0]
     QtWidgets.QApplication.instance().processEvents()
@@ -608,6 +612,31 @@ def import_bitmap(graph_id, path, embed='link', position=None, name=None):
     return node.getIdentifier()
 
 
+def quit_designer(discard_unsaved=False):
+    """Close Designer's main window shortly after this call returns. Refuses while user packages
+    have unsaved changes, unless discard_unsaved (then those packages are unloaded first, so
+    Designer doesn't stop at a save prompt)."""
+    from PySide6.QtCore import QTimer
+    modified = [p for p in _PM.getUserPackages() if p.isModified()]
+    if modified and not discard_unsaved:
+        raise RuntimeError('unsaved changes in %d package(s): %s. Save them (save_package) or pass '
+                           'discard_unsaved=True.' % (len(modified), '; '.join(
+                               '%s [%s]' % (p.getFilePath() or 'never saved', ', '.join(
+                                   r.getIdentifier() for r in p.getChildrenResources(False)))
+                               for p in modified)))
+    for p in modified:
+        print('discarding unsaved changes:', p.getFilePath() or 'never-saved package')
+        _PM.unloadUserPackage(p)
+    from PySide6.QtWidgets import QApplication
+    qt_app = QApplication.instance()
+    # getMainWindow() is a hidden QMainWindow; the window the user sees is another top-level
+    # widget. Close the visible ones (Designer's normal shutdown), with quit() as a fallback.
+    # Deferred, so the bridge can still send this reply.
+    QTimer.singleShot(300, lambda: [w.close() for w in qt_app.topLevelWidgets() if w.isVisible()])
+    QTimer.singleShot(5000, qt_app.quit)
+    print('closing Designer')
+
+
 # ---------------------------------------------------------------- editor / graphs
 def _process_events(n=10):
     from PySide6 import QtWidgets
@@ -632,9 +661,37 @@ def _fit_graph_view():
     return False
 
 
+def _home_screen():
+    """Designer's window is a stack: the main window (panels) and the Home screen. While Home
+    is showing, every panel counts as invisible. Returns (stack, home page, its 'Close home
+    screen' button), or None. Keep all three referenced while using the button, or PySide
+    reports it as already deleted."""
+    from PySide6 import QtWidgets
+    for top in QtWidgets.QApplication.instance().topLevelWidgets():
+        if isinstance(top, QtWidgets.QStackedWidget) and top.isVisible():
+            page = top.currentWidget()
+            for button in (page.findChildren(QtWidgets.QAbstractButton) if page is not None else []):
+                if button.objectName() == 'close_btn':
+                    return top, page, button
+    return None
+
+
+def leave_home_screen():
+    home = _home_screen()
+    if home is None:
+        return
+    stack, page, button = home
+    button.click()  # Designer's own "Close home screen"
+    _process_events()
+    if stack.currentWidget() is page:
+        raise RuntimeError("could not close Designer's Home screen")
+    print('closed the Home screen')
+
+
 def open_graph(identifier, node_id=None):
     """Open a graph in Designer's graph editor; optionally centre the view on a node."""
     g = find_graph(identifier)
+    leave_home_screen()  # otherwise the graph opens behind it
     ui = _APP.getUIMgr()
     ui.openResourceInEditor(g)
     _process_events()

@@ -4,7 +4,8 @@ End-to-end self-test of every substance-designer MCP tool, over a real stdio MCP
     macOS:   mcp_server/venv/bin/python tests/test_all_tools.py
     Windows: mcp_server\\venv\\Scripts\\python tests\\test_all_tools.py
 
-Needs Designer running with the sd_bridge plugin. Everything that changes state happens in a
+If Designer isn't running, the test starts it (launch_designer) and closes it again at the end
+(quit_designer); a Designer that was already running is left open. Everything that changes state happens in a
 temporary graph ("mcp_selftest") that is removed at the end; the graph you had open in the
 editor is reopened. It triggers Undo/Redo only while the self-test graph is the one in the editor
 (Undo acts on the document in focus), checks that exactly its own step was undone, and redoes at
@@ -123,8 +124,10 @@ async def run(scratch):
             tools = sorted(t.name for t in (await s.list_tools()).tools)
             print('server instructions: %d chars (AGENTS.md: %s); tools: %d\n' % (
                 len(init.instructions or ''), (init.instructions or '').startswith('# AGENTS.md'), len(tools)))
+            was_running = not (await c('designer_status')).is_error
             t = text(await c('launch_designer', {'wait_s': 240}))
-            check('launch_designer', 'running / started', 'sd_bridge' in t, t)
+            check('launch_designer', 'already running' if was_running else 'started from closed',
+                  ('already running' if was_running else 'Designer started in') in t and 'ERROR' not in t, t)
             user_graph = re.search(r'CURRENT=(.*)', text(await c('execute_designer_code', {'code': CURRENT_GRAPH}))).group(1).strip()
             await c('execute_designer_code', {'code': CLEAN})
             try:
@@ -153,6 +156,7 @@ async def run(scratch):
                 t = text(await c('create_graph', {'name': TEST_GRAPH, 'size_log2': 9}))
                 check('create_graph', '512 px', '(512 px)' in t, t)
                 G = {'graph': TEST_GRAPH}
+                await c('open_graph', {'graph': TEST_GRAPH})   # so you can watch the nodes appear
                 t = text(await c('add_node', {'definition': 'noise_clouds_2.sbs/clouds_2', 'params': {'scale': 4}, **G}))
                 check('add_node', 'library + param', 'instance:clouds_2' in t and '-> 4' in t, t)
                 clouds = added_id(t)
@@ -188,8 +192,20 @@ async def run(scratch):
                 check('execute_designer_code', 'error traceback', 'ValueError: boom' in text(r_), '')
                 t = text(await c('execute_designer_code', {'code': 'while True: pass', 'timeout_s': 2}))
                 check('execute_designer_code', 'timeout', 'ScriptAborted: timed out' in t, '')
+                t = text(await c('execute_designer_code', {'code': (
+                    "import sd\nprint('MODIFIED=%%s' %% any(p.isModified() for p in sd.getContext().getSDApplication()"
+                    ".getPackageMgr().getUserPackages() if any(r.getIdentifier()=='%s' for r in p.getChildrenResources(False))))"
+                    % TEST_GRAPH)}))
+                if 'MODIFIED=True' in t:   # otherwise quit_designer could really close Designer
+                    r_ = await c('quit_designer')
+                    still = not (await c('designer_status')).is_error
+                    check('quit_designer', 'refuses with unsaved changes', r_.is_error and 'unsaved changes' in text(r_)
+                          and TEST_GRAPH in text(r_) and still, text(r_))
+                else:
+                    skip('quit_designer', 'refuses with unsaved changes', 'self-test package not reported as modified')
                 t = text(await c('move_nodes', {'positions': {clouds: [-600, 0], slope: [-300, 0], lv: [0, 0], out: [300, 0]}, **G}))
                 check('move_nodes', '4 moved', t.count('moved') == 4, '')
+                await c('open_graph', {'graph': TEST_GRAPH})   # fit the view to the nodes so far
                 t = text(await c('describe_graph', {'include_params': True, **G}))
                 check('describe_graph', 'links + params', 'Effect<-%s' % clouds in t and 'Samples = 16' in t, t.splitlines()[0])
                 r_ = await c('preview_node', {'node_id': slope, **G})
@@ -481,6 +497,13 @@ async def run(scratch):
                 if user_graph and user_graph != TEST_GRAPH:
                     await c('open_graph', {'graph': user_graph})
                     print('reopened your graph:', user_graph)
+                if was_running:
+                    skip('quit_designer', 'closes Designer', 'Designer was already running, so it is left open')
+                else:
+                    # our own instance: nothing of the user's can be lost
+                    t = text(await c('quit_designer', {'discard_unsaved': True}))
+                    gone = (await c('designer_status')).is_error
+                    check('quit_designer', 'closes the Designer it started', 'Designer quit after' in t and gone, t)
     return tools
 
 

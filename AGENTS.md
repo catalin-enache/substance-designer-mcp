@@ -33,6 +33,7 @@ before calling a change done.
 Parameters are in each tool's description; this is when to reach for which.
 
 - **Start:** `designer_status` (bridge state, version, open graphs); `launch_designer` if it isn't running.
+  `quit_designer` closes it (ask first: it's the user's app).
 - **Find and understand nodes:** `search_nodes` (name/label/category/description across the 29 atomic
   nodes and the **whole** library; returns the exact `definition`), then `describe_node` for
   connector ids, parameter types and **enum values**. Never guess ids or enum numbers.
@@ -110,7 +111,9 @@ README.md, **How it works**. Agent-specific notes:
   the MCP server restarts (helpers are re-sent with every call; the user reconnects in `/mcp`, or
   test them directly with a fresh MCP client such as the self-test). **Plugin** changes must be
   copied into Designer's plugin folder (re-run `install.py`; folder paths in README.md, Install)
-  and need a **Designer restart** by the user (never hot-reload; see below).
+  and need a **Designer restart** (never hot-reload; see below): with the user's OK,
+  `quit_designer` then `launch_designer`. `quit_designer` refuses while packages have unsaved
+  changes; never pass `discard_unsaved=True` unless the user said to drop them.
 - The bridge token file (README.md, Security) gives code execution in Designer: **never print,
   log or send its contents anywhere.**
 - Environment variables `SD_DESIGNER_BIN_DIR`, `SD_DESIGNER_APP`, `SD_DESIGNER_LOG`, `SD_SNAPSHOT_DIR`, `SD_BRIDGE_PORT`: see README.md,
@@ -214,6 +217,15 @@ README.md, **How it works**. Agent-specific notes:
 - Slider ranges exist only for **library** node parameters, as annotations (`min`, `max`,
   `step`, `clamp`) on the referenced graph's input property. Atomic nodes expose no ranges, only
   `prop.getDescription()`.
+- `getQtForPythonUIMgr().getMainWindow()` is a **hidden** QMainWindow; closing it does nothing.
+  The window the user sees is another top-level widget (`QStackedWidget` titled "Adobe Substance
+  3D Designer"); closing the visible top-level widgets quits Designer normally (`quit_designer`).
+  `SDPackage.isModified()` tells whether a package has unsaved changes.
+- That visible widget is a 2-page stack: the main window (page 0) and the **Home screen**
+  (page 1, current after a fresh start). While Home shows, every dock reports `isVisible()`
+  False, graphs open behind it, and only whole-window captures work (they render the hidden
+  main window). Leave it with Home's own "Close home screen" button (`close_btn`);
+  `open_graph` and a `launch_designer` that started Designer do this.
 - Fit the graph view: the graph dock's toolbar action "Fit in view (selection)" (shortcut F)
   fits everything when nothing is selected (`open_graph` without a node does this).
 - **Portals** are a per-connection display flag, `<displayType v="1"/>` inside the

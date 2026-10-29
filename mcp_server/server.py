@@ -298,7 +298,8 @@ def import_bitmap(path: str, graph: str | None = None, embed: str = 'link',
 
 @server.tool()
 def open_graph(graph: str, node_id: str | None = None) -> str:
-    """Open a graph in Designer's graph editor (so the user and screenshot_designer see it).
+    """Open a graph in Designer's graph editor (so the user and screenshot_designer see it;
+    closes Designer's Home screen if it is showing).
     Without node_id the whole graph is fitted in view; with node_id the view centres on that node."""
     return _checked(_bridge(_helpers_call('open_graph(%r, %r)' % (graph, node_id)), timeout=60))
 
@@ -1124,6 +1125,7 @@ DESIGNER_APP = {
 @server.tool()
 def launch_designer(wait_s: int = 180) -> str:
     """Start Substance Designer if it isn't running and wait until the sd_bridge plugin answers.
+    When it starts Designer it also closes the Home screen, so the editor panels are visible.
     Override the app location with SD_DESIGNER_APP."""
     try:
         return 'Designer already running: ' + _send({'cmd': 'status'}, wait=5).get('output', '')
@@ -1143,11 +1145,46 @@ def launch_designer(wait_s: int = 180) -> str:
         time.sleep(2)
         try:
             status = _send({'cmd': 'status'}, wait=5).get('output', '')
-            return 'Designer started in %.0fs: %s' % (time.time() - started, status)
         except ToolError:
             continue
+        # we started it, so nobody is using the Home screen: show the editor panels
+        home = _bridge(_helpers_call('leave_home_screen()'), timeout=30).strip()
+        return 'Designer started in %.0fs%s: %s' % (time.time() - started, ' (%s)' % home if home else '', status)
     raise ToolError('Designer did not answer within %ds. It may be showing a dialog, or the '
                     'sd_bridge plugin did not load (check the Designer log).' % wait_s)
+
+
+def _designer_running():
+    """True while a Designer process exists (the bridge port closes before the process exits)."""
+    if sys.platform == 'win32':
+        out = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq Adobe Substance 3D Designer.exe', '/NH'],
+                             capture_output=True, text=True).stdout
+        return 'Adobe Substance 3D Designer.exe' in out
+    return subprocess.run(['pgrep', '-f', 'MacOS/Adobe Substance 3D Designer( |$)'],
+                          capture_output=True).returncode == 0
+
+
+@server.tool()
+def quit_designer(discard_unsaved: bool = False, wait_s: int = 60) -> str:
+    """Close Substance Designer and wait until its process has exited (for example to restart it
+    after a plugin change, with launch_designer). Refuses while any open package has unsaved
+    changes and lists them; save them first, or pass discard_unsaved=True to drop those changes
+    (only when the user said so)."""
+    try:
+        _send({'cmd': 'status'}, wait=5)
+    except ToolError:
+        if not _designer_running():
+            return 'Designer is not running.'
+        raise ToolError('A Designer process is running but the bridge does not answer; '
+                        'close Designer by hand.')
+    text = _checked(_bridge(_helpers_call('quit_designer(%r)' % discard_unsaved), timeout=30))
+    started = time.time()
+    while time.time() - started < wait_s:
+        time.sleep(1)
+        if not _designer_running():
+            notes = text.replace('closing Designer', '').strip()
+            return (notes + '\n' if notes else '') + 'Designer quit after %.0fs.' % (time.time() - started)
+    raise ToolError('Designer is still running after %ds; it may be showing a dialog.' % wait_s)
 
 
 def _checked(text):
