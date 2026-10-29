@@ -283,6 +283,20 @@ def delete_nodes(node_ids: list[str], graph: str | None = None) -> str:
 
 
 @server.tool()
+def import_bitmap(path: str, graph: str | None = None, embed: str = 'link',
+                  position: list[float] | None = None, name: str | None = None) -> str:
+    """Add an image file (png, jpg, tga, exr, tif, psd...) to a graph as a Bitmap node and return
+    its id (output connector `unique_filter_output`). For references, masks and hand-painted maps.
+    embed: 'link' references the file where it is (an existing link to the same file is reused);
+    'copy' copies it into `<package>.resources/` (into a temp folder until the package is saved).
+    Embedding the image in the .sbs is not available through the API. The node keeps the image's
+    own size; set its `$outputsize` with set_params to change it. name: resource identifier
+    (default: the file name). position as in add_node. One undo step."""
+    return _edit('import_bitmap(%r, %r, %r, %r, %r)' % (graph, path, embed, position, name),
+                 'Claude: import bitmap')
+
+
+@server.tool()
 def open_graph(graph: str, node_id: str | None = None) -> str:
     """Open a graph in Designer's graph editor (so the user and screenshot_designer see it).
     Without node_id the whole graph is fitted in view; with node_id the view centres on that node."""
@@ -469,6 +483,7 @@ def set_graph_size(size_log2: int, graph: str | None = None, overridable: bool =
 def apply_edits(ops: list[dict], graph: str | None = None) -> str:
     """Run several edits in one call and one undo step. Each op is a dict:
     {"op": "add", "definition": "levels", "ref": "lv", "position"?: [x, y], "params"?: {...}}
+    {"op": "bitmap", "path": "/abs/image.png", "ref": "img", "embed"?: "link", "position"?, "name"?}
     {"op": "set", "node": "lv", "params": {...}}            (node: a ref, a node id, or "graph")
     {"op": "connect", "from": "a", "to": "lv", "input": "input1", "output"?: "..."}
     {"op": "disconnect", "node": "lv", "input": "input1"}

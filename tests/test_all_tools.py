@@ -171,6 +171,21 @@ async def run(scratch):
                 t = text(await c('delete_nodes', {'node_ids': [tmp], **G}))
                 check('delete_nodes', 'one node', 'deleted %s blur' % tmp in t, t)
 
+                # --- bitmaps
+                from PIL import Image
+                png = os.path.join(scratch, 'selftest_bitmap.png')
+                Image.new('RGB', (64, 32), (200, 100, 50)).save(png)
+                t = text(await c('import_bitmap', {'path': png, 'position': [-600, 300], **G}))
+                check('import_bitmap', 'linked, native size', 'size (6, 5)' in t, t)
+                bm = added_id(t)
+                t = text(await c('node_stats', {'node_id': bm, 'points': [[0, 0]], **G}))
+                check('import_bitmap', 'pixels match file', 'R=0.7843, G=0.3922, B=0.1961' in t, t)
+                t = text(await c('apply_edits', {'ops': [{'op': 'bitmap', 'path': png, 'ref': 'img'},
+                                                         {'op': 'delete', 'node': 'img'}], **G}))
+                check('import_bitmap', 'apply_edits op, link reused', 'reusing bitmap resource' in t, t)
+                r_ = await c('import_bitmap', {'path': os.path.join(scratch, 'missing.png'), **G})
+                check('import_bitmap', 'error on missing file', r_.is_error and 'no such file' in text(r_), '')
+
                 # --- pixel statistics
                 t = text(await c('node_stats', {'node_id': lv, 'points': [[0, 0]], 'region': [0, 0, 64, 64], **G}))
                 check('node_stats', 'stats + region + point', 'min' in t and 'pixel (0,0)' in t and 'region' in t, t.splitlines()[0])

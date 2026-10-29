@@ -511,17 +511,22 @@ def _resolve_definition(g, definition):
     return g.newInstanceNode(res)
 
 
-def add_node(graph_id, definition, position=None, params=None):
+def _place(node, position, existing):
     from sd.api.sdbasetypes import float2
-    g = find_graph(graph_id)
-    existing = list(g.getNodes())
-    node = _resolve_definition(g, definition)
     if position is None:
         # to the right of everything, so it doesn't land on top of existing nodes
         xs = [n.getPosition().x for n in existing] or [0.0]
         ys = [n.getPosition().y for n in existing] or [0.0]
         position = (max(xs) + 200.0, sum(ys) / len(ys))
     node.setPosition(float2(float(position[0]), float(position[1])))
+    return position
+
+
+def add_node(graph_id, definition, position=None, params=None):
+    g = find_graph(graph_id)
+    existing = list(g.getNodes())
+    node = _resolve_definition(g, definition)
+    position = _place(node, position, existing)
     print('added %s %s @(%d,%d)' % (node.getIdentifier(), node_kind(node), position[0], position[1]))
     print('outputs:', [p.getId() for p in node.getProperties(SDPropertyCategory.Output)])
     if params:
@@ -561,6 +566,46 @@ def delete_nodes(graph_id, node_ids):
         kind = node_kind(node)
         g.deleteNode(node)
         print('deleted %s %s' % (nid, kind))
+
+
+def import_bitmap(graph_id, path, embed='link', position=None, name=None):
+    """Bitmap node for an image file. embed: 'link' (reference the file where it is) or 'copy'
+    (copy into <package>.resources/, or a temp folder until the package is saved).
+    Embedding into the .sbs itself isn't supported by the API (NotSupported)."""
+    from sd.api.sdresource import EmbedMethod
+    from sd.api.sdresourcebitmap import SDResourceBitmap
+    methods = {'link': EmbedMethod.Linked, 'copy': EmbedMethod.CopiedAndLinked}
+    if embed not in methods:
+        raise RuntimeError('embed must be one of %s' % ', '.join(methods))
+    path = os.path.abspath(os.path.expanduser(path))
+    if not os.path.isfile(path):
+        raise RuntimeError('no such file: %s' % path)
+    g = find_graph(graph_id)
+    pkg = g.getPackage()
+    existing = list(g.getNodes())
+    res = None
+    if embed == 'link' and not name:
+        # reuse a resource that already links this file instead of adding probe_1, probe_2...
+        for r in pkg.getChildrenResources(True):
+            if (isinstance(r, SDResourceBitmap) and r.getEmbedMethod() == EmbedMethod.Linked
+                    and os.path.normpath(r.getFilePath() or '') == path):
+                res = r
+                print('reusing bitmap resource', r.getIdentifier())
+                break
+    if res is None:
+        res = SDResourceBitmap.sNewFromFile(pkg, path, methods[embed])
+        if res is None:
+            raise RuntimeError('Designer could not load %s as a bitmap' % path)
+        if name:
+            res.setIdentifier(name)
+        print('bitmap resource %s (%s): %s' % (res.getIdentifier(), embed, res.getFilePath()))
+    node = g.newInstanceNode(res)
+    position = _place(node, position, existing)
+    size = fmt(node.getPropertyValue(node.getPropertyFromId('$outputsize', SDPropertyCategory.Input)))
+    print('added %s bitmap @(%d,%d), size %s (log2, the image\'s own; set $outputsize to change)'
+          % (node.getIdentifier(), position[0], position[1], size))
+    print('outputs:', [p.getId() for p in node.getProperties(SDPropertyCategory.Output)])
+    return node.getIdentifier()
 
 
 # ---------------------------------------------------------------- editor / graphs
@@ -820,6 +865,12 @@ def apply_edits(identifier, ops):
                 if op.get('ref'):
                     refs[op['ref']] = new_id
                     print('  ref %r = %s' % (op['ref'], new_id))
+            elif kind == 'bitmap':
+                new_id = import_bitmap(gid, op['path'], op.get('embed', 'link'), op.get('position'),
+                                       op.get('name'))
+                if op.get('ref'):
+                    refs[op['ref']] = new_id
+                    print('  ref %r = %s' % (op['ref'], new_id))
             elif kind == 'set':
                 set_params(gid, node(op['node']), op['params'])
             elif kind == 'connect':
@@ -834,7 +885,7 @@ def apply_edits(identifier, ops):
                 expose_param(gid, node(op['node']), op['param'], op.get('input_id'), op.get('label'),
                              op.get('default'), op.get('min'), op.get('max'), op.get('step'), op.get('group'))
             else:
-                raise RuntimeError('unknown op %r (add, set, connect, disconnect, move, delete, expose)' % kind)
+                raise RuntimeError('unknown op %r (add, bitmap, set, connect, disconnect, move, delete, expose)' % kind)
         except (Exception, APIException) as e:
             raise RuntimeError('op %d (%s) failed: %s. Ops 0-%d were applied; Ctrl+Z on this graph '
                                'reverts the whole batch.' % (i, kind, e, i - 1))

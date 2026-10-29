@@ -54,7 +54,7 @@ Parameters are in each tool's description; this is when to reach for which.
 - **Tune a value:** `sweep_param` instead of edit-rebuild-look loops: several values of one
   parameter (or of an exposed graph input) side by side with numbers, original restored
   afterwards. Use `view_node` to watch the final output while sweeping an early node.
-- **Edit:** one-off `add_node` / `set_params` / `connect` / `disconnect` / `move_nodes` /
+- **Edit:** one-off `add_node` / `import_bitmap` (reference images, masks, painted maps) / `set_params` / `connect` / `disconnect` / `move_nodes` /
   `delete_nodes`; several changes at once with `apply_edits` (one call, one undo step, refs for new
   nodes); new graph with `create_graph`; controls with `expose_param` / `remove_graph_input`;
   size with `set_graph_size`.
@@ -165,6 +165,13 @@ README.md, **How it works**. Agent-specific notes:
   divide 8, overlay 9, screen 10, softlight 11. **Don't trust third-party tables**: one public
   SD MCP lists 4 = Max / 5 = Min / 6 = Difference, which is wrong (there is no Difference).
   Read enums with `describe_node`.
+- Bitmaps: `SDResourceBitmap.sNewFromFile(pkg, path, EmbedMethod.X)` + `graph.newInstanceNode(res)`
+  gives an atomic `bitmap` node (out `unique_filter_output`, param `bitmapresourcepath` =
+  `pkg:///<resource id>`). The `EmbedMethod` docstrings in `sdresource.py` are shifted by one:
+  `Linked` references the original file, `CopiedAndLinked` copies it into `<package>.resources/`
+  (prefixed `XXXXXX-`; in an OS temp folder until the package is first saved, then moved), and
+  `BinaryEmbedded` raises `NotSupported`. The node's `$outputsize` is the image's own size (log2),
+  not the graph's. Verified: pixels read back exactly.
 - Output nodes: annotation `usages` = `SDValueArray` of
   `SDValueUsage.sNew(SDUsage.sNew('baseColor', 'RGBA', 'sRGB'))`; annotations `identifier` /
   `label` via `SDValueString`. The identifier becomes the exported/rendered file name.
