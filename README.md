@@ -6,12 +6,7 @@ node, take screenshots of Designer's panels (including the 3D view), expose para
 render or export the results. No Automation Toolkit (`pysbs`) needed.
 
 Tested with Designer 16.0.7 on macOS. Windows uses the same code with Windows default paths,
-but hasn't been tested yet.
-
-```
-Claude Code ──stdio──> mcp_server/server.py ──TCP 127.0.0.1:9877──> sd_bridge plugin (inside Designer)
-                               └──> sbscooker / sbsrender (Designer's command-line tools)
-```
+but hasn't been tested yet. How the pieces fit together: [How it works](#how-it-works).
 
 **Documents:** this README is for people (what it does, install, configure, troubleshoot).
 [AGENTS.md](AGENTS.md) is for the AI agent (which tool when, workflow, Designer pitfalls); the
@@ -24,6 +19,62 @@ Once installed, ask Claude things like "build a trim sheet for this reference", 
 node look wrong?", "expose the wear amount and render three variations", or "show me the
 material in the 3D view". [examples/build_dwarf_trimsheet.py](examples/build_dwarf_trimsheet.py)
 is a full example: a 2048² stone + wood trim sheet built entirely through this bridge.
+
+## How it works
+
+There are two programs, plus Designer's own command-line tools:
+
+```
+ Claude Code (MCP client)
+      │  MCP over stdio: tool calls in, text and images back
+      ▼
+ MCP server ─ mcp_server/server.py + designer_helpers.py
+ (a separate Python 3.10+ process in mcp_server/venv, started by Claude Code)
+      │                                         │
+      │  JSON over TCP 127.0.0.1:9877            │  runs as needed
+      │  (secret token, code, timeout)           ▼
+      ▼                                     sbscooker / sbsrender
+ sd_bridge plugin                           (Designer's command-line tools:
+ (inside Designer, in Designer's Python)     .sbs → .sbsar → image files)
+      │  runs the code on Designer's main thread
+      ▼
+ Designer's own Python API (`sd`): graphs, nodes, parameters, rendering, UI
+```
+
+| Part | Runs where | What it does |
+|---|---|---|
+| **sd_bridge plugin** (`plugin/sd_bridge`) | Inside Designer, loaded at startup | A small, generic script runner. It listens on `127.0.0.1:9877`, checks the secret token, queues the Python code it receives, runs it on Designer's main thread (the only place the `sd` API may be used), and sends back the printed output or the error. It also enforces timeouts, answers `status` / `cancel` while a script runs, and knows nothing about MCP or the individual tools. |
+| **MCP server** (`mcp_server/server.py`) | Its own process, started by Claude Code | Defines the 39 tools Claude sees and sends [AGENTS.md](AGENTS.md) to Claude as its instructions. Each tool does one or more of: send Python code to the plugin (most tools), run Designer's command-line tools (`render_sbs`, `sbsar_info`), or do the work itself outside Designer (decoding pixels, building preview images, comparing `.sbs` files, reading the log, editing files for portals). |
+| **Designer helpers** (`mcp_server/designer_helpers.py`) | Sent to Designer with each request | The library of functions that actually do the work inside Designer: describing nodes, editing graphs, computing previews, layout, exposing inputs and so on. It's re-sent with every call, so updating it never needs a Designer restart. |
+| **sbscooker / sbsrender** | Separate processes | Designer's own tools for compiling a saved `.sbs` into `.sbsar` and rendering its outputs, independently of the open Designer. |
+| **CLI client** (`client/sd_run.py`) | Your terminal | The same connection to the plugin without MCP, for running scripts by hand. |
+| `install.py`, `tests/` | Your terminal | Installation and the end-to-end self-test. |
+
+**One tool call, step by step** (`preview_node`, "show me this node's image"):
+
+1. Claude calls the tool; the MCP server builds a small Python program: the helpers plus a call
+   to the preview function, wrapped in a single undo step.
+2. The server sends it to the plugin with the token and a timeout.
+3. The plugin queues it, and Designer's main thread runs it: the graph is computed and the node's
+   pixels are written to a temporary file.
+4. The plugin replies with whatever the program printed (here, the image's size and format).
+5. The server reads the temporary file, turns the pixels into a PNG, and returns it to Claude.
+
+**Why it's split this way**
+
+- **The plugin stays tiny and stable.** Every tool lives in the server, so new or improved tools
+  only need the MCP connection restarted (`/mcp` in Claude Code), not Designer. The plugin only
+  changes for connection-level features, like the timeout/cancel support.
+- **Designer stays responsive.** Designer runs plugin code on its UI thread, so anything heavy
+  that doesn't need the `sd` API (image decoding, statistics, file comparison) happens in the
+  server process instead.
+- **It doesn't depend on Designer's Python.** The server uses its own Python environment and
+  libraries (`mcp`, `numpy`, `pillow`); the plugin needs nothing beyond what Designer ships.
+
+**When the API can't do something.** A few things aren't reachable through Designer's Python API,
+for example showing a connection as a portal. For those, the server takes a snapshot, saves the
+package, edits the `.sbs` file directly and reloads it in Designer, then checks that nothing else
+changed.
 
 ## Tools (39)
 

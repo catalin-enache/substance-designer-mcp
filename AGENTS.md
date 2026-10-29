@@ -15,8 +15,14 @@ about Designer), add a short hint where it belongs, in the same change:
 | How to use the tools well, workflow, sd API / Designer pitfalls, verified facts | **AGENTS.md** (this file), in the matching section |
 | A tool's parameters and behaviour | The tool's **docstring in `mcp_server/server.py`**, the single source; don't repeat parameters here |
 | Install, configuration, security, troubleshooting, anything a **person** needs | **README.md** |
-| Project layout, how to deploy changes, diagnostics an **agent** needs | **AGENTS.md**, "Working on this project" |
+| Architecture: what the plugin, server, helpers and CLI tools each do | **README.md**, "How it works" |
+| How to deploy changes, diagnostics an **agent** needs | **AGENTS.md**, "Working on this project" |
 | New or changed tool | Its entry and the tool count in README.md's Tools table, and a check in `tests/test_all_tools.py` |
+| Work still to do, ideas, follow-ups | **ROADMAP.md** (remove items when done) |
+
+**Open work lives in [ROADMAP.md](ROADMAP.md)**, the road map for perfecting this MCP. Check it before
+proposing improvements, add new ideas there, and when you finish an item delete it from ROADMAP.md in
+the same change (git history keeps the record).
 
 Keep each fact in **one** place and link to it from elsewhere instead of copying it. Fix or
 delete hints that turn out to be wrong rather than adding a contradicting one. Run the self-test
@@ -82,19 +88,8 @@ Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `--stat
 
 ## Working on this project
 
-```
-substance-designer-mcp/
-├── plugin/sd_bridge/            Designer plugin: pluginInfo.json + sd_bridge/__init__.py (the package
-│                                Designer imports as `sd_bridge`; socket server, timeout/cancel/status)
-├── mcp_server/server.py         the MCP tools (docstrings = tool descriptions shown to agents)
-├── mcp_server/designer_helpers.py   code the server sends into Designer (inspection, edits, previews)
-├── client/sd_run.py             CLI client for the bridge
-├── tests/test_all_tools.py      end-to-end self-test (extend it for every new tool)
-├── install.py                   copies the plugin, creates mcp_server/venv, registers the server
-├── examples/                    example graph generator
-├── README.md                    for people
-└── AGENTS.md                    for agents (this file; served as the server's instructions)
-```
+How the plugin, server, helpers and command-line tools fit together, and which file does what:
+README.md, **How it works**. Agent-specific notes:
 
 `server.py` loads this file from the folder above `mcp_server/` at startup, so keep it there.
 
