@@ -44,7 +44,7 @@ There are two programs, plus Designer's own command-line tools:
 | Part | Runs where | What it does |
 |---|---|---|
 | **sd_bridge plugin** (`plugin/sd_bridge`) | Inside Designer, loaded at startup | A small, generic script runner. It listens on `127.0.0.1:9877`, checks the secret token, queues the Python code it receives, runs it on Designer's main thread (the only place the `sd` API may be used), and sends back the printed output or the error. It also enforces timeouts, answers `status` / `cancel` while a script runs, and knows nothing about MCP or the individual tools. |
-| **MCP server** (`mcp_server/server.py`) | Its own process, started by Claude Code | Defines the 40 tools Claude sees and sends [AGENTS.md](AGENTS.md) to Claude as its instructions. Each tool does one or more of: send Python code to the plugin (most tools), run Designer's command-line tools (`render_sbs`, `sbsar_info`), or do the work itself outside Designer (decoding pixels, building preview images, comparing `.sbs` files, reading the log, editing files for portals). |
+| **MCP server** (`mcp_server/server.py`) | Its own process, started by Claude Code | Defines the 41 tools Claude sees and sends [AGENTS.md](AGENTS.md) to Claude as its instructions. Each tool does one or more of: send Python code to the plugin (most tools), run Designer's command-line tools (`render_sbs`, `sbsar_info`), or do the work itself outside Designer (decoding pixels, building preview images, comparing `.sbs` files, reading the log, editing files for portals). |
 | **Designer helpers** (`mcp_server/designer_helpers.py`) | Sent to Designer with each request | The library of functions that actually do the work inside Designer: describing nodes, editing graphs, computing previews, layout, exposing inputs and so on. It's re-sent with every call, so updating it never needs a Designer restart. |
 | **sbscooker / sbsrender** | Separate processes | Designer's own tools for compiling a saved `.sbs` into `.sbsar` and rendering its outputs, independently of the open Designer. |
 | **CLI client** (`client/sd_run.py`) | Your terminal | The same connection to the plugin without MCP, for running scripts by hand. |
@@ -76,13 +76,13 @@ for example showing a connection as a portal. For those, the server takes a snap
 package, edits the `.sbs` file directly and reloads it in Designer, then checks that nothing else
 changed.
 
-## Tools (40)
+## Tools (41)
 
 | Area | Tools |
 |---|---|
 | Connection | `designer_status`, `launch_designer` (starts Designer and waits for it), `cancel_designer_job`, `read_designer_log` |
 | Finding nodes | `search_nodes` (built-in nodes and Designer's whole library), `describe_node` (parameters, types, ranges, descriptions, dropdown values) |
-| Inspecting | `describe_graph`, `list_graph_inputs`, `preview_node` (image of any node), `node_stats` (exact pixel numbers), `check_tiling` (does it tile seamlessly?) |
+| Inspecting | `describe_graph`, `list_graph_inputs`, `preview_node` (image of any node), `node_stats` (exact pixel numbers), `check_tiling` (does it tile seamlessly?), `compare_to_reference` (how far a node's tones are from a reference image, in numbers) |
 | Tuning | `sweep_param` (try several values of a parameter side by side; the original value is restored) |
 | Safety | `snapshot_graph`, `list_snapshots`, `diff_graph` (what changed vs the saved file or a snapshot) |
 | Readability | `arrange_graph` (tidy layout by data flow), `add_frame`, `add_comment`, `set_link_display` (show wires as portals to hide clutter; saves and reloads the package after a snapshot) |

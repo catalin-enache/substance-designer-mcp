@@ -51,6 +51,13 @@ Parameters are in each tool's description; this is when to reach for which.
 - **Measure:** `node_stats` (exact min/max/mean/std, regions, sampled pixels). Prefer numbers
   over eyeballing. `check_tiling` measures the wrap-around seam per axis (ratio ≈ 1 seamless,
   > 3 visible); trim sheets only need horizontal.
+  `compare_to_reference` matches tones against a reference image (`import_bitmap` it too if you
+  want it in the graph). Compare **like with like**: a `reference_region` of plain, lit material
+  against the matching `region` of the node. A whole product shot is dominated by its background,
+  and lit renders or photos include shading, so their contrast is higher than a baseColor's
+  should be (on the dwarf house: whole image EMD 0.33; a lit stone wall vs the stone strip
+  0.04; a wall in shadow 0.085 darker). Treat the suggested `x*gain + bias` as a starting point
+  for levels, not a target.
 - **Tune a value:** `sweep_param` instead of edit-rebuild-look loops: several values of one
   parameter (or of an exposed graph input) side by side with numbers, original restored
   afterwards. Use `view_node` to watch the final output while sweeping an early node.

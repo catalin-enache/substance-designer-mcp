@@ -183,6 +183,16 @@ async def run(scratch):
                 t = text(await c('apply_edits', {'ops': [{'op': 'bitmap', 'path': png, 'ref': 'img'},
                                                          {'op': 'delete', 'node': 'img'}], **G}))
                 check('import_bitmap', 'apply_edits op, link reused', 'reusing bitmap resource' in t, t)
+                r_ = await c('compare_to_reference', {'node_id': bm, 'reference_path': png, 'aligned': True, **G})
+                t = text(r_)
+                check('compare_to_reference', 'same image matches', 'EMD 0.000' in t and 'mean abs diff 0.0000' in t
+                      and any(x.type == 'image' for x in r_.content), t)
+                darker = os.path.join(scratch, 'selftest_darker.png')
+                Image.new('RGB', (128, 64), (100, 50, 25)).save(darker)
+                t = text(await c('compare_to_reference', {'node_id': bm, 'reference_path': darker, **G}))
+                check('compare_to_reference', 'shift measured', 'R     0.784' in t and 'mean -0.392' in t, t)
+                r_ = await c('compare_to_reference', {'node_id': bm, 'reference_path': png, 'region': [100, 100, 120, 120], **G})
+                check('compare_to_reference', 'error on empty region', r_.is_error and 'is empty' in text(r_), text(r_))
                 r_ = await c('import_bitmap', {'path': os.path.join(scratch, 'missing.png'), **G})
                 check('import_bitmap', 'error on missing file', r_.is_error and 'no such file' in text(r_), '')
 
