@@ -162,3 +162,14 @@ def test_render_warns_about_unexposed_inputs(monkeypatch, tmp_path):
     text, cmd = _render_with(monkeypatch, tmp_path, set(), graph='alpha', params={'wear': 0.5}, size_log2=10)
     assert "input 'wear' is not exposed" in text and "input '$outputsize' is not exposed" in text
     assert 'graph output size is fixed' in text
+
+
+def test_reload_is_split_with_pauses(monkeypatch):
+    # unload, pause, load, pause: separate calls so Designer's event loop finishes tearing down
+    # the old graph views before new ones are created (a back-to-back reload once crashed it)
+    events = []
+    monkeypatch.setattr(server, '_bridge', lambda code, path=None, timeout=None:
+                        events.append(code.rsplit('\n', 2)[-2].split('(')[0]) or 'ok')
+    monkeypatch.setattr(server.time, 'sleep', lambda s: events.append('sleep %.1f' % s))
+    server._reload_package_file('/x/pkg.sbs')
+    assert events == ['unload_package_file', 'sleep 0.5', 'load_package_file', 'sleep 0.5']

@@ -1236,17 +1236,18 @@ def package_file_of(identifier, save=False):
     print('OPEN=' + ('1' if current is not None and current.getIdentifier() == g.getIdentifier() else '0'))
 
 
-def reload_package(path, graph_to_open=None):
-    """Close every open copy of the package at `path` and load it again from disk."""
+def unload_package_file(path):
+    """Close every open copy of the package at `path` (its graph views are torn down when this
+    call returns to Designer's event loop; load it again in a separate call)."""
     norm = os.path.normpath(path)
+    count = 0
     for p in list(_PM.getUserPackages()):
         if os.path.normpath(p.getFilePath() or '') == norm:
             _PM.unloadUserPackage(p)
-    pkg = _PM.loadUserPackage(path)
-    print('reloaded', path)
-    if graph_to_open:
-        g = pkg.findResourceFromUrl(graph_to_open)
-        if g is not None:
-            _APP.getUIMgr().openResourceInEditor(g)
-            _process_events()
-            _fit_graph_view()
+            count += 1
+    print('unloaded %d package(s): %s' % (count, path))
+
+
+def load_package_file(path):
+    _PM.loadUserPackage(path)
+    print('loaded', path)

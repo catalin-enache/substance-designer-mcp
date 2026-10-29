@@ -173,10 +173,12 @@ Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `-c COD
   connections; leave those alone). Dot nodes (`passthrough`) are just optional reroute points.
   The API can't read or set the flag, so `set_link_display` uses the **file-level edit
   pattern**: snapshot the live graph and copy the saved file, decide on the copy (no change → no
-  save), save, edit the .sbs XML, reload the package, reopen the graph in a separate call
-  (reopening in the reload's call can leave the graph panel empty; once, in about ten self-test
-  runs, Designer crashed as the graph view reopened after a reload, so warn the user and save
-  their work first). Use the same pattern for
+  save), save, edit the .sbs XML, then unload, load and reopen as **three separate bridge calls
+  with short pauses**. Back to back, Designer once crashed: a null call in PySide from its own
+  `node_align_tools` plugin, which adds a toolbar to each new graph view, while the old views
+  were still being torn down (crash dump in Designer's `Sentry-Crashpad/completed`). Returning
+  to Designer's event loop between the steps lets the teardown finish; 300 stress reloads since
+  have been clean. If it recurs, read the newest dump's crashing module first. Use the same pattern for
   other things the API can't do, with a `diff_graph` plus `node_stats` check afterwards.
 
 ## Designer UI (Qt)

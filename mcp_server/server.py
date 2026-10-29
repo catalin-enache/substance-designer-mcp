@@ -1214,11 +1214,26 @@ def set_link_display(graph: str | None = None, mode: str = 'portal', from_nodes:
                 dt = ET.SubElement(c, 'displayType')
             dt.set('v', _DISPLAY[mode])
     tree.write(path, encoding='UTF-8', xml_declaration=True)
-    _checked(_bridge(_helpers_call('reload_package(%r, %r)' % (path, None)), timeout=180))
+    _reload_package_file(path)
     if info.get('OPEN') == '1':
-        open_graph(gid)   # reopen in a separate call so the editor has settled after the reload
+        open_graph(gid)
+
     return ('%d of %d selected link(s) changed to %s in %s (of %d links in the graph); package saved and '
             'reloaded. %s' % (len(picked), len(picked), mode, gid, total, snap))
+
+
+RELOAD_SETTLE_S = 0.5
+
+
+def _reload_package_file(path):
+    """Unload, load, and (by the caller) reopen as separate bridge calls with pauses between,
+    so Designer's event loop finishes tearing down the old graph views before new ones are made.
+    Done back to back, Designer once crashed: its own node_align_tools plugin (Python, PySide)
+    was called for a destroyed view while the reopened graph's view was being created."""
+    _checked(_bridge(_helpers_call('unload_package_file(%r)' % path), timeout=180))
+    time.sleep(RELOAD_SETTLE_S)
+    _checked(_bridge(_helpers_call('load_package_file(%r)' % path), timeout=180))
+    time.sleep(RELOAD_SETTLE_S)
 
 
 def _select_links(g, mode, from_nodes=None, fanout_at_least=None, longer_than=None, links=None):
