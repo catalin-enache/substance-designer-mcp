@@ -188,8 +188,13 @@ save, edit and reload it in a single call (the example script does, for its port
 ## Designer UI (Qt)
 
 - The graph editor's node view is a `QGraphicsView` inside the `areaB_` dock (the dock adds a
-  title bar and two toolbar rows above it); its **scene coordinates are graph units**, so
-  `fitInView(QRectF(x, y, w, h))` frames a part of the graph (`open_graph(frame=...)` does).
+  title bar and two toolbar rows above it); its **scene coordinates are graph units**.
+  **Don't set its transform** (`fitInView`, `scale`): Designer keeps its own zoom level beside
+  it, and the user's next mouse-wheel step jumps from that stale level (seen once: one notch up
+  went from a 22 % fit to very close). Zoom with synthetic `QWheelEvent`s on the viewport
+  instead, 1.2x per notch in Designer 16, and pan with `centerOn` (panning is safe);
+  `open_graph(frame=...)` does this, and the self-test checks that a wheel step after a fit
+  is exactly 1.2x.
 - Current graph: `getQtForPythonUIMgr().getCurrentGraph()`; editor control via
   **`app.getUIMgr()`**: `openResourceInEditor(graph)`, `focusGraphNode(graphViewID, node)` (ids
   via `getGraphViewIDCount/At`, `getGraphFromGraphViewID`), `getGraphNodeBBox`,

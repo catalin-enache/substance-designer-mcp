@@ -302,7 +302,10 @@ def screenshot_designer(panel: str = 'window', max_size: int = 1000,
         im = PILImage.open(out_path).convert('RGB')
         if crop is not None:
             w, h = im.size
-            im = im.crop((round(crop[0] * w), round(crop[1] * h), round(crop[2] * w), round(crop[3] * h)))
+            box = (round(crop[0] * w), round(crop[1] * h), round(crop[2] * w), round(crop[3] * h))
+            if box[2] - box[0] < 1 or box[3] - box[1] < 1:
+                raise ToolError('crop %r is less than a pixel of the %dx%d panel' % (crop, w, h))
+            im = im.crop(box)
         im.thumbnail((max_size, max_size))
         buf = io.BytesIO()
         im.save(buf, format='PNG')
@@ -394,8 +397,13 @@ def open_graph(graph: str, node_id: str | None = None, node_ids: list[str] | Non
     closes Designer's Home screen if it is showing). By default the whole graph is fitted in
     view. To look at one section, fit the view to a frame (its title), to node_ids (their
     bounding box) or to rect ([x, y, width, height] in graph units), with a little padding and
-    at most 100 % zoom. node_id centres the view on one node (Designer's own focus, zoomed in
+    at most 100 % zoom; it zooms in Designer's own wheel steps (1.2x), so the view may show up
+    to one step more than the area. node_id centres the view on one node (Designer's own focus, zoomed in
     close). Prints the zoom and the visible area in graph units."""
+    chosen = [name for name, value in (('node_id', node_id), ('node_ids', node_ids), ('frame', frame),
+                                       ('rect', rect)) if value not in (None, '', [])]
+    if len(chosen) > 1:
+        raise ToolError('choose one of node_id, node_ids, frame or rect (got %s)' % ', '.join(chosen))
     if rect is not None and len(rect) != 4:
         raise ToolError('rect is [x, y, width, height] in graph units')
     return _checked(_bridge(_helpers_call('open_graph(%r, %r, %r, %r, %r)' % (

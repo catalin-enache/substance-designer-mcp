@@ -759,12 +759,8 @@ def _fit_area(g, node_ids=None, frame=None, rect=None):
         pos, size = found[0].getPosition(), found[0].getSize()
         return pos.x, pos.y, size.x, size.y, 'frame %r' % found[0].getTitle()
     if node_ids:
-        nodes = [_target(g, i) for i in node_ids]
-        xs = [n.getPosition().x for n in nodes]
-        ys = [n.getPosition().y for n in nodes]
-        half = _NODE_SIZE / 2.0
-        return (min(xs) - half, min(ys) - half, max(xs) - min(xs) + _NODE_SIZE, max(ys) - min(ys) + _NODE_SIZE,
-                '%d node(s)' % len(nodes))
+        nodes, (left, top, right, bottom) = _nodes_bbox(g, node_ids)
+        return left, top, right - left, bottom - top, '%d node(s)' % len(nodes)
     x, y, w, h = (float(v) for v in rect)
     if w <= 0 or h <= 0:
         raise RuntimeError('rect is [x, y, width, height] with a positive width and height')
@@ -775,8 +771,35 @@ FIT_MAX_ZOOM = 1.0   # 100 %: a node at its normal size, never larger
 FIT_PADDING = 0.05   # of the fitted area, on every side
 
 
+def _wheel_zoom(view, notches):
+    """Zoom the graph view by mouse-wheel notches (positive: in), through Designer's own wheel
+    handling. Designer keeps its own zoom level besides the view's transform: setting the
+    transform directly (fitInView, scale) leaves that level stale, and the user's next wheel
+    step jumps from it. Wheel events keep the two in step (Designer 16: 1.2x per notch)."""
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtWidgets import QApplication
+    viewport = view.viewport()
+    centre = QPointF(viewport.width() / 2.0, viewport.height() / 2.0)
+    event = QWheelEvent(centre, QPointF(viewport.mapToGlobal(centre.toPoint())), QPoint(0, 0),
+                        QPoint(0, 120 if notches > 0 else -120), Qt.NoButton, Qt.NoModifier,
+                        Qt.NoScrollPhase, False)
+    for _ in range(abs(notches)):
+        QApplication.sendEvent(viewport, event)
+        _process_events(2)
+
+
 def _fit_view_to(g, node_ids=None, frame=None, rect=None):
-    from PySide6.QtCore import QRectF, Qt
+    """Fit the graph view to part of g, zooming only with wheel notches (see _wheel_zoom): the
+    largest zoom, at most FIT_MAX_ZOOM, at which the area fits; then pan to its centre. The
+    view found is whichever graph view is visible, so first make sure the editor's current
+    graph is g (same identifier and package)."""
+    from PySide6.QtCore import QRectF
+    current = _current_graph()
+    if current is None or current.getIdentifier() != g.getIdentifier() \
+            or current.getPackage().getUID() != g.getPackage().getUID():
+        raise RuntimeError('the graph in the editor is %s, not %s; not fitting the wrong view' % (
+            current.getIdentifier() if current is not None else 'none', g.getIdentifier()))
     x, y, w, h, what = _fit_area(g, node_ids, frame, rect)
     mw = _APP.getQtForPythonUIMgr().getMainWindow()   # keeps the view's wrappers alive
     view = _graph_view(mw)
@@ -784,15 +807,29 @@ def _fit_view_to(g, node_ids=None, frame=None, rect=None):
         raise RuntimeError('the graph view is not visible in Designer')
     pad = max(w, h) * FIT_PADDING + 20.0
     area = QRectF(x - pad, y - pad, w + 2 * pad, h + 2 * pad)
-    view.fitInView(area, Qt.KeepAspectRatio)
-    if view.transform().m11() > FIT_MAX_ZOOM:
-        view.resetTransform()
-        view.scale(FIT_MAX_ZOOM, FIT_MAX_ZOOM)
-        view.centerOn(area.center())
+    viewport = view.viewport()
+    target = min(FIT_MAX_ZOOM, viewport.width() / area.width(), viewport.height() / area.height())
+    zoom = lambda: view.transform().m11()
+    for _ in range(80):                       # out until it fits (a stuck zoom ends the loop)
+        before = zoom()
+        if before <= target * 1.001:
+            break
+        _wheel_zoom(view, -1)
+        if zoom() == before:
+            break
+    for _ in range(80):                       # in while the next notch still fits
+        before = zoom()
+        _wheel_zoom(view, 1)
+        if zoom() > target * 1.001:
+            _wheel_zoom(view, -1)
+            break
+        if zoom() == before:
+            break
+    view.centerOn(area.center())              # panning leaves the zoom level alone
     _process_events()
-    seen = view.mapToScene(view.viewport().rect()).boundingRect()
+    seen = view.mapToScene(viewport.rect()).boundingRect()
     print('fitted %s: zoom %d%%, visible %d,%d to %d,%d' % (
-        what, round(view.transform().m11() * 100), seen.left(), seen.top(), seen.right(), seen.bottom()))
+        what, round(zoom() * 100), seen.left(), seen.top(), seen.right(), seen.bottom()))
 
 
 def open_graph(identifier, node_id=None, node_ids=None, frame=None, rect=None):
@@ -1165,6 +1202,23 @@ def save_package_copy(identifier, path):
 _NODE_SIZE = 96.0   # graph-view size of a node; positions are node centres
 
 
+def _nodes_bbox(g, node_ids):
+    """The nodes (never the graph itself, which _target allows for parameters) and their
+    bounding box (left, top, right, bottom) in graph units."""
+    nodes = []
+    for i in node_ids:
+        node = g.getNodeFromId(str(i)) if i not in (None, '') else None
+        if node is None:
+            raise RuntimeError('node %r not found in graph %s' % (i, g.getIdentifier()))
+        nodes.append(node)
+    if not nodes:
+        raise RuntimeError('no node ids given')
+    half = _NODE_SIZE / 2.0
+    xs = [n.getPosition().x for n in nodes]
+    ys = [n.getPosition().y for n in nodes]
+    return nodes, (min(xs) - half, min(ys) - half, max(xs) + half, max(ys) + half)
+
+
 def _links(g, nodes):
     """(upstream_id, downstream_id) pairs between the given nodes."""
     ids = {n.getIdentifier() for n in nodes}
@@ -1242,14 +1296,9 @@ def add_frame(identifier, node_ids, title, color=None, description=None, margin=
     from sd.api.sdbasetypes import float2, ColorRGBA
     from sd.api.sdgraphobjectframe import SDGraphObjectFrame
     g = find_graph(identifier)
-    nodes = [_target(g, i) for i in node_ids]
-    if not nodes:
-        raise RuntimeError('add_frame needs at least one node')
-    half = _NODE_SIZE / 2.0
-    xs = [n.getPosition().x for n in nodes]
-    ys = [n.getPosition().y for n in nodes]
-    left, right = min(xs) - half - margin, max(xs) + half + margin
-    top, bottom = min(ys) - half - margin - 30.0, max(ys) + half + margin   # room for the title bar
+    nodes, (left, top, right, bottom) = _nodes_bbox(g, node_ids)
+    left, right = left - margin, right + margin
+    top, bottom = top - margin - 30.0, bottom + margin   # room for the title bar
     frame = SDGraphObjectFrame.sNew(g)
     frame.setTitle(title)
     frame.setPosition(float2(left, top))

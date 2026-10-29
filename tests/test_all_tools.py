@@ -749,7 +749,29 @@ async def run(scratch):
                       and contains(box, points), t)
                 t = text(await c('open_graph', {'graph': TEST_GRAPH, 'rect': [0, 0, 10, 10]}))
                 zoom, box = visible(t)
-                check('open_graph', 'rect, zoom capped at 100%', zoom == 100 and contains(box, [(0, 0), (10, 10)]), t)
+                check('open_graph', 'rect, zoom capped at 100%', zoom is not None and 100 / 1.2 <= zoom <= 100
+                      and contains(box, [(0, 0), (10, 10)]), t)
+                # the fit zooms through Designer's own wheel handling, so the user's next wheel step
+                # continues from the fitted zoom (setting the view's transform directly made it jump)
+                t = text(await c('execute_designer_code', {'code': (
+                    "import sd\nfrom PySide6.QtWidgets import QApplication, QGraphicsView, QDockWidget\n"
+                    "from PySide6.QtGui import QWheelEvent\nfrom PySide6.QtCore import QPoint, QPointF, Qt\n"
+                    "mw=sd.getContext().getSDApplication().getQtForPythonUIMgr().getMainWindow()\n"
+                    "d=[w for w in mw.findChildren(QDockWidget) if w.objectName().startswith('areaB_') and w.isVisible()][0]\n"
+                    "v=max((x for x in d.findChildren(QGraphicsView) if x.isVisible()), key=lambda x: x.width()*x.height())\n"
+                    "vp=v.viewport(); c=QPointF(vp.width()/2, vp.height()/2); before=v.transform().m11()\n"
+                    "QApplication.sendEvent(vp, QWheelEvent(c, QPointF(vp.mapToGlobal(c.toPoint())), QPoint(0,0), QPoint(0,120), "
+                    "Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False))\n"
+                    "QApplication.processEvents(); print('STEP=%.4f' % (v.transform().m11() / before))")}))
+                step = re.search(r'STEP=([\d.]+)', t)
+                check('open_graph', 'a wheel step after a fit continues from the fitted zoom',
+                      step is not None and abs(float(step.group(1)) - 1.2) < 0.01, t.strip())
+                r_ = await c('open_graph', {'graph': TEST_GRAPH, 'node_id': slope, 'frame': 'Shape'})
+                check('open_graph', 'refuses two view targets at once', r_.is_error
+                      and 'choose one of' in text(r_) and 'node_id, frame' in text(r_), text(r_))
+                r_ = await c('open_graph', {'graph': TEST_GRAPH, 'node_ids': ['graph']})
+                check('open_graph', "node_ids never means the graph itself", r_.is_error
+                      and "node 'graph' not found" in text(r_), text(r_))
                 r_ = await c('open_graph', {'graph': TEST_GRAPH, 'frame': 'no such frame'})
                 check('open_graph', 'error on unknown frame lists the frames', r_.is_error and "'Shape'" in text(r_), text(r_))
                 # 'graph' captures the node view alone (no title bar, no toolbars); crop takes a part of it
@@ -769,6 +791,9 @@ async def run(scratch):
                 part = await c('screenshot_designer', {'panel': 'graph', 'max_size': 4000, 'crop': [0, 0, 0.5, 0.25]})
                 check('screenshot_designer', 'crop', is_image(part) and view_size is not None and image_size(part) == (
                     round(view_size[0] * 0.5), round(view_size[1] * 0.25)), str(image_size(part)) if is_image(part) else text(part))
+                r_ = await c('screenshot_designer', {'panel': 'graph', 'crop': [0, 0, 0.0001, 1]})
+                check('screenshot_designer', 'error on a crop under a pixel', r_.is_error
+                      and 'less than a pixel' in text(r_), text(r_))
                 r_ = await c('screenshot_designer', {'panel': 'graph', 'crop': [0.5, 0, 0.2, 1]})
                 check('screenshot_designer', 'error on a bad crop', r_.is_error and 'left < right' in text(r_), text(r_))
 
@@ -1022,6 +1047,15 @@ async def run(scratch):
                     ratio = re.search(r'ratio ([\d.]+)', t)
                     check(E, 'tiles horizontally (trim sheet)', ratio is not None and float(ratio.group(1)) <= 3, t.splitlines()[-1])
                     await c('open_graph', {'graph': TEST_GRAPH})
+                    # the fit refuses to zoom a view that shows another graph (here: fit the trim
+                    # sheet's frame while the self-test graph is in the editor, via the helper itself)
+                    with open(os.path.join(BUNDLE, 'mcp_server', 'designer_helpers.py'), encoding='utf-8') as f:
+                        helpers = f.read()
+                    t = text(await c('execute_designer_code', {'code': helpers + (
+                        "\ntry:\n    _fit_view_to(find_graph(%r), frame='K: wood planks')\n    print('FITTED')\n"
+                        "except RuntimeError as e:\n    print('REFUSED', e)\n") % EXAMPLE_GRAPH}))
+                    check('open_graph', 'never fits a view showing another graph',
+                          'REFUSED' in t and 'not %s' % EXAMPLE_GRAPH in t, t.strip()[-200:])
 
                 # --- script runner
                 script = os.path.join(scratch, 'probe_script.py')
