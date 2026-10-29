@@ -1,0 +1,22 @@
+name: tests
+
+# Unit tests that need no Designer (tests/unit). The end-to-end self-test
+# (tests/test_all_tools.py) needs a running Designer and is run by hand.
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r mcp_server/requirements.txt pytest
+      - run: python -m pytest -v

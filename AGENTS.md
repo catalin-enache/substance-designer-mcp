@@ -82,6 +82,9 @@ user something works.
 
 **Self-test:** `mcp_server/venv/bin/python tests/test_all_tools.py` exercises every tool over MCP
 on a temporary graph (exit 0 = all passed). Run it after changing the server, plugin or helpers.
+Also run `mcp_server/venv/bin/python -m pytest` (`tests/unit`, no Designer, also on CI): it
+fails if a tool is missing from README's Tools table/count or has no check in the self-test.
+Add unit tests there for new pure-Python code (server-side parsing, maths, image handling).
 
 Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `--status`, `--cancel`
 (no undo grouping).

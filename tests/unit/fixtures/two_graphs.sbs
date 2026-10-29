@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Hand-made fixture in Designer 16's .sbs shape: graph "alpha" (gradient -> blend -> output,
+     one exposed input, portal on the output link) and graph "beta" (empty, other parent size). -->
+<package>
+  <identifier v="Unsaved Package"/>
+  <formatVersion v="1.1.0.202502"/>
+  <content>
+    <graph>
+      <identifier v="alpha"/>
+      <uid v="100"/>
+      <paraminputs>
+        <paraminput>
+          <identifier v="roughness"/>
+          <uid v="101"/>
+          <type v="256"/>
+          <defaultValue><constantValueFloat1 v="0.5"/></defaultValue>
+        </paraminput>
+      </paraminputs>
+      <compNodes>
+        <compNode>
+          <uid v="200"/>
+          <GUILayout><gpos v="-200 0 0"/></GUILayout>
+          <compImplementation>
+            <compInstance>
+              <path v="pkg:///gradient_linear_1?dependency=1585245707"/>
+              <parameters>
+                <parameter><name v="rotation"/><relativeTo v="0"/><paramValue><constantValueFloat1 v="0.25"/></paramValue></parameter>
+              </parameters>
+            </compInstance>
+          </compImplementation>
+        </compNode>
+        <compNode>
+          <uid v="201"/>
+          <connections>
+            <connection><identifier v="source"/><connRef v="200"/></connection>
+          </connections>
+          <GUILayout><gpos v="0 0 0"/></GUILayout>
+          <compImplementation>
+            <compFilter>
+              <filter v="blend"/>
+              <parameters>
+                <parameter><name v="blendingmode"/><relativeTo v="0"/><paramValue><constantValueInt32 v="6"/></paramValue></parameter>
+                <parameter><name v="opacitymult"/><relativeTo v="0"/><paramValue><dynamicValue><rootnode v="1"/></dynamicValue></paramValue></parameter>
+              </parameters>
+            </compFilter>
+          </compImplementation>
+        </compNode>
+        <compNode>
+          <uid v="202"/>
+          <connections>
+            <connection><identifier v="inputNodeOutput"/><connRef v="201"/><displayType v="1"/></connection>
+          </connections>
+          <GUILayout><gpos v="200 0 0"/></GUILayout>
+          <compImplementation>
+            <compOutputBridge><output v="300"/></compOutputBridge>
+          </compImplementation>
+        </compNode>
+      </compNodes>
+      <baseParameters>
+        <parameter><name v="outputsize"/><relativeTo v="1"/><paramValue><constantValueInt2 v="0 0"/></paramValue></parameter>
+      </baseParameters>
+      <options><option><name v="defaultParentSize"/><value v="9x9"/></option></options>
+    </graph>
+    <graph>
+      <identifier v="beta"/>
+      <uid v="400"/>
+      <compNodes/>
+      <baseParameters/>
+      <options><option><name v="defaultParentSize"/><value v="11x11"/></option></options>
+    </graph>
+  </content>
+</package>
