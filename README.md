@@ -48,7 +48,7 @@ There are two programs, plus Designer's own command-line tools:
 | **Designer helpers** (`mcp_server/designer_helpers.py`) | Sent to Designer with each request | The library of functions that actually do the work inside Designer: describing nodes, editing graphs, computing previews, layout, exposing inputs and so on. It's re-sent with every call, so updating it never needs a Designer restart. |
 | **sbscooker / sbsrender** | Separate processes | Designer's own tools for compiling a saved `.sbs` into `.sbsar` and rendering its outputs, independently of the open Designer. |
 | **CLI client** (`client/sd_run.py`) | Your terminal | The same connection to the plugin without MCP, for running scripts by hand. |
-| `install.py`, `tests/` | Your terminal | Installation, the end-to-end self-test, and unit tests that need no Designer (`tests/unit`, also run by GitHub Actions). |
+| `install.py`, `tests/` | Your terminal | Installation, the end-to-end self-test, and unit tests that need no Designer (`tests/unit`). |
 
 **One tool call, step by step** (`preview_node`, "show me this node's image"):
 
@@ -164,8 +164,8 @@ after a Designer update.
 
 **Unit tests (no Designer needed).** `tests/unit` tests the parts that run outside Designer
 (pixel decoding, the tiling metric, `.sbs` parsing and diffing, search ranking) and checks that
-the server starts and that this README and the self-test cover every tool. GitHub Actions runs
-them on every push (Linux, macOS, Windows). To run them locally:
+the server starts and that this README and the self-test cover every tool. Run them after
+changing the server:
 
 ```bash
 mcp_server/venv/bin/pip install pytest

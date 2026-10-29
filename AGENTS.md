@@ -82,7 +82,7 @@ user something works.
 
 **Self-test:** `mcp_server/venv/bin/python tests/test_all_tools.py` exercises every tool over MCP
 on a temporary graph (exit 0 = all passed). Run it after changing the server, plugin or helpers.
-Also run `mcp_server/venv/bin/python -m pytest` (`tests/unit`, no Designer, also on CI): it
+Also run `mcp_server/venv/bin/python -m pytest` (`tests/unit`, no Designer needed): it
 fails if a tool is missing from README's Tools table/count or has no check in the self-test.
 Add unit tests there for new pure-Python code (server-side parsing, maths, image handling).
 
@@ -110,6 +110,8 @@ README.md, **How it works**. Agent-specific notes:
   answers, or a tool is missing in Claude Code, only the user can fix it (restart Designer /
   reconnect `/mcp`), so tell them.
 - The repository is public on GitHub. Commit and push only when the user asks.
+- **There is no CI and none is planned.** Don't add GitHub Actions or other CI; all tests run
+  locally (self-test and `tests/unit`).
 
 ## Undo, timeouts, plugin lifecycle
 
