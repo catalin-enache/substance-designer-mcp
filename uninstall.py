@@ -15,6 +15,7 @@ itself is left for you to delete.
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -40,13 +41,7 @@ def snapshot_dir():
     return os.environ.get('SD_SNAPSHOT_DIR') or os.path.join(os.path.expanduser('~'), '.sd_mcp', 'snapshots')
 
 
-def is_our_plugin(folder):
-    try:
-        with open(os.path.join(folder, 'pluginInfo.json'), encoding='utf-8') as f, \
-                open(os.path.join(PLUGIN_DIR, 'pluginInfo.json'), encoding='utf-8') as g:
-            return json.load(f).get('name') == json.load(g).get('name')
-    except (OSError, ValueError):
-        return False
+is_our_plugin = install.is_our_plugin
 
 
 def _points_here(entry):
@@ -92,6 +87,31 @@ def remove_registration(scope, folder, claude):
     return None if result.returncode == 0 else (result.stderr or result.stdout).strip()
 
 
+# <folder>/<graph>/<YYYYmmdd-HHMMSS>[_n][-label].sbs, as server.py names them
+SNAPSHOT_FILE = re.compile(r'^\d{8}-\d{6}(?:_\d+)?(?:-.*)?\.sbs$')
+
+
+class Kept(str):
+    """What an action returns when it did its part but something stays (not an error)."""
+
+
+def remove_snapshots(folder):
+    """Only the snapshot files the server wrote, then the folders they leave empty: the folder may
+    be a shared one (SD_SNAPSHOT_DIR). Says so when the folder stays."""
+    for graph in os.listdir(folder):
+        sub = os.path.join(folder, graph)
+        if not os.path.isdir(sub):
+            continue
+        for name in os.listdir(sub):
+            if SNAPSHOT_FILE.match(name):
+                os.remove(os.path.join(sub, name))
+        if not os.listdir(sub):
+            os.rmdir(sub)
+    if os.listdir(folder):
+        return Kept('the snapshots were deleted; folder kept, other files are in it')
+    os.rmdir(folder)
+
+
 def plan(args):
     """[(description, action or None)]; an action of None is only reported. An action returns
     None when done, or an error text."""
@@ -102,10 +122,21 @@ def plan(args):
             items.append(('Designer plugin: %s' % plugin, lambda: shutil.rmtree(plugin)))
         else:
             items.append(('%s is not this project\'s plugin; left as it is' % plugin, None))
+    for suffix in ('.new', '.old'):   # left by an interrupted install (REVIEW.md INS-16)
+        leftover = plugin + suffix
+        if os.path.isdir(leftover):
+            if is_our_plugin(leftover):
+                items.append(('leftover plugin copy: %s' % leftover, lambda f=leftover: shutil.rmtree(f)))
+            else:   # not ours, or a partly deleted copy (REVIEW.md INS-20)
+                items.append(('%s is not this project\'s plugin (or a partly deleted copy); left as it is'
+                              % leftover, None))
     old = os.path.join(args.plugins_dir, install.OLD_PLUGIN)
     if os.path.isdir(old):
-        items.append(('old plugin (before the rename), if it is this project\'s: %s' % old,
-                      lambda: install.remove_old_plugin(args.plugins_dir)))
+        if install.is_old_plugin(old):
+            items.append(('old plugin (before the rename): %s' % old,
+                          lambda: install.remove_old_plugin(args.plugins_dir)))
+        else:
+            items.append(('%s is not this project\'s old plugin; left as it is' % old, None))
     for token in (TOKEN_FILE, install.OLD_TOKEN):
         if os.path.exists(token):
             # remove_old_plugin may already have deleted the old token
@@ -135,7 +166,7 @@ def plan(args):
     snapshots = snapshot_dir()
     if os.path.isdir(snapshots):
         if args.remove_snapshots:
-            items.append(('graph snapshots: %s' % snapshots, lambda: shutil.rmtree(snapshots)))
+            items.append(('graph snapshots: %s' % snapshots, lambda: remove_snapshots(snapshots)))
         else:
             items.append(('graph snapshots kept (--remove-snapshots deletes them): %s' % snapshots, None))
     return items
@@ -150,6 +181,10 @@ def main():
     ap.add_argument('--remove-snapshots', action='store_true', help='also delete the graph snapshots')
     args = ap.parse_args()
 
+    if os.path.normcase(os.path.realpath(sys.prefix)) == os.path.normcase(os.path.realpath(VENV)):
+        # its own files can't be deleted while it runs on Windows, and it removes them
+        print("Note: this runs with the MCP server's own Python (mcp_server/venv), which it removes. "
+              "Run it with your system Python instead: python3 uninstall.py (Windows: py -3 uninstall.py).\n")
     items = plan(args)
     actions = [(text, act) for text, act in items if act]
     if not items:
@@ -170,8 +205,13 @@ def main():
         return
     failed = False
     for text, act in actions:
-        error = act()
-        if error:
+        try:
+            error = act()
+        except OSError as e:   # a locked or vanished file (Windows: a running server): go on
+            error = str(e)
+        if isinstance(error, Kept):
+            print('Removed %s (%s)' % (text, error))
+        elif error:
             failed = True
             print('Could not remove %s: %s' % (text, error))
         else:

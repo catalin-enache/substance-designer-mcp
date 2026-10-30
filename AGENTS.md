@@ -3,8 +3,8 @@
 You have access to the user's **running** Substance 3D Designer through the
 `substance-designer` MCP server. These notes were learned the hard way; read them before writing
 `sd` scripts. (Served whole by the `get_guide` tool and the resource `designer://agents-guide`.
-The server's own instructions are one short paragraph, because MCP clients cut long ones
-(Claude Code at 4,096 characters): leave these tools alone unless the user asks for Designer
+The server's own instructions are one short paragraph, because MCP clients cut long ones (see
+Working on this project): leave these tools alone unless the user asks for Designer
 work; right before the first Designer tool call, call `get_guide()` and confirm to the user.)
 
 ## Rules that protect the user's work
@@ -27,7 +27,7 @@ Parameters are in each tool's description; this is when to reach for which.
 
 - **Start:** `designer_status`; `launch_designer` if Designer isn't running; `quit_designer`
   (see the rules).
-- **Find and understand nodes:** `search_nodes` (the 29 atomic nodes and Designer's **whole**
+- **Find and understand nodes:** `search_nodes` (the atomic nodes and Designer's **whole**
   library; returns the exact `definition`), then `describe_node` for connector ids, parameter
   types, **enum values**, library slider ranges and descriptions. Never guess ids or enum
   numbers; pick values inside the slider range.
@@ -65,7 +65,8 @@ Parameters are in each tool's description; this is when to reach for which.
 - **Bigger logic:** `run_designer_script` (script on disk, preferred for anything long) or
   `execute_designer_code`; `cancel_designer_job` aborts.
 - **Output:** `save_package`; `export_outputs` (straight from Designer, live unsaved state; same
-  as the cooked render up to 16-bit rounding, a few pixels off by <= 3/65535); `sbsar_info` +
+  as the cooked render to within a few 1/65535 steps at a few pixels: the self-test allows 8,
+  since renders computed in parallel aren't bit-identical from run to run); `sbsar_info` +
   `render_sbs` (exposed params, size, formats); `preview_maps` to look at rendered files.
 
 **Loop:** search/describe → build (script or `apply_edits`) → `describe_graph` + `preview_node`
@@ -135,7 +136,9 @@ Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `-c COD
   gives an atomic `bitmap` node (out `unique_filter_output`, param `bitmapresourcepath` =
   `pkg:///<resource id>`). The `EmbedMethod` docstrings in `sdresource.py` are shifted by one:
   `Linked` references the original file, `CopiedAndLinked` copies it into `<package>.resources/`
-  (prefixed `XXXXXX-`; in an OS temp folder until the package is first saved, then moved), and
+  (prefixed `XXXXXX-`; before the package's first save, into
+  `<OS temp>/Adobe/Adobe Substance 3D Designer/`, moved on saving; copies there stay after an
+  unsaved package closes, and a later copy of a taken name gets `1-`, `2-`... in front), and
   `BinaryEmbedded` raises `NotSupported`. The node's `$outputsize` is the image's own size (log2).
 - Output nodes: annotation `usages` = `SDValueArray` of
   `SDValueUsage.sNew(SDUsage.sNew('baseColor', 'RGBA', 'sRGB'))`; annotations `identifier` /
@@ -151,6 +154,10 @@ Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `-c COD
   parameter (`node.newPropertyGraph(prop, 'SDSBSFunctionGraph')`) whose output node is
   `sbs::function::get_<type>` with `__constant__` = the input id (`get_float1..4`,
   `get_integer1..4`, `get_bool`, `get_string`). Use the parameter's own type; enums → int.
+  Adding a function graph to a parameter resets its stored value to the default; setting the
+  value deletes an empty function graph (measured with `set_params`; not checked for a graph with
+  nodes). An empty function graph drives nothing: the output follows the stored value (the tools
+  treat such a parameter as not driven).
 - Graph size is log2 (`$outputsize` 11 = 2048), set with
   `graph.setInputPropertyValueFromId('$outputsize', SDValueInt2.sNew(int2(11, 11)))`.
   Generators inherit the graph size; filters inherit from their input. A node's `$format` /
@@ -203,8 +210,17 @@ save, edit and reload it in a single call (the example script does, for its port
 - `getQtForPythonUIMgr().getMainWindow()` is a **hidden** QMainWindow; closing it does nothing.
   The window the user sees is a top-level `QStackedWidget` ("Adobe Substance 3D Designer");
   closing the visible top-level widgets quits Designer normally. If a window refuses to close,
-  Qt 6's `QApplication.quit()` gives up too; `exit(0)` stops the event loops regardless
-  (`quit_designer`'s fallback after 5 s). A modal dialog doesn't stop a programmatic close.
+  Qt 6's `QApplication.quit()` gives up too. `QApplication.exit(0)` stops the event loops, but
+  Designer's teardown then races its own background threads: twice Adobe's licence check
+  (`Alg::BinaryHardeningService`, on a `QtConcurrent` thread) crashed reading a destroyed
+  profile, and the process hung for over 30 s. So `quit_designer`'s fallback after 5 s is
+  `os._exit(0)`: no teardown, no race (Designer doesn't save its window layout then). A window that
+  refuses to close is forced at 5 s. Once every window has closed, or while a close handler is still
+  running, the shutdown is left to finish; a window still visible about 35 s after the quit (a stuck
+  handler) is forced then. Designer quits once its main window has closed, even with another
+  top-level window showing (measured: a window shown during the close; gone in 2 s). (`aboutToQuit` can't serve as the
+  signal: its slots run in connection order, after any connected earlier.) A modal
+  dialog doesn't stop a programmatic close. Crash dumps: Designer's `Sentry-Crashpad/completed`.
 - That stack has two pages: the main window and the **Home screen** (current after a fresh
   start). While Home shows, every dock reports `isVisible()` False and graphs open behind it.
   Leave it with Home's own "Close home screen" button (`close_btn`); keep the stack and the page
@@ -214,8 +230,9 @@ save, edit and reload it in a single call (the example script does, for its port
   `menu.aboutToShow` first).
 - Screenshots: `QWidget.grab()` on Designer's widgets only. **Never use `QScreen.grabWindow`**,
   not even with Designer's own window id: on macOS both copy the screen area, so they capture
-  whatever covers Designer (the user's other apps). The GPU-drawn 3D view is black under widget
-  capture, so `3d` uses the 3D view's own **Camera > Copy Render to Clipboard** and restores the
+  whatever covers Designer (the user's other apps). Widget capture can't see the GPU-drawn 3D
+  view: a grab of its viewport is leftover content (black or grey blocks, varying between calls),
+  so `3d` uses the 3D view's own **Camera > Copy Render to Clipboard** and restores the
   user's clipboard in a `finally`. Never use "Save Render...": its modal file dialog blocks the
   bridge.
 - Dock titles change with content. Find panels by object name: `areaA_` explorer, `areaB_`
@@ -253,8 +270,10 @@ save, edit and reload it in a single call (the example script does, for its port
   on a .sbsar says so (it reads the archive's .xml with the system `tar`).
 - Pixel precision: grayscale 16-bit PNGs load in PIL as `I;16` (normalise by 65535), but PIL
   loads 16-bit **RGBA** PNGs as 8-bit. For exact values use `node_stats`, which reads the raw
-  buffer: RGBA or single-channel (`LUM*`), little-endian, uint8 / uint16 / float16 / float32 per
-  `getPixelFormat()`, row stride `getRowPitch()`.
+  buffer: little-endian, uint8 / uint16 / float16 / float32 per `getPixelFormat()`, row stride
+  `getRowPitch()`. Outputs seen so far are `RGBA*` or `LUM*`: even an imported RGB JPG or
+  grey+alpha PNG computes as `RGBA8`. The other `SBSPixelFormat` layouts (`RGB*`, `BGR8`,
+  `BGRA8`, `LUMALPHA*`) are decoded too, untested against Designer.
 - Verify orientation and conventions numerically (sample known pixels), not just visually.
 
 ## Example
@@ -265,8 +284,12 @@ roughness, metallic, height and AO. A good template for band and tile helpers, t
 parameter setting, and rebuild-safe package handling, and for a generator that leaves a readable
 graph: nodes grouped into sections as they are built, laid out by data flow inside each section,
 one titled frame per section (its description carries the notes), portals for long links
-between sections, and an overridable size (2048 by default). Re-running it builds a fresh graph,
-so edits made afterwards are lost; change the script instead. The self-test
+between sections, and an overridable size (2048 by default). Re-running it closes the previous
+build (the package at `OUT_SBS`) and builds a fresh graph, so edits made afterwards are lost;
+change the script instead. It refuses while that build has unsaved changes, and leaves other
+packages with a graph of the same name open (a copy saved elsewhere, an unsaved one). Re-running
+with the previous build open in an editor tab (an unload and a reload in one call) caused no
+crash in five tries, and the self-test's re-runs do it too. The self-test
 builds a copy with its `OUT_SBS = ...` and `GRAPH_ID = ...` lines rewritten, so keep each of
 those assignments on one line.
 
@@ -279,8 +302,28 @@ has been called in the session (unit tests check both).
 
 **Every new feature or fix comes with a test, in the same change.** A tool, a parameter or a
 documented behaviour gets a check in the live self-test (`tests/test_all_tools.py`, against the
-real Designer); pure-Python logic gets a unit test in `tests/unit`. A bug fix gets a test that
-fails without the fix. A claim in these docs without a test is a guess: test it or remove it.
+real Designer); pure-Python logic gets a unit test in `tests/unit`. A claim in these docs
+without a test is a guess: test it or remove it.
+
+**Fix issues test first (TDD).** Reproduce the issue with a test and watch it fail; then fix
+the code until the test passes. If the test passes before any fix, the issue isn't real (or
+the test doesn't reproduce it): say so rather than "fixing" it. For anything that depends on
+Designer, reproduce it in the live self-test too, since a unit test may take a path Designer
+never does. Two review findings were disproved this way: an abort raised again during cleanup
+(Python unsets a trace function that raises) and a job starting inside the running one (Qt
+doesn't re-fire a timer whose slot is running; only a direct call in a unit test did).
+
+**Reviews go in REVIEW.md** (in the repo root, committed with the changes it records). Two skills:
+`project-code-review` (`.claude/skills/project-code-review/`) for reviewing, whose `TEMPLATE.md` is the
+format, and `address-review` (`.claude/skills/address-review/`) for fixing or answering findings
+test first and checking them off.
+The rules:
+- Five sections by severity, from high to low: High, Medium-high, Medium, Low-medium, Low.
+- Each finding is one entry starting with a checkbox: unchecked while open, checked once it is
+  fixed or answered (not a bug, not reproduced, won't fix), with a resolution line giving the
+  commit and the evidence.
+- A new review **appends** its findings to the sections they belong in, plus an entry in the
+  review log; it never replaces or rewrites what is already there.
 The unit tests enforce part of this: they fail when a tool, a tool parameter or an `apply_edits`
 op is never exercised by the self-test, or a tool is missing from README's Tools table.
 
@@ -309,6 +352,10 @@ it; fix or delete notes that turn out to be wrong rather than adding a contradic
 Open work lives in [ROADMAP.md](ROADMAP.md): check it before proposing improvements and add
 new ideas there.
 
+- **Fresh clone, or a deleted `mcp_server/venv`:** run `python3 install.py` (Windows:
+  `py -3 install.py`) before anything else; without the venv the server can't start, and the
+  `.mcp.json` command says so in `/mcp`. Then the user reconnects `/mcp`. `designer_status` shows
+  which Python and library versions the server runs on.
 - **How changes reach Designer:** `server.py` and `designer_helpers.py` changes take effect when
   the MCP server restarts (helpers are re-sent with every call; the user reconnects in `/mcp`,
   or test with a fresh MCP client such as the self-test). **Plugin** changes must be copied into

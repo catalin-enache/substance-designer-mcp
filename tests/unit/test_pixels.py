@@ -64,3 +64,22 @@ def test_seam_vertical_axis():
 
 def test_seam_flat_image():
     assert '(ratio 0.00)' in _seam(np.zeros((8, 8, 1)), 'horizontal')
+
+
+# REVIEW.md SRV-8: Designer's SBSPixelFormat also has RGB*, BGR8, BGRA8 and LUMALPHA*
+@pytest.mark.parametrize('fmt, dtype, scale, channels, names, order', [
+    ('RGB8', np.uint8, 255, 3, 'RGB', [0, 1, 2]), ('RGB16', np.uint16, 65535, 3, 'RGB', [0, 1, 2]),
+    ('RGB16F', np.float16, 1, 3, 'RGB', [0, 1, 2]), ('RGB32F', np.float32, 1, 3, 'RGB', [0, 1, 2]),
+    ('BGR8', np.uint8, 255, 3, 'RGB', [2, 1, 0]), ('BGRA8', np.uint8, 255, 4, 'RGBA', [2, 1, 0, 3]),
+    ('LUMALPHA8', np.uint8, 255, 2, 'LA', [0, 1]), ('LUMALPHA16', np.uint16, 65535, 2, 'LA', [0, 1]),
+    ('LUMALPHA16F', np.float16, 1, 2, 'LA', [0, 1]), ('LUMALPHA32F', np.float32, 1, 2, 'LA', [0, 1])])
+def test_decode_other_channel_layouts(fmt, dtype, scale, channels, names, order):
+    w, h = 3, 2
+    stored = (np.arange(w * h * channels) * (scale // 20 if scale > 1 else 0.04)).astype(dtype)
+    raw, pitch = _buffer(stored, dtype, w, h, channels, padding=8)
+    bpp = channels * np.dtype(dtype).itemsize
+    data, layout = server._decode_pixels(raw, {'format': fmt, 'width': w, 'height': h, 'pitch': pitch, 'bpp': bpp})
+    assert data.shape == (h, w, channels) and server._channel_names(data, layout) == names
+    expected = stored.astype(np.float64).reshape(h, w, channels)[:, :, order] / scale
+    np.testing.assert_allclose(data, expected, rtol=1e-6)
+    assert layout == ('L' if names == 'LA' else 'RGBA')

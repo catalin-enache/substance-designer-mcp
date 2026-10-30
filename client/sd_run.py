@@ -16,7 +16,7 @@ import sys
 
 PORT = int(os.environ.get('SD_BRIDGE_PORT', '9877'))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from project_constants import TOKEN_FILE  # noqa: E402  (the plugin's name lives there)
+from project_constants import QUEUE_WAIT, TOKEN_FILE  # noqa: E402  (the plugin's name lives there)
 
 
 def send(request, wait):
@@ -67,7 +67,14 @@ def main():
         request = {'code': code, 'path': path}
         if args.timeout:
             request['timeout'] = args.timeout
-        reply = send(request, wait=(args.timeout or 900) + 60)
+        # wait for the plugin's queue and the script itself, or a job we gave up on could start later
+        wait = QUEUE_WAIT + (args.timeout or 900) + 60
+        try:
+            reply = send(request, wait=wait)
+        except (socket.timeout, TimeoutError):
+            sys.stderr.write('No reply from Designer after %ds; the script may still be running '
+                             '(sd_run.py --status, --cancel).\n' % wait)
+            sys.exit(1)
     for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(errors='replace')   # a cp1252 console can't print everything
     sys.stdout.write(reply['output'])

@@ -96,7 +96,26 @@ def test_every_tool_parameter_is_exercised_live():
     assert not missing, 'parameters never passed by tests/test_all_tools.py: %s' % missing
 
 
+def _dispatched_ops():
+    """apply_edits op -> the op fields its branch reads, from the helpers' dispatcher (the code
+    that runs), not from the docstring (REVIEW.md TST-6)."""
+    body = _read('mcp_server', 'designer_helpers.py').split('def apply_edits(', 1)[1].split('\ndef ', 1)[0]
+    branches = re.split(r"\n\s+(?:el)?if kind == '(\w+)':", body.split('else:\n                raise', 1)[0])
+    return {kind: {a or b for a, b in re.findall(r"op(?:\['(\w+)'\]|\.get\('(\w+)')", code)}
+            for kind, code in zip(branches[1::2], branches[2::2])}
+
+
 def test_every_apply_edits_op_is_exercised_live():
     ops = set(re.findall(r"\{'op': '(\w+)'", _read('tests', 'test_all_tools.py')))
-    documented = set(re.findall(r'\{"op": "(\w+)"', _read('mcp_server', 'server.py')))
-    assert documented and documented <= ops, 'apply_edits ops never run live: %s' % sorted(documented - ops)
+    dispatched = set(_dispatched_ops())
+    assert dispatched and dispatched <= ops, 'apply_edits ops never run live: %s' % sorted(dispatched - ops)
+
+
+def test_apply_edits_docstring_lists_every_op_and_field():
+    text = _read('mcp_server', 'server.py').split('def apply_edits(', 1)[1].split('Refs let', 1)[0]
+    doc = {m.group(1): set(re.findall(r'"(\w+)"\??:', m.group(0))) - {'op'}
+           for m in re.finditer(r'\{"op": "(\w+)"[^{]*', text)}
+    for kind, fields in _dispatched_ops().items():
+        assert kind in doc, 'apply_edits op %r is not in the docstring' % kind
+        assert fields <= doc[kind], 'apply_edits %r: fields %s not in the docstring' % (kind, sorted(fields - doc[kind]))
+

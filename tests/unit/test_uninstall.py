@@ -153,3 +153,85 @@ def test_snapshot_default_matches_the_server():
     with open(SERVER, encoding='utf-8') as f:
         assert ("SNAPSHOT_DIR = os.environ.get('SD_SNAPSHOT_DIR') or os.path.join(os.path.expanduser('~'), "
                 "'.sd_mcp', 'snapshots')") in f.read()
+
+
+def test_one_failure_does_not_stop_the_rest(env, monkeypatch, capsys):
+    # REVIEW.md INS-2: on Windows a running server locks files; one item failing must not leave
+    # the rest undone or end in a traceback
+    real_rmtree = shutil.rmtree
+    locked = str(env.plugins / PLUGIN)
+
+    def rmtree(path, *a, **kw):
+        if str(path) == locked:
+            raise PermissionError(13, 'Access is denied', locked)
+        return real_rmtree(path, *a, **kw)
+    monkeypatch.setattr(env.module.shutil, 'rmtree', rmtree)
+    run(env, monkeypatch, '--yes')
+    out = capsys.readouterr().out
+    assert (env.plugins / PLUGIN).exists()
+    assert not env.token.exists() and not env.venv.exists() and not (env.skills / 'substance-designer').exists()
+    assert 'Could not remove Designer plugin' in out and 'Access is denied' in out
+    assert 'Some items were not removed' in out
+
+
+def test_warns_when_run_with_the_venvs_own_python(env, monkeypatch, capsys):
+    monkeypatch.setattr(env.module.sys, 'prefix', str(env.venv))
+    run(env, monkeypatch, '--dry-run')
+    assert 'python3 uninstall.py' in capsys.readouterr().out
+
+
+def test_someone_elses_sd_bridge_is_never_reported_as_removed(env, monkeypatch, capsys):
+    # REVIEW.md INS-6: it was listed under "Will remove" and printed as "Removed" although
+    # remove_old_plugin left it alone
+    other = env.plugins / 'sd_bridge'
+    other.mkdir()
+    (other / 'pluginInfo.json').write_text('{"name": "Some other bridge"}')
+    run(env, monkeypatch, '--yes')
+    out = capsys.readouterr().out
+    assert other.exists()
+    removed = [l for l in out.splitlines() if l.startswith('Removed ')]
+    assert not any(str(other) in l for l in removed), removed
+    assert str(other) in out.split('Not touched:')[1].split('Removed')[0]
+
+
+def test_remove_snapshots_deletes_only_the_snapshots(env, monkeypatch):
+    # REVIEW.md INS-7: SD_SNAPSHOT_DIR may point at a shared folder; only what the server wrote goes
+    snap = env.snapshots / 'graph' / '20261029-170000-before_tweak.sbs'
+    snap.write_text('snapshot')
+    mine = env.snapshots / 'notes.txt'
+    mine.write_text('not a snapshot')
+    run(env, monkeypatch, '--yes', '--remove-snapshots')
+    assert not snap.exists() and mine.exists()
+
+
+def test_a_kept_snapshot_folder_is_reported_as_kept(env, monkeypatch, capsys):
+    # REVIEW.md INS-15: other files keep the folder, but the summary said it was removed
+    (env.snapshots / 'notes.txt').write_text('not a snapshot')
+    capsys.readouterr()
+    run(env, monkeypatch, '--yes', '--remove-snapshots')
+    line = next(l for l in capsys.readouterr().out.splitlines() if 'graph snapshots' in l and 'Removed' in l)
+    assert 'folder kept' in line, line
+
+
+def test_removes_leftover_copies_of_the_plugin(env, monkeypatch):
+    # REVIEW.md INS-16: an interrupted install can leave <plugin>.new or <plugin>.old (each a full
+    # copy of ours); someone else's folder with such a name is left alone
+    import shutil
+    ours = env.plugins / PLUGIN
+    for suffix in ('.new', '.old'):
+        shutil.copytree(ours, env.plugins / (PLUGIN + suffix))
+    foreign = env.plugins / (PLUGIN + '.bak')
+    foreign.mkdir()
+    run(env, monkeypatch, '--yes')
+    assert not (env.plugins / (PLUGIN + '.new')).exists() and not (env.plugins / (PLUGIN + '.old')).exists()
+    assert foreign.exists()
+
+
+def test_reports_a_leftover_copy_that_isnt_ours(env, monkeypatch, capsys):
+    # REVIEW.md INS-20: a partly deleted <plugin>.old (no pluginInfo.json any more) was skipped silently
+    partial = env.plugins / (PLUGIN + '.old')
+    partial.mkdir()
+    (partial / 'stuck.dll').write_text('locked')
+    run(env, monkeypatch, '--yes')
+    out = capsys.readouterr().out
+    assert partial.exists() and str(partial) in out and 'left as it is' in out

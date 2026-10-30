@@ -3,7 +3,10 @@
     "substance-designer": {
       "type": "stdio",
       "command": "sh",
-      "args": ["-c", "d=$CLAUDE_PROJECT_DIR; [ -n \"$d\" ] || d=$(git rev-parse --show-toplevel 2>/dev/null || pwd); cd \"$d\" && exec mcp_server/venv/bin/python mcp_server/server.py"]
+      "args": [
+        "-c",
+        "has() { [ -x \"$1/mcp_server/venv/bin/python\" ] || [ -x \"$1/mcp_server/venv/Scripts/python.exe\" ]; }; d=$CLAUDE_PROJECT_DIR; has \"$d\" || d=$(git rev-parse --show-toplevel 2>/dev/null || pwd); cd \"$d\" || exit 1; p=mcp_server/venv/bin/python; [ -x \"$p\" ] || p=mcp_server/venv/Scripts/python.exe; [ -x \"$p\" ] || { echo \"substance-designer: no Python environment in $d/mcp_server/venv; run python3 install.py (Windows: py -3 install.py) in the repository first\" >&2; exit 1; }; exec \"$p\" mcp_server/server.py"
+      ]
     }
   }
 }

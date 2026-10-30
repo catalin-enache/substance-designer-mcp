@@ -11,6 +11,7 @@ uninstall.py undoes all of it.
 import argparse
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -39,8 +40,19 @@ def default_skills_dir():
     return os.path.join(claude_config_dir(), 'skills')
 
 
+def register_args(py, server):
+    return ['claude', 'mcp', 'add', '--scope', 'local', SERVER_NAME, '--', py, server]
+
+
 def register_command(py, server):
-    return subprocess.list2cmdline(['claude', 'mcp', 'add', '--scope', 'local', SERVER_NAME, '--', py, server])
+    """For the user's own terminal (cmd/PowerShell quoting on Windows)."""
+    return subprocess.list2cmdline(register_args(py, server))
+
+
+def shell_command(args):
+    """For Claude Code's Bash tool, a POSIX shell on every platform (Git Bash on Windows): quoted,
+    with forward slashes, since that shell drops unquoted backslashes."""
+    return shlex.join(a.replace('\\', '/') if sys.platform == 'win32' else a for a in args)
 
 
 def skill_text(py, server):
@@ -75,9 +87,10 @@ Otherwise:
    Designer tool). `launch_designer` starts Designer if it isn't running.
 
 To disable it here again: `claude mcp remove %(name)s -s local`. To remove everything (plugin,
-token, this skill, every folder's registration): `%(python)s %(uninstall)s`.
-''' % {'name': SERVER_NAME, 'marker': SKILL_MARKER, 'repo': HERE, 'cmd': register_command(py, server),
-       'python': 'py -3' if sys.platform == 'win32' else 'python3', 'uninstall': os.path.join(HERE, 'uninstall.py')}
+token, this skill, every folder's registration): `%(uninstall)s`.
+''' % {'name': SERVER_NAME, 'marker': SKILL_MARKER, 'repo': HERE, 'cmd': shell_command(register_args(py, server)),
+       'uninstall': shell_command((['py', '-3'] if sys.platform == 'win32' else ['python3'])
+                                  + [os.path.join(HERE, 'uninstall.py')])}
 
 
 def is_our_skill(folder):
@@ -113,18 +126,74 @@ def venv_python(venv):
     return os.path.join(venv, 'bin', 'python')
 
 
+def is_our_plugin(folder):
+    """True when an installed plugin folder is this project's: its pluginInfo.json names the same
+    plugin as the repo's (the installer and the uninstaller both decide by this)."""
+    try:
+        with open(os.path.join(folder, 'pluginInfo.json'), encoding='utf-8') as f, \
+                open(os.path.join(PLUGIN_DIR, 'pluginInfo.json'), encoding='utf-8') as g:
+            return json.load(f).get('name') == json.load(g).get('name')
+    except (OSError, ValueError):
+        return False
+
+
+def install_plugin(src, dst):
+    """Copy the plugin to dst, replacing this project's earlier copy (a fresh copy drops files an
+    older version had). Copied beside it first and swapped in, so a failing copy leaves the
+    installed plugin as it was; a folder of the same name that isn't ours is refused."""
+    if os.path.isdir(dst) and not is_our_plugin(dst):
+        sys.exit('%s exists but is not this project\'s plugin (its pluginInfo.json differs); move it '
+                 'away and run the installer again' % dst)
+    new, old = dst + '.new', dst + '.old'
+    for leftover in (new, old):
+        if os.path.isdir(leftover):
+            if not is_our_plugin(leftover):
+                sys.exit('%s exists but is not this project\'s (or is a partly deleted copy); move it away '
+                         'and run the installer again' % leftover)
+            shutil.rmtree(leftover)
+    try:
+        shutil.copytree(src, new, ignore=shutil.ignore_patterns('__pycache__'))
+    except BaseException:
+        shutil.rmtree(new, ignore_errors=True)
+        raise
+    moved = False
+    try:
+        if os.path.isdir(dst):
+            os.rename(dst, old)
+            moved = True
+        os.rename(new, dst)
+    except BaseException:
+        # roll back, so a failed swap (Windows: a handle open in the folder) leaves the installed
+        # plugin where it was and no second copy beside it (REVIEW.md INS-16, INS-19)
+        try:
+            if moved and not os.path.isdir(dst):
+                os.rename(old, dst)
+        except OSError:
+            print('Note: the previous plugin is in %s; rename it back to %s by hand' % (old, dst))
+        finally:
+            shutil.rmtree(new, ignore_errors=True)
+        raise
+    shutil.rmtree(old, ignore_errors=True)
+    if os.path.isdir(old):
+        print('Note: could not remove %s (the previous plugin); delete it by hand' % old)
+
+
+def is_old_plugin(folder):
+    """True if <folder> is this project's plugin from before the rename (its pluginInfo.json name)."""
+    try:
+        with open(os.path.join(folder, 'pluginInfo.json'), encoding='utf-8') as f:
+            return json.load(f).get('name') == OLD_PLUGIN_NAME
+    except (OSError, ValueError):
+        return False
+
+
 def remove_old_plugin(plugins_dir):
     """Delete <plugins_dir>/sd_bridge and the old token, but only if that folder is this
-    project's plugin (its pluginInfo.json name); anything else called sd_bridge is left alone."""
+    project's plugin; anything else called sd_bridge is left alone."""
     old = os.path.join(plugins_dir, OLD_PLUGIN)
     if not os.path.isdir(old):
         return
-    try:
-        with open(os.path.join(old, 'pluginInfo.json'), encoding='utf-8') as f:
-            ours = json.load(f).get('name') == OLD_PLUGIN_NAME
-    except (OSError, ValueError):
-        ours = False
-    if not ours:
+    if not is_old_plugin(old):
         print('      Note: %s exists but is not this project\'s old plugin; left as it is.' % old)
         return
     shutil.rmtree(old)
@@ -149,7 +218,7 @@ def main():
     src = PLUGIN_DIR
     dst = os.path.join(args.plugins_dir, PLUGIN)
     os.makedirs(args.plugins_dir, exist_ok=True)
-    shutil.copytree(src, dst, dirs_exist_ok=True, ignore=shutil.ignore_patterns('__pycache__'))
+    install_plugin(src, dst)
     print('[1/4] Plugin installed to', dst)
     remove_old_plugin(args.plugins_dir)
 
@@ -161,7 +230,11 @@ def main():
     subprocess.check_call([py, '-m', 'pip', 'install', '-q', '--upgrade', 'pip'])
     subprocess.check_call([py, '-m', 'pip', 'install', '-q', '-r',
                            os.path.join(HERE, 'mcp_server', 'requirements.txt')])
-    print('[2/4] MCP server environment ready:', venv)
+    try:   # which Python the server runs on (the one that ran this installer, when it made the venv)
+        version = subprocess.check_output([py, '--version'], text=True).strip()
+    except (OSError, subprocess.CalledProcessError):
+        version = 'Python version unknown'
+    print('[2/4] MCP server environment ready (%s): %s' % (version, venv))
 
     # 3. Registration: never global. This repo's .mcp.json registers the server for this folder
     # (Claude Code asks once to approve it); other folders opt in one by one.

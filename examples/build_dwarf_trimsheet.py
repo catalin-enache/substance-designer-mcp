@@ -88,14 +88,30 @@ class Builder:
         self.app = ctx.getSDApplication()
         self.pkg_mgr = self.app.getPackageMgr()
         self.lib_dir = os.path.join(self.app.getPath(SDApplicationPath.DefaultResourcesDir), 'packages')
-        # Close earlier builds, saved or not, so re-running doesn't pile up packages
+        # Close the previous build (the package saved at OUT_SBS) so re-running doesn't pile up
+        # packages; never discard edits: refuse if it has unsaved changes, and leave any other
+        # package with a graph of this name (a copy saved elsewhere, an unsaved one) open
+        previous = []
         for p in list(self.pkg_mgr.getUserPackages()):
-            if any(r.getIdentifier() == GRAPH_ID for r in p.getChildrenResources(False)):
-                self.pkg_mgr.unloadUserPackage(p)
+            if not any(r.getIdentifier() == GRAPH_ID for r in p.getChildrenResources(False)):
+                continue
+            path = p.getFilePath() or ''
+            if not path or os.path.normcase(os.path.abspath(path)) != os.path.normcase(os.path.abspath(OUT_SBS)):
+                print('Note: left %s open; it also has a graph named %s' % (path or 'an unsaved package', GRAPH_ID))
+                continue
+            if p.isModified():
+                raise RuntimeError('%s has unsaved changes; save or close it before rebuilding' % OUT_SBS)
+            previous.append(p)
+        for p in previous:
+            self.pkg_mgr.unloadUserPackage(p)
         self.pkg = self.pkg_mgr.newUserPackage()
-        self.graph = SDSBSCompGraph.sNew(self.pkg)
-        self.graph.setIdentifier(GRAPH_ID)
-        self._set_graph_size()
+        try:
+            self.graph = SDSBSCompGraph.sNew(self.pkg)
+            self.graph.setIdentifier(GRAPH_ID)
+            self._set_graph_size()
+        except BaseException:             # don't leave the new, unsaved package behind (REVIEW.md INS-17)
+            self.pkg_mgr.unloadUserPackage(self.pkg)
+            raise
         self._lib_cache = {}
         self.sections = []      # [{'title', 'column', 'color', 'description', 'nodes'}] in build order
         self.warnings = []
@@ -392,8 +408,22 @@ def save_with_portals(b, portals):
 
 
 def build(ctx):
+    """Build the trim sheet. If the build fails before the package was first saved, its unsaved
+    package is closed, so failed runs don't leave packages with the graph's name behind."""
     b = Builder(ctx)
+    try:
+        build_into(b)
+    except BaseException:                 # also the bridge's abort, which is raised on
+        try:
+            if not b.pkg.getFilePath():
+                b.pkg_mgr.unloadUserPackage(b.pkg)
+                print('Build failed; closed its unsaved package.')
+        except ERRORS:
+            pass                          # already saved and reloaded by save_with_portals
+        raise
 
+
+def build_into(b):
     def strip(title, desc, color=STONE_FRAME):
         # two columns of strips, A-F and G-K, so the graph isn't one very tall column
         b.section(title, 1 if title < 'G' else 2, color, desc)

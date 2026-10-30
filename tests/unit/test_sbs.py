@@ -133,16 +133,26 @@ def test_diff_sees_a_link_moving_to_another_output(tmp_path, sbs_path):
 
 def test_select_links_ignores_function_graph_links(sbs_path):
     g = server._xml_graph(ET.parse(sbs_path).getroot(), 'alpha', sbs_path)
-    chosen, total = server._select_links(g, 'portal', longer_than=1)
+    chosen, _, total = server._select_links(g, 'portal', longer_than=1)
     assert total == 2                                    # source<-200 and inputNodeOutput<-201, not a<-1
     assert [c.find('identifier').get('v') for c in chosen] == ['source']   # the other is a portal already
-    chosen, _ = server._select_links(g, 'wire', fanout_at_least=1)
+    chosen, _, _ = server._select_links(g, 'wire', fanout_at_least=1)
     assert [c.find('identifier').get('v') for c in chosen] == ['inputNodeOutput']
-    chosen, _ = server._select_links(g, 'portal', links=[['202', 'inputNodeOutput']])
+    chosen, _, _ = server._select_links(g, 'portal', links=[['202', 'inputNodeOutput']])
     assert chosen == []                                  # already a portal: nothing to change
-    chosen, _ = server._select_links(g, 'portal', from_nodes=['200'])
+    chosen, _, _ = server._select_links(g, 'portal', from_nodes=['200'])
     assert [c.find('connRef').get('v') for c in chosen] == ['200']
 
 
 def test_default_parent_sizes(sbs_path):
     assert server._default_parent_sizes(sbs_path) == {'alpha': 9, 'beta': 11}
+
+
+def test_select_links_counts_selected_and_changed_apart(sbs_path):
+    # REVIEW.md SRV-7: the messages said "N of N selected" (or "0 of 0"): the selection count
+    # was lost once links already in the wanted mode were filtered out
+    g = server._xml_graph(ET.parse(sbs_path).getroot(), 'alpha', sbs_path)
+    chosen, selected, total = server._select_links(g, 'portal', longer_than=1)
+    assert (len(chosen), selected, total) == (1, 2, 2)   # both selected, one is a portal already
+    chosen, selected, total = server._select_links(g, 'portal', links=[['202', 'inputNodeOutput']])
+    assert (len(chosen), selected) == (0, 1)

@@ -1,6 +1,7 @@
 """Server fixes from the code review: regions, snapshots, cooking, the Windows process check,
 connection errors, 16-bit previews, render_sbs size notes."""
 import os
+import re
 import socket
 import threading
 
@@ -173,3 +174,162 @@ def test_reload_is_split_with_pauses(monkeypatch):
     monkeypatch.setattr(server.time, 'sleep', lambda s: events.append('sleep %.1f' % s))
     server._reload_package_file('/x/pkg.sbs')
     assert events == ['unload_package_file', 'sleep 0.5', 'load_package_file', 'sleep 0.5']
+
+
+def test_snapshot_latest_is_the_live_graph_after_set_link_display(monkeypatch, tmp_path):
+    # REVIEW.md SRV-1: set_link_display writes '<stamp>-before_portals.sbs' (the live graph) and,
+    # usually in the same second, '<stamp>-before_portals_file_on_disk.sbs' (a copy2 of the older
+    # saved file). "latest" must be the live graph, not the copy that sorts last by name.
+    import shutil
+    monkeypatch.setattr(server, 'SNAPSHOT_DIR', str(tmp_path))
+    monkeypatch.setattr(server.time, 'strftime', lambda fmt: '20261029-170000')
+    saved = tmp_path / 'saved.sbs'
+    saved.write_text('old saved file')
+    os.utime(saved, (1, 1))                                   # saved long before
+    live = server._new_snapshot_path('g', 'before portals')
+    with open(live, 'w') as f:
+        f.write('live graph')
+    shutil.copy2(str(saved), server._new_snapshot_path('g', 'before portals (file on disk)'))
+    assert server._snapshots('g')[-1] == live
+
+
+def test_sweep_reports_a_value_that_failed(monkeypatch):
+    # REVIEW.md SRV-2: tiles for the first values, then an error, then "restored" from the finally
+    def fake_bridge(code, path=None, timeout=None):
+        out_dir = re.search(r"(/[^'\\]*sd_sweep_\w+)", code).group(1)
+        with open(os.path.join(out_dir, '0.raw'), 'wb') as f:
+            f.write(bytes([128]))
+        return ('SWEEP={"index": 0, "value": 0.1, "width": 1, "height": 1, "pitch": 1, "bpp": 1, "format": "LUM8"}\n'
+                'restored n.p to 0.5\n--- ERROR ---\nTraceback ...\nRuntimeError: bad value for p')
+    monkeypatch.setattr(server, '_bridge', fake_bridge)
+    text = server.sweep_param('n', 'p', [0.1, 'bogus', 0.9])[0]
+    assert 'RuntimeError: bad value for p' in text and 'stopped' in text
+
+
+def test_quick_edits_have_time_for_a_big_batch(monkeypatch):
+    # REVIEW.md SRV-5: one 60 s limit for a whole apply_edits batch (or an import, a layout)
+    seen = []
+    monkeypatch.setattr(server, '_bridge', lambda code, path=None, timeout=None: seen.append(timeout) or 'ok')
+    server.apply_edits([{'op': 'move', 'node_id': '1', 'position': [0, 0]}] * 50, graph='g')
+    assert seen and seen[0] >= 300
+
+
+def test_designer_status_reports_the_servers_versions(monkeypatch):
+    # REVIEW.md SRV-13: the server's own Python and library versions
+    import platform
+    monkeypatch.setattr(server, '_send', lambda request, wait: {'ok': True, 'output': 'bridge idle'})
+    monkeypatch.setattr(server, '_bridge', lambda code, path=None, timeout=None: 'Designer 16.0.7')
+    text = server.designer_status()
+    assert 'MCP server: Python %s' % platform.python_version() in text
+    assert 'mcp ' in text and 'pillow ' in text and 'numpy ' in text
+
+
+def test_sbsar_info_reports_a_failed_sbsrender(monkeypatch):
+    # REVIEW.md SRV-6: a failing `sbsrender info` came back as a normal result
+    import contextlib
+    import subprocess
+    monkeypatch.setattr(server, 'SBSCOOKER', 'sbscooker')
+    monkeypatch.setattr(server, 'SBSRENDER', 'sbsrender')
+    monkeypatch.setattr(server, '_cooked', lambda path: contextlib.nullcontext('/tmp/x.sbsar'))
+    monkeypatch.setattr(server, '_run_tool', lambda cmd, timeout: subprocess.CompletedProcess(
+        cmd, 1, '', '[ERROR] Unable to open /tmp/x.sbsar'))
+    with pytest.raises(server.ToolError) as error:
+        server.sbsar_info('/tmp/x.sbs')
+    assert 'Unable to open' in str(error.value)
+
+
+def test_compare_ignores_transparent_pixels_of_a_grayscale_alpha_reference(tmp_path):
+    # REVIEW.md SRV-9: an 'LA' reference was converted to 'L', so its transparent pixels counted
+    a = np.zeros((4, 8, 2), np.uint8)
+    a[:, :4] = (128, 255)                      # left half opaque mid-grey
+    a[:, 4:] = (0, 0)                          # right half transparent black
+    Image.fromarray(a, 'LA').save(tmp_path / 'la.png')
+    ref, layout = server._load_reference(str(tmp_path / 'la.png'))
+    lines, _ = server._compare_report(np.full((4, 8, 1), 128 / 255), 'L', ref, layout)
+    text = '\n'.join(lines)
+    assert 'ignoring 50.0% transparent reference pixels' in text
+    assert re.search(r'^luma .*\+0\.000', text, re.M), text
+
+
+def _sbs(tmp_path, graph_body):
+    path = tmp_path / 'p.sbs'
+    path.write_text('<?xml version="1.0" encoding="UTF-8"?><package><content><graph>'
+                    '<identifier v="g"/>%s</graph></content></package>' % graph_body)
+    return path
+
+
+def test_links_of_a_graph_without_nodes():
+    # REVIEW.md SRV-12: a graph without <compNodes> raised TypeError instead of counting 0 links
+    import xml.etree.ElementTree as ET
+    g = ET.fromstring('<graph><identifier v="g"/></graph>')
+    assert server._select_links(g, 'portal', fanout_at_least=1) == ([], 0, 0)
+
+
+@pytest.mark.parametrize('case', ['no pngs', 'unknown name', 'missing folder'])
+def test_preview_maps_explains_what_is_missing(tmp_path, case):
+    # REVIEW.md SRV-12: these raised ValueError / FileNotFoundError from PIL or os
+    if case != 'no pngs':
+        Image.new('L', (4, 4)).save(tmp_path / 'height.png')
+    folder = tmp_path / 'nowhere' if case == 'missing folder' else tmp_path
+    with pytest.raises(server.ToolError) as error:
+        server.preview_maps(str(folder), names=['roughness'] if case == 'unknown name' else None)
+    assert {'no pngs': 'no .png files', 'unknown name': "'roughness'",
+            'missing folder': 'not a folder'}[case] in str(error.value)
+
+
+def test_set_link_display_reports_success_when_the_reopen_fails(monkeypatch, tmp_path):
+    # REVIEW.md SRV-12: after the edit and reload, an ambiguous reopen was reported as a failure
+    sbs = _sbs(tmp_path, '<compNodes><compNode><uid v="1"/></compNode><compNode><uid v="2"/><connections>'
+                         '<connection><identifier v="input1"/><connRef v="1"/></connection>'
+                         '</connections></compNode></compNodes>')
+    live = tmp_path / 'live.sbs'
+    live.write_bytes(sbs.read_bytes())
+    monkeypatch.setattr(server, 'SNAPSHOT_DIR', str(tmp_path / 'snaps'))
+    monkeypatch.setattr(server, '_bridge', lambda code, path=None, timeout=None:
+                        'FILE=%s\nGRAPH=g\nOPEN=1' % sbs)
+    monkeypatch.setattr(server, 'snapshot_graph', lambda gid, label: 'saved: %s' % live)
+    monkeypatch.setattr(server, '_reload_package_file', lambda path: None)
+
+    def ambiguous(gid):
+        raise server.ToolError("2 open graphs are called 'g'")
+    monkeypatch.setattr(server, 'open_graph', ambiguous)
+    text = server.set_link_display('g', from_nodes=['1'])
+    assert '1 of 1 selected link(s) changed to portal' in text
+    assert "could not reopen g: 2 open graphs are called 'g'" in text
+    assert '<displayType v="1"' in sbs.read_text()
+
+
+def test_set_link_displays_copy_of_the_saved_file_keeps_relative_paths_working(monkeypatch, tmp_path):
+    # REVIEW.md SRV-14: the "file on disk" snapshot was a plain copy into the snapshot folder, but
+    # Designer writes bitmap and dependency paths relative to the .sbs, so they pointed nowhere
+    import xml.etree.ElementTree as ET
+    project = tmp_path / 'project'
+    (project / 'p.resources').mkdir(parents=True)
+    (project / 'p.resources' / 'XXXXXX-img.png').write_bytes(b'png')
+    (project / 'other.sbs').write_text('<package/>')
+    sbs = project / 'p.sbs'
+    sbs.write_text('<?xml version="1.0" encoding="UTF-8"?><package>'
+                   '<dependencies><dependency><filename v="other.sbs"/></dependency>'
+                   '<dependency><filename v="sbs://pattern_shape.sbs"/></dependency>'
+                   '<dependency><filename v="?himself"/></dependency></dependencies>'
+                   '<content><resource><identifier v="img"/><filepath v="p.resources/XXXXXX-img.png"/></resource>'
+                   '<graph><identifier v="g"/><compNodes><compNode><uid v="1"/></compNode><compNode><uid v="2"/>'
+                   '<connections><connection><identifier v="input1"/><connRef v="1"/></connection></connections>'
+                   '</compNode></compNodes></graph></content></package>')
+    os.utime(sbs, (1000, 1000))                                # saved long ago
+    live = tmp_path / 'live.sbs'
+    live.write_bytes(sbs.read_bytes())
+    monkeypatch.setattr(server, 'SNAPSHOT_DIR', str(tmp_path / 'snaps'))
+    monkeypatch.setattr(server, '_bridge', lambda code, path=None, timeout=None: 'FILE=%s\nGRAPH=g\nOPEN=0' % sbs)
+    monkeypatch.setattr(server, 'snapshot_graph', lambda gid, label: 'saved: %s' % live)
+    monkeypatch.setattr(server, '_reload_package_file', lambda path: None)
+    server.set_link_display('g', from_nodes=['1'])
+    copy = next(p for p in (tmp_path / 'snaps' / 'g').iterdir() if 'file_on_disk' in p.name)
+    root = ET.parse(copy).getroot()
+    paths = [e.get('v') for e in root.iter('filepath')] + [e.get('v') for e in root.iter('filename')]
+    local = [p for p in paths if '://' not in p and not p.startswith('?')]
+    missing = [p for p in local if not os.path.isfile(os.path.join(os.path.dirname(copy), p))]
+    assert len(local) == 2 and not missing, 'paths %s, missing %s' % (paths, missing)
+    assert 'sbs://pattern_shape.sbs' in paths                  # library references left alone
+    assert '?himself' in paths                                 # the package's own graphs (REVIEW.md SRV-17)
+    assert os.path.getmtime(copy) == 1000                      # still older than the live snapshot (SRV-1)

@@ -1,6 +1,9 @@
 """The guide reaches every session: short instructions (MCP clients cut long ones; Claude Code at
 4,096 characters) that point to get_guide(), which returns all of AGENTS.md."""
 import os
+import re
+
+import pytest
 
 from conftest import ROOT, server
 
@@ -48,3 +51,12 @@ def test_reminder_leaves_non_text_results_alone(monkeypatch, tmp_path):
     monkeypatch.setitem(server._session, 'guide_read', False)
     result = server.preview_maps(str(tmp_path))
     assert not isinstance(result, str) and result.data
+
+
+@pytest.mark.parametrize('fact', [r'4,096', r'\b29\b'])   # the instructions limit; the atomic node count
+def test_facts_are_stated_once_in_the_docs(fact):
+    # AGENTS.md, Keeping the docs current: each fact in one place, linked from elsewhere (REVIEW.md TST-10,
+    # TST-18)
+    count = sum(len(re.findall(fact, open(os.path.join(ROOT, name), encoding='utf-8').read()))
+                for name in ('AGENTS.md', 'README.md', 'ROADMAP.md'))
+    assert count <= 1, '%r appears %d times in AGENTS.md, README.md and ROADMAP.md' % (fact, count)

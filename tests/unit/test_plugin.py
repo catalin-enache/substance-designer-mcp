@@ -14,7 +14,7 @@ import types
 
 import pytest
 
-from conftest import server
+from conftest import ROOT, server
 from project_constants import PLUGIN_PACKAGE_DIR
 
 PLUGIN = os.path.join(PLUGIN_PACKAGE_DIR, '__init__.py')
@@ -166,6 +166,25 @@ def test_clients_never_send_the_token(monkeypatch, tmp_path):
     assert json.loads(seen['request'])['auth'] == hmac.new(b's' * 64, b'n1', hashlib.sha256).hexdigest()
 
 
+@pytest.mark.parametrize('client', ['sd_run', 'server'])
+def test_both_clients_speak_the_plugins_protocol(bridge, monkeypatch, client):
+    # README says the unit tests cover the clients' protocol: each client against the real plugin
+    # server (REVIEW.md TST-8; sd_run.py was only exercised by the live self-test)
+    plugin, _, _ = bridge
+    if client == 'sd_run':
+        monkeypatch.syspath_prepend(os.path.join(ROOT, 'client'))
+        import sd_run
+        monkeypatch.setattr(sd_run, 'TOKEN_FILE', plugin.TOKEN_FILE)
+        monkeypatch.setattr(sd_run, 'PORT', plugin.PORT)
+        send = sd_run.send
+    else:
+        monkeypatch.setattr(server, 'TOKEN_FILE', plugin.TOKEN_FILE)
+        monkeypatch.setattr(server, 'PORT', plugin.PORT)
+        send = server._send
+    assert send({'code': 'print(6 * 7)'}, 10) == {'ok': True, 'output': '42\n', 'error': ''}
+    assert send({'cmd': 'status'}, 10)['ok']
+
+
 # ---- robustness
 def test_bad_requests_get_no_details(bridge):
     plugin, _, _ = bridge
@@ -229,3 +248,198 @@ def test_cancel_drops_queued_jobs(bridge):
     t.join(5)
     assert out == 'cancel requested (running: False, queued dropped: 1)'
     assert replies[0]['error'] == 'ScriptAborted: cancelled before start'
+
+
+def test_a_job_never_starts_inside_the_running_one(plugin, monkeypatch):
+    # REVIEW.md PLG-1. In Designer the drain runs on a QTimer, and a script that lets Qt process
+    # events (screenshots, open_graph) fires that timer again: the queued job must wait.
+    import builtins
+    srv = plugin._Server()
+    seen = {}
+    box_a, box_b = {}, {}
+    done_a, done_b = threading.Event(), threading.Event()
+
+    def timer_fires_meanwhile():                   # what processEvents() does inside job A
+        srv._drain()
+        seen['b_started_inside_a'] = bool(box_b.get('started'))
+        seen['a_still_busy'] = srv.busy_since is not None
+    monkeypatch.setattr(builtins, '_timer_fires_meanwhile', timer_fires_meanwhile, raising=False)
+    srv.jobs.put(('_timer_fires_meanwhile()', None, None, box_a, done_a))
+    srv.jobs.put(("print('B ran')", None, None, box_b, done_b))
+    try:
+        srv._drain()
+        srv._drain()                               # the next tick (one job per tick, PLG-13)
+    finally:
+        srv.stop()
+    assert box_a['result']['ok'], box_a['result']['error']
+    assert seen == {'b_started_inside_a': False, 'a_still_busy': True}
+    assert done_b.is_set() and box_b['result']['output'] == 'B ran\n'   # B ran afterwards
+    assert srv.busy_since is None
+
+
+def test_an_abort_lets_cleanup_code_finish(plugin):
+    # REVIEW.md PLG-2. The abort is raised once; finally blocks and context-manager exits (such
+    # as Designer's UndoGroup committing its transaction) must then run to the end.
+    cancel = threading.Event()
+    cancel.set()
+    code = ("try:\n    while True:\n        pass\nfinally:\n    total = 0\n"
+            "    for i in range(20000):\n        total += i\n    print('cleanup finished', total)\n")
+    result = plugin._run(code, None, None, cancel)
+    assert not result['ok'] and 'ScriptAborted: cancelled by client' in result['error']
+    assert 'cleanup finished 199990000' in result['output']
+
+
+def test_a_trickling_client_is_dropped_by_a_total_deadline(bridge):
+    # REVIEW.md PLG-4: the read timeout applied per recv, so a byte every so often kept a
+    # connection (and its buffer) open before authentication forever
+    plugin, _, _ = bridge
+    plugin.READ_TIMEOUT = 0.6
+    with socket.create_connection(('127.0.0.1', plugin.PORT), timeout=10) as s:
+        s.recv(1024)                                   # the nonce greeting
+        started = time.monotonic()
+        closed = False
+        while time.monotonic() - started < 4:
+            try:
+                s.sendall(b' ')
+            except OSError:
+                closed = True
+                break
+            s.settimeout(0.25)
+            try:
+                if s.recv(65536):                       # the plugin answered (and will close)
+                    closed = True
+                    break
+            except socket.timeout:
+                pass
+        assert closed and time.monotonic() - started < 2.5
+
+
+def test_connections_beyond_the_limit_are_closed_at_once(bridge):
+    # REVIEW.md PLG-4: one thread and one buffer per connection, with no cap
+    plugin, _, _ = bridge
+    plugin.MAX_CLIENTS = 2
+    held = [socket.create_connection(('127.0.0.1', plugin.PORT), timeout=5) for _ in range(2)]
+    try:
+        for h in held:
+            h.recv(1024)                               # both got a greeting and stay open
+        with socket.create_connection(('127.0.0.1', plugin.PORT), timeout=5) as extra:
+            extra.settimeout(2)
+            assert extra.recv(1024) == b''             # closed without a greeting
+    finally:
+        for h in held:
+            h.close()
+    time.sleep(0.2)
+    assert _call(plugin, {'code': "print('ok')"})['output'] == 'ok\n'   # slots free again
+
+
+def test_status_does_not_count_abandoned_jobs(bridge):
+    # REVIEW.md PLG-7: a job dropped after QUEUE_WAIT stays in the queue until the main thread
+    # gets to it, and status counted it as queued
+    plugin, srv, draining = bridge
+    draining['on'] = False                          # Designer busy: nothing drains the queue
+    time.sleep(0.05)
+    plugin.QUEUE_WAIT = 0.2
+    assert 'was not run' in _call(plugin, {'code': "print('late')"})['error']
+    assert _call(plugin, {'cmd': 'status'})['output'].endswith(': idle, 0 queued')
+
+
+def test_stop_answers_queued_clients_and_frees_the_port(bridge):
+    # REVIEW.md PLG-5: stop() closed the socket only, so clients whose jobs were queued waited
+    # out QUEUE_WAIT (900 s), and a blocked accept() could hold the port
+    plugin, srv, draining = bridge
+    draining['on'] = False
+    time.sleep(0.05)
+    replies = []
+    waiter = threading.Thread(target=lambda: replies.append(_call(plugin, {'code': "print('never')"})))
+    waiter.start()
+    deadline = time.monotonic() + 5
+    while srv.jobs.qsize() == 0 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    started = time.monotonic()
+    srv.stop()
+    waiter.join(5)
+    assert replies and not replies[0]['ok'] and 'closing' in replies[0]['error']
+    assert time.monotonic() - started < 2
+    srv.thread.join(2)
+    assert not srv.thread.is_alive(), 'the accept thread is still blocked'
+    with socket.socket() as again:                  # the port can be bound again at once
+        again.bind(('127.0.0.1', plugin.PORT))
+
+
+def test_control_commands_are_answered_while_queued_jobs_fill_the_cap(bridge):
+    # REVIEW.md PLG-10: a client waiting for its queued job kept its connection slot, so with the
+    # cap full of them, cancel and status were closed without a greeting
+    plugin, srv, draining = bridge
+    draining['on'] = False                          # a long job "runs": nothing drains the queue
+    time.sleep(0.05)
+    plugin.MAX_CLIENTS = 2
+    waiting = [threading.Thread(target=_call, args=(plugin, {'code': "print('queued')"}), daemon=True)
+               for _ in range(2)]
+    for w in waiting:
+        w.start()
+    deadline = time.monotonic() + 5
+    while srv.jobs.qsize() < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert srv.jobs.qsize() == 2
+    reply = _call(plugin, {'cmd': 'status'})
+    assert reply['ok'] and '2 queued' in reply['output']
+    assert 'queued dropped: 2' in _call(plugin, {'cmd': 'cancel'})['output']
+
+
+def test_status_while_a_job_ends_is_not_a_bad_request(bridge, monkeypatch):
+    # REVIEW.md PLG-11: busy_since was read twice outside the lock; a job ending between the two
+    # reads made status fail with "bad request"
+    plugin, srv, _ = bridge
+    srv.busy_since = time.monotonic()
+    real = plugin.time.monotonic
+
+    def job_ends_now():
+        srv.busy_since = None                       # the main thread finishes the job right here
+        return real()
+    monkeypatch.setattr(plugin.time, 'monotonic', job_ends_now)
+    reply = srv._control('status')
+    assert reply['ok'] and ('idle' in reply['output'] or 'running for' in reply['output'])
+
+
+def test_a_job_arriving_after_stop_is_answered_at_once(bridge):
+    # REVIEW.md PLG-12: a request read before stop() but queued after it waited out QUEUE_WAIT
+    plugin, srv, draining = bridge
+    draining['on'] = False
+    time.sleep(0.05)
+    plugin.QUEUE_WAIT = 1.5
+    srv.stop()
+    nonce = 'n' * 32
+    started = time.monotonic()
+    reply = srv._authorised({'code': "print('late')", 'auth': plugin.expected_auth(srv.token, nonce)}, nonce)
+    assert not reply['ok'] and 'closing' in reply['error'] and time.monotonic() - started < 1
+
+
+def test_one_job_per_timer_tick(bridge):
+    # REVIEW.md PLG-13: one tick ran every queued job back to back, without returning to Qt's
+    # event loop in between (AGENTS.md, Portals: an unload and a load need that)
+    plugin, srv, draining = bridge
+    draining['on'] = False
+    time.sleep(0.05)
+    replies = []
+    for i in range(2):
+        threading.Thread(target=lambda i=i: replies.append(_call(plugin, {'code': 'print(%d)' % i})),
+                         daemon=True).start()
+        deadline = time.monotonic() + 5
+        while srv.jobs.qsize() < i + 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+    srv._drain()                                    # one tick
+    time.sleep(0.3)
+    assert len(replies) == 1 and srv.jobs.qsize() == 1
+    srv._drain()
+    time.sleep(0.3)
+    assert len(replies) == 2
+
+
+def test_cancel_does_not_count_abandoned_jobs(bridge):
+    # REVIEW.md PLG-14: status skips abandoned jobs (PLG-7), but cancel counted them as dropped
+    plugin, srv, draining = bridge
+    draining['on'] = False
+    time.sleep(0.05)
+    plugin.QUEUE_WAIT = 0.2
+    assert 'was not run' in _call(plugin, {'code': "print('late')"})['error']
+    assert 'queued dropped: 0' in _call(plugin, {'cmd': 'cancel'})['output']

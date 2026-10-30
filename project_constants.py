@@ -14,3 +14,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_DIR = os.path.join(ROOT, 'plugin', PLUGIN)        # what install.py copies (holds pluginInfo.json)
 PLUGIN_PACKAGE_DIR = os.path.join(PLUGIN_DIR, PLUGIN)    # the Python package Designer imports
 TOKEN_FILE = os.path.join(os.path.expanduser('~'), '.%s_token' % PLUGIN)   # the plugin's secret
+# Seconds the plugin keeps a queued job before dropping it (its own QUEUE_WAIT, which it can't
+# import from here; tests/unit/test_queue_wait.py checks they match). A client waits at least
+# this long plus the script's time, so a job it gave up on can't start later.
+QUEUE_WAIT = 900

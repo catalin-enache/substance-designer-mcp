@@ -12,6 +12,7 @@ import io
 import json
 import re
 import os
+import platform
 import shutil
 import socket
 import subprocess
@@ -27,7 +28,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 PORT = int(os.environ.get('SD_BRIDGE_PORT', '9877'))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from project_constants import PLUGIN, TOKEN_FILE  # noqa: E402  (the plugin's name lives there)
+from project_constants import PLUGIN, QUEUE_WAIT, TOKEN_FILE  # noqa: E402  (the plugin's name lives there)
 
 # Folder holding sbscooker / sbsrender. Override with SD_DESIGNER_BIN_DIR.
 DEFAULT_BIN_DIRS = {
@@ -184,18 +185,32 @@ def _bridge(code, path=None, timeout=None):
     request = {'code': code, 'path': path}
     if timeout:
         request['timeout'] = timeout
-    reply = _send(request, wait=(timeout or 900) + 60)
+    # wait for the plugin's queue and the script itself, or a job we gave up on could start later
+    reply = _send(request, wait=QUEUE_WAIT + (timeout or 900) + 60)
     text = reply['output']
     if not reply['ok']:
         text += '\n--- ERROR ---\n' + reply['error']
     return text or '(no output)'
 
 
+def _server_versions():
+    from importlib.metadata import PackageNotFoundError, version
+
+    def of(dist):
+        try:
+            return version(dist)
+        except PackageNotFoundError:
+            return '?'
+    return 'MCP server: Python %s, mcp %s, pillow %s, numpy %s' % (
+        platform.python_version(), of('mcp'), of('pillow'), of('numpy'))
+
+
 @_tool()
 def designer_status() -> str:
-    """Report Designer's version, the bridge state (idle/running) and the open user packages."""
+    """Report Designer's version, the bridge state (idle/running) and the open user packages,
+    plus this server's Python and library versions."""
     bridge = _send({'cmd': 'status'}, wait=10)
-    return bridge.get('output', '') + '\n' + _bridge(
+    return bridge.get('output', '') + '\n' + _server_versions() + '\n' + _bridge(
         "import sd\n"
         "app = sd.getContext().getSDApplication()\n"
         "print('Designer', app.getVersion())\n"
@@ -217,9 +232,10 @@ def cancel_designer_job() -> str:
 def execute_designer_code(code: str, undo_label: str = 'Claude: code', timeout_s: int = 120) -> str:
     """Run Python inside Substance Designer (full `sd` API) and return printed output and errors.
     All changes form one undo step named `undo_label` (Ctrl+Z in Designer reverts them).
-    The script is aborted after `timeout_s` seconds (0 = no limit in Designer, but this
-    call stops waiting after about 16 minutes while the script keeps running; cancel_designer_job
-    stops it)."""
+    The script is aborted after `timeout_s` seconds (0 = no limit in Designer). A script queued
+    behind another can wait up to 15 minutes before it starts; this call stops waiting 15 minutes
+    + `timeout_s` (15 minutes if 0) + 1 minute after it is sent, about 31 minutes for 0, while the
+    script goes on (cancel_designer_job stops it)."""
     return _bridge(_with_undo(code, undo_label), '<execute_designer_code>', timeout_s)
 
 
@@ -227,11 +243,11 @@ def execute_designer_code(code: str, undo_label: str = 'Claude: code', timeout_s
 def run_designer_script(path: str, timeout_s: int = 600) -> str:
     """Run a Python file inside Substance Designer; `__file__` is set to its absolute path.
     All changes form one undo step named after the file. Aborted after `timeout_s` seconds
-    (0 = no limit in Designer, but this
-    call stops waiting after about 16 minutes while the script keeps running; cancel_designer_job
-    stops it)."""
+    (0 = no limit in Designer). A script queued behind another can wait up to 15 minutes before it
+    starts; this call stops waiting 15 minutes + `timeout_s` (15 minutes if 0) + 1 minute after it
+    is sent, while the script goes on (cancel_designer_job stops it)."""
     path = os.path.abspath(os.path.expanduser(path))
-    with open(path) as f:
+    with open(path, encoding='utf-8') as f:
         return _bridge(_with_undo(f.read(), 'Claude: ' + os.path.basename(path)), path, timeout_s)
 
 
@@ -241,7 +257,8 @@ def describe_graph(graph: str | None = None, node_ids: list[str] | None = None,
     """List a graph's nodes: id, type (atomic name or instance:<library graph>), position and
     incoming connections (`input<-sourceNodeId.output`). `graph` is the graph identifier
     (default: the graph open in Designer's UI). `include_params` adds every parameter that
-    differs from its default. Use `node_ids` to focus on a few nodes; `limit` caps how many
+    differs from its default, and each one driven by a graph input or a function
+    (`param <- graph input 'x'`, `param <- a function`). Use `node_ids` to focus on a few nodes; `limit` caps how many
     nodes are listed (the rest are counted)."""
     return _checked(_bridge(_helpers_call('describe_graph(%r, %r, %r, %d)' % (graph, node_ids, include_params, limit)), timeout=60))
 
@@ -285,7 +302,7 @@ def screenshot_designer(panel: str = 'window', max_size: int = 1000,
     parameters, library or console. Shows what the user sees (node layout, 2D view, properties).
     'graph' is the node view alone (no title bar or toolbars); open_graph(frame=... / node_ids=...)
     zooms it to a section first. '3d' returns the 3D view's own render (material on the mesh);
-    the user's clipboard is restored afterwards. Inside 'window' the 3D view appears black.
+    the user's clipboard is restored afterwards. Inside 'window' the 3D area doesn't show the render.
     crop: [left, top, right, bottom] as fractions 0-1 of the panel, applied before max_size.
     An image costs about width x height / 750 tokens (1000 x 700 is about 930), so keep
     max_size small and crop to what you need."""
@@ -333,8 +350,9 @@ def export_outputs(graph: str, output_dir: str, outputs: list[str] | None = None
 
 
 def _edit(call, label):
-    # Quick edits run inside one undo step, like execute_designer_code
-    return _checked(_bridge(_with_undo(HELPERS + '\n\n' + call + '\n', label), '<quick edit>', 60))
+    # Quick edits run inside one undo step, like execute_designer_code. The limit only stops a
+    # hang: a big apply_edits batch or a first use of many library packages can take minutes
+    return _checked(_bridge(_with_undo(HELPERS + '\n\n' + call + '\n', label), '<quick edit>', 300))
 
 
 @_tool()
@@ -351,7 +369,9 @@ def add_node(definition: str, graph: str | None = None, position: list[float] | 
 def set_params(node_id: str, params: dict, graph: str | None = None) -> str:
     """Set parameters on a node (node_id 'graph' = the graph itself, e.g. $outputsize).
     Values are converted to the parameter's type: numbers, bools, lists for vectors/colors
-    ([r,g,b(,a)]), enums by id or number ('max' or 5). Prints old -> new. One undo step."""
+    ([r,g,b(,a)]), enums by id or number ('max', 5 or '5'). Every value is checked before any is set.
+    A parameter driven by a graph input (expose_param) or a function is refused: set the graph
+    input instead (node_id 'graph'). Prints old -> new. One undo step."""
     return _edit('set_params(%r, %r, %r)' % (graph, node_id, params), 'Claude: set params on ' + node_id)
 
 
@@ -499,18 +519,31 @@ def search_nodes(query: str, limit: int = 30, include_hidden: bool = False) -> s
 _PIXEL_TYPES = {'8': (np.uint8, 255.0), '16': (np.uint16, 65535.0), '16F': (np.float16, 1.0), '32F': (np.float32, 1.0)}
 
 
+# Designer's SBSPixelFormat names: channel prefix -> (channel count, order to put them in RGB(A)/L(A)).
+# Longest prefixes first: LUMALPHA before LUM, RGBA before RGB.
+_PIXEL_LAYOUTS = [('LUMALPHA', 2, [0, 1]), ('LUM', 1, [0]), ('RGBA', 4, [0, 1, 2, 3]), ('BGRA', 4, [2, 1, 0, 3]),
+                  ('RGB', 3, [0, 1, 2]), ('BGR', 3, [2, 1, 0])]
+
+
 def _decode_pixels(raw, meta):
-    """Raw Designer pixel buffer -> float array (H, W, C), values normalised to 0..1 for ints."""
-    fmt_name = meta['format']                       # e.g. RGBA16, LUM8, RGBA32F
-    channels = 4 if fmt_name.startswith('RGBA') else 1
-    depth = fmt_name[4:] if channels == 4 else fmt_name[3:]
-    if depth not in _PIXEL_TYPES:
+    """Raw Designer pixel buffer -> (float array (H, W, C), values normalised to 0..1 for ints;
+    'RGBA' for colour (3 or 4 channels, B and R swapped back for BGR formats) or 'L' for
+    grayscale (1 channel, or 2 with alpha))."""
+    fmt_name = meta['format']                       # e.g. RGBA16, LUM8, RGBA32F, BGR8, LUMALPHA16F
+    prefix, channels, order = next((l for l in _PIXEL_LAYOUTS if fmt_name.startswith(l[0])), ('', 0, None))
+    depth = fmt_name[len(prefix):]
+    if not prefix or depth not in _PIXEL_TYPES:
         raise ToolError('unsupported pixel format %s' % fmt_name)
     dtype, scale = _PIXEL_TYPES[depth]
     rows = np.frombuffer(raw, dtype=np.uint8).reshape(meta['height'], meta['pitch'])
     rows = rows[:, :meta['width'] * meta['bpp']].copy()
-    data = rows.view(dtype).reshape(meta['height'], meta['width'], channels).astype(np.float64)
-    return data / scale, ('RGBA' if channels == 4 else 'L')
+    data = rows.view(dtype).reshape(meta['height'], meta['width'], channels)[:, :, order].astype(np.float64)
+    return data / scale, ('RGBA' if channels >= 3 else 'L')
+
+
+def _channel_names(data, layout):
+    """Channel letters of decoded pixels: 'RGBA', 'RGB', 'LA' or 'L'."""
+    return ('RGBA', 'RGB')[data.shape[2] == 3] if layout == 'RGBA' else 'LA'[:data.shape[2]]
 
 
 def _crop(data, region, what):
@@ -528,7 +561,8 @@ def _crop(data, region, what):
 
 
 def _node_pixels(node_id, graph, output, tool):
-    """A node's output computed in Designer: (pixels 0..1 as (H, W, C) floats, 'RGBA' or 'L', meta)."""
+    """A node's output computed in Designer: (pixels 0..1 as (H, W, C) floats, 'RGBA' or 'L', meta);
+    see _decode_pixels."""
     tmp_dir = tempfile.mkdtemp(prefix='sd_px_')
     raw_path = os.path.join(tmp_dir, 'pixels.raw')
     try:
@@ -559,7 +593,7 @@ def node_stats(node_id: str, graph: str | None = None, output: str | None = None
     if region:
         area = _crop(data, region, 'region')
         lines.append('region %s (%dx%d px)' % (list(region), area.shape[1], area.shape[0]))
-    names = 'RGBA' if layout == 'RGBA' else 'L'
+    names = _channel_names(data, layout)
     for ch, name in enumerate(names):
         a = area[:, :, ch]
         lines.append('%s: min %.4f  max %.4f  mean %.4f  std %.4f' % (name, a.min(), a.max(), a.mean(), a.std()))
@@ -612,13 +646,15 @@ def set_graph_size(size_log2: int, graph: str | None = None, overridable: bool =
 def apply_edits(ops: list[dict], graph: str | None = None) -> str:
     """Run several edits in one call and one undo step. Each op is a dict:
     {"op": "add", "definition": "levels", "ref": "lv", "position"?: [x, y], "params"?: {...}}
-    {"op": "bitmap", "path": "/abs/image.png", "ref": "img", "embed"?: "link", "position"?, "name"?}
+    {"op": "bitmap", "path": "/abs/image.png", "ref": "img", "embed"?: "link", "position"?: [x, y],
+     "name"?: "..."}
     {"op": "set", "node": "lv", "params": {...}}            (node: a ref, a node id, or "graph")
     {"op": "connect", "from": "a", "to": "lv", "input": "input1", "output"?: "..."}
     {"op": "disconnect", "node": "lv", "input": "input1"}
     {"op": "move", "node": "lv", "position": [x, y]}
     {"op": "delete", "node": "lv"}
-    {"op": "expose", "node": "lv", "param": "...", "input_id"?, "label"?, "default"?, "min"?, "max"?}
+    {"op": "expose", "node": "lv", "param": "...", "input_id"?: "...", "label"?: "...", "default"?: ...,
+     "min"?: 0, "max"?: 1, "step"?: 0.1, "group"?: "..."}         (as expose_param)
     Refs let later ops use nodes added earlier in the batch. Stops at the first failing op
     (earlier ops stay applied; Ctrl+Z on the graph reverts the whole batch)."""
     return _edit('apply_edits(%r, %r)' % (graph, ops), 'Claude: apply %d edits' % len(ops))
@@ -653,7 +689,7 @@ def _sheet(tiles, gap=6):
 
 
 def _channel_summary(data, layout):
-    names = 'RGBA' if layout == 'RGBA' else 'L'
+    names = _channel_names(data, layout)
     return '  '.join('%s %.3f..%.3f (mean %.3f)' % (n, data[:, :, i].min(), data[:, :, i].max(),
                                                      data[:, :, i].mean()) for i, n in enumerate(names))
 
@@ -685,6 +721,10 @@ def sweep_param(node_id: str, param: str, values: list, graph: str | None = None
             im = _to_display(data, layout)
             im.thumbnail((tile_size, tile_size))
             tiles.append(_labelled(im, '%s = %s' % (param, meta['value'])))
+        if '--- ERROR ---' in text:
+            error = text.split('--- ERROR ---', 1)[1].strip().splitlines()
+            lines.append('Sweep stopped after %d of %d value(s): %s' % (len(metas), len(values),
+                                                                       error[-1] if error else 'error'))
         if 'restored' not in text:
             lines.append('WARNING: the original value may not have been restored:\n' + text[-1500:])
     finally:
@@ -734,8 +774,9 @@ _LUMA = np.array([0.2126, 0.7152, 0.0722])
 
 
 def _load_reference(path, region=None):
-    """Image file -> (pixels 0..1 as (H, W, C) floats, 'RGBA' or 'L'). PIL reads 16-bit RGBA PNGs
-    as 8-bit; 16-bit grayscale and float (mode F) keep their precision."""
+    """Image file -> (pixels 0..1 as (H, W, C) floats, 'RGBA' or 'L'; a grayscale image with alpha
+    is 'L' with alpha as a second channel). PIL reads 16-bit RGBA PNGs as 8-bit; 16-bit grayscale
+    and float (mode F) keep their precision."""
     path = os.path.abspath(os.path.expanduser(path))
     try:
         im = PILImage.open(path)
@@ -747,8 +788,10 @@ def _load_reference(path, region=None):
         if im.mode != 'F':
             a /= 65535.0 if im.mode.startswith('I;16') or a.max() > 255 else 255.0
         data, layout = a[:, :, None], 'L'
-    elif im.mode in ('1', 'L', 'LA'):
+    elif im.mode in ('1', 'L'):
         data, layout = np.array(im.convert('L')).astype(np.float64)[:, :, None] / 255.0, 'L'
+    elif im.mode in ('LA', 'La'):
+        data, layout = np.array(im.convert('LA')).astype(np.float64) / 255.0, 'L'
     else:
         data, layout = np.array(im.convert('RGBA')).astype(np.float64) / 255.0, 'RGBA'
     if region:
@@ -781,13 +824,18 @@ def _resize(data, size):
                       for c in range(data.shape[2])]).astype(np.float64)
 
 
+def _alpha(data):
+    """The alpha channel of decoded pixels (4 channels, or 'L' with alpha), or None."""
+    return data[:, :, -1] if data.shape[2] in (2, 4) else None
+
+
 def _compare_report(node, node_layout, ref, ref_layout, aligned=False):
     """Compare a node's pixels with a reference: value distributions always, pixel by pixel when
     aligned. Returns (text lines, absolute luma difference image or None)."""
     lines = []
     mask_n = mask_r = None
-    if ref_layout == 'RGBA' and (ref[:, :, 3] < 0.5).any():
-        mask_r = ref[:, :, 3] >= 0.5
+    if _alpha(ref) is not None and (_alpha(ref) < 0.5).any():
+        mask_r = _alpha(ref) >= 0.5
         if not mask_r.any():
             raise ToolError('the reference is fully transparent')
         lines.append('ignoring %.1f%% transparent reference pixels' % (100 - 100 * mask_r.mean()))
@@ -800,7 +848,7 @@ def _compare_report(node, node_layout, ref, ref_layout, aligned=False):
         if ref.shape[:2] != (h, w):
             ref = _resize(ref, (w, h))
             if mask_r is not None:
-                mask_r = ref[:, :, 3] >= 0.5
+                mask_r = _alpha(ref) >= 0.5
         mask_n = mask_r
     chans = _compare_channels(node, node_layout, ref, ref_layout)
     lines.append('%-5s %-36s %-36s %s' % ('', 'node: mean std (p5 p50 p95)', 'reference: mean std (p5 p50 p95)',
@@ -883,7 +931,8 @@ def compare_to_reference(node_id: str, reference_path: str, graph: str | None = 
         im.thumbnail((tile_size, tile_size))
         tiles.append(_labelled(im, label))
     chans = _compare_channels(data, layout, ref, ref_layout)
-    ref_luma = chans[-1][2] if ref_layout != 'RGBA' or (ref[:, :, 3] >= 0.5).all() else chans[-1][2][ref[:, :, 3] >= 0.5]
+    alpha = _alpha(ref)
+    ref_luma = chans[-1][2] if alpha is None or (alpha >= 0.5).all() else chans[-1][2][alpha >= 0.5]
     tiles.append(_labelled(_histogram_tile(chans[-1][1].ravel(), ref_luma.ravel(), tile_size,
                                            max(max(t.height for t in tiles) - 18, 96)), 'luma histograms'))
     if diff is not None:
@@ -962,15 +1011,15 @@ def _copy_package(graph, path):
 def snapshot_graph(graph: str | None = None, label: str | None = None) -> str:
     """Save a snapshot of a graph's package (a full .sbs copy) before risky work. It doesn't
     change the open package, its file or its saved state. Compare later with diff_graph; the
-    snapshot .sbs can also be opened in Designer to recover anything. Snapshots live in
+    snapshot .sbs can also be opened in Designer to recover anything. Bitmaps aren't copied: the
+    snapshot points to the files the package uses (its .resources folder, linked images). Snapshots live in
     ~/.sd_mcp/snapshots/<graph>/ (override with SD_SNAPSHOT_DIR)."""
-    tmp = os.path.join(tempfile.mkdtemp(prefix='sd_snap_'), 'copy.sbs')
-    try:
-        info = _copy_package(graph, tmp)
-        path = _new_snapshot_path(info['GRAPH'], label)
-        shutil.move(tmp, path)
-    finally:
-        shutil.rmtree(os.path.dirname(tmp), ignore_errors=True)
+    # Designer writes resource paths (bitmaps) relative to the copy, so it is saved where it
+    # stays: moved afterwards, those paths would point nowhere
+    gid = _checked(_bridge(_helpers_call('print("GRAPH=" + find_graph(%r).getIdentifier())' % graph), timeout=60))
+    gid = re.search(r'^GRAPH=(.*)$', gid, re.M).group(1)
+    path = _new_snapshot_path(gid, label)
+    info = _copy_package(graph, path)
     return 'snapshot of %s saved: %s' % (info['GRAPH'], path)
 
 
@@ -994,12 +1043,17 @@ def _snapshots(graph_id):
     folder = os.path.join(SNAPSHOT_DIR, _safe_name(graph_id))
     if not os.path.isdir(folder):
         return []
-    return sorted(os.path.join(folder, f) for f in os.listdir(folder) if f.endswith('.sbs'))
+    # oldest first by when the content was written: names alone misorder two snapshots taken in
+    # the same second (set_link_display's live graph and its copy2 of the older saved file)
+    paths = [os.path.join(folder, f) for f in os.listdir(folder) if f.endswith('.sbs')]
+    return sorted(paths, key=lambda p: (os.stat(p).st_mtime_ns, p))
 
 
 @_tool()
 def list_snapshots(graph: str | None = None) -> str:
-    """List saved snapshots (newest last). graph: graph identifier (default: all graphs)."""
+    """List saved snapshots, newest last (by when their content was written; set_link_display's
+    copy of the saved file counts from when that file was saved). graph: graph identifier
+    (default: all graphs)."""
     graphs = [_safe_name(graph)] if graph else (sorted(os.listdir(SNAPSHOT_DIR)) if os.path.isdir(SNAPSHOT_DIR) else [])
     lines = []
     for gid in graphs:
@@ -1206,8 +1260,9 @@ def set_link_display(graph: str | None = None, mode: str = 'portal', from_nodes:
     mode: 'portal' or 'wire'. Designer's API can't do this, so the tool first takes a snapshot of
     the graph and copies the package's saved file (both in the snapshot folder), then saves the
     package, edits the .sbs and reloads it (the package's undo history is reset; the graph is
-    reopened). If no selected link would change, nothing is saved or reloaded. The package must
-    have been saved to a file once."""
+    reopened). If no selected link would change, nothing is saved or reloaded. If the package is
+    edited again before the reload, the reload is refused and those edits are kept. The package
+    must have been saved to a file once."""
     if mode not in _DISPLAY:
         raise ToolError("mode must be 'portal' or 'wire'")
     if not (from_nodes or fanout_at_least or longer_than or links):
@@ -1222,15 +1277,15 @@ def set_link_display(graph: str | None = None, mode: str = 'portal', from_nodes:
     snap = snapshot_graph(gid, 'before ' + mode + 's')
     live = snap.split('saved: ', 1)[1].strip()
     if os.path.exists(path):
-        shutil.copy2(path, _new_snapshot_path(gid, 'before %ss (file on disk)' % mode))
-    chosen, total = _select_links(_xml_graph(ET.parse(live).getroot(), gid, live), mode, from_nodes,
+        _copy_sbs(path, _new_snapshot_path(gid, 'before %ss (file on disk)' % mode))
+    chosen, selected, total = _select_links(_xml_graph(ET.parse(live).getroot(), gid, live), mode, from_nodes,
                                   fanout_at_least, longer_than, links)
     if not chosen:
         return ('0 of %d selected link(s) changed to %s in %s (of %d links in the graph); nothing to do, '
-                'package not saved or reloaded.' % (len(chosen), mode, gid, total))
+                'package not saved or reloaded.' % (selected, mode, gid, total))
     _checked(_bridge(_helpers_call('package_file_of(%r, save=True)' % gid), timeout=120))
     tree = ET.parse(path)
-    picked, total = _select_links(_xml_graph(tree.getroot(), gid, path), mode, from_nodes,
+    picked, selected, total = _select_links(_xml_graph(tree.getroot(), gid, path), mode, from_nodes,
                                   fanout_at_least, longer_than, links)
     for c in picked:
         dt = c.find('displayType')
@@ -1242,11 +1297,40 @@ def set_link_display(graph: str | None = None, mode: str = 'portal', from_nodes:
             dt.set('v', _DISPLAY[mode])
     tree.write(path, encoding='UTF-8', xml_declaration=True)
     _reload_package_file(path)
+    reopen = ''
     if info.get('OPEN') == '1':
-        open_graph(gid)
+        try:
+            open_graph(gid)
+        except ToolError as e:
+            reopen = ' WARNING: could not reopen %s: %s.' % (gid, e)
 
     return ('%d of %d selected link(s) changed to %s in %s (of %d links in the graph); package saved and '
-            'reloaded. %s' % (len(picked), len(picked), mode, gid, total, snap))
+            'reloaded.%s %s' % (len(picked), selected, mode, gid, total, reopen, snap))
+
+
+def _copy_sbs(src, dst):
+    """Copy a saved .sbs to another folder so it still opens with its bitmaps and dependencies:
+    Designer writes their paths relative to the .sbs, so those are rewritten for the new folder
+    (library references such as sbs://... and the ?himself marker are left alone). Keeps the original's timestamps, as
+    shutil.copy2 does, so this copy never sorts as the latest snapshot (REVIEW.md SRV-1, SRV-14)."""
+    tree = ET.parse(src)
+    changed = False
+    for element in list(tree.getroot().iter('filepath')) + list(tree.getroot().iter('filename')):
+        value = element.get('v') or ''
+        if not value or '://' in value or value.startswith('?') or os.path.isabs(value):
+            continue                            # ?himself: the package's own graphs (REVIEW.md SRV-17)
+        target = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(src)), value))
+        try:
+            new = os.path.relpath(target, os.path.dirname(os.path.abspath(dst)))
+        except ValueError:                      # another drive on Windows
+            new = target
+        element.set('v', new.replace(os.sep, '/'))
+        changed = True
+    if changed:
+        tree.write(dst, encoding='UTF-8', xml_declaration=True)
+        shutil.copystat(src, dst)
+    else:
+        shutil.copy2(src, dst)
 
 
 RELOAD_SETTLE_S = 0.5
@@ -1264,10 +1348,10 @@ def _reload_package_file(path):
 
 
 def _select_links(g, mode, from_nodes=None, fanout_at_least=None, longer_than=None, links=None):
-    """The <connection> elements of a <graph> that the selection picks and that would change
-    display mode, plus the total number of links. Only the graph's own links count (a node's
-    <connections>), not those inside function graphs on its parameters."""
-    nodes = {n.find('uid').get('v'): n for n in g.find('compNodes')}
+    """(the <connection> elements of a <graph> that the selection picks and that would change
+    display mode, how many it picks in all, the total number of links). Only the graph's own
+    links count (a node's <connections>), not those inside function graphs on its parameters."""
+    nodes = {n.find('uid').get('v'): n for n in g.findall('compNodes/compNode')}
 
     def pos(uid):
         gp = nodes[uid].find('GUILayout/gpos') if uid in nodes else None
@@ -1281,7 +1365,7 @@ def _select_links(g, mode, from_nodes=None, fanout_at_least=None, longer_than=No
     for _, _, src, out in conns:
         fanout[(src, out)] = fanout.get((src, out), 0) + 1
     wanted_links = {(str(a), str(b)) for a, b in (links or [])}
-    chosen = []
+    chosen, selected = [], 0
     for down, c, src, out in conns:
         port = c.find('identifier').get('v')
         pick = (from_nodes and src in {str(x) for x in from_nodes}) \
@@ -1292,9 +1376,11 @@ def _select_links(g, mode, from_nodes=None, fanout_at_least=None, longer_than=No
             pick = a is not None and b is not None and ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5 > longer_than
         dt = c.find('displayType')
         current = dt.get('v') if dt is not None else None
-        if pick and current != _DISPLAY[mode]:
-            chosen.append(c)
-    return chosen, len(conns)
+        if pick:
+            selected += 1
+            if current != _DISPLAY[mode]:
+                chosen.append(c)
+    return chosen, selected, len(conns)
 
 
 DESIGNER_APP = {
@@ -1307,32 +1393,51 @@ DESIGNER_APP = {
 def launch_designer(wait_s: int = 180) -> str:
     """Start Substance Designer if it isn't running and wait until the bridge plugin answers.
     When it starts Designer it also closes the Home screen, so the editor panels are visible.
+    A Designer that is running but not answering yet (still starting) is waited for, not started
+    again; if it exits during the wait, a new one is started and gets its own wait_s, so the call
+    can then take up to about twice wait_s.
     Override the app location with SD_DESIGNER_APP."""
     try:
         return 'Designer already running: ' + _send({'cmd': 'status'}, wait=5).get('output', '')
     except ToolError:
         pass
+    # A Designer process without an answering bridge (still starting, a dialog, the plugin didn't
+    # load) is waited for, not started again (Windows would open a second instance). If it exits
+    # while we wait (it was shutting down, or hung after a crash), a new one is started then.
     app = os.environ.get('SD_DESIGNER_APP') or DESIGNER_APP.get(sys.platform)
-    if not app or not os.path.exists(app):
-        raise ToolError('Designer not found at %r; set SD_DESIGNER_APP' % app)
-    if sys.platform == 'darwin':
-        subprocess.Popen(['open', '-a', app])
-    elif sys.platform == 'win32':
-        os.startfile(app)
-    else:
-        subprocess.Popen([app])
+
+    def start():
+        if not app or not os.path.exists(app):
+            raise ToolError('Designer not found at %r; set SD_DESIGNER_APP' % app)
+        if sys.platform == 'darwin':
+            subprocess.Popen(['open', '-a', app])
+        elif sys.platform == 'win32':
+            os.startfile(app)
+        else:
+            subprocess.Popen([app])
+    running, restarted = _designer_running(), False
+    if not running:
+        start()
     started = time.time()
     while time.time() - started < wait_s:
         time.sleep(2)
         try:
             status = _send({'cmd': 'status'}, wait=5).get('output', '')
         except ToolError:
+            if running and not _designer_running():
+                running, restarted = False, True
+                start()
+                started = time.time()       # the new one gets the whole wait (REVIEW.md SRV-19)
             continue
+        if running:
+            return 'Designer already running: ' + status
         # we started it, so nobody is using the Home screen: show the editor panels
         home = _bridge(_helpers_call('leave_home_screen()'), timeout=30).strip()
         return 'Designer started in %.0fs%s: %s' % (time.time() - started, ' (%s)' % home if home else '', status)
-    raise ToolError('Designer did not answer within %ds. It may be showing a dialog, or the '
-                    '%s plugin did not load (check the Designer log).' % (wait_s, PLUGIN))
+    raise ToolError('%s did not answer within %ds%s. It may be showing a dialog, or the '
+                    '%s plugin did not load (check the Designer log).' % (
+                        'Designer is already running, but its bridge' if running else 'Designer', wait_s,
+                        ' of being started' if restarted else '', PLUGIN))
 
 
 @_tool()
@@ -1505,7 +1610,8 @@ def _sbsar_default_log2(sbsar, graph=None):
 def _run_tool(cmd, timeout):
     """Run one of Designer's command-line tools; a hang becomes a ToolError, not a stuck server."""
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        # UTF-8 whatever the locale (cp1252 on many Windows machines); a stray byte can't fail the call
+        return subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=timeout)
     except subprocess.TimeoutExpired:
         raise ToolError('%s did not finish within %ds' % (os.path.basename(cmd[0]), timeout))
 
@@ -1559,6 +1665,9 @@ def sbsar_info(sbs_path: str) -> str:
         raise ToolError('sbscooker/sbsrender not found. Set SD_DESIGNER_BIN_DIR.')
     with _cooked(sbs_path) as sbsar:
         info = _run_tool([SBSRENDER, 'info', sbsar], 120)
+    if info.returncode != 0:
+        raise ToolError('sbsrender info failed (exit %d): %s' % (info.returncode,
+                                                                 (info.stderr or info.stdout).strip()[-1500:]))
     return info.stdout.strip() or info.stderr.strip()
 
 
@@ -1579,9 +1688,17 @@ def preview_maps(map_dir: str, names: list[str] | None = None, tile_size: int = 
     """Return a side-by-side preview of rendered maps (PNG files in map_dir). `names` picks
     maps by file stem (default: all). `crop` = [x0, y0, x1, y1] in source pixels to zoom in."""
     map_dir = os.path.abspath(os.path.expanduser(map_dir))
-    stems = names or sorted(os.path.splitext(f)[0] for f in os.listdir(map_dir) if f.endswith('.png'))
+    if not os.path.isdir(map_dir):
+        raise ToolError('%s is not a folder' % map_dir)
+    found = sorted(os.path.splitext(f)[0] for f in os.listdir(map_dir) if f.endswith('.png'))
+    if not found:
+        raise ToolError('no .png files in %s' % map_dir)
+    missing = [n for n in names or [] if n not in found]
+    if missing:
+        raise ToolError('no map called %s in %s; there are: %s' % (', '.join(repr(n) for n in missing), map_dir,
+                                                                   ', '.join(found)))
     tiles = []
-    for stem in stems:
+    for stem in names or found:
         im = _load_8bit(os.path.join(map_dir, stem + '.png'))
         if crop:
             im = im.crop(tuple(crop))

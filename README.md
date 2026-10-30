@@ -44,7 +44,7 @@ There are two programs, plus Designer's own command-line tools:
 | Part | Runs where | What it does |
 |---|---|---|
 | **sd_claude_bridge_kve plugin** (`plugin/sd_claude_bridge_kve`) | Inside Designer, loaded at startup | A small, generic script runner. It listens on `127.0.0.1:9877`, checks that each request is signed with the secret token, queues the Python code it receives, runs it on Designer's main thread (the only place the `sd` API may be used), and sends back the printed output or the error. It also enforces timeouts, answers `status` / `cancel` while a script runs, and knows nothing about MCP or the individual tools. |
-| **MCP server** (`mcp_server/server.py`) | Its own process, started by Claude Code | Defines the 43 tools Claude sees. Its instructions to Claude are one short paragraph (MCP clients cut long ones; Claude Code at 4,096 characters): leave the Designer tools alone unless you ask for Designer work, and right before the first Designer tool call, call `get_guide()`, which returns the full [AGENTS.md](AGENTS.md). Sessions started for other things never load the guide. Each tool does one or more of: send Python code to the plugin (most tools), run Designer's command-line tools (`render_sbs`, `sbsar_info`), or do the work itself outside Designer (decoding pixels, building preview images, comparing `.sbs` files, reading the log, editing files for portals). |
+| **MCP server** (`mcp_server/server.py`) | Its own process, started by Claude Code | Defines the 43 tools Claude sees. Its instructions to Claude are one short paragraph (MCP clients cut long ones; the limit is in [AGENTS.md](AGENTS.md), Working on this project): leave the Designer tools alone unless you ask for Designer work, and right before the first Designer tool call, call `get_guide()`, which returns the full [AGENTS.md](AGENTS.md). Sessions started for other things never load the guide. Each tool does one or more of: send Python code to the plugin (most tools), run Designer's command-line tools (`render_sbs`, `sbsar_info`), or do the work itself outside Designer (decoding pixels, building preview images, comparing `.sbs` files, reading the log, editing files for portals). |
 | **Designer helpers** (`mcp_server/designer_helpers.py`) | Sent to Designer with each request | The library of functions that actually do the work inside Designer: describing nodes, editing graphs, computing previews, layout, exposing inputs and so on. It's re-sent with every call, so updating it never needs a Designer restart. |
 | **sbscooker / sbsrender** | Separate processes | Designer's own tools for compiling a saved `.sbs` into `.sbsar` and rendering its outputs, independently of the open Designer. |
 | **CLI client** (`client/sd_run.py`) | Your terminal | The same connection to the plugin without MCP, for running scripts by hand. |
@@ -69,7 +69,8 @@ There are two programs, plus Designer's own command-line tools:
   that doesn't need the `sd` API (image decoding, statistics, file comparison) happens in the
   server process instead.
 - **It doesn't depend on Designer's Python.** The server uses its own Python environment and
-  libraries (`mcp`, `numpy`, `pillow`); the plugin needs nothing beyond what Designer ships.
+  libraries (`mcp`, `numpy`, `pillow`, with tested version ranges in
+  `mcp_server/requirements.txt`); the plugin needs nothing beyond what Designer ships.
 
 **When the API can't do something.** A few things aren't reachable through Designer's Python API,
 for example showing a connection as a portal. For those, the server edits the saved `.sbs` file
@@ -101,7 +102,9 @@ changes to your graphs, Claude can take a snapshot and afterwards show you exact
 ## Requirements
 
 - Substance 3D Designer 16 (tested on 16.0.7; 14.1 or newer should work, untested)
-- Python **3.10+** (only for the MCP server; the plugin uses Designer's own Python)
+- Python **3.10+** (only for the MCP server; the plugin uses Designer's own Python). 3.10 is the
+  minimum the installer accepts; the tests run on 3.12. The installer and `designer_status` show
+  which Python the server uses.
 - Claude Code (`claude` command), or any MCP client
 
 ## Install
@@ -199,11 +202,14 @@ checks the Security promises below (unsigned, wrongly signed and old-style reque
 reachable from the network, private token file), the command-line client, that the plugin Designer loaded matches
 this repo (re-run `install.py` if not), and that the example trim sheet still builds (a renamed
 copy, so a trim sheet you have open is never touched). The 3D screenshot check is skipped if no 3D View is visible; the clipboard check runs
-on macOS only. Exit code 0 means everything passed. Run it after installing, after updates, and
+on macOS only. Exit code 0 means everything that ran passed; the summary lists tools whose checks
+were all skipped (`quit_designer` when your own Designer is running) instead of counting them as
+covered. Run it after installing, after updates, and
 after a Designer update.
 
 **Unit tests (no Designer needed).** `tests/unit` tests everything that can run outside
-Designer: the plugin's server and authentication (with Qt replaced), the clients' protocol,
+Designer: the plugin's server and authentication (with Qt replaced), both clients' protocol
+(the MCP server's and `client/sd_run.py`'s, against that plugin server),
 pixel decoding, image comparison, the tiling metric, `.sbs` parsing, diffing and portal
 selection, render command building, search ranking, the installer, launch/quit edge cases,
 environment variables and log reading. It also checks that this README lists every tool and that
@@ -245,11 +251,18 @@ python client/sd_run.py --cancel              # abort the running script
   `%USERPROFILE%\.sd_claude_bridge_kve_token`): the plugin sends a random challenge and the client answers
   with an HMAC of it, so the secret itself never crosses the connection, and a program posing as
   the plugin while Designer is closed learns nothing it can reuse.
+- Only the client proves it knows the secret, not the plugin. So while Designer is closed, a
+  program that takes over port 9877 would receive the next script and could send back a made-up
+  reply. This is accepted: a program running as you could read the token file anyway, so only
+  another user account on the same machine gains anything, and scripts carry no secrets.
 - The plugin creates the token on first run, owner-only on macOS (it also tightens an existing
   file's permissions), and replaces an empty or truncated one. Anything that can read that file
   can run code inside Designer. To rotate it, delete the file and restart Designer.
-- Requests are size- and time-limited, malformed ones get no details back, and on Windows the
-  port is bound exclusively so a second program can't share it.
+- Requests are size- and time-limited (a whole request must arrive within 30 s, and at most 16
+  connections that haven't authenticated yet are served at once, so nothing can tie the plugin up
+  before authenticating, while `status` and `cancel` still get through behind queued jobs),
+  malformed ones get no details back, and on Windows the port is bound exclusively so a second
+  program can't share it.
 - Screenshots only ever capture Designer's own panels. The 3D view uses Designer's own render
   through the clipboard and puts back whatever was on your clipboard.
 - To turn the bridge off, disable it in Tools > Plugin Manager or delete the `sd_claude_bridge_kve`
@@ -264,7 +277,8 @@ python3 uninstall.py             # lists it again, asks, then removes it (--yes 
 
 It removes the `sd_claude_bridge_kve` plugin from Designer's plugin folder (and the old `sd_bridge`
 one), `~/.sd_claude_bridge_kve_token`, the skill, `mcp_server/venv`, and this server's registration in
-every folder where you ran `claude mcp add --scope local` (found in Claude Code's
+every folder where you ran `claude mcp add --scope local`, plus a user-scope registration
+(`--scope user`) if there is one (found in Claude Code's
 `~/.claude.json`, removed with `claude mcp remove` in each folder). A plugin, skill or
 registration with the same name that isn't this project's is reported and left alone. Your graph
 snapshots (`~/.sd_mcp/snapshots`) stay unless you pass `--remove-snapshots`. Pass
@@ -274,6 +288,7 @@ snapshots (`~/.sd_mcp/snapshots`) stay unless you pass `--remove-snapshots`. Pas
 
 | Symptom | Fix |
 |---|---|
+| `substance-designer` fails to connect in `/mcp`; its log says "no Python environment" | The venv is missing (a fresh clone, or it was deleted): run `python3 install.py`, then reconnect in `/mcp`. |
 | `No bridge token found` | The plugin has never run. Restart Designer and check its console. |
 | `Designer is not reachable` | Designer isn't running, or the plugin failed to load. Check the Designer log. |
 | Every call returns `invalid token` | The plugin and the server are different versions (for example after `git pull`): re-run `install.py` and restart Designer. |

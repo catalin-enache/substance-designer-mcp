@@ -27,6 +27,13 @@ def _is_library_package(pkg):
     return os.path.normcase(os.path.dirname(pkg.getFilePath() or '')) == lib
 
 
+def _same_graph(a, b):
+    """True when a and b are the same graph: the same identifier in the same package (two open
+    packages can each have a graph with one name)."""
+    return a is not None and b is not None and a.getIdentifier() == b.getIdentifier() \
+        and a.getPackage().getUID() == b.getPackage().getUID()
+
+
 def find_graph(identifier=None):
     """Compositing graph by identifier among the user's open packages (library packages
     excluded); default: the graph shown in the UI. A graph object is returned as is, so a batch
@@ -50,8 +57,7 @@ def find_graph(identifier=None):
     if not matches:
         raise RuntimeError('Graph %r not found in open user packages.' % identifier)
     for g in matches:
-        if current is not None and g.getIdentifier() == current.getIdentifier() \
-                and g.getPackage().getUID() == current.getPackage().getUID():
+        if _same_graph(g, current):
             return g
     raise RuntimeError('%d open graphs are named %r (packages: %s); open the one you mean in Designer '
                        'or close the others.' % (len(matches), identifier, ', '.join(
@@ -124,6 +130,12 @@ def describe_graph(identifier=None, node_ids=None, include_params=False, limit=4
         if include_params:
             for prop in n.getProperties(SDPropertyCategory.Input):
                 if prop.isConnectable():
+                    continue
+                driven = _driving_graph(n, prop)
+                if driven is not None:
+                    # the stored constant is hidden and unused while a function drives the value
+                    source = _plain_binding(driven)
+                    print('    %s <- %s' % (prop.getId(), 'graph input %r' % source if source else 'a function'))
                     continue
                 cur = fmt(n.getPropertyValue(prop))
                 default = fmt(prop.getDefaultValue())
@@ -336,7 +348,7 @@ def _save_3d_render(mw, out_path):
     clipboard = app.clipboard()
     original = clipboard.mimeData()
     backup = QtCore.QMimeData()
-    for fmt in original.formats():
+    for fmt in original.formats() if original is not None else []:   # None where Qt has no clipboard
         backup.setData(fmt, original.data(fmt))
     try:
         clipboard.clear()
@@ -409,14 +421,25 @@ def save_screenshot(panel, out_path):
 
 # ---------------------------------------------------------------- save / export
 def _package_of(identifier):
+    """The package to save: never one of Designer's own library packages, which saving would
+    overwrite in Designer's install folder."""
     if not identifier:
         g = find_graph(None)
-        return g.getPackage(), g
-    for p in _PM.getUserPackages():
-        if os.path.normpath(p.getFilePath() or '') == os.path.normpath(os.path.expanduser(identifier)):
-            return p, None
-    g = find_graph(identifier)
-    return g.getPackage(), g
+        pkg = g.getPackage()
+    else:
+        pkg = g = None
+        for p in _PM.getUserPackages():
+            if os.path.normpath(p.getFilePath() or '') == os.path.normpath(os.path.expanduser(identifier)):
+                pkg = p
+                break
+        if pkg is None:
+            g = find_graph(identifier)
+            pkg = g.getPackage()
+    if _is_library_package(pkg):
+        raise RuntimeError('%s is one of Designer\'s library packages; not saving it (saving it elsewhere '
+                           'would re-point the loaded library itself); to keep a copy, open it in the editor, then '
+                           'call snapshot_graph with no graph' % pkg.getFilePath())
+    return pkg, g
 
 
 def save_package(identifier=None, path=None):
@@ -493,7 +516,8 @@ def _make_value(prop, value):
     if isinstance(ptype, SDTypeEnum):
         options = [(e.getId(), e.getDefaultValue()) for e in ptype.getEnumerators()]
         for eid, ev in options:
-            if value == eid or (not isinstance(value, bool) and value == ev.get()):
+            if value == eid or (not isinstance(value, bool) and value == ev.get()) \
+                    or (isinstance(value, str) and value.strip() == str(ev.get())):
                 return ev
         raise RuntimeError('%s: %r is not one of %s' % (prop.getId(), value,
                            ', '.join('%s=%s' % (eid, ev.get()) for eid, ev in options)))
@@ -536,14 +560,22 @@ def set_params(graph_id, node_id, params):
     from sd.api.sdproperty import SDPropertyInheritanceMethod
     g = find_graph(graph_id)
     target = _target(g, node_id)
+    checked = []                               # every value is checked before any is set
     for pid, value in params.items():
         prop = target.getPropertyFromId(pid, SDPropertyCategory.Input)
         if prop is None:
             raise RuntimeError('no parameter %r on %s; see describe_node' % (pid, node_id or 'graph'))
         if prop.isConnectable():
             raise RuntimeError('%r is an input connector; use connect' % pid)
+        driven = _driving_graph(target, prop) if node_id not in (None, '', 'graph') else None
+        if driven is not None:
+            # setting it would cut the parameter loose from its graph input or function
+            source = _plain_binding(driven)
+            raise RuntimeError("%s.%s is driven by %s; set that instead (set_params node_id='graph')" % (
+                node_id, pid, 'graph input %r' % source if source else 'a function'))
+        checked.append((pid, prop, _make_value(prop, value)))
+    for pid, prop, new_value in checked:
         before = fmt(target.getPropertyValue(prop))
-        new_value = _make_value(prop, value)   # validate before changing anything
         if pid.startswith('$') and hasattr(target, 'setPropertyInheritanceMethod'):
             # $outputsize/$format etc. only take effect when not inherited
             try:
@@ -622,8 +654,8 @@ def disconnect(graph_id, node_id, input_id):
 
 def delete_nodes(graph_id, node_ids):
     g = find_graph(graph_id)
-    for nid in node_ids:
-        node = _target(g, nid)
+    nodes = [(nid, _target(g, nid)) for nid in node_ids]   # every id found before anything is deleted
+    for nid, node in nodes:
         kind = node_kind(node)
         g.deleteNode(node)
         print('deleted %s %s' % (nid, kind))
@@ -687,11 +719,43 @@ def quit_designer(discard_unsaved=False):
     from PySide6.QtWidgets import QApplication
     qt_app = QApplication.instance()
     # getMainWindow() is a hidden QMainWindow; the window the user sees is another top-level
-    # widget. Close the visible ones (Designer's normal shutdown). Fallback: exit(), which stops
-    # the event loops; quit() would not, as Qt 6 cancels it when a window refuses to close.
-    # Deferred, so the bridge can still send this reply.
-    QTimer.singleShot(300, lambda: [w.close() for w in qt_app.topLevelWidgets() if w.isVisible()])
-    QTimer.singleShot(5000, lambda: qt_app.exit(0))
+    # widget. Close the visible ones (Designer's normal shutdown). Fallback when a window refuses
+    # to close: os._exit(), which ends the process without tearing Designer down. quit() would
+    # not stop it (Qt 6 cancels it when a window refuses to close), and exit() runs the teardown
+    # while Designer's own background threads still work: twice its licence check thread crashed
+    # on objects already destroyed (REVIEW.md PLG-8). The fallback fires only while a window is
+    # still open and the normal shutdown hasn't begun, so a slow shutdown is never cut off
+    # (REVIEW.md HLP-12). Deferred, so the bridge can still reply.
+    # The shutdown has begun once every window accepted its Close (none visible after
+    # close_windows). While it has, or while a close() is still running (a slow close handler,
+    # REVIEW.md HLP-17), the fallback only looks again every second; about 35 s after the quit, a
+    # window still visible is forced (a stuck handler, or a prompt shown after everything had closed,
+    # REVIEW.md HLP-19). A window that refuses to close is forced at 5 s. aboutToQuit isn't used:
+    # its slots run in connection order, so it can't be relied on (REVIEW.md TST-19, TST-23).
+    import time
+    closed_all = []
+    closing = []
+    give_up = time.monotonic() + 35
+
+    def close_windows():
+        closing.append(True)
+        try:
+            for w in qt_app.topLevelWidgets():
+                if w.isVisible():
+                    w.close()
+        finally:
+            closing.clear()
+        if not any(w.isVisible() for w in qt_app.topLevelWidgets()):
+            closed_all.append(True)
+
+    def fallback():
+        if (closing or closed_all) and time.monotonic() < give_up:
+            QTimer.singleShot(1000, fallback)
+            return
+        if any(w.isVisible() for w in qt_app.topLevelWidgets()):
+            os._exit(0)
+    QTimer.singleShot(300, close_windows)
+    QTimer.singleShot(5000, fallback)
     print('closing Designer')
 
 
@@ -850,8 +914,7 @@ def open_graph(identifier, node_id=None, node_ids=None, frame=None, rect=None):
     if node_id:
         node = _target(g, node_id)
         views = [ui.getGraphViewIDAt(i) for i in range(ui.getGraphViewIDCount())]
-        views = [v for v in views if ui.getGraphFromGraphViewID(v) is not None
-                 and ui.getGraphFromGraphViewID(v).getIdentifier() == g.getIdentifier()]
+        views = [v for v in views if _same_graph(ui.getGraphFromGraphViewID(v), g)]
         if not views:
             raise RuntimeError('graph opened but no graph view shows it')
         ui.focusGraphNode(views[0], node)
@@ -882,8 +945,9 @@ def create_graph(name, save_path=None, size_log2=11):
 def move_nodes(identifier, positions):
     from sd.api.sdbasetypes import float2
     g = find_graph(identifier)
-    for nid, (x, y) in positions.items():
-        _target(g, nid).setPosition(float2(float(x), float(y)))
+    moves = [(nid, _target(g, nid), x, y) for nid, (x, y) in positions.items()]   # all found first
+    for nid, node, x, y in moves:
+        node.setPosition(float2(float(x), float(y)))
         print('moved %s to (%d, %d)' % (nid, x, y))
 
 
@@ -948,10 +1012,10 @@ def expose_param(identifier, node_id, param, input_id=None, label=None, default=
     if g.getPropertyFromId(input_id, SDPropertyCategory.Input) is not None:
         raise RuntimeError('graph already has an input %r; pick another input_id' % input_id)
     try:
-        existing = node.getPropertyGraph(prop)
+        existing = node.getPropertyGraph(prop)    # an empty one is reused below
     except (Exception, APIException):
         existing = None
-    if existing is not None and len(existing.getNodes()):
+    if _driving_graph(node, prop) is not None:
         raise RuntimeError('%s.%s is already driven by a function; replacing it would lose that logic. '
                            'Edit the function by hand, or remove its graph input first.' % (node_id, param))
     from sd.api.sdvalueint import SDValueInt
@@ -959,6 +1023,8 @@ def expose_param(identifier, node_id, param, input_id=None, label=None, default=
     if is_enum:
         value = SDValueInt.sNew(int(value.get()))
     inp = g.newProperty(input_id, SDTypeInt.sNew() if is_enum else ptype, SDPropertyCategory.Input)
+    created_graph = existing is None
+    get = None
     try:
         g.setPropertyValue(inp, value)
         _set_annotation(g, inp, 'label', label or input_id.replace('_', ' ').capitalize())
@@ -970,10 +1036,31 @@ def expose_param(identifier, node_id, param, input_id=None, label=None, default=
         get.setInputPropertyValueFromId('__constant__', SDValueString.sNew(input_id))
         fg.setOutputNode(get, True)
     except (Exception, APIException):
+        # leave nothing half-made: a function graph left on the parameter would count as "driven";
+        # a reused empty one loses the node added to it (REVIEW.md HLP-15)
+        try:
+            if created_graph:
+                node.deletePropertyGraph(prop)
+            elif get is not None:
+                fg.deleteNode(get)
+        except (Exception, APIException):
+            pass
         g.deleteProperty(inp)   # don't leave an input that drives nothing
         raise
     print('exposed %s.%s as graph input %r (%s, default %r)' % (
         node_id, param, input_id, type_id, fmt(g.getPropertyValue(inp))))
+
+
+def _driving_graph(node, prop):
+    """The function graph driving a parameter's value, or None. An empty function graph (no
+    nodes) drives nothing, so the stored value counts, as expose_param has always assumed."""
+    try:
+        fg = node.getPropertyGraph(prop)
+    except (Exception, APIException):
+        return None
+    if fg is None or not len(fg.getNodes()):
+        return None
+    return fg
 
 
 def _plain_binding(fg):
@@ -1096,6 +1183,7 @@ def apply_edits(identifier, ops):
     node = lambda value: refs.get(value, value)
     for i, op in enumerate(ops):
         kind = op.get('op')
+        nodes_before = g.getNodes().getSize()
         try:
             if kind == 'add':
                 new_id = add_node(gid, op['definition'], op.get('position'), op.get('params'))
@@ -1125,10 +1213,11 @@ def apply_edits(identifier, ops):
                 raise RuntimeError('unknown op %r (add, bitmap, set, connect, disconnect, move, delete, expose)' % kind)
         except (Exception, APIException) as e:
             done = 'ops 0-%d were applied' % (i - 1) if i else 'no earlier op was applied'
+            # an add can fail after creating its node (in setting its params): say so only then
+            added = kind in ('add', 'bitmap') and g.getNodes().getSize() > nodes_before
             raise RuntimeError('op %d (%s) failed: %s. %s%s; Ctrl+Z on this graph reverts the whole '
                                'batch.' % (i, kind, e, done, ' (its node was added before the failure)'
-                                           if kind in ('add', 'bitmap') and refs.get(op.get('ref')) is None
-                                           and op.get('params') else ''))
+                                           if added else ''))
     print('applied %d op(s); refs: %s' % (len(ops), refs))
 
 
@@ -1145,11 +1234,7 @@ def sweep_param(identifier, node_id, param, values, out_dir, view_node=None, out
         raise RuntimeError('%r is not a parameter of %s; see describe_node / list_graph_inputs'
                            % (param, node_id))
     if node_id not in (None, '', 'graph'):
-        try:
-            driven = target.getPropertyGraph(prop)
-        except (Exception, APIException):
-            driven = None
-        if driven is not None:
+        if _driving_graph(target, prop) is not None:
             raise RuntimeError('%s.%s is driven by a graph input or function; sweep the graph input '
                                'instead (node_id="graph", param=<input id>, see list_graph_inputs)'
                                % (node_id, param))
@@ -1179,9 +1264,11 @@ def sweep_param(identifier, node_id, param, values, out_dir, view_node=None, out
                                              'format': str(texture.getPixelFormat()).split('.')[-1]}))
             _with_node_texture(g, view, output, use)
     finally:
-        target.setPropertyValue(prop, original)
-        if inherit is not None:
-            target.setPropertyInheritanceMethod(prop, inherit)
+        try:
+            target.setPropertyValue(prop, original)
+        finally:   # the inheritance goes back even if putting the value back fails
+            if inherit is not None:
+                target.setPropertyInheritanceMethod(prop, inherit)
         print('restored %s.%s to %r' % (node_id or 'graph', param, original_text))
 
 
@@ -1351,18 +1438,22 @@ def package_file_of(identifier, save=False):
     current = _APP.getQtForPythonUIMgr().getCurrentGraph()
     print('FILE=' + path)
     print('GRAPH=' + g.getIdentifier())
-    print('OPEN=' + ('1' if current is not None and current.getIdentifier() == g.getIdentifier() else '0'))
+    print('OPEN=' + ('1' if _same_graph(current, g) else '0'))
 
 
 def unload_package_file(path):
     """Close every open copy of the package at `path` (its graph views are torn down when this
     call returns to Designer's event loop; load it again in a separate call)."""
     norm = os.path.normpath(path)
+    matches = [p for p in _PM.getUserPackages() if os.path.normpath(p.getFilePath() or '') == norm]
+    if any(p.isModified() for p in matches):
+        # edited after the save that came before the file edit: never drop those changes
+        raise RuntimeError('%s has unsaved changes (made after it was saved for the edit); not unloading it. '
+                           'Save it and try again.' % path)
     count = 0
-    for p in list(_PM.getUserPackages()):
-        if os.path.normpath(p.getFilePath() or '') == norm:
-            _PM.unloadUserPackage(p)
-            count += 1
+    for p in matches:
+        _PM.unloadUserPackage(p)
+        count += 1
     print('unloaded %d package(s): %s' % (count, path))
 
 

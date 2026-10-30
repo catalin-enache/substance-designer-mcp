@@ -41,6 +41,7 @@ TOKEN_FILE = os.path.join(os.path.expanduser('~'), '.%s_token' % NAME)
 QUEUE_WAIT = 900          # seconds a job may wait for Designer before it is dropped
 READ_TIMEOUT = 30         # seconds to receive a whole request
 MAX_REQUEST = 64 << 20    # bytes
+MAX_CLIENTS = 16          # connections not yet authenticated; more are closed straight away
 VERSION = 3
 
 _server = None
@@ -75,6 +76,9 @@ def expected_auth(token, nonce):
 
 
 def _make_tracer(deadline, cancel):
+    """Raises ScriptAborted in the running script. Python unsets a trace function that raises
+    (sys.settrace docs), so the abort fires once and the script's finally blocks and context
+    exits, such as UndoGroup committing its transaction, run to the end."""
     ticks = [0]
 
     def tracer(frame, event, arg):
@@ -120,9 +124,15 @@ def _fail(error):
 
 
 def _read_request(conn):
-    conn.settimeout(READ_TIMEOUT)
+    # one deadline for the whole request: a timeout per recv lets a client sending a byte now
+    # and then hold the connection, and its buffer, forever
+    deadline = time.monotonic() + READ_TIMEOUT
     data = bytearray()
     while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise socket.timeout('request not received within %ds' % READ_TIMEOUT)
+        conn.settimeout(remaining)
         chunk = conn.recv(65536)
         if not chunk:
             return bytes(data)
@@ -138,6 +148,8 @@ class _Server:
         self.cancel = threading.Event()
         self.lock = threading.Lock()   # dequeuing a job and marking it running happen together
         self.busy_since = None
+        self.draining = False          # main thread only: _drain is running
+        self.clients = 0               # connections being served (under self.lock)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         if sys.platform == 'win32':
             # SO_REUSEADDR on Windows would let a second socket bind the same port
@@ -161,7 +173,29 @@ class _Server:
                 conn, _ = self.sock.accept()
             except OSError:
                 break
-            threading.Thread(target=self._handle, args=(conn,), daemon=True).start()
+            with self.lock:
+                full = self.clients >= MAX_CLIENTS
+                if not full:
+                    self.clients += 1
+            if full:
+                conn.close()   # a thread and a buffer per connection: never without a limit
+                continue
+            threading.Thread(target=self._serve, args=(conn,), daemon=True).start()
+
+    def _serve(self, conn):
+        # The slot only limits connections that haven't authenticated yet: an authenticated client
+        # waiting for its queued job must not shut out cancel and status (REVIEW.md PLG-10)
+        held = [True]
+
+        def release():
+            with self.lock:
+                if held[0]:
+                    held[0] = False
+                    self.clients -= 1
+        try:
+            self._handle(conn, release)
+        finally:
+            release()
 
     def _control(self, cmd):
         if cmd == 'cancel':
@@ -174,19 +208,23 @@ class _Server:
                         break
                     box['result'] = _fail('ScriptAborted: cancelled before start')
                     done.set()
-                    dropped += 1
+                    if not box.get('abandoned'):   # counted as status counts them (PLG-14)
+                        dropped += 1
                 running = self.busy_since is not None
                 if running:
                     self.cancel.set()
             return {'ok': True, 'output': 'cancel requested (running: %s, queued dropped: %d)' % (running, dropped),
                     'error': ''}
         if cmd == 'status':
-            busy = 'idle' if self.busy_since is None else 'running for %.1fs' % (time.monotonic() - self.busy_since)
-            return {'ok': True, 'output': '%s v%d: %s, %d queued' % (NAME, VERSION, busy, self.jobs.qsize()),
-                    'error': ''}
+            since = self.busy_since        # read once: the main thread may clear it meanwhile
+            busy = 'idle' if since is None else 'running for %.1fs' % (time.monotonic() - since)
+            with self.lock:
+                # jobs dropped after QUEUE_WAIT stay in the queue until _drain skips them
+                waiting = sum(1 for job in list(self.jobs.queue) if not job[3].get('abandoned'))
+            return {'ok': True, 'output': '%s v%d: %s, %d queued' % (NAME, VERSION, busy, waiting), 'error': ''}
         return _fail('unknown cmd %r' % cmd)
 
-    def _handle(self, conn):
+    def _handle(self, conn, release=lambda: None):
         with conn:
             try:
                 nonce = secrets.token_hex(16)
@@ -198,7 +236,7 @@ class _Server:
                 except (ValueError, UnicodeDecodeError, OSError):
                     reply = _fail('bad request')   # no details before authentication
                 else:
-                    reply = self._authorised(req, nonce)
+                    reply = self._authorised(req, nonce, release)
             except Exception:
                 reply = _fail('bad request')
             try:
@@ -206,9 +244,10 @@ class _Server:
             except OSError:
                 pass
 
-    def _authorised(self, req, nonce):
+    def _authorised(self, req, nonce, release=lambda: None):
         if not hmac.compare_digest(str(req.get('auth', '')), expected_auth(self.token, nonce)):
             return _fail('invalid token')
+        release()
         if req.get('cmd'):
             # Control commands are answered from this thread, even while a script runs
             return self._control(req['cmd'])
@@ -220,7 +259,10 @@ class _Server:
             return _fail('code must be a string')
         done = threading.Event()
         box = {}
-        self.jobs.put((code, req.get('path'), timeout, box, done))
+        with self.lock:
+            if not self.running:           # stop() has emptied the queue already; nothing would run it
+                return _fail('Designer is closing; the script was not run')
+            self.jobs.put((code, req.get('path'), timeout, box, done))
         if not box.get('started') and not done.wait(QUEUE_WAIT):
             with self.lock:
                 if not box.get('started'):
@@ -230,30 +272,56 @@ class _Server:
         return box['result']
 
     def _drain(self):
-        while True:
-            with self.lock:
+        # Never start a job inside the running one. Qt doesn't fire this timer again while its
+        # own slot runs, even when the script processes events (the self-test checks it), so
+        # this only guards against any other caller of _drain
+        if self.draining:
+            return
+        self.draining = True
+        try:
+            while True:
+                with self.lock:
+                    try:
+                        code, path, timeout, box, done = self.jobs.get_nowait()
+                    except queue.Empty:
+                        return
+                    if box.get('abandoned'):
+                        continue
+                    box['started'] = True
+                    self.cancel.clear()
+                    self.busy_since = time.monotonic()
                 try:
-                    code, path, timeout, box, done = self.jobs.get_nowait()
-                except queue.Empty:
-                    return
-                if box.get('abandoned'):
-                    continue
-                box['started'] = True
-                self.cancel.clear()
-                self.busy_since = time.monotonic()
-            try:
-                box['result'] = _run(code, path, timeout, self.cancel)
-            finally:
-                self.busy_since = None
-            done.set()
+                    box['result'] = _run(code, path, timeout, self.cancel)
+                finally:
+                    self.busy_since = None
+                done.set()
+                # One job per tick: Designer's event loop runs before the next one, as two separate
+                # calls (an unload, then a load) need (AGENTS.md, Portals; REVIEW.md PLG-13)
+                return
+        finally:
+            self.draining = False
 
     def stop(self):
-        self.running = False
+        with self.lock:
+            self.running = False
         self.timer.stop()
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)   # wakes a blocked accept(), so the port is released
+        except OSError:
+            pass
         try:
             self.sock.close()
         except OSError:
             pass
+        # Nothing will run the queued jobs now: answer their clients instead of letting them wait
+        with self.lock:
+            while True:
+                try:
+                    _, _, _, box, done = self.jobs.get_nowait()
+                except queue.Empty:
+                    break
+                box['result'] = _fail('Designer is closing; the script was not run')
+                done.set()
 
 
 def initializeSDPlugin():

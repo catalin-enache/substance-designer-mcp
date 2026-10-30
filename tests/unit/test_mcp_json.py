@@ -43,3 +43,38 @@ async def _tool_count(cwd, project_dir):
 def test_server_starts_from_anywhere_in_the_repo(subfolder, project_dir):
     # Claude Code sets CLAUDE_PROJECT_DIR; without it the command falls back to the git root
     assert asyncio.run(_tool_count(os.path.join(ROOT, subfolder), project_dir)) > 30
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='.mcp.json uses sh; Windows registers per folder')
+def test_starts_when_project_dir_is_a_subfolder():
+    # REVIEW.md INS-5: a CLAUDE_PROJECT_DIR without the venv falls back to the git root
+    assert asyncio.run(_tool_count(os.path.join(ROOT, 'tests'), os.path.join(ROOT, 'examples'))) > 30
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='.mcp.json uses sh; Windows registers per folder')
+def test_a_missing_venv_says_to_run_the_installer(tmp_path):
+    # REVIEW.md INS-5: a fresh clone (or a deleted venv) only showed "failed to connect"
+    import subprocess
+    cfg = _config()
+    env = {k: v for k, v in os.environ.items() if k != 'CLAUDE_PROJECT_DIR'}
+    result = subprocess.run([cfg['command'], *cfg['args']], cwd=str(tmp_path), env=env,
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode != 0 and 'install.py' in result.stderr
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='runs a stand-in python.exe through sh; real Windows '
+                    'registers per folder (REVIEW.md INS-18)')
+def test_a_windows_venv_is_used(tmp_path):
+    # REVIEW.md INS-14: with sh on PATH on Windows (Git Bash), the venv is
+    # mcp_server/venv/Scripts/python.exe, and the command said there was no Python environment
+    import stat
+    import subprocess
+    python = tmp_path / 'mcp_server' / 'venv' / 'Scripts' / 'python.exe'
+    python.parent.mkdir(parents=True)
+    python.write_text('#!/bin/sh\necho WINDOWS_VENV "$@"\n')
+    python.chmod(python.stat().st_mode | stat.S_IXUSR)
+    cfg = _config()
+    env = {k: v for k, v in os.environ.items() if k != 'CLAUDE_PROJECT_DIR'}
+    result = subprocess.run([cfg['command'], *cfg['args']], cwd=str(tmp_path), env=env,
+                            capture_output=True, text=True, timeout=20)
+    assert result.stdout.strip() == 'WINDOWS_VENV mcp_server/server.py', result.stderr
