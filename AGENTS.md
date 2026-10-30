@@ -65,8 +65,8 @@ Parameters are in each tool's description; this is when to reach for which.
 - **Bigger logic:** `run_designer_script` (script on disk, preferred for anything long) or
   `execute_designer_code`; `cancel_designer_job` aborts.
 - **Output:** `save_package`; `export_outputs` (straight from Designer, live unsaved state; same
-  as the cooked render to within a few 1/65535 steps at a few pixels: the self-test allows 8,
-  since renders computed in parallel aren't bit-identical from run to run); `sbsar_info` +
+  as the cooked render to within a few 1/65535 steps at a few pixels: the self-test allows 8
+  and prints what it measured; why renders differ run to run is ROADMAP item 17); `sbsar_info` +
   `render_sbs` (exposed params, size, formats); `preview_maps` to look at rendered files.
 
 **Loop:** search/describe → build (script or `apply_edits`) → `describe_graph` + `preview_node`
@@ -162,7 +162,19 @@ Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `-c COD
   `graph.setInputPropertyValueFromId('$outputsize', SDValueInt2.sNew(int2(11, 11)))`.
   Generators inherit the graph size; filters inherit from their input. A node's `$format` /
   `$outputsize` only take effect with inheritance set to Absolute (`set_params` and
-  `sweep_param` do that). `setDefaultParentSize()` takes **pixels**, not log2.
+  `sweep_param` do that). So does the graph's own `$format` (a new graph's follows its parent:
+  setting 16 bits left a generator at RGBA8 until made Absolute); `set_params` does that too.
+  Not the graph's `$randomseed`: inherited, its value still changes the output (an offset added to
+  a render's seed: stored 3 rendered with seed 2 matches stored 0 with seed 5, within render noise), and
+  only an inherited one stays a control of the cooked .sbsar. A node's `$randomseed` likewise:
+  inherited, its value is added to the graph's (0 + 3, 3 + 0 and 1 + 2 gave one image); made Absolute
+  it no longer follows the graph's seed, nor a render's. So `set_params` never changes a seed's
+  inheritance (an Absolute one stays Absolute); to fix one on purpose, change it in code. (Compare computed pixels with a tolerance: two computes of one setting
+  differed by 2/65535, and raw buffers carry row padding.)
+  **Changing a parameter's inheritance doesn't keep its value** (measured on a node's `$outputsize`
+  and the graph's `$randomseed`, both directions; back to inherited gave the default): set the
+  inheritance first, then the value (`sweep_param` restores in that order).
+  `setDefaultParentSize()` takes **pixels**, not log2.
 - **Inheritance numbers differ between the API and the file.** API `SDPropertyInheritanceMethod`:
   RelativeToInput 0, RelativeToParent 1, Absolute 2. A .sbs `<relativeTo>`: 0 absolute,
   1 relative to parent, 2 relative to input, and the default isn't stored (parent for a graph,
@@ -216,8 +228,8 @@ save, edit and reload it in a single call (the example script does, for its port
   profile, and the process hung for over 30 s. So `quit_designer`'s fallback after 5 s is
   `os._exit(0)`: no teardown, no race (Designer doesn't save its window layout then). A window that
   refuses to close is forced at 5 s. Once every window has closed, or while a close handler is still
-  running, the shutdown is left to finish; a window still visible about 35 s after the quit (a stuck
-  handler) is forced then. Designer quits once its main window has closed, even with another
+  running, the shutdown is left to finish; about 35 s after the quit, a window still visible (a stuck
+  handler), or a Designer still running with every window closed, is forced then. Designer quits once its main window has closed, even with another
   top-level window showing (measured: a window shown during the close; gone in 2 s). (`aboutToQuit` can't serve as the
   signal: its slots run in connection order, after any connected earlier.) A modal
   dialog doesn't stop a programmatic close. Crash dumps: Designer's `Sentry-Crashpad/completed`.
@@ -297,7 +309,7 @@ those assignments on one line.
 
 How the plugin, server, helpers and command-line tools fit together: README.md, **How it
 works**. `server.py` loads this file from the folder above `mcp_server/`, so keep it there. Its
-instructions (`INSTRUCTIONS` in `server.py`) must stay under 4,096 characters, and every tool result starts with a reminder until `get_guide()`
+instructions (`INSTRUCTIONS` in `server.py`) must stay under 4,096 characters, and every text tool result starts with a reminder until `get_guide()`
 has been called in the session (unit tests check both).
 
 **Every new feature or fix comes with a test, in the same change.** A tool, a parameter or a
@@ -312,6 +324,15 @@ Designer, reproduce it in the live self-test too, since a unit test may take a p
 never does. Two review findings were disproved this way: an abort raised again during cleanup
 (Python unsets a trace function that raises) and a job starting inside the running one (Qt
 doesn't re-fire a timer whose slot is running; only a direct call in a unit test did).
+
+**Review your own work before calling it done.** When you implement something, or write or run
+its tests, step back once it seems finished and look at it as a reviewer would, not as its author:
+does it cover the neighbouring cases (a node as well as the graph, the other parameter, the other
+code path), would each test fail without the change it guards (not pass on state an earlier check
+left, a value already there, or a comparison any rule satisfies), does every test clean up on
+failure too, did the change weaken an older test, and does any comment, docstring or doc now say
+more than the code and tests show? Fix what you find, then look again the same way, and repeat
+until a fresh look finds nothing a reviewer could report. Only then say it is done.
 
 **Reviews go in REVIEW.md** (in the repo root, committed with the changes it records). Two skills:
 `project-code-review` (`.claude/skills/project-code-review/`) for reviewing, whose `TEMPLATE.md` is the

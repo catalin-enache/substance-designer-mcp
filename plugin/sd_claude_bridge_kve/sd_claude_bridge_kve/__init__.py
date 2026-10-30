@@ -168,11 +168,23 @@ class _Server:
         print('[%s] v%d listening on 127.0.0.1:%d' % (NAME, VERSION, PORT))
 
     def _accept_loop(self):
+        delay, last_error = 0.1, None
         while self.running:
             try:
                 conn, _ = self.sock.accept()
-            except OSError:
-                break
+            except OSError as e:
+                if not self.running:
+                    break                  # stop() closed the socket
+                # a momentary error (too many open files, a connection reset before accept) must
+                # not end the loop: the bridge would stop answering until Designer restarts (PLG-15).
+                # One that lasts is logged once and retried less and less often (PLG-20)
+                if str(e) != last_error:
+                    print('[%s] accept failed (%s); still listening' % (NAME, e))
+                    last_error = str(e)
+                time.sleep(delay)
+                delay = min(delay * 2, 5)
+                continue
+            delay, last_error = 0.1, None
             with self.lock:
                 full = self.clients >= MAX_CLIENTS
                 if not full:
@@ -180,7 +192,12 @@ class _Server:
             if full:
                 conn.close()   # a thread and a buffer per connection: never without a limit
                 continue
-            threading.Thread(target=self._serve, args=(conn,), daemon=True).start()
+            try:
+                threading.Thread(target=self._serve, args=(conn,), daemon=True).start()
+            except RuntimeError:           # can't start a thread: free the slot, drop the connection
+                with self.lock:
+                    self.clients -= 1
+                conn.close()
 
     def _serve(self, conn):
         # The slot only limits connections that haven't authenticated yet: an authenticated client

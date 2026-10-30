@@ -48,6 +48,7 @@ skipped = []
 
 
 def check(tool, name, ok, detail=''):
+    ok = bool(ok)   # a condition like `refs and not missing` may be [] or None (REVIEW.md TST-29)
     results.setdefault(tool, []).append(ok)
     print('%s  %-22s %s | %s' % ('PASS' if ok else 'FAIL', tool, name, detail.strip()[:150].replace('\n', ' / ')))
 
@@ -138,6 +139,20 @@ def clipboard_fingerprint():
     return hashlib.sha256(info + data).hexdigest()
 
 
+# Designer's library packages loaded right now (their paths), so the run can unload the ones it
+# loaded itself (describe_node, add_node of library graphs) and leave the user's (REVIEW.md TST-30)
+LIBRARY_PACKAGES = (
+    "import os, sd\nfrom sd.api.sdapplication import SDApplicationPath\napp = sd.getContext().getSDApplication()\n"
+    "lib = os.path.normcase(os.path.join(app.getPath(SDApplicationPath.DefaultResourcesDir), 'packages'))\n"
+    "print('LIBS=' + '|'.join(sorted(p.getFilePath() for p in app.getPackageMgr().getUserPackages()\n"
+    "                                if os.path.normcase(p.getFilePath() or '').startswith(lib))))")
+UNLOAD_LIBRARY_PACKAGES = (
+    "import os, sd\nfrom sd.api.sdapplication import SDApplicationPath\napp = sd.getContext().getSDApplication()\n"
+    "keep = set(%r)\nlib = os.path.normcase(os.path.join(app.getPath(SDApplicationPath.DefaultResourcesDir), 'packages'))\n"
+    "for p in list(app.getPackageMgr().getUserPackages()):\n"
+    "    path = p.getFilePath() or ''\n"
+    "    if os.path.normcase(path).startswith(lib) and path not in keep:\n"
+    "        app.getPackageMgr().unloadUserPackage(p)\n")
 # Every graph the self-test creates is named mcp_selftest...: this closes them all
 CLEAN = ("import sd\npm=sd.getContext().getSDApplication().getPackageMgr()\nn=0\n"
          "for p in list(pm.getUserPackages()):\n"
@@ -166,6 +181,22 @@ FACTS = ("import sd\nfrom sd.api.apiexception import APIException\nfrom sd.api.s
          "c.getInputPropertyNode().getIdentifier()=='%s' and c.getOutputProperty().getId()=='input1'))")
 GRAPH_OF = ("import sd\ng=[r for p in sd.getContext().getSDApplication().getPackageMgr().getUserPackages() "
             "for r in p.getChildrenResources(False) if r.getIdentifier()=='%s'][0]\n")
+# Computed pixels to compare with a tolerance (two computes of one setting differ by a step or two,
+# and raw buffers carry row padding; AGENTS.md): pixels(texture) -> integers, apart(a, b) -> the
+# largest difference. Only 8- and 16-bit integer formats, where a tolerance in steps means something
+# (REVIEW.md TST-54, TST-56)
+PIXELS = (
+    "import ctypes, array\n"
+    "def pixels(t):\n"
+    "    fmt = str(t.getPixelFormat()).split('.')[-1]\n"
+    "    if not (fmt.endswith('8') or fmt.endswith('16')):\n"
+    "        raise RuntimeError('pixels(): %s is not an 8- or 16-bit integer format' % fmt)\n"
+    "    w, h, pitch, bpp = t.getSize().x, t.getSize().y, t.getRowPitch(), t.getBytesPerPixel()\n"
+    "    raw = ctypes.string_at(t.getPixelBufferAddress(), pitch * h)\n"
+    "    rows = b''.join(raw[y * pitch:y * pitch + w * bpp] for y in range(h))\n"
+    "    return array.array('H' if fmt.endswith('16') else 'B', rows)\n"
+    "def apart(a, b):\n"
+    "    return max(abs(x - y) for x, y in zip(a, b))\n")
 INHERIT = GRAPH_OF + ("from sd.api.sdproperty import SDPropertyCategory\nn=g.getNodeFromId('%s')\n"
                       "p=n.getPropertyFromId('$outputsize', SDPropertyCategory.Input)\n"
                       "print('INHERIT=%%s VALUE=%%s' %% (n.getPropertyInheritanceMethod(p).name, n.getPropertyValue(p).get()))")
@@ -225,6 +256,41 @@ async def cancel_from_second_client():
             return text(await s.call_tool('cancel_designer_job', {}))
 
 
+async def libs(c):
+    """(the library packages loaded now, '') or (None, the bridge's answer) on an error."""
+    t = text(await c('execute_designer_code', {'code': LIBRARY_PACKAGES}))
+    m = re.search(r'LIBS=(.*)', t)
+    return ([l for l in m.group(1).strip().split('|') if l], '') if m else (None, t)
+
+
+async def library_packages(c):
+    """The library packages loaded when the run starts, or None (a failed check) if the bridge
+    answers with an error, so the run goes on to its summary and clean-up (REVIEW.md TST-51)."""
+    found, error = await libs(c)
+    if found is None:
+        check('self-test', 'reads the library packages loaded at the start', False, error)
+    return found
+
+
+async def restore_library_packages(c, libs_before):
+    """Unloads the library packages the run loaded and checks the user's are still there. A bridge
+    error is a failed check, so the rest of the clean-up still runs (REVIEW.md TST-33)."""
+    if libs_before is None:
+        skip('self-test', 'leaves the library packages loaded as it found them', 'the list at the start could not be read')
+        return
+    loaded, error = await libs(c)
+    if loaded is not None:
+        await c('execute_designer_code', {'code': UNLOAD_LIBRARY_PACKAGES % libs_before})
+        after, error = await libs(c)
+    if loaded is None or after is None:
+        check('self-test', 'leaves the library packages loaded as it found them', False, error)
+        return
+    check('self-test', 'leaves the library packages loaded as it found them', after == libs_before,
+          'the run had loaded %d more; before %d, after %d: %s' % (
+              len([l for l in loaded if l not in libs_before]), len(libs_before), len(after),
+              sorted(set(after) ^ set(libs_before))[:4]))
+
+
 async def run(scratch):
     async with stdio_client(PARAMS) as (r, w):
         async with ClientSession(r, w) as s:
@@ -251,6 +317,7 @@ async def run(scratch):
             check('launch_designer', 'already running' if was_running else 'started from closed',
                   ('already running' if was_running else 'Designer started in') in t and 'ERROR' not in t, t)
             user_graph = re.search(r'CURRENT=(.*)', text(await c('execute_designer_code', {'code': CURRENT_GRAPH}))).group(1).strip()
+            libs_before = await library_packages(c)
             await c('execute_designer_code', {'code': CLEAN})
             try:
                 # --- connection
@@ -269,9 +336,11 @@ async def run(scratch):
                 token_file = TOKEN_FILE
                 with open(token_file) as f:
                     token = f.read().strip()                      # used, never printed
+                # the old protocol (the token itself) can only be told apart from a wrong answer with the
+                # real token, which never crosses the socket: unit test
+                # test_the_old_protocol_sending_the_token_is_refused (REVIEW.md TST-34)
                 for name, req in (('a wrong answer', {'auth': 'x' * 64, 'cmd': 'status'}),
                                   ('no answer', {'cmd': 'status'}),
-                                  ('the token itself (old protocol)', {'token': token, 'cmd': 'status'}),
                                   ('code with a wrong answer', {'auth': 'nope', 'code': "print('SHOULD NOT RUN')"})):
                     reply = raw_request(req)
                     check(B, 'refuses ' + name, not reply['ok'] and reply.get('error') == 'invalid token'
@@ -416,6 +485,138 @@ async def run(scratch):
                 check('set_params', 'float4', '(0.3, 0.3, 0.3, 0.3)' in t, t)
                 t = text(await c('set_params', {'node_id': 'graph', 'params': {'$outputsize': [9, 9]}, **G}))
                 check('set_params', 'graph $outputsize', '(9, 9)' in t, t)
+                # on an overridable graph it is refused (it would quietly make the size fixed), pointing
+                # to set_graph_size, and the graph stays overridable (REVIEW.md HLP-22)
+                await c('set_graph_size', {'size_log2': 9, 'overridable': True, **G})
+                r_ = await c('set_params', {'node_id': 'graph', 'params': {'$outputsize': [10, 10]}, **G})
+                still = text(await c('execute_designer_code', {'code': GRAPH_OF % TEST_GRAPH + (
+                    "from sd.api.sdproperty import SDPropertyCategory\n"
+                    "p = g.getPropertyFromId('$outputsize', SDPropertyCategory.Input)\n"
+                    "print('INHERIT=' + str(g.getPropertyInheritanceMethod(p)).split('.')[-1])")}))
+                check('set_params', 'graph $outputsize on an overridable graph: refused, still overridable',
+                      r_.is_error and 'set_graph_size' in text(r_) and 'INHERIT=RelativeToParent' in still,
+                      text(r_).strip()[-120:] + ' | ' + still.strip())
+                await c('set_graph_size', {'size_log2': 9, 'overridable': False, **G})
+                # the graph's other $ parameters follow its parent too, and a value set while they do
+                # changes nothing, so set_params makes them Absolute (REVIEW.md HLP-24); measured on a
+                # generator that inherits the graph's format
+                FORMAT_OF = GRAPH_OF % TEST_GRAPH + (
+                    "from sd.api.sdproperty import SDPropertyCategory\n"
+                    "from sd.api.sdvalueenum import SDValueEnum\n"
+                    "p = g.getPropertyFromId('$format', SDPropertyCategory.Input)\n"
+                    "%s\n"
+                    "u = g.newNode('sbs::compositing::uniform'); o = g.newNode('sbs::compositing::output')\n"
+                    "u.newPropertyConnectionFromId('unique_filter_output', o, 'inputNodeOutput')\n"
+                    "try:\n    g.compute()\n"
+                    "    t = u.getPropertyValue(u.getPropertyFromId('unique_filter_output', SDPropertyCategory.Output)).get()\n"
+                    "    print('FORMAT=' + str(t.getPixelFormat()).split('.')[-1])\n"
+                    "finally:\n    g.deleteNode(u); g.deleteNode(o)\n"   # no stray output if it fails (REVIEW.md TST-49)
+                    "print('INHERIT=' + str(g.getPropertyInheritanceMethod(p)).split('.')[-1])")
+                fact = text(await c('execute_designer_code', {'code': FORMAT_OF % (
+                    "g.setPropertyValue(p, SDValueEnum.sFromValueId(p.getType().getId(), '16_bits_per_channel'))")}))
+                check('designer facts', "an inherited graph $format ignores its value (AGENTS.md)",
+                      'FORMAT=RGBA8' in fact and 'INHERIT=RelativeToParent' in fact, fact.strip())
+                t = text(await c('set_params', {'node_id': 'graph', 'params': {'$format': '16_bits_per_channel'}, **G}))
+                fmt16 = text(await c('execute_designer_code', {'code': FORMAT_OF % ''}))
+                check('set_params', 'graph $format takes effect (made Absolute)',
+                      'FORMAT=RGBA16' in fmt16 and 'INHERIT=Absolute' in fmt16, t.strip() + ' | ' + fmt16.strip())
+                # later checks run on a graph like a new one: $format follows its parent again (REVIEW.md TST-35)
+                back = text(await c('execute_designer_code', {'code': GRAPH_OF % TEST_GRAPH + (
+                    "from sd.api.sdproperty import SDPropertyCategory, SDPropertyInheritanceMethod as IM\n"
+                    "from sd.api.sdvalueenum import SDValueEnum\n"
+                    "p = g.getPropertyFromId('$format', SDPropertyCategory.Input)\n"
+                    "g.setPropertyValue(p, SDValueEnum.sFromValueId(p.getType().getId(), '8_bits_per_channel'))\n"
+                    "g.setPropertyInheritanceMethod(p, IM.RelativeToParent)\n"
+                    "print('INHERIT=' + str(g.getPropertyInheritanceMethod(p)).split('.')[-1])")}))
+                check('self-test', 'the graph $format check puts the graph back as it was', 'INHERIT=RelativeToParent' in back, back.strip())
+                # the graph's $randomseed is different: one that follows its parent is exposed in a
+                # .sbsar (an Absolute one isn't) and its value still counts, so set_params leaves its
+                # inheritance (REVIEW.md HLP-25; sbsar_info checks the exposure further down)
+                SEED_OF = GRAPH_OF % TEST_GRAPH + PIXELS + (
+                    "from sd.api.sdproperty import SDPropertyCategory\n"
+                    "from sd.api.sdvalueint import SDValueInt\n"
+                    "p = g.getPropertyFromId('$randomseed', SDPropertyCategory.Input)\n"
+                    "n = g.getNodeFromId('%s'); out = n.getProperties(SDPropertyCategory.Output)[0]\n"
+                    "def look(seed):\n"
+                    "    g.setPropertyValue(p, SDValueInt.sNew(seed)); g.compute()\n"
+                    "    return pixels(n.getPropertyValue(out).get())\n"
+                    "o = None\n"
+                    "try:\n"   # no stray output for later checks if a step fails (REVIEW.md TST-38, TST-53)
+                    "    o = g.newNode('sbs::compositing::output')\n"
+                    "    n.newPropertyConnectionFromId(out.getId(), o, 'inputNodeOutput')\n"
+                    "    looks = [look(s) for s in (0, 3, 3)]\n"
+                    "finally:\n"
+                    "    if o is not None:\n        g.deleteNode(o)\n"
+                    "print('DIFFERS=%%s REPEATS=%%s INHERIT=%%s' %% (apart(looks[0], looks[1]) > 8, apart(looks[1], looks[2]) <= 8, "
+                    "str(g.getPropertyInheritanceMethod(p)).split('.')[-1]))") % clouds
+                fact = text(await c('execute_designer_code', {'code': SEED_OF}))
+                check('designer facts', "an inherited graph $randomseed's value changes the output (AGENTS.md)",
+                      'DIFFERS=True REPEATS=True INHERIT=RelativeToParent' in fact, fact.strip())
+                # a node's seed: inherited, its value is added to the graph's; Absolute, it no longer follows
+                # the graph's seed (nor a .sbsar's), so set_params leaves it inherited (REVIEW.md HLP-27).
+                # Pixels compared with a tolerance: two computes of one setting differ by a step or two
+                fact = text(await c('execute_designer_code', {'code': GRAPH_OF % TEST_GRAPH + PIXELS + (
+                    "from sd.api.sdproperty import SDPropertyCategory, SDPropertyInheritanceMethod as IM\n"
+                    "from sd.api.sdvalueint import SDValueInt\n"
+                    "n = g.getNodeFromId('%s'); out = n.getProperties(SDPropertyCategory.Output)[0]\n"
+                    "gp = g.getPropertyFromId('$randomseed', SDPropertyCategory.Input)\n"
+                    "np_ = n.getPropertyFromId('$randomseed', SDPropertyCategory.Input)\n"
+                    "kept = (g.getPropertyValue(gp).get(), n.getPropertyInheritanceMethod(np_), n.getPropertyValue(np_).get())\n"
+                    "def look(inherit, graph_seed, node_seed):\n"
+                    "    n.setPropertyInheritanceMethod(np_, inherit)\n"
+                    "    g.setPropertyValue(gp, SDValueInt.sNew(graph_seed)); n.setPropertyValue(np_, SDValueInt.sNew(node_seed))\n"
+                    "    g.compute(); return pixels(n.getPropertyValue(out).get())\n"
+                    "o = None\n"
+                    "try:\n"   # the output node inside the try too (REVIEW.md TST-53)
+                    "    o = g.newNode('sbs::compositing::output')\n"
+                    "    n.newPropertyConnectionFromId(out.getId(), o, 'inputNodeOutput')\n"
+                    "    r03 = look(IM.RelativeToParent, 0, 3)\n"
+                    "    near = max(apart(r03, look(IM.RelativeToParent, 3, 0)), apart(r03, look(IM.RelativeToParent, 1, 2)))\n"
+                    "    counts = apart(r03, look(IM.RelativeToParent, 0, 0))\n"
+                    "    a0 = look(IM.Absolute, 0, 0)\n"
+                    "    follows = apart(a0, look(IM.Absolute, 3, 0))\n"
+                    "finally:\n"
+                    "    if o is not None:\n        g.deleteNode(o)\n"
+                    "    n.setPropertyInheritanceMethod(np_, kept[1]); n.setPropertyValue(np_, SDValueInt.sNew(kept[2]))\n"
+                    "    g.setPropertyValue(gp, SDValueInt.sNew(kept[0]))\n"
+                    "print('ADDED_WITHIN=%%d VALUE_COUNTS_BY=%%d ABSOLUTE_MOVES_WITH_GRAPH_BY=%%d' %% (near, counts, follows))") % clouds}))
+                m = re.search(r'ADDED_WITHIN=(\d+) VALUE_COUNTS_BY=(\d+) ABSOLUTE_MOVES_WITH_GRAPH_BY=(\d+)', fact)
+                check('designer facts', "a node's $randomseed: inherited it's added to the graph's; Absolute it no longer follows it (AGENTS.md)",
+                      m is not None and int(m.group(1)) <= 8 and int(m.group(2)) > 8 and int(m.group(3)) <= 8, fact.strip())
+                t = text(await c('set_params', {'node_id': clouds, 'params': {'$randomseed': 7}, **G}))
+                still = text(await c('execute_designer_code', {'code': GRAPH_OF % TEST_GRAPH + (
+                    "from sd.api.sdproperty import SDPropertyCategory\nn = g.getNodeFromId('%s')\n"
+                    "p = n.getPropertyFromId('$randomseed', SDPropertyCategory.Input)\n"
+                    "print('INHERIT=%%s VALUE=%%s' %% (n.getPropertyInheritanceMethod(p).name, n.getPropertyValue(p).get()))") % clouds}))
+                check('set_params', "a node's $randomseed keeps following the graph's", 'INHERIT=RelativeToParent VALUE=7' in still,
+                      t.strip() + ' | ' + still.strip())
+                # and one already Absolute stays Absolute, on a node and on the graph: set_params never
+                # changes a seed's inheritance (AGENTS.md; REVIEW.md HLP-29, TST-57)
+                SEED_INHERIT = GRAPH_OF % TEST_GRAPH + (
+                    "from sd.api.sdproperty import SDPropertyCategory, SDPropertyInheritanceMethod as IM\n"
+                    "from sd.api.sdvalueint import SDValueInt\n"
+                    "n = %s; p = n.getPropertyFromId('$randomseed', SDPropertyCategory.Input)\n"
+                    "%s\nprint('INHERIT=%%s VALUE=%%s' %% (n.getPropertyInheritanceMethod(p).name, n.getPropertyValue(p).get()))")
+                for target, node_id in (("g.getNodeFromId('%s')" % clouds, clouds), ('g', 'graph')):
+                    kept = re.search(r'VALUE=(-?\d+)', text(await c('execute_designer_code', {'code': SEED_INHERIT % (target, '')})))
+                    await c('execute_designer_code', {'code': SEED_INHERIT % (target, 'n.setPropertyInheritanceMethod(p, IM.Absolute)')})
+                    t = text(await c('set_params', {'node_id': node_id, 'params': {'$randomseed': 4}, **G}))
+                    still = text(await c('execute_designer_code', {'code': SEED_INHERIT % (target, '')}))
+                    check('set_params', "an Absolute $randomseed stays Absolute (%s)" % ('node' if node_id != 'graph' else 'graph'),
+                          'INHERIT=Absolute VALUE=4' in still, t.strip() + ' | ' + still.strip())
+                    # back as it was: inherited, then the value (changing the inheritance resets it)
+                    await c('execute_designer_code', {'code': SEED_INHERIT % (target, (
+                        'n.setPropertyInheritanceMethod(p, IM.RelativeToParent); n.setPropertyValue(p, SDValueInt.sNew(%s))'
+                        % (kept.group(1) if kept else 0)))})
+                await c('set_params', {'node_id': clouds, 'params': {'$randomseed': 0}, **G})
+                # 5: a value SEED_OF never set, so the check sees set_params write it (REVIEW.md TST-37)
+                t = text(await c('set_params', {'node_id': 'graph', 'params': {'$randomseed': 5}, **G}))
+                still = text(await c('execute_designer_code', {'code': GRAPH_OF % TEST_GRAPH + (
+                    "from sd.api.sdproperty import SDPropertyCategory\n"
+                    "p = g.getPropertyFromId('$randomseed', SDPropertyCategory.Input)\n"
+                    "print('INHERIT=%s VALUE=%s' % (str(g.getPropertyInheritanceMethod(p)).split('.')[-1], g.getPropertyValue(p).get()))")}))
+                check('set_params', 'graph $randomseed keeps following its parent (stays exposed)',
+                      'INHERIT=RelativeToParent VALUE=5' in still, t.strip() + ' | ' + still.strip())
                 r_ = await c('set_params', {'node_id': lv, 'params': {'levelinlow': [1, 2]}, **G})
                 check('set_params', 'error on bad length', r_.is_error and 'expects 4' in text(r_), text(r_))
                 before = text(await c('execute_designer_code', {'code': INHERIT % (TEST_GRAPH, lv)}))
@@ -556,6 +757,50 @@ async def run(scratch):
                 after = text(await c('execute_designer_code', {'code': INHERIT % (TEST_GRAPH, lv)}))
                 check('sweep_param', '$outputsize takes effect and is restored', '(128x128)' in t and '(256x256)' in t
                       and before == after, t + before + after)
+                # changing a parameter's inheritance resets its value to the default (AGENTS.md), so a sweep
+                # of one that isn't Absolute must put the inheritance back before the value (REVIEW.md HLP-26)
+                RELATIVE_SIZE = GRAPH_OF % TEST_GRAPH + (
+                    "from sd.api.sdproperty import SDPropertyCategory, SDPropertyInheritanceMethod as IM\n"
+                    "from sd.api.sdvalueint2 import SDValueInt2\nfrom sd.api.sdbasetypes import int2\n"
+                    "n = g.getNodeFromId('%s'); p = n.getPropertyFromId('$outputsize', SDPropertyCategory.Input)\n"
+                    "n.setPropertyInheritanceMethod(p, IM.RelativeToParent)\n"
+                    "n.setPropertyValue(p, SDValueInt2.sNew(int2(1, 1)))\n"
+                    "%s\n"
+                    "v = n.getPropertyValue(p).get()\n"
+                    "print('INHERIT=%%s VALUE=%%d,%%d' %% (n.getPropertyInheritanceMethod(p).name, v.x, v.y))")
+                # each switch on its own, on a node and on the graph (REVIEW.md TST-42)
+                fact = text(await c('execute_designer_code', {'code': GRAPH_OF % TEST_GRAPH + (
+                    "from sd.api.sdproperty import SDPropertyCategory, SDPropertyInheritanceMethod as IM\n"
+                    "from sd.api.sdvalueint import SDValueInt\nfrom sd.api.sdvalueint2 import SDValueInt2\n"
+                    "from sd.api.sdbasetypes import int2\n"
+                    "def resets(target, pid, value, read, start):\n"
+                    "    p = target.getPropertyFromId(pid, SDPropertyCategory.Input); was = target.getPropertyInheritanceMethod(p)\n"
+                    "    kept = target.getPropertyValue(p)\n"
+                    "    seen = []\n"
+                    "    try:\n"   # put back even if a call fails, for the later checks (REVIEW.md TST-46)
+                    "        for there, back in ((start, IM.Absolute), (IM.Absolute, start)):\n"
+                    "            target.setPropertyInheritanceMethod(p, there); target.setPropertyValue(p, value)\n"
+                    "            target.setPropertyInheritanceMethod(p, back); seen.append(read(target.getPropertyValue(p).get()))\n"
+                    "    finally:\n"
+                    "        target.setPropertyInheritanceMethod(p, was); target.setPropertyValue(p, kept)\n"
+                    "    return seen\n"
+                    "n = g.getNodeFromId('%s')\n"
+                    "print('NODE_SIZE=%%s' %% resets(n, '$outputsize', SDValueInt2.sNew(int2(1, 1)), lambda v: (v.x, v.y), IM.RelativeToParent))\n"
+                    "print('GRAPH_SEED=%%s' %% resets(g, '$randomseed', SDValueInt.sNew(5), lambda v: v, IM.RelativeToParent))") % lv}))
+                # neither switch keeps the value set (1, 1 / 5), and back to inherited gives the default
+                # (REVIEW.md TST-45)
+                kept_any = re.search(r'\(1, 1\)|SEED=\[[^]]*\b5\b', fact)
+                default_back = re.search(r'NODE_SIZE=\[\([^)]*\), \(0, 0\)\]', fact) and re.search(r'GRAPH_SEED=\[-?\d+, 0\]', fact)
+                check('designer facts', "changing a parameter's inheritance doesn't keep its value, either way, node or graph (AGENTS.md)",
+                      default_back and not kept_any, fact.strip())
+                await c('execute_designer_code', {'code': RELATIVE_SIZE % (lv, '')})
+                t = text(await c('sweep_param', {'node_id': lv, 'param': '$outputsize', 'values': [[7, 7]], **G}))
+                after = text(await c('execute_designer_code', {'code': INHERIT % (TEST_GRAPH, lv)}))
+                check('sweep_param', 'a relative $outputsize comes back with its offset', 'INHERIT=RelativeToParent' in after
+                      and 'VALUE=x: 1, y: 1' in after, t.splitlines()[-1] + ' | ' + after.strip())
+                await c('execute_designer_code', {'code': INHERIT % (TEST_GRAPH, lv) + (
+                    "\nfrom sd.api.sdproperty import SDPropertyInheritanceMethod as IM\n"
+                    "n.setPropertyInheritanceMethod(p, IM.RelativeToInput)")})   # back as before
                 r_ = await c('sweep_param', {'node_id': lv, 'param': 'nope', 'values': [1], **G})
                 check('sweep_param', 'error on bad param', r_.is_error and 'not a parameter' in text(r_), text(r_))
                 t = text(await c('check_tiling', {'node_id': clouds, **G}))
@@ -638,15 +883,19 @@ async def run(scratch):
                 with open(os.path.join(BUNDLE, 'mcp_server', 'designer_helpers.py'), encoding='utf-8') as f:
                     helpers_src = f.read()
                 t = text(await c('execute_designer_code', {'code': helpers_src + (
-                    "\n_GETTERS['float4'] = 'get_no_such_type'\n"
+                    "\nset_params(%r, %r, {'levelinhigh': [0.8] * 4})\n"
+                    "_GETTERS['float4'] = 'get_no_such_type'\n"
                     "try:\n    expose_param(%r, %r, 'levelinhigh', input_id='broken')\nexcept (Exception, APIException) as e:\n"
                     "    print('FAILED', type(e).__name__)\n"
                     "g = find_graph(%r); n = g.getNodeFromId(%r)\n"
                     "p = n.getPropertyFromId('levelinhigh', SDPropertyCategory.Input)\n"
-                    "print('LEFT_GRAPH=%%s LEFT_INPUT=%%s' %% (n.getPropertyGraph(p) is not None, "
-                    "g.getPropertyFromId('broken', SDPropertyCategory.Input) is not None))") % (TEST_GRAPH, lv, TEST_GRAPH, lv)}))
+                    "print('LEFT_GRAPH=%%s LEFT_INPUT=%%s VALUE=%%.2f' %% (n.getPropertyGraph(p) is not None, "
+                    "g.getPropertyFromId('broken', SDPropertyCategory.Input) is not None, n.getPropertyValue(p).get().x))\n"
+                    "set_params(%r, %r, {'levelinhigh': [1.0] * 4})") % (
+                        TEST_GRAPH, lv, TEST_GRAPH, lv, TEST_GRAPH, lv, TEST_GRAPH, lv)}))
+                # ...and the parameter keeps the value it had (adding the graph reset it; REVIEW.md HLP-21)
                 check('expose_param', 'a failure midway leaves nothing behind', 'FAILED' in t
-                      and 'LEFT_GRAPH=False LEFT_INPUT=False' in t, t.strip()[-160:])
+                      and 'LEFT_GRAPH=False LEFT_INPUT=False VALUE=0.80' in t, t.strip()[-160:])
                 # and when the parameter already had an empty function graph, which is reused, a
                 # failure leaves no half-made get node in it (REVIEW.md HLP-15)
                 t = text(await c('execute_designer_code', {'code': helpers_src + (
@@ -1260,6 +1509,30 @@ async def run(scratch):
                 inh = re.search(r'INHERIT before=(\w+) after=(\w+)', t)
                 check('sweep_param', 'a failed restore still restores the inheritance', 'restore failed on purpose' in t
                       and inh is not None and inh.group(1) == inh.group(2), t.strip()[-200:])
+                # and the other way round: the inheritance goes back first (HLP-26), so when that fails the
+                # value must still come back (REVIEW.md TST-41); a relative size with offset 1 to tell
+                t = text(await c('execute_designer_code', {'code': helpers + (
+                    "\nfrom sd.api.sdnode import SDNode\nfrom sd.api.sdproperty import SDPropertyInheritanceMethod as IM\n"
+                    "from sd.api.sdvalueint2 import SDValueInt2\nfrom sd.api.sdbasetypes import int2\n"
+                    "g = find_graph(%r); n = g.getNodeFromId(%r)\np = n.getPropertyFromId('$outputsize', SDPropertyCategory.Input)\n"
+                    "before = n.getPropertyInheritanceMethod(p)\n"
+                    "n.setPropertyInheritanceMethod(p, IM.RelativeToParent); n.setPropertyValue(p, SDValueInt2.sNew(int2(1, 1)))\n"
+                    "owner = next(k for k in type(n).__mro__ if 'setPropertyInheritanceMethod' in k.__dict__)\n"
+                    "real = owner.setPropertyInheritanceMethod\n"
+                    "def failing(self, prop, method):\n"
+                    "    if prop.getId() == '$outputsize' and method == IM.RelativeToParent:\n"
+                    "        raise RuntimeError('inheritance restore failed on purpose')\n"
+                    "    return real(self, prop, method)\n"
+                    "owner.setPropertyInheritanceMethod = failing\n"
+                    "try:\n    sweep_param(%r, %r, '$outputsize', [[10, 10]], %r, None, None)\n"
+                    "except Exception as e:\n    print('ERROR=' + str(e))\n"
+                    "finally:\n    owner.setPropertyInheritanceMethod = real\n"
+                    "    v = n.getPropertyValue(p).get(); print('VALUE=%%d,%%d' %% (v.x, v.y))\n"
+                    "    n.setPropertyInheritanceMethod(p, before)\n"
+                    "    n.setPropertyValue(p, SDValueInt2.sNew(int2(0, 0)))") % (
+                        TEST_GRAPH, lv, TEST_GRAPH, lv, os.path.join(scratch, 'sweep_restore2'))}))
+                check('sweep_param', 'a failed inheritance restore still puts the value back',
+                      'inheritance restore failed on purpose' in t and 'VALUE=1,1' in t, t.strip()[-200:])
                 # a Designer library package is never chosen for saving (REVIEW.md HLP-10): by its path,
                 # or as the graph in the editor; nothing is saved here, only the lookup is asked
                 t = text(await c('execute_designer_code', {'code': helpers + (
@@ -1379,6 +1652,87 @@ async def run(scratch):
                 check('export_outputs', 'from Designer', 'height.png  512x512' in t, t)
                 t = text(await c('sbsar_info', {'sbs_path': sbs}))
                 check('sbsar_info', 'graph + output', 'pkg://%s' % TEST_GRAPH in t and 'OUTPUT height' in t, t.splitlines()[0])
+                # the graph seed set with set_params is still a control of the cooked graph (REVIEW.md HLP-25)
+                check('sbsar_info', 'the graph seed set with set_params is still exposed', 'INPUT $randomseed' in t,
+                      ' / '.join(l for l in t.splitlines() if 'INPUT' in l))
+                # and an Absolute one is not (AGENTS.md): a copy saved with it Absolute, the graph put back;
+                # changing the inheritance resets the value, so the value goes back after it
+                abs_sbs = os.path.join(scratch, 'seed_absolute.sbs')
+                await c('execute_designer_code', {'code': GRAPH_OF % TEST_GRAPH + (
+                    "from sd.api.sdproperty import SDPropertyCategory, SDPropertyInheritanceMethod as IM\n"
+                    "from sd.api.sdvalueint import SDValueInt\n"
+                    "p = g.getPropertyFromId('$randomseed', SDPropertyCategory.Input)\nkept = g.getPropertyValue(p).get()\n"
+                    "g.setPropertyInheritanceMethod(p, IM.Absolute)\n"
+                    "try:\n    sd.getContext().getSDApplication().getPackageMgr().saveCopyOfPackageAs(g.getPackage(), %r)\n"
+                    "finally:\n    g.setPropertyInheritanceMethod(p, IM.RelativeToParent)\n"
+                    "    g.setPropertyValue(p, SDValueInt.sNew(kept))") % abs_sbs})
+                t_abs = text(await c('sbsar_info', {'sbs_path': abs_sbs}))
+                check('designer facts', 'an Absolute graph $randomseed is not exposed in a .sbsar (AGENTS.md)',
+                      'INPUT $outputsize' in t_abs and 'INPUT $randomseed' not in t_abs,
+                      ' / '.join(l for l in t_abs.splitlines() if 'INPUT' in l))
+                # the stored seed (5) reaches the .sbsar too, added to the seed a render sets (AGENTS.md: "an
+                # offset added to a render's seed"; REVIEW.md TST-39, TST-44): copies storing 0 and 3 to compare
+                seed_copies = {}
+                for stored_seed in (0, 3):   # copies of the graph storing another seed
+                    seed_copies[stored_seed] = os.path.join(scratch, 'seed_stored%d.sbs' % stored_seed)
+                    await c('execute_designer_code', {'code': GRAPH_OF % TEST_GRAPH + (
+                        "from sd.api.sdproperty import SDPropertyCategory\nfrom sd.api.sdvalueint import SDValueInt\n"
+                        "p = g.getPropertyFromId('$randomseed', SDPropertyCategory.Input)\n"
+                        "kept = g.getPropertyValue(p).get()\n"
+                        "g.setPropertyValue(p, SDValueInt.sNew(%d))\n"
+                        "try:\n    sd.getContext().getSDApplication().getPackageMgr().saveCopyOfPackageAs(g.getPackage(), %r)\n"
+                        "finally:\n    g.setPropertyValue(p, SDValueInt.sNew(kept))") % (stored_seed, seed_copies[stored_seed])})
+                zero_sbs = seed_copies[0]
+                # and one with the clouds node's seed made Absolute (REVIEW.md TST-52); the graph's untouched
+                abs_node_sbs = os.path.join(scratch, 'seed_absolute_node.sbs')
+                await c('execute_designer_code', {'code': GRAPH_OF % TEST_GRAPH + (
+                    "from sd.api.sdproperty import SDPropertyCategory, SDPropertyInheritanceMethod as IM\n"
+                    "from sd.api.sdvalueint import SDValueInt\n"
+                    "n = g.getNodeFromId('%s'); p = n.getPropertyFromId('$randomseed', SDPropertyCategory.Input)\n"
+                    "was, kept = n.getPropertyInheritanceMethod(p), n.getPropertyValue(p).get()\n"
+                    "try:\n    n.setPropertyInheritanceMethod(p, IM.Absolute)\n"
+                    "    sd.getContext().getSDApplication().getPackageMgr().saveCopyOfPackageAs(g.getPackage(), %r)\n"
+                    "finally:\n    n.setPropertyInheritanceMethod(p, was); n.setPropertyValue(p, SDValueInt.sNew(kept))") % (
+                        clouds, abs_node_sbs)})
+                from PIL import Image
+                import numpy as np
+                # both count: the stored value (5 vs 0 at render seed 0) and the render seed (0 vs 5 for the
+                # copy storing 0), so neither replaces the other (REVIEW.md TST-40)
+                seed_maps, render_said = {}, {}
+                for name, path, seed in (('stored5_seed0', sbs, 0), ('stored0_seed0', zero_sbs, 0), ('stored0_seed5', zero_sbs, 5),
+                                         ('stored3_seed2', seed_copies[3], 2), ('abs_node_seed0', abs_node_sbs, 0),
+                                         ('abs_node_seed5', abs_node_sbs, 5)):
+                    d = os.path.join(scratch, 'seed_render_' + name)
+                    t_r = text(await c('render_sbs', {'sbs_path': path, 'output_dir': d, 'outputs': ['height'],
+                                                      'params': {'$randomseed': seed}}))
+                    render_said[name] = t_r
+                    f = os.path.join(d, 'height.png')
+                    seed_maps[name] = np.array(Image.open(f)).astype(int) if os.path.isfile(f) else None
+
+                def apart(a, b):
+                    ma, mb = seed_maps[a], seed_maps[b]
+                    return int(np.abs(ma - mb).max()) if ma is not None and mb is not None and ma.shape == mb.shape else -1
+                stored, override = apart('stored5_seed0', 'stored0_seed0'), apart('stored0_seed0', 'stored0_seed5')
+                # added: 3 + 2 gives the image of 0 + 5, within the parallel render noise (8, as export vs
+                # render); a pair without zeros, since 5 + 0 = 0 + 5 also fits max, OR or XOR (REVIEW.md TST-44)
+                added = apart('stored3_seed2', 'stored0_seed5')
+                check('designer facts', 'an inherited graph seed stored in the .sbsar is added to the render seed (AGENTS.md)',
+                      stored > 8 and override > 8 and 0 <= added <= 8,
+                      'max difference: stored value %d, render seed %d, 3+2 vs 0+5 %d (/65535)%s' % (
+                          stored, override, added, '' if min(stored, override, added) >= 0 else ' | ' + t_r[-150:]))
+                # a node seed made Absolute ignores the render's seed: its noise is the same at render seed 0
+                # and 5 (the height output's only randomness is that clouds node), while the copy where it
+                # follows the graph changes (REVIEW.md TST-52)
+                frozen = apart('abs_node_seed0', 'abs_node_seed5')
+                # and the render seed did reach that copy: render_sbs only warns when an input isn't exposed
+                # (REVIEW.md TST-58)
+                reached = not any('is not exposed' in render_said[k] for k in ('abs_node_seed0', 'abs_node_seed5'))
+                check('designer facts', "a node $randomseed made Absolute ignores the render's seed (AGENTS.md)",
+                      0 <= frozen <= 8 and override > 8 and reached, 'max difference: Absolute node, render seed 0 vs 5: %d; '
+                      'inherited: %d (/65535); render seed exposed: %s' % (frozen, override, reached))
+                # and back to a new graph's seed for the later checks (REVIEW.md TST-37)
+                t = text(await c('set_params', {'node_id': 'graph', 'params': {'$randomseed': 0}, **G}))
+                check('self-test', 'the graph seed checks put the seed back as it was', '5 -> 0' in t, t)
                 render_dir = os.path.join(scratch, 'render')
                 t = text(await c('render_sbs', {'sbs_path': sbs, 'output_dir': render_dir, 'outputs': ['height']}))
                 check('render_sbs', 'png', 'height.png  512x512' in t, t)
@@ -1547,6 +1901,19 @@ async def run(scratch):
                     after = text(await c('execute_designer_code', {'code': state}))
                     check(E, 'a re-run refuses to discard unsaved edits', 'ERROR' in t and 'unsaved' in t
                           and '%s:True' % os.path.basename(example_sbs) in after, t.strip()[-150:] + ' / ' + after.strip())
+                    # ...also when its graph was renamed: the package at OUT_SBS is matched by its path
+                    # (REVIEW.md INS-22)
+                    t = text(await c('execute_designer_code', {'code': (
+                        "import sd\npm=sd.getContext().getSDApplication().getPackageMgr()\n"
+                        "for p in pm.getUserPackages():\n"
+                        "    if (p.getFilePath() or '') == %r:\n"
+                        "        p.getChildrenResources(False)[0].setIdentifier('mcp_selftest_trimsheet_renamed')\n"
+                        "        print('RENAMED', p.isModified(), p.getChildrenResources(False)[0].getIdentifier())") % example_sbs}))
+                    t2 = text(await c('run_designer_script', {'path': example, 'timeout_s': 300}))
+                    check(E, 'a re-run refuses to discard unsaved edits to a renamed previous build',
+                          # the new name read back, so a rename that did nothing can't pass (REVIEW.md TST-50)
+                          'RENAMED True mcp_selftest_trimsheet_renamed' in t and 'ERROR' in t2 and 'unsaved' in t2,
+                          t.strip() + ' / ' + t2.strip()[-150:])
                     await c('execute_designer_code', {'code': (
                         "import sd\npm=sd.getContext().getSDApplication().getPackageMgr()\n"
                         "for p in list(pm.getUserPackages()):\n    if (p.getFilePath() or '') == %r:\n        pm.unloadUserPackage(p)") % decoy_sbs})
@@ -1562,6 +1929,10 @@ async def run(scratch):
                 check('run_designer_script', 'UTF-8 text survives', 'utf-8: → é ✓' in t, t)
             finally:
                 print('\ncleanup:', text(await c('execute_designer_code', {'code': CLEAN})).strip())
+                # the library packages the run loaded, in a separate call (graph views from the test
+                # graph are torn down first); the user's own stay (REVIEW.md TST-30)
+                time.sleep(0.5)
+                await restore_library_packages(c, libs_before)
                 shutil.rmtree(os.path.join(os.environ.get('SD_SNAPSHOT_DIR') or os.path.join(
                     os.path.expanduser('~'), '.sd_mcp', 'snapshots'), TEST_GRAPH), ignore_errors=True)
                 if user_graph and user_graph != TEST_GRAPH:
@@ -1641,20 +2012,14 @@ async def run(scratch):
                               os.path.exists(normal_quit), took, sorted(new_dumps)))
                     t = text(await c('launch_designer', {'wait_s': 240}))
                     check('launch_designer', 'starts again after a forced quit', 'Designer started in' in t and 'ERROR' not in t, t)
-                    # the realistic blocker: a modal dialog (its own event loop) must not stop quitting
-                    await c('execute_designer_code', {'code': (
-                        "from PySide6.QtCore import QTimer\nfrom PySide6.QtWidgets import QMessageBox\n"
-                        "QTimer.singleShot(0, lambda: QMessageBox.information(None, 'sd_mcp self-test', "
-                        "'A modal dialog; quit_designer must still close Designer.'))")})
-                    time.sleep(1)
-                    modal = text(await c('execute_designer_code', {'code': (
-                        "from PySide6.QtWidgets import QApplication\n"
-                        "print('MODAL=' + type(QApplication.instance().activeModalWidget()).__name__)")}))
                     # a slow normal shutdown must be left to finish, not killed by the os._exit
                     # fallback: 7 s of work in the window's close handler (HLP-17), then 7 s in an
                     # aboutToQuit handler (HLP-12) that shows a window, so only the fallback's
                     # "every window had closed" test can keep the process alive (TST-19, TST-23).
-                    # Both keep processing events past the fallback's 5 s.
+                    # Both keep processing events past the fallback's 5 s. No modal dialog here: with
+                    # one open as well, Designer once didn't go on to quit and stayed without a window
+                    # (REVIEW.md HLP-23; not reproduced on demand: hiding the main window instead of
+                    # closing it still quits in 2 s)
                     slow_close = os.path.join(scratch, 'slow_close_finished')
                     slow_marker = os.path.join(scratch, 'slow_shutdown_finished')
                     await c('execute_designer_code', {'code': (
@@ -1684,9 +2049,25 @@ async def run(scratch):
                     check('quit_designer', 'a slow close handler is left to finish', closed,
                           'its 7 s close handler finished' if closed
                           else 'the close handler did not finish: the process was ended under it')
-                    check('quit_designer', 'a slow shutdown with a window showing is left to finish', finished,
-                          'its 7 s aboutToQuit handler finished' if finished
-                          else 'the aboutToQuit handler did not finish: the process was ended under it')
+                    check('quit_designer', 'a slow shutdown with a window showing is left to finish',
+                          finished and 'Designer quit after' in t and gone and not new_dumps,
+                          ('its 7 s aboutToQuit handler finished' if finished
+                           else 'the aboutToQuit handler did not finish') + ' | ' + t.strip()[-80:])
+                    t = text(await c('launch_designer', {'wait_s': 240}))
+                    check('launch_designer', 'starts again after a slow quit', 'Designer started in' in t and 'ERROR' not in t, t)
+                    # the realistic blocker: a modal dialog (its own event loop) must not stop quitting
+                    await c('execute_designer_code', {'code': (
+                        "from PySide6.QtCore import QTimer\nfrom PySide6.QtWidgets import QMessageBox\n"
+                        "QTimer.singleShot(0, lambda: QMessageBox.information(None, 'sd_mcp self-test', "
+                        "'A modal dialog; quit_designer must still close Designer.'))")})
+                    time.sleep(1)
+                    modal = text(await c('execute_designer_code', {'code': (
+                        "from PySide6.QtWidgets import QApplication\n"
+                        "print('MODAL=' + type(QApplication.instance().activeModalWidget()).__name__)")}))
+                    dumps_before = crash_dumps()
+                    t = text(await c('quit_designer', {'discard_unsaved': True}))
+                    gone = (await c('designer_status')).is_error
+                    new_dumps = new_crash_dumps(dumps_before)
                     check('quit_designer', 'closes the Designer it started, with a modal dialog open, without a crash',
                           'MODAL=QMessageBox' in modal and 'Designer quit after' in t and gone and not new_dumps,
                           modal + t + (' new crash dumps: %s' % sorted(new_dumps) if new_dumps else ''))
@@ -1718,13 +2099,18 @@ def main():
         tools = asyncio.run(run(scratch))
     finally:
         dumps_before = crash_dumps()       # just before the clean-up it is about (REVIEW.md TST-21)
-        shutil.rmtree(scratch, ignore_errors=True)
+        if designer_alive():
+            # deleting it while Designer ran crashed Designer twice, in its own file watcher, and
+            # couldn't be reproduced on demand (REVIEW.md PLG-9, PLG-18): leave it to the OS
+            print('scratch folder left for the OS to clear, since Designer is running:', scratch)
+        else:
+            shutil.rmtree(scratch, ignore_errors=True)
     if STATE['was_running']:
-        # deleting the scratch folder once crashed the user's Designer (REVIEW.md PLG-9, TST-16):
-        # it must still be running, with no new crash dump, a little after the clean-up
+        # and the user's Designer must still be running, with no new crash dump, a little after the
+        # run's end (REVIEW.md PLG-9, TST-16; the scratch folder is no longer deleted then, TST-43)
         new_dumps = new_crash_dumps(dumps_before)
         alive = designer_alive()
-        check('self-test', 'your Designer survives the clean-up, with no crash dump', alive and not new_dumps,
+        check('self-test', 'your Designer is still running after the run, with no crash dump', alive and not new_dumps,
               'running=%s, new crash dumps: %s' % (alive, sorted(new_dumps)))
     summary, ok = summarize(tools, results, skipped)
     print('\n' + summary)

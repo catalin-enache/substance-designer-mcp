@@ -3,6 +3,8 @@ check that ran; one whose checks were all skipped is listed, not counted."""
 import importlib.util
 import os
 
+import pytest
+
 from conftest import ROOT
 
 
@@ -41,3 +43,64 @@ def test_cleanup_covers_every_graph_the_self_test_creates():
     created = [n for n in re.findall(r"setIdentifier\('([^']*)'", src) if n != '%s']   # '%s' is DUP_GRAPH
     assert created and all(name.startswith('mcp_selftest') for name in created), created
     assert ".startswith('mcp_selftest')" in _selftest().CLEAN
+
+
+def test_a_check_that_is_not_a_bool_is_counted(monkeypatch):
+    # REVIEW.md TST-29: check() stored the condition as given; `refs and not missing` with no refs is
+    # [], and summarize()'s sum then raised TypeError, so no summary was printed
+    selftest = _selftest()
+    monkeypatch.setattr(selftest, 'results', {})
+    selftest.check('tool', 'empty list', [])
+    selftest.check('tool', 'none', None)
+    text, ok = selftest.summarize(['tool'], selftest.results, [])
+    assert not ok and 'checks passed: 0/2' in text
+
+
+def test_a_bridge_error_in_the_library_clean_up_is_a_failed_check_not_a_crash():
+    # REVIEW.md TST-33: an error answer there raised AttributeError in the self-test's finally,
+    # skipping the rest of its clean-up (the snapshots, putting the user's graph back, the quit)
+    import asyncio
+    from types import SimpleNamespace
+    selftest = _selftest()
+
+    async def bridge_error(name, args=None):
+        return SimpleNamespace(content=[SimpleNamespace(type='text', text='Error executing tool: bridge busy')])
+    asyncio.run(selftest.restore_library_packages(bridge_error, []))
+    assert selftest.results['self-test'] == [False]
+
+
+@pytest.mark.parametrize('designer_running', [True, False])
+def test_the_scratch_folder_is_only_deleted_once_designer_is_closed(monkeypatch, capsys, tmp_path, designer_running):
+    # REVIEW.md PLG-18 (and PLG-9): deleting it while Designer ran crashed Designer twice, in its file
+    # watcher; with a Designer still running it is left in the OS temp folder, and the path printed
+    selftest = _selftest()
+    scratch = tmp_path / 'sd_mcp_selftest_x'
+    scratch.mkdir()
+    (scratch / 'graph.sbs').write_text('x')
+    monkeypatch.setattr(selftest.tempfile, 'mkdtemp', lambda prefix: str(scratch))
+
+    async def run(scratch):
+        selftest.STATE['was_running'] = designer_running
+        return []
+    monkeypatch.setattr(selftest, 'run', run)
+    monkeypatch.setattr(selftest, 'designer_alive', lambda: designer_running)
+    monkeypatch.setattr(selftest, 'new_crash_dumps', lambda before, wait_s=10: set())
+    with pytest.raises(SystemExit):
+        selftest.main()
+    assert scratch.exists() == designer_running
+    assert (str(scratch) in capsys.readouterr().out) == designer_running
+
+
+def test_a_bridge_error_reading_the_library_packages_at_the_start_is_a_failed_check():
+    # REVIEW.md TST-51: this ran before the try/finally, unguarded, so an error answer ended the run
+    # with no summary and a Designer the self-test started was never quit
+    import asyncio
+    from types import SimpleNamespace
+    selftest = _selftest()
+
+    async def bridge_error(name, args=None):
+        return SimpleNamespace(content=[SimpleNamespace(type='text', text='Error executing tool: bridge busy')])
+    assert asyncio.run(selftest.library_packages(bridge_error)) is None
+    assert selftest.results['self-test'] == [False]
+    asyncio.run(selftest.restore_library_packages(bridge_error, None))   # then skipped, not a crash
+    assert selftest.skipped == [('self-test', 'leaves the library packages loaded as it found them')]

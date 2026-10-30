@@ -560,6 +560,7 @@ def set_params(graph_id, node_id, params):
     from sd.api.sdproperty import SDPropertyInheritanceMethod
     g = find_graph(graph_id)
     target = _target(g, node_id)
+    is_graph = node_id in (None, '', 'graph')
     checked = []                               # every value is checked before any is set
     for pid, value in params.items():
         prop = target.getPropertyFromId(pid, SDPropertyCategory.Input)
@@ -567,7 +568,13 @@ def set_params(graph_id, node_id, params):
             raise RuntimeError('no parameter %r on %s; see describe_node' % (pid, node_id or 'graph'))
         if prop.isConnectable():
             raise RuntimeError('%r is an input connector; use connect' % pid)
-        driven = _driving_graph(target, prop) if node_id not in (None, '', 'graph') else None
+        if is_graph and pid == '$outputsize' and \
+                g.getPropertyInheritanceMethod(prop) != SDPropertyInheritanceMethod.Absolute:
+            # on an overridable graph the value is an offset from the parent size, and making it
+            # Absolute would ignore render size overrides from then on (REVIEW.md HLP-22)
+            raise RuntimeError("the graph's size follows its parent (overridable); use set_graph_size "
+                               "(overridable=True keeps it so, False fixes it)")
+        driven = _driving_graph(target, prop) if not is_graph else None
         if driven is not None:
             # setting it would cut the parameter loose from its graph input or function
             source = _plain_binding(driven)
@@ -576,8 +583,11 @@ def set_params(graph_id, node_id, params):
         checked.append((pid, prop, _make_value(prop, value)))
     for pid, prop, new_value in checked:
         before = fmt(target.getPropertyValue(prop))
-        if pid.startswith('$') and hasattr(target, 'setPropertyInheritanceMethod'):
-            # $outputsize/$format etc. only take effect when not inherited
+        if pid.startswith('$') and pid != '$randomseed' and hasattr(target, 'setPropertyInheritanceMethod'):
+            # $outputsize/$format etc. only take effect when not inherited, on a node or the graph
+            # (REVIEW.md HLP-24); the graph's $outputsize gets here only when already Absolute (HLP-22).
+            # A $randomseed counts while inherited too (added to its parent's seed), and only then
+            # follows the graph's seed and a .sbsar's control (REVIEW.md HLP-25, HLP-27)
             try:
                 target.setPropertyInheritanceMethod(prop, SDPropertyInheritanceMethod.Absolute)
             except (Exception, APIException):
@@ -723,14 +733,15 @@ def quit_designer(discard_unsaved=False):
     # to close: os._exit(), which ends the process without tearing Designer down. quit() would
     # not stop it (Qt 6 cancels it when a window refuses to close), and exit() runs the teardown
     # while Designer's own background threads still work: twice its licence check thread crashed
-    # on objects already destroyed (REVIEW.md PLG-8). The fallback fires only while a window is
-    # still open and the normal shutdown hasn't begun, so a slow shutdown is never cut off
-    # (REVIEW.md HLP-12). Deferred, so the bridge can still reply.
+    # on objects already destroyed (REVIEW.md PLG-8). Until about 35 s after the quit the fallback
+    # fires only while a window is still open and the normal shutdown hasn't begun, so a slow
+    # shutdown isn't cut off (REVIEW.md HLP-12); after that it forces a Designer still running (see
+    # below, REVIEW.md HLP-28). Deferred, so the bridge can still reply.
     # The shutdown has begun once every window accepted its Close (none visible after
     # close_windows). While it has, or while a close() is still running (a slow close handler,
     # REVIEW.md HLP-17), the fallback only looks again every second; about 35 s after the quit, a
-    # window still visible is forced (a stuck handler, or a prompt shown after everything had closed,
-    # REVIEW.md HLP-19). A window that refuses to close is forced at 5 s. aboutToQuit isn't used:
+    # window still visible (a stuck handler, REVIEW.md HLP-19), or a Designer still running with
+    # every window closed (REVIEW.md HLP-23), is forced. A window that refuses to close is forced at 5 s. aboutToQuit isn't used:
     # its slots run in connection order, so it can't be relied on (REVIEW.md TST-19, TST-23).
     import time
     closed_all = []
@@ -752,7 +763,10 @@ def quit_designer(discard_unsaved=False):
         if (closing or closed_all) and time.monotonic() < give_up:
             QTimer.singleShot(1000, fallback)
             return
-        if any(w.isVisible() for w in qt_app.topLevelWidgets()):
+        # A timer can fire here only while Designer's event loop still runs, so with every window
+        # closed it never went on to quit: force it rather than leave it running without a window
+        # (REVIEW.md HLP-23)
+        if closed_all or any(w.isVisible() for w in qt_app.topLevelWidgets()):
             os._exit(0)
     QTimer.singleShot(300, close_windows)
     QTimer.singleShot(5000, fallback)
@@ -1025,6 +1039,7 @@ def expose_param(identifier, node_id, param, input_id=None, label=None, default=
     inp = g.newProperty(input_id, SDTypeInt.sNew() if is_enum else ptype, SDPropertyCategory.Input)
     created_graph = existing is None
     get = None
+    old_value = node.getPropertyValue(prop)   # adding a function graph resets it to the default
     try:
         g.setPropertyValue(inp, value)
         _set_annotation(g, inp, 'label', label or input_id.replace('_', ' ').capitalize())
@@ -1041,6 +1056,7 @@ def expose_param(identifier, node_id, param, input_id=None, label=None, default=
         try:
             if created_graph:
                 node.deletePropertyGraph(prop)
+                node.setPropertyValue(prop, old_value)   # as it was (REVIEW.md HLP-21)
             elif get is not None:
                 fg.deleteNode(get)
         except (Exception, APIException):
@@ -1264,11 +1280,12 @@ def sweep_param(identifier, node_id, param, values, out_dir, view_node=None, out
                                              'format': str(texture.getPixelFormat()).split('.')[-1]}))
             _with_node_texture(g, view, output, use)
     finally:
+        # the inheritance first: changing it resets the value to the default (REVIEW.md HLP-26)
         try:
-            target.setPropertyValue(prop, original)
-        finally:   # the inheritance goes back even if putting the value back fails
             if inherit is not None:
                 target.setPropertyInheritanceMethod(prop, inherit)
+        finally:   # the value goes back even if putting the inheritance back fails
+            target.setPropertyValue(prop, original)
         print('restored %s.%s to %r' % (node_id or 'graph', param, original_text))
 
 

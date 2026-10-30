@@ -194,7 +194,10 @@ mcp_server\venv\Scripts\python tests\test_all_tools.py   # Windows
 ```
 
 It builds a temporary graph (`mcp_selftest`), checks every tool including error cases, removes
-the graph and reopens the graph you had open. It doesn't touch your packages. To check that
+the graph and reopens the graph you had open. It doesn't touch your packages. Its files go in a
+temporary folder (`sd_mcp_selftest_...`), deleted at the end, except when Designer stays open:
+deleting it while Designer ran crashed Designer twice, so it is left and its path printed. Delete it
+once Designer is closed (the system may clear old temporary files itself, but don't count on it). To check that
 one change is one undo step it triggers Undo and Redo, but only while its own graph is the one
 in the editor; it skips that check otherwise. It also re-checks the Designer behaviour the
 agent notes rely on ("designer facts"), so a Designer update that changes it shows up, and it

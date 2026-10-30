@@ -208,9 +208,13 @@ def _server_versions():
 @_tool()
 def designer_status() -> str:
     """Report Designer's version, the bridge state (idle/running) and the open user packages,
-    plus this server's Python and library versions."""
+    plus this server's Python and library versions. While a job runs or waits, only the bridge
+    state is reported: the package list would have to wait for the job."""
     bridge = _send({'cmd': 'status'}, wait=10)
-    return bridge.get('output', '') + '\n' + _server_versions() + '\n' + _bridge(
+    state = bridge.get('output', '')
+    if 'idle, 0 queued' not in state:   # the listing is a job too; it would queue (REVIEW.md SRV-22)
+        return state + '\n' + _server_versions() + '\n(Designer version and package list skipped while a job runs)'
+    return state + '\n' + _server_versions() + '\n' + _bridge(
         "import sd\n"
         "app = sd.getContext().getSDApplication()\n"
         "print('Designer', app.getVersion())\n"
@@ -367,11 +371,16 @@ def add_node(definition: str, graph: str | None = None, position: list[float] | 
 
 @_tool()
 def set_params(node_id: str, params: dict, graph: str | None = None) -> str:
-    """Set parameters on a node (node_id 'graph' = the graph itself, e.g. $outputsize).
+    """Set parameters on a node (node_id 'graph' = the graph itself, e.g. a fixed-size graph's
+    $outputsize; an overridable graph's size is refused: use set_graph_size).
     Values are converted to the parameter's type: numbers, bools, lists for vectors/colors
     ([r,g,b(,a)]), enums by id or number ('max', 5 or '5'). Every value is checked before any is set.
     A parameter driven by a graph input (expose_param) or a function is refused: set the graph
-    input instead (node_id 'graph'). Prints old -> new. One undo step."""
+    input instead (node_id 'graph'). A $ parameter is made Absolute so its value takes effect ($format
+    and $outputsize ignore theirs while inherited); except $randomseed, on a node or the graph, whose
+    inheritance is left as it is: inherited, its value counts (added to the parent's seed), and only
+    an inherited seed follows the graph's seed and the cooked .sbsar's Random Seed. To fix a seed on
+    purpose, change its inheritance with execute_designer_code. Prints old -> new. One undo step."""
     return _edit('set_params(%r, %r, %r)' % (graph, node_id, params), 'Claude: set params on ' + node_id)
 
 
@@ -546,10 +555,9 @@ def _channel_names(data, layout):
     return ('RGBA', 'RGB')[data.shape[2] == 3] if layout == 'RGBA' else 'LA'[:data.shape[2]]
 
 
-def _crop(data, region, what):
-    """data[y0:y1, x0:x1] for region [x0, y0, x1, y1] in pixels, clamped to the image. An empty
+def _crop_box(region, w, h, what):
+    """(x0, y0, x1, y1) for region [x0, y0, x1, y1] in pixels, clamped to a w x h image. An empty
     or inverted region is an error (numpy would silently wrap negative coordinates)."""
-    h, w = data.shape[:2]
     if len(region) != 4:
         raise ToolError('%s must be [x0, y0, x1, y1]' % what)
     x0, y0, x1, y1 = (int(v) for v in region)
@@ -557,6 +565,12 @@ def _crop(data, region, what):
     y0, y1 = max(0, min(y0, h)), max(0, min(y1, h))
     if x1 <= x0 or y1 <= y0:
         raise ToolError('%s %s is empty for the %dx%d image' % (what, list(region), w, h))
+    return x0, y0, x1, y1
+
+
+def _crop(data, region, what):
+    """data[y0:y1, x0:x1] for region [x0, y0, x1, y1], clamped to the image (see _crop_box)."""
+    x0, y0, x1, y1 = _crop_box(region, data.shape[1], data.shape[0], what)
     return data[y0:y1, x0:x1]
 
 
@@ -701,8 +715,10 @@ def sweep_param(node_id: str, param: str, values: list, graph: str | None = None
     strip plus per-value channel ranges, then restores the original value. node_id='graph' with
     param=<input id> sweeps an exposed graph input (then view_node is required). view_node: the
     node to look at (default: the swept node), e.g. the final output while sweeping an early
-    node. Values use the same rules as set_params. The parameter ends where it started, but the
-    sweep is an undo step and marks the package as modified."""
+    node. Values are converted as in set_params, but a $ parameter is made Absolute for the sweep
+    even where set_params refuses it or leaves it inherited (an overridable graph's $outputsize, the
+    graph's $randomseed), so its values are absolute ones. The parameter ends where it started,
+    inheritance included, but the sweep is an undo step and marks the package as modified."""
     tmp_dir = tempfile.mkdtemp(prefix='sd_sweep_')
     try:
         text = _bridge(_with_undo(_helpers_call('sweep_param(%r, %r, %r, %r, %r, %r, %r)' % (
@@ -1700,8 +1716,8 @@ def preview_maps(map_dir: str, names: list[str] | None = None, tile_size: int = 
     tiles = []
     for stem in names or found:
         im = _load_8bit(os.path.join(map_dir, stem + '.png'))
-        if crop:
-            im = im.crop(tuple(crop))
+        if crop:   # checked like every other region (REVIEW.md SRV-23)
+            im = im.crop(_crop_box(crop, im.width, im.height, 'crop for %s' % stem))
         scale = tile_size / max(im.size)
         tiles.append(im.resize((max(1, round(im.width * scale)), max(1, round(im.height * scale)))))
     return _sheet(tiles)

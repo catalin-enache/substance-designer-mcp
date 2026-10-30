@@ -21,10 +21,10 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
 |---|---|---|
 | High | 0 | 1 |
 | Medium-high | 0 | 1 |
-| Medium | 0 | 15 |
-| Low-medium | 0 | 17 |
-| Low | 0 | 68 |
-| **Total** | **0** | **102** |
+| Medium | 0 | 17 |
+| Low-medium | 0 | 31 |
+| Low | 0 | 103 |
+| **Total** | **0** | **153** |
 
 ## Review log
 
@@ -171,6 +171,190 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
   Designer and its `normal_quit` counterpart in the relaunched one, so no slot carries over; both
   marker paths are in the run's own temporary folder; the snapshot path is parsed from
   `snapshot_graph`'s "saved: <path>" result, whatever reminder precedes it.
+### 2026-10-30: whole project at `de7cad6` (main, after the review-fixes squash)
+
+- **How:** five read-only reviewers, one per area (plugin and protocol; `server.py`; the helpers;
+  installer, uninstaller, configuration and example; tests and docs), each reading its files in
+  full and assessing every resolution in its area. Unit tests passed (214); the live self-test
+  passed before the merge (250/250). The top finding of each area was verified by hand.
+- **Resolutions assessed:** all 102. Questioned: HLP-3 (HLP-21), SRV-12 (SRV-23), TST-2 (TST-31),
+  INS-8 (INS-22). The rest hold up.
+- **Findings:** 12, no regressions: 5 low-medium (PLG-15, SRV-22, HLP-21, HLP-22, TST-28), 7 low
+  (PLG-16, SRV-23, SRV-24, INS-22, TST-29, TST-30, TST-31).
+- **Suggested order:** TST-28 (the token), PLG-15 (a bridge that silently stops), SRV-22, HLP-22,
+  HLP-21, then the low ones.
+- **Checked and found fine:** cancel can't abort the next job; the abandon/start handshake; a
+  non-string `path` or bad timeout is a reported error; `set_link_display`'s order of snapshot,
+  copy, decision, save and split reload; every temp folder removed in `finally`; `_send`'s except
+  order; `_other_end`; no `fitInView`/`scale`, no Undo outside the self-test's own graph; patched
+  classes restored; the uninstaller's lambdas bind their values; the two skills agree with
+  AGENTS.md and each other; no secrets or personal paths tracked.
+### 2026-10-30: branch `review-2` against `main`, the diff only, at `e7f3760`
+
+- **How:** three read-only reviewers (plugin, CLI and server; helpers and example; tests and docs),
+  each given only its part of `git diff main...review-2`. Unit tests passed (222); the live
+  self-test passed just before (254/254 from a closed Designer). Each finding's code was verified
+  by hand.
+- **Resolutions assessed:** the 13 in the diff (PLG-15, PLG-16, SRV-22..24, HLP-21..23, INS-22,
+  TST-28..31). Questioned: PLG-16 (PLG-17), HLP-22 (HLP-24), HLP-23 (TST-32), TST-28 (TST-34),
+  TST-30 (TST-33). The other eight hold up.
+- **Findings:** 5: 2 low-medium (HLP-24, TST-32), 3 low (PLG-17, TST-33, TST-34).
+- **Suggested order:** HLP-24 (a silent no-op the fix introduced), TST-32, then the low ones.
+- **Checked and found fine:** `running` read without the lock in the accept loop (one bool, set
+  before the socket closes); the status substring matches every plugin version's format; `_crop`
+  behaves as before; `expose_param`'s restore copes with an enum and its clean-up errors are
+  swallowed with the input still deleted; two packages at `OUT_SBS` are both closed and an
+  unsaved one stops the run first; the HLP-22 check restores the graph's fixed size; the renamed
+  example graph is caught by the clean-up's `mcp_selftest` prefix.
+
+### 2026-10-30: branch `review-2` against `main`, the diff only, at `c3da904`
+
+- **How:** the previous round reviewed the branch up to `e7f3760`, so this one covers what changed
+  since (`git diff e7f3760..review-2`): read by hand, plus one read-only reviewer given only that
+  diff. Unit tests passed (225); the live self-test passed 243/243 with 4 skips (run against an open
+  Designer). HLP-25 was measured by hand: two graphs saved and cooked, the .sbsar inputs compared.
+- **Resolutions assessed:** the 5 in that diff (HLP-24, TST-32, PLG-17, TST-33, TST-34). Questioned:
+  HLP-24 (HLP-25), TST-32 (TST-36). The other three hold up.
+- **Findings:** 3: 1 low-medium (HLP-25), 2 low (TST-35, TST-36).
+- **Suggested order:** HLP-25, then TST-35 and TST-36.
+- **Checked and found fine:** the HLP-24 live check fails without the fix and deletes its temporary
+  nodes; the graph's `$outputsize` reaches the switch only when already Absolute; the fake clock,
+  timers and global monkeypatches in `test_quit_fallback.py` are undone after each test and the
+  HLP-23 test fails without `closed_all or`; `restore_library_packages` never reads `after` before
+  setting it. Not a finding: an exception from the MCP call itself in the clean-up (the session is
+  gone then, and the `finally`'s first call, `CLEAN`, is no better guarded).
+
+### 2026-10-30: branch `review-2` against `main`, the diff only, at `799a461`
+
+- **How:** what changed since the previous round (`git diff c3da904..review-2`), read by hand plus one
+  read-only reviewer given only that diff. Unit tests passed (227); the live self-test passed 248/248
+  with 4 skips (against an open Designer).
+- **Resolutions assessed:** the 3 in that diff (HLP-25, TST-35, TST-36). Questioned: HLP-25 (TST-37,
+  TST-39). TST-35 and TST-36 hold up (the reviewer traced both new quit tests by hand, with and
+  without the branches they cover).
+- **Findings:** 3, all low (TST-37, TST-38, TST-39), all in the tests or docs; no code defects.
+- **Suggested order:** TST-37 and TST-38 together (same snippet), then TST-39.
+- **Checked and found fine:** `set_params`' new condition skips only the inheritance switch and still
+  sets the value; a node's `$randomseed` and the graph's other `$` parameters behave as before; a
+  graph seed already Absolute stays Absolute; the Absolute-copy fact restores the inheritance in a
+  `finally` and can't pass vacuously (it also requires `$outputsize`); the "still exposed" check reads
+  a package saved after `set_params`. Leaving the seed at 3 doesn't break the export/render match (the
+  stored value reaches the .sbsar), but it is still state left behind (TST-37).
+
+### 2026-10-30: branch `review-2` against `main`, the diff only, at `e7bf85e`
+
+- **How:** what changed since the previous round (`git diff 799a461..review-2`), read by hand plus one
+  read-only reviewer given only that diff. Unit tests passed (229); the live self-test passed 252/252
+  with 4 skips (against an open Designer), no new crash dump.
+- **Resolutions assessed:** the 5 in that diff (TST-37, TST-38, TST-39, PLG-18, HLP-26), and HLP-7,
+  whose check the HLP-26 change weakened. Questioned: TST-39 (TST-40), HLP-7 (TST-41), HLP-26
+  (TST-42), PLG-18 (TST-43). TST-37 and TST-38 hold up.
+- **Findings:** 4, all in tests or docs: 2 low-medium (TST-40, TST-41), 2 low (TST-42, TST-43). No
+  defect in the tools' code.
+- **Suggested order:** TST-41 (a guard left untested), TST-40 and TST-42 (one live run together),
+  then TST-43.
+- **Checked and found fine:** `sweep_param`'s new order uses the value captured before the switch,
+  and a parameter without inheritance skips straight to the value; the HLP-26 check fails without the
+  fix and puts the levels node back as it was (RelativeToInput, 0, 0); nothing else deletes the
+  scratch folder, and each run gets a fresh one; the seed render check compares copies differing only
+  in the stored seed.
+
+### 2026-10-30: branch `review-2` against `main`, the diff only, at `0695418`
+
+- **How:** what changed since the previous round (`git diff e7bf85e..review-2`: the self-test, AGENTS.md,
+  README.md), read by hand plus one read-only reviewer given only that diff. Unit tests passed (229);
+  the live self-test passed 253/253 with 4 skips (against an open Designer).
+- **Resolutions assessed:** the 4 in that diff (TST-40..43) and the correction under HLP-25.
+  Questioned: TST-40 (TST-44), TST-42 (TST-45, TST-46), TST-43 (TST-47). TST-41 holds up.
+- **Findings:** 4, all in tests or docs: 1 low-medium (TST-44), 3 low (TST-45..47). No code changed
+  in this diff.
+- **Suggested order:** TST-44 (one more render pair, decides the AGENTS.md wording), TST-45 and TST-46
+  together (same snippet), TST-47.
+- **Checked and found fine:** `apart()`'s -1 fails every condition, so a missing render can't pass;
+  the `kept_any` regex can't match a wrong line and the check needs both lists; the levels node is put
+  back (RelativeToInput, 0, 0) on every path; the TST-41 patch fails only the restore, restores the
+  real method first, and fails without `sweep_param`'s inner `finally`; the graph seed goes back to 0.
+
+### 2026-10-30: branch `review-2` against `main`, the diff only, at `68be8f3`
+
+- **How:** what changed since the previous round (`git diff 0695418..review-2`: about 60 lines in the
+  self-test, AGENTS.md and README.md), read line by hand; no reviewer agent for a diff this small.
+  Unit tests passed (229); the live self-test passed 253/253 with 4 skips (against an open Designer).
+- **Resolutions assessed:** the 4 in that diff (TST-44..47). Questioned: TST-44 (TST-48, a stale
+  comment). TST-45, TST-46 and TST-47 hold up.
+- **Findings:** 1 low (TST-48). No code changed in this diff.
+- **Checked and found fine:** 3 + 2 matching 0 + 5 rules out max, OR, XOR and "render seed only"
+  (which would give 2 against 5); the copies restore the graph's seed by number in a `finally`; the
+  `default_back` patterns pass on the measured output and fail on wrong values; `resets()` restores on
+  every path; README and AGENTS.md now claim only what is measured.
+
+### 2026-10-30: branch `review-2` against `main`, the whole diff, at `68be8f3` plus TST-48's comment fix
+
+- **How:** the earlier rounds each reviewed only what changed since the round before, so this one
+  reviewed the whole `git diff main...review-2` again, for interactions between rounds: two read-only
+  reviewers (the tools' code and docs; the tests), each finding checked against the code by hand.
+  Unit tests passed (229).
+- **Resolutions assessed:** those whose fix is in the diff, as the reviewers met them. Questioned:
+  HLP-25 (HLP-27), HLP-23 (HLP-28), PLG-16 (PLG-19), PLG-15 (PLG-20), HLP-22 (SRV-25), HLP-24 (TST-49),
+  INS-22 (TST-50); TST-51 follows TST-33.
+- **Findings:** 8: 1 low-medium (HLP-27, plausible, to measure first), 7 low (HLP-28, PLG-19, PLG-20,
+  SRV-25, TST-49, TST-50, TST-51). None high or medium.
+- **Suggested order:** HLP-27 (measure a node seed first), PLG-19 and PLG-20 (plugin and client
+  behaviour), then the comment, docstring and test fixes.
+- **Checked and found fine:** `set_params`' graph `$outputsize` refusal runs before anything is set;
+  `sweep_param`'s restore also covers a graph seed or size made Absolute for the sweep; `expose_param`
+  reads the old value before creating the function graph; `designer_status`' busy check matches the
+  plugin's format; the accept loop frees its slot when a thread can't start; the example's path-first
+  clean-up and failed-build unload; every `%`-formatted string snippet in the self-test; the graph's
+  `$format`, `$randomseed` and the levels node are put back for later checks; the patched methods are
+  restored in `finally`; the unit-test fakes match the code paths they stand in for.
+
+### 2026-10-30: branch `review-2` against `main`, the diff only, at `1b76a81`
+
+- **How:** what changed since the previous round (`git diff 68be8f3..review-2`, about 200 lines), read
+  by hand plus one read-only reviewer given only that diff. Unit tests passed (233); the live self-test
+  passed 255/255 with 4 skips (against an open Designer), and 265 of 266 from a closed Designer before
+  the HLP-27 fix (the quit scenarios included).
+- **Resolutions assessed:** the 9 in that diff. Questioned: HLP-27 (TST-52, HLP-29, TST-53, TST-54),
+  PLG-20 (TST-55); and HLP-25 (TST-56, found by hand). HLP-28, PLG-19, SRV-25, TST-48..51 hold up.
+- **Findings:** 6, all in docs or tests: 1 low-medium (TST-52), 5 low. Not a finding here: the
+  unguarded `CURRENT=` parse at the start of the self-test, which comes from `main` (a note under TST-51).
+- **Suggested order:** TST-52 (a render check or narrower wording), HLP-29, then the test fixes.
+- **Checked and found fine:** `sd_run`'s except order (refused, then timeout, then any other
+  `ConnectionError`), every path exits 1; the accept thread is a daemon, so its backoff can't delay
+  Designer's exit, and its state is its own; the global `time.sleep` patch records only the accept
+  loop's sleeps; each new test fails without its fix; the node-seed check strips row padding and
+  restores the node and graph seed (inheritance before value) on every path.
+
+### 2026-10-30: branch `review-2` against `main`, the diff only, at `99532b4`
+
+- **How:** what changed since the previous round (`git diff aa148fd..review-2`, about 130 lines in the
+  self-test, a unit test, AGENTS.md and a docstring), one read-only reviewer given only that diff (the
+  author had reviewed it before committing). Unit tests passed (233); the live self-test passed 257/257
+  with 4 skips (against an open Designer).
+- **Resolutions assessed:** the 6 in that diff (TST-52, HLP-29, TST-53..56). Questioned: HLP-29
+  (TST-57), TST-52 (TST-58). The other four hold up.
+- **Findings:** 2 low (TST-57, TST-58), both in the tests. No code changed in this diff.
+- **Checked and found fine:** `PIXELS`' suffix test picks exactly Designer's integer formats (LUM8,
+  LUMALPHA8, RGB8, BGR8, RGBA8, BGRA8 and the 16-bit ones) and raises for float and Unknown; `%`
+  precedence in every `GRAPH_OF % x + PIXELS + (...) % y`; the seed checks create their output inside
+  the `try` and restore inheritance before value; the Absolute-node copy is saved while Absolute and
+  put back; the HLP-29 check restores the node on every path; the scripted accept test's order and
+  sleeps hold whether or not the loop was already blocked in `accept()`.
+
+### 2026-10-30: branch `review-2` against `main`, the diff only, at `9539b0c`
+
+- **How:** what changed since the previous round (`git diff 99532b4..review-2`: about 30 lines in the
+  self-test, the TST-57 and TST-58 fixes), read line by line by hand; no reviewer agent for a diff
+  this small. Unit tests passed (233); the live self-test passed 258/258 with 4 skips (against an open
+  Designer).
+- **Resolutions assessed:** TST-57 and TST-58; both hold up.
+- **Findings:** none.
+- **Checked and found fine:** the "stays Absolute" loop formats the target and the restore statement
+  in the right order, restores the graph seed (inherited, 3; the next check reads "3 -> 5") and the
+  node's; a missing value falls back to 0, harmless after the check; "is not exposed" is the text
+  `render_sbs` prints, and a failed render gives no map, so that check fails rather than passes.
+
 ---
 
 ## High
@@ -387,6 +571,7 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
       renders computed in parallel aren't bit-identical from run to run, so 3 would be flaky.
     - **Fix:** AGENTS.md (Output) now states the tolerance the test uses (a few 1/65535 steps at a
       few pixels; the self-test allows 8) and why; the test's comment points there.
+  - Questioned by TST-31 (2026-10-30).
 
 - [x] **TST-3 · Facts in AGENTS.md without a "designer facts" check** · AGENTS.md · confirmed by searching `tests/` · found 2026-10-29
   - **Defect.** Untested claims: the API inheritance numbers (`RelativeToInput 0, RelativeToParent
@@ -484,6 +669,59 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
       `set_link_display` does (AGENTS.md, Portals). If a dump like this shows up again, reopen
       with the dump's stack.
   - Questioned by TST-16 (2026-10-29).
+  - Questioned by PLG-18 (2026-10-30).
+
+- [x] **PLG-18 · The self-test crashed the open Designer again while deleting its scratch folder** · `tests/test_all_tools.py` (`main`, the scratch folder's deletion), Designer's `FileSystemWatcherMgr` · confirmed once, cause unknown · verified by hand · found 2026-10-30
+  - **Defect.** At 15:57:04, during the clean-up of a self-test run against an open Designer (one I
+    started), Designer crashed: the self-test's own check reported a new dump, and Adobe's crash
+    reporter opened. The main thread called address 0 from
+    `Alg::Core::FileSystemWatcherMgr::fileChanged`, reached from
+    `FileSystemWatcherMgr::Impl::onFileChanged` and `AbstractFileSystemWatcher::fileChanged`, on a
+    `QFileSystemWatcher` change signal. That is PLG-9's signature, so PLG-9's cause or fix doesn't
+    cover it. Questions PLG-9's resolution.
+  - **Scenario.** That run was the first to save two package copies into the scratch folder with
+    `saveCopyOfPackageAs` (`seed_absolute.sbs`, `seed_zero.sbs`) and render them. An earlier run
+    with only `seed_absolute.sbs` passed, and so did a run that stopped early with both copies
+    saved, so the copies are a suspect, not a proven cause. Anyone running the self-test against
+    their own Designer could lose unsaved work.
+  - **Fix.** Find out which files Designer watches (does `saveCopyOfPackageAs` add a watch on the
+    copy?), then delete only what Designer no longer watches, or keep those copies out of the
+    scratch folder; a self-test run against an open Designer repeated a few times, checking for dumps.
+  - **Resolution: done, by not deleting files while Designer runs; cause not found** (commit `b9d1036`).
+    - **Test:** a unit test runs the self-test's `main` with a fake run: with a Designer still
+      running, the scratch folder was deleted (it failed); now it stays and its path is printed,
+      and it is still deleted when Designer is closed.
+    - **Why the cause is unknown:** 60 rounds of four variants by hand (save a copy, save, both, a
+      linked bitmap with the graph open in the editor; each unloaded, then its folder deleted from
+      outside Designer) gave no crash. Designer's watcher can't be inspected from Python (no
+      `QFileSystemWatcher` reachable) or with `lsof` (no descriptors; FSEvents).
+    - **Fix:** the self-test deletes its scratch folder only when no Designer is running (so after
+      its own Designer has quit); otherwise it leaves it in the OS temp folder and prints the path.
+      README (Self-test) says so. A full run against an open Designer afterwards: 250/250, folder
+      kept, no new dump.
+  - Questioned by TST-43 (2026-10-30).
+
+- [x] **HLP-26 · `sweep_param` on a `$` parameter that isn't Absolute leaves it at the default** · `mcp_server/designer_helpers.py` (`sweep_param`, its `finally`) · confirmed by measurement · verified by hand · found 2026-10-30
+  - **Defect.** It saves the value, makes the parameter Absolute, sweeps, then puts the value back
+    and *then* the inheritance. Changing a parameter's inheritance resets its value to the default
+    (measured while fixing TST-37: a graph's `$randomseed` and `$format`, a node's `$outputsize` and
+    `$randomseed`, both directions), so the value put back is lost, while it prints "restored ... to
+    <original>".
+  - **Scenario.** A node whose size is relative to its parent with offset 1 (twice the graph size):
+    `sweep_param(node, '$outputsize', ...)` ends with offset 0, half the size, and says it restored
+    "1, 1". Likewise a graph seed stored as 5 ends at 0.
+  - **Fix.** Put the inheritance back first, then the value; a live check sweeping a relative
+    `$outputsize` with a non-zero offset and reading it back; the inheritance fact in AGENTS.md with
+    a "designer facts" check.
+  - **Resolution: done** (commit `b9d1036`).
+    - **Test:** a live check makes a levels node's `$outputsize` relative to its parent with offset
+      1, sweeps it and reads it back: "INHERIT=RelativeToParent VALUE=x: 0, y: 0". A "designer facts"
+      check measures the cause: switching that parameter to Absolute and back leaves 0, 0.
+    - **Cause:** the `finally` put the value back first and the inheritance second, and changing the
+      inheritance reset the value just restored.
+    - **Fix:** the inheritance goes back first, then the value (each still in its own `try/finally`
+      step). AGENTS.md (Graph size) states the fact. The check now reads "VALUE=x: 1, y: 1".
+  - Questioned by TST-42 (2026-10-30).
 
 ## Low-medium
 
@@ -531,6 +769,7 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
     - **Fix:** `expose_param` remembers whether it created the function graph and deletes it too
       (`deletePropertyGraph`) when a later step fails.
   - Questioned by HLP-15 (2026-10-30).
+  - Questioned by HLP-21 (2026-10-30).
 
 - [x] **PLG-10 · The connection cap also locks out `cancel` and `status`** · `plugin/.../__init__.py:176-183, 250-256` · confirmed · verified by hand · found 2026-10-29
   - **Defect.** `MAX_CLIENTS` (PLG-4) counts every connection being served, and a client waiting for
@@ -785,6 +1024,244 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
     - **Fix:** the check deletes only the snapshot file its result names, and the folder only if
       nothing else is in it; live, the folder (the check's own) was removed as empty.
 
+- [x] **PLG-15 · One socket error from `accept()` stops the bridge until Designer restarts** · `plugin/.../__init__.py` (`_accept_loop`) · plausible · verified by hand · found 2026-10-30
+  - **Defect.** `except OSError: break` ends the accept loop on any error, not only when `stop()`
+    closed the socket; nothing is logged. A `Thread.start()` failure also ends it and leaks a slot.
+  - **Scenario.** A momentary EMFILE or ECONNABORTED (Windows: WSAECONNRESET) and every later
+    connection waits unanswered: the "accepts connections but never answers" symptom AGENTS.md says
+    only a Designer restart fixes.
+  - **Fix.** Break only when not running; otherwise log, pause briefly and go on; release the slot
+    and close the connection if the thread can't start. A unit test with `accept` failing once.
+  - **Resolution: done** (commit `e7f3760`).
+    - **Test:** `test_one_failed_accept_does_not_stop_the_bridge` makes `accept()` raise
+      `ConnectionAbortedError` once: the next call timed out (the loop had ended).
+    - **Fix:** the loop breaks only when the server is stopping; otherwise it logs, pauses 0.1 s and
+      goes on. A thread that can't start frees its slot and closes the connection. Plugin reinstalled.
+  - Questioned by PLG-20 (2026-10-30).
+
+- [x] **SRV-22 · `designer_status` waits behind a running job, up to about 31 minutes** · `mcp_server/server.py` (`designer_status`) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** The bridge's own status comes back at once, but the package listing after it is a
+    normal job with no timeout, queued behind whatever runs.
+  - **Scenario.** Asking whether Designer is still busy during a long script returns nothing until
+    the script ends, though the plugin knows ("running for 412.0s").
+  - **Fix.** Skip the listing (and say why) while the bridge isn't idle; a unit test with a busy status.
+  - **Resolution: done** (commit `e7f3760`).
+    - **Test:** `test_designer_status_answers_while_a_job_runs` (status "running for 412.0s"): the
+      package listing was queued.
+    - **Fix:** while the bridge isn't "idle, 0 queued", `designer_status` returns its state and the
+      server versions and says the package list is skipped; docstring updated.
+
+- [x] **HLP-21 · A failed `expose_param` leaves the parameter at its default, not its old value** · `mcp_server/designer_helpers.py` (`expose_param`) · plausible · found 2026-10-30
+  - **Defect.** Adding a function graph resets the stored value (measured, HLP-16); the clean-up
+    deletes the graph but never puts the old value back. Questions HLP-3's resolution.
+  - **Scenario.** `levelinhigh` 0.8, an exposure that fails midway: an error is reported, the agent
+    believes nothing changed, and the parameter now reads 1.0.
+  - **Fix.** Keep the value before adding the graph and set it back after deleting it; run the
+    HLP-3 check on a non-default value.
+  - **Resolution: done** (commit `e7f3760`).
+    - **Test:** the HLP-3 live check now sets `levelinhigh` to 0.8 first: after the failed exposure
+      it read 1.00.
+    - **Fix:** `expose_param` keeps the value before adding a function graph and sets it back after
+      deleting the graph it created.
+
+- [x] **HLP-22 · `set_params` on the graph's `$outputsize` silently makes an overridable graph fixed** · `mcp_server/designer_helpers.py` (`set_params`) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** The switch to Absolute inheritance, meant for nodes, also runs for the graph target.
+  - **Scenario.** `set_params(node_id='graph', params={'$outputsize': [10, 10]})` on an overridable
+    graph (as the docstring suggests): it becomes fixed at 1024, and render size overrides are then
+    ignored; the output only shows the value change.
+  - **Fix.** For the graph, refuse `$outputsize` and point to `set_graph_size`, or keep its
+    inheritance and say so; a live check on an overridable graph.
+  - **Resolution: done** (commit `e7f3760`).
+    - **Test:** a live check makes the test graph overridable and sets its `$outputsize` through
+      `set_params`: it became Absolute ("INHERIT=Absolute").
+    - **Fix:** `set_params` refuses `$outputsize` on a graph whose size follows its parent, pointing
+      to `set_graph_size`, and never changes the graph's own inheritance (only nodes'); docstring
+      updated.
+  - Questioned by HLP-24 (2026-10-30).
+  - Questioned by SRV-25 (2026-10-30).
+
+- [x] **TST-28 · The self-test sends the real bridge token over the socket** · `tests/test_all_tools.py:274` · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** The old-protocol refusal check sends `{'token': token, ...}`, against AGENTS.md
+    ("Never ... send the bridge token") and README ("the secret itself never crosses the
+    connection").
+  - **Scenario.** A process listening on the port at that moment would receive the token in clear,
+    and with it code execution in Designer (unlikely while Designer holds the port).
+  - **Fix.** Use a token-shaped dummy; the refusal is the same.
+  - **Resolution: done** (commit `e7f3760`).
+    - **Test:** the old-protocol refusal check sends a token-shaped dummy; it is refused the same way
+      ("invalid token"). The refusal of the real token in the old field stays covered by
+      `test_the_old_protocol_sending_the_token_is_refused`, against the real plugin code locally.
+  - Questioned by TST-34 (2026-10-30).
+
+- [x] **HLP-23 · A quit can leave Designer running without any window, and the fallback never forces it** · `mcp_server/designer_helpers.py` (`quit_designer`) · confirmed once · found 2026-10-30
+  - **Defect.** When every window has closed but Designer doesn't go on to quit, the fallback only
+    looked again until the give-up time and forced the process only if a window was visible, so it
+    did nothing.
+  - **Scenario.** Found while addressing this review: in a self-test run, the quit with a modal
+    dialog open and a 7 s close handler left Designer running with no window (the bridge still
+    answered, nothing was open); `quit_designer` reported "still running after 60s".
+  - **Fix.** At the give-up time, also force a Designer that is still running with every window closed.
+  - **Resolution: done, defensively; not reproduced on demand** (commit `e7f3760`).
+    - **Test:** the occurrence above is the reproduction; it didn't recur in the next runs. A
+      scenario that hid the main window instead of closing it didn't reproduce it either (Designer
+      still quit in 2 s), so it was dropped. The self-test now quits with a modal dialog and with the
+      slow handlers in separate Designers, so that race no longer occurs in it.
+    - **Fix:** at the give-up time (about 35 s after the quit) the fallback also forces a Designer
+      still running with every window closed: a timer can fire then only while its event loop runs,
+      so it never went on to quit. AGENTS.md says so.
+  - Questioned by TST-32 (2026-10-30).
+  - Questioned by HLP-28 (2026-10-30).
+
+- [x] **HLP-24 · `set_params` no longer makes the graph's other `$` parameters Absolute** · `mcp_server/designer_helpers.py` (`set_params`) · plausible · verified by hand · found 2026-10-30
+  - **Defect.** The HLP-22 fix skips the inheritance switch for every `$` parameter on the graph,
+    not only `$outputsize`, so `$format`, `$tiling` and the like on a graph that follows its parent
+    are stored but may not take effect, with `old -> new` printed as success; `sweep_param` still
+    switches them. Questions HLP-22's resolution.
+  - **Fix.** Skip the switch only for the graph's `$outputsize` (or refuse the others when not
+    Absolute); a live check that sets the graph's `$format` and measures the output's format.
+  - **Resolution: done** (commit `8c47a02`).
+    - **Test:** a live check sets the test graph's `$format` to 16 bits with `set_params` and computes
+      a uniform generator wired to an output: it stayed RGBA8 with the graph's `$format` still
+      RelativeToParent. A "designer facts" check measures the same with the value set through the API.
+    - **Cause:** the HLP-22 fix limited the switch to Absolute to nodes, to protect the graph's
+      `$outputsize`, which the new refusal already protects; the graph's other `$` parameters follow
+      its parent too, so their values were ignored.
+    - **Fix:** the switch runs for the graph again (`$outputsize` reaches it only when already
+      Absolute); the docstring and AGENTS.md (Graph size) say so. The check now reads RGBA16, Absolute.
+  - Questioned by HLP-25 (2026-10-30).
+  - Questioned by TST-49 (2026-10-30).
+
+- [x] **TST-32 · HLP-23's fix and AGENTS.md's sentence about it have no test** · `AGENTS.md` (Designer UI), `mcp_server/designer_helpers.py` (`quit_designer`) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** "A Designer still running with every window closed is forced" is untested: the only
+    scenario that ever triggered it was removed with the quit split, so breaking the `closed_all`
+    branch would pass every test. Questions HLP-23's resolution.
+  - **Fix.** A unit test that runs `quit_designer`'s fallback with fake windows, timer and clock
+    (every window closed, past the give-up time) and expects `os._exit`; or mark the sentence untested.
+  - **Resolution: done** (commit `8c47a02`).
+    - **Test:** `tests/unit/test_quit_fallback.py` loads the helpers with fake `sd`, windows, timer and
+      clock and runs `quit_designer`: every window closed, the process still running, is left alone up
+      to 34 s and forced at 35 s; a window that refuses to close is forced at 5 s. With the HLP-23
+      condition taken out (`closed_all or` removed), the first test failed: no `os._exit`.
+    - **Fix:** the test only; the code was right.
+  - Questioned by TST-36 (2026-10-30).
+
+- [x] **HLP-25 · `set_params` on the graph's `$randomseed` stops a .sbsar from exposing it** · `mcp_server/designer_helpers.py` (`set_params`) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** The HLP-24 fix makes every `$` parameter of the graph Absolute. That is right for
+    `$format`, which a cooked graph never exposes, but a graph's `$randomseed` that follows its parent
+    is exposed and an Absolute one isn't: the same loss HLP-22 refuses for the size, reported as
+    success. Questions HLP-24's resolution (found by a reviewer, measured by hand).
+  - **Scenario.** `set_params(node_id='graph', params={'$randomseed': 3})`, save, cook: the .sbsar's
+    inputs are `$outputsize` only (a graph left to follow its parent: `$randomseed` and
+    `$outputsize`), so `render_sbs` or Painter can no longer change the seed.
+  - **Fix.** Refuse the graph's `$randomseed` while it follows its parent, as for `$outputsize` (or
+    leave its inheritance and say what its value means then); a live check that cooks the graph and
+    reads the exposed inputs (`sbsar_info`).
+  - **Note (2026-10-30, measured by hand): no refusal needed.** The value of a graph `$randomseed`
+    that follows its parent counts. On a clouds noise, graph seeds 0, 3 and 7 gave three different
+    outputs, and 3 gave the same one again. Cooked, that graph still exposes `$randomseed`, and
+    `sbsrender --set-value $randomseed@0/3/9` gave three different renders. The stored value stays
+    in the .sbsar as an offset on the render-time seed, though not added (stored 3 with seed 0
+    differs from stored 0 with seed 3), and the cooked default reads 0 either way. So the fix is to
+    leave the graph seed's inheritance alone and set only its value.
+  - **Correction (2026-10-30, TST-40):** the value *is* added to the render seed: stored 5 rendered
+    with seed 0 matched stored 0 with seed 5 (identical once, 1/65535 apart in another run: render noise). "Not added" above compared md5 hashes of
+    PNG files, which can differ for identical pixels.
+  - **Resolution: done** (commit `603a34c`).
+    - **Test:** a live check sets the test graph's `$randomseed` with `set_params`: it came back
+      Absolute, and `sbsar_info` on the saved graph listed `$outputsize` and `floor` but no
+      `$randomseed`. Two "designer facts" checks back the reason: an inherited graph seed's value
+      changes a clouds noise (0 vs 3, and 3 repeats), and a copy saved with the seed Absolute
+      doesn't expose it.
+    - **Cause:** the HLP-24 fix treated every graph `$` parameter like `$format`, but a graph's
+      `$randomseed` both counts while inherited and is a .sbsar control only while inherited.
+    - **Fix:** `set_params` leaves the graph's `$randomseed` inheritance alone and sets its value
+      (`is_graph` is now worked out once, before both loops). Docstring and AGENTS.md (Graph size)
+      say so. Now it stays RelativeToParent with value 3, and the .sbsar exposes `$randomseed`.
+  - Questioned by TST-37, TST-39 (2026-10-30).
+  - Questioned by HLP-27 (2026-10-30).
+  - Questioned by TST-56 (2026-10-30).
+
+- [x] **TST-40 · The TST-39 render check can't tell "combines" from "the override is ignored"** · `tests/test_all_tools.py` (seed render check) · confirmed · found 2026-10-30
+  - **Defect.** It renders a copy storing 5 and one storing 0, both with render seed 0, and passes if
+    they differ, which they would also do if sbsrender ignored `$randomseed` altogether; so "(a seed
+    offset)" is still not shown. Found by a reviewer. Questions TST-39's resolution.
+  - **Fix.** Also render with another render seed and check it changes the image (the override
+    counts), keeping the stored-value comparison (the stored value counts too).
+  - **Resolution: done** (commit `adf5f4d`).
+    - **Test:** a third render, the copy storing 0 at render seed 5, so both the stored value and the
+      render seed must change the image. It also showed the stored value is *added* to the render
+      seed: stored 5 at seed 0 matched stored 0 at seed 5 (0 or 1/65535 apart in different runs, the
+      parallel render noise), which corrects HLP-25's note ("not added" came from md5 hashes of PNGs).
+    - **Fix:** the check asserts all three (stored value counts, render seed counts, 5 + 0 = 0 + 5
+      within 8/65535); AGENTS.md says "an offset added to the parent's or render's seed".
+  - Questioned by TST-44 (2026-10-30).
+
+- [x] **TST-41 · The HLP-7 check no longer tests `sweep_param`'s restore guard** · `tests/test_all_tools.py` ("a failed restore still restores the inheritance"), `mcp_server/designer_helpers.py` (`sweep_param`) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** It makes the value write fail during the restore; since HLP-26 the inheritance goes
+    back before that write, so the check passes with or without the `try/finally`, and the new case
+    (the inheritance restore fails, the value still goes back) has no test. Found by a reviewer,
+    checked by hand. Questions HLP-7's resolution.
+  - **Fix.** Make `setPropertyInheritanceMethod` fail during the restore and check that the value
+    comes back and the first error is kept.
+  - **Resolution: done** (commit `adf5f4d`).
+    - **Test:** a live check patches `setPropertyInheritanceMethod` (on the class that defines it) to
+      fail when the sweep restores a relative size with offset 1. With the guard taken out of
+      `sweep_param` it failed ("VALUE=10,10", the swept value); with it, "VALUE=1,1" and the error kept.
+    - **Fix:** the test only; the code was right. The node is put back in a `finally`.
+
+- [x] **TST-44 · The seed renders don't show the stored seed is *added*** · `tests/test_all_tools.py` (seed render check), `AGENTS.md` (Graph size) · confirmed · found 2026-10-30
+  - **Defect.** Every pair compared has a seed of 0 (5 + 0 against 0 + 5), which fits any rule with
+    f(s, 0) = f(0, s) = s (max, OR, XOR, "the render seed unless 0"), so "an offset added" isn't
+    shown; nor is "the parent's" seed (only a render seed is measured). Found by a reviewer; the
+    "parent's" part by hand. Questions TST-40's resolution.
+  - **Fix.** A pair without zeros (stored 3 at render 2 against stored 0 at render 5: max and OR give
+    3, XOR 1), and drop "the parent's" or measure it; else say "combined".
+  - **Resolution: done** (commit `1b6006c`).
+    - **Test:** a copy storing 3, rendered at seed 2, against the copy storing 0 at seed 5: identical
+      (0/65535), which max, OR or XOR would not give, so the stored seed is added.
+    - **Fix:** the check compares that pair instead of 5 + 0 against 0 + 5; AGENTS.md cites it and
+      says "a render's seed" (a parent graph's seed isn't measured).
+  - Questioned by TST-48 (2026-10-30).
+
+- [x] **HLP-27 · `set_params` still makes a node's `$randomseed` Absolute** · `mcp_server/designer_helpers.py` (`set_params`), `mcp_server/server.py` (its docstring) · plausible · found 2026-10-30
+  - **Defect.** Only the graph's seed is exempt. A node's seed follows its parent by default and, like
+    the graph's, its value is probably an offset; made Absolute, the node no longer follows the graph's
+    (and the .sbsar's) Random Seed, the HLP-25 loss one level down, reported as success. The docstring's
+    "an inherited one ignores its value" is then wrong for seeds. Found by a reviewer; not measured
+    for nodes. Questions HLP-25's resolution.
+  - **Scenario.** `set_params(noise, {'$randomseed': 7})`, cook: Painter's seed slider no longer
+    changes that noise.
+  - **Fix.** Measure an inherited node seed (does its value change the output; does the node still
+    follow the graph or render seed); if so, exempt it too and fix the docstring.
+  - **Resolution: done** (commit `44ab3f8`).
+    - **Test:** a "designer facts" check on the self-test's clouds node, comparing computed pixels with
+      a tolerance: inherited, 0 + 3, 3 + 0 and 1 + 2 agree within 2/65535 and differ from 0 + 0 by
+      45767 (the value is added to the graph's seed); made Absolute, graph seed 0 against 3 differ by
+      2, compute noise (it no longer follows the graph's seed). A live check sets the node's seed with
+      `set_params`: "INHERIT=Absolute", and in that run the later render check found the .sbsar's
+      render seed no longer changed the output, which is the lost slider.
+    - **A wrong first measurement:** hashes of raw buffers said an Absolute node seed still followed
+      the graph, but two computes of one setting give different hashes (row padding, a step or two of
+      noise); AGENTS.md now says to compare pixels with a tolerance.
+    - **Fix:** `set_params` leaves every `$randomseed` inherited (node or graph) and sets its value;
+      docstring and AGENTS.md (Graph size) say so. The check reads "INHERIT=RelativeToParent VALUE=7".
+  - Questioned by TST-52, HLP-29, TST-53, TST-54 (2026-10-30).
+
+- [x] **TST-52 · AGENTS.md and the docstring say an Absolute node seed ignores a render's seed; only the graph seed is measured** · `AGENTS.md` (Graph size), `mcp_server/server.py` (`set_params` docstring) · confirmed · found 2026-10-30
+  - **Defect.** "No longer follows the graph's seed, nor a render's" and "only an inherited one follows
+    ... the cooked .sbsar's Random Seed": the fact check compares graph seeds only; the render side was
+    seen once (the failing run before the HLP-27 fix) but no check keeps it. Found by a reviewer.
+    Questions HLP-27's resolution.
+  - **Fix.** A render check with a node seed made Absolute (as TST-39 does for the graph seed), or
+    narrow the sentence to the graph's seed.
+  - **Resolution: done** (commit `256211f`).
+    - **Test:** a "designer facts" check saves a copy with the clouds node's seed made Absolute and
+      renders it at render seeds 0 and 5: 3/65535 apart (noise), while the copy where it follows the
+      graph differs by 42141; so the claim now has a check. It can't pass by accident: it also needs
+      the inherited copy to change, and a copy that wasn't really Absolute would differ.
+    - **Fix:** the check; the wording stays.
+  - Questioned by TST-58 (2026-10-30).
+
 ## Low
 
 - [x] **PLG-5 · `stop()` may keep the port bound and leaves queued clients hanging** · `__init__.py:250-256` · queued clients confirmed, port plausible · found 2026-10-29
@@ -923,6 +1400,7 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
     - **Fix:** `preview_maps` says "not a folder", "no .png files in ..." or "no map called 'x'
       ...; there are: ..."; `_select_links` uses `findall('compNodes/compNode')`; a failed reopen
       becomes "WARNING: could not reopen <graph>: <why>" in the success message.
+  - Questioned by SRV-23 (2026-10-30).
 
 - [x] **HLP-4 · `delete_nodes` and `move_nodes` stop halfway on a bad id** · `designer_helpers.py:623-629, 882-887` · confirmed · found 2026-10-29
   - **Defect.** Ids are resolved one at a time, so earlier ones are already applied.
@@ -967,6 +1445,7 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
       `finally`, so a failure in the first skipped the second.
     - **Fix:** the inheritance is restored in an inner `finally`, so it goes back either way; the
       first error is still the one raised.
+  - Questioned by TST-41 (2026-10-30).
 
 - [x] **HLP-8 · An empty clipboard can break the 3D screenshot** · `designer_helpers.py:336-340` · plausible · found 2026-10-29
   - **Defect.** `mimeData()` returning `None` fails before the render starts.
@@ -1063,6 +1542,7 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
       path and whether it had unsaved changes.
     - **Fix:** it now unloads only the previous build at `OUT_SBS`, refuses while that has unsaved
       changes, and leaves other packages open with a note. AGENTS.md's Example section says so.
+  - Questioned by INS-22 (2026-10-30).
 
 - [x] **INS-9 · `pillow` and `numpy` are unpinned** · `mcp_server/requirements.txt` · plausible · found 2026-10-29
   - **Scenario.** A later install picks up an incompatible major version (now 13.0.0 and 2.5.4).
@@ -1576,3 +2056,395 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
   - **Resolution: done, by skipping against an open Designer** (commit `07c12c0`).
     - **Fix:** Designer's UI API has no call to close an editor tab, so the check runs only in a
       Designer the self-test started (closed at the end) and is skipped, with the reason, in yours.
+
+- [x] **PLG-16 · `sd_run.py` prints raw tracebacks when Designer isn't running or the token is missing** · `client/sd_run.py` · confirmed · found 2026-10-30
+  - **Defect.** Only the timeout is caught; `ConnectionRefusedError` and `FileNotFoundError` come out
+    as tracebacks, though the CLI is the fallback for when MCP isn't available.
+  - **Fix.** Catch both with a one-line hint, as the server's client does; unit tests.
+  - **Resolution: done** (commit `e7f3760`).
+    - **Test:** `test_sd_run_explains_a_closed_designer_or_a_missing_token` (`--status` and `-c`):
+      raw `ConnectionRefusedError` and `FileNotFoundError` tracebacks.
+    - **Fix:** `_send_or_explain` in `client/sd_run.py` prints one line ("Designer is not running, or
+      its ... plugin is not loaded"; "No bridge token at ...: is the plugin installed?") and exits 1.
+  - Questioned by PLG-17 (2026-10-30).
+  - Questioned by PLG-19 (2026-10-30).
+
+- [x] **SRV-23 · `preview_maps` doesn't check `crop`** · `mcp_server/server.py` (`preview_maps`) · confirmed · found 2026-10-30
+  - **Defect.** An inverted box raises a raw PIL `ValueError`; a box outside the image gives an
+    all-black tile, which reads as "the map is black there". Questions SRV-12's scope.
+  - **Fix.** Validate against each image as `_crop` does; a unit test.
+  - **Resolution: done** (commit `e7f3760`).
+    - **Test:** `test_preview_maps_checks_the_crop`: an inverted box raised PIL's `ValueError`, a box
+      outside the image was accepted, a short list raised `IndexError`.
+    - **Fix:** `_crop_box()` (split out of `_crop`) clamps and checks the box for `preview_maps` too.
+
+- [x] **SRV-24 · AGENTS.md says every tool result carries the guide reminder; only text results do** · `AGENTS.md` (Working on this project), `mcp_server/server.py` (`_tool`) · confirmed · found 2026-10-30
+  - **Defect.** Image and list results (`preview_node`, `screenshot_designer`, `sweep_param`,
+    `compare_to_reference`) and errors never carry it.
+  - **Fix.** "every text result", or add it to list results too, with a test.
+  - **Resolution: done** (commit `e7f3760`).
+    - **Test:** none (documentation).
+    - **Fix:** AGENTS.md says "every text tool result".
+
+- [x] **INS-22 · The example skips an open package at `OUT_SBS` whose graph was renamed** · `examples/build_dwarf_trimsheet.py` (`Builder.__init__`) · plausible · verified by hand · found 2026-10-30
+  - **Defect.** Packages are filtered by graph name before the path and unsaved-changes checks, so
+    the previous build with a renamed graph and unsaved edits is neither refused nor closed, and the
+    new build is written over its file. Questions INS-8's scope.
+  - **Fix.** Match by path first (refuse if modified, else close), then apply the name note to other
+    paths only.
+  - **Resolution: done** (commit `e7f3760`).
+    - **Test:** a live check renames the previous build's graph (with unsaved edits) and re-runs the
+      example: it built over the file.
+    - **Fix:** the example matches the previous build by its path first (refuses if modified, else
+      closes it), and gives the graph-name note only for packages at other paths.
+  - Questioned by TST-50 (2026-10-30).
+
+- [x] **TST-29 · A check whose condition isn't a bool crashes the summary** · `tests/test_all_tools.py` (`check`, `summarize`) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** `check()` stores `ok` as given; a condition like `refs and not missing` with no refs
+    stores `[]`, and `summarize()`'s `sum` then raises `TypeError`, so no summary is printed. Two
+    `abs()` calls on possibly-None maxima can raise mid-run.
+  - **Fix.** Store `bool(ok)`; guard the None values.
+  - **Resolution: done** (commit `e7f3760`).
+    - **Test:** `test_a_check_that_is_not_a_bool_is_counted`: `TypeError` in `summarize()`.
+    - **Fix:** `check()` stores `bool(ok)`.
+
+- [x] **TST-30 · A run against your Designer leaves library packages loaded** · `tests/test_all_tools.py` (`CLEAN`), README (self-test) · plausible · found 2026-10-30
+  - **Defect.** Library packages loaded for `describe_node`/`add_node` (bevel, slope_blur...) stay
+    loaded; README says the self-test doesn't touch your packages.
+  - **Fix.** Unload the library packages the run loaded (in a separate call at the end), or say so.
+  - **Resolution: done** (commit `e7f3760`).
+    - **Test:** a new "self-test" check notes the library packages loaded before the run and
+      compares at the end; it reports how many the run had loaded (9).
+    - **Fix:** at the end, in a separate call after the clean-up, the run unloads the library
+      packages it loaded; yours stay.
+  - Questioned by TST-33 (2026-10-30).
+
+- [x] **TST-31 · TST-2 added an untested fact, and ROADMAP contradicts it** · `AGENTS.md` (Output), `ROADMAP.md` item 17 · confirmed · found 2026-10-30
+  - **Defect.** "Renders computed in parallel aren't bit-identical from run to run" has no check, and
+    ROADMAP 17 calls the same fact "measured, not yet written down". Questions TST-2's resolution.
+  - **Fix.** Do ROADMAP 17 (a check rendering twice in parallel and with `--cpu-count 1`), or mark
+    the sentence unverified.
+  - **Resolution: done, by removing the untested reason** (commit `e7f3760`).
+    - **Fix:** AGENTS.md keeps the tolerance the test uses and says it prints what it measured; why
+      renders differ run to run is left to ROADMAP item 17, which would measure it.
+
+- [x] **PLG-17 · `sd_run.py`'s "not running" message names the user, not the plugin** · `client/sd_run.py` (`_send_or_explain`) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** The name comes from `basename(dirname(TOKEN_FILE))`, but the token file sits in the
+    home folder, so it prints the login name ("its catalinenache plugin"); the test only checks
+    "not running". Questions PLG-16's resolution.
+  - **Fix.** Use `project_constants.PLUGIN`; assert the name in the test.
+  - **Resolution: done** (commit `8c47a02`).
+    - **Test:** `test_sd_run_explains_a_closed_designer_or_a_missing_token` now expects "not running,
+      or its sd_claude_bridge_kve plugin" (from `PLUGIN`): it failed, the message named the home folder.
+    - **Cause:** the token file sits in the home folder, so its folder's name is the login, not the plugin.
+    - **Fix:** `sd_run.py` takes the name from `project_constants.PLUGIN`.
+
+- [x] **TST-33 · The self-test's new clean-up steps can skip the rest of the clean-up** · `tests/test_all_tools.py` (library-package unload in the `finally`) · plausible · found 2026-10-30
+  - **Defect.** `re.search(...).group(1)` without a guard: if the bridge answers with an error there,
+    the `AttributeError` skips the snapshot clean-up, putting your graph back, and the quit block.
+    Follows TST-30.
+  - **Fix.** Guard the parse (record a failed check instead), or put the library clean-up in its own
+    `try`.
+  - **Resolution: done** (commit `8c47a02`).
+    - **Test:** `test_a_bridge_error_in_the_library_clean_up_is_a_failed_check_not_a_crash` runs the
+      clean-up (moved unchanged into `restore_library_packages`) with a bridge that answers an error:
+      `AttributeError: 'NoneType' object has no attribute 'group'`.
+    - **Cause:** the `LIBS=` line was parsed without checking it was there.
+    - **Fix:** `restore_library_packages` records a failed check with the answer instead, and returns,
+      so the rest of the `finally` runs.
+  - Questioned by TST-51 (2026-10-30).
+
+- [x] **TST-34 · With a dummy token, the "old protocol" live check proves nothing** · `tests/test_all_tools.py` (bridge security) · confirmed · found 2026-10-30
+  - **Defect.** A plugin that still accepted `{'token': ...}` would refuse the dummy too, exactly like
+    the "wrong answer" case; only the unit test with the real token catches a regression. Questions
+    TST-28's resolution.
+  - **Fix.** Drop or rename the live check and point to the unit test.
+  - **Resolution: done** (commit `8c47a02`).
+    - **Test:** none can fail here: any plugin refuses a dummy token, which is the finding.
+    - **Fix:** the live case is dropped; a comment points to the unit test
+      `test_the_old_protocol_sending_the_token_is_refused`, which uses the real token without a socket.
+
+- [x] **TST-35 · The HLP-24 live check leaves the test graph's `$format` Absolute** · `tests/test_all_tools.py` (`set_params` checks, after "graph $format takes effect") · confirmed · found 2026-10-30
+  - **Defect.** It sets the value back to 8 bits but not the inheritance, so every later check
+    (`export_outputs`, `render_sbs`, the 16-bit render match) runs on a graph unlike a new one; no
+    later check breaks today.
+  - **Fix.** Put the inheritance back to RelativeToParent with `execute_designer_code`.
+  - **Resolution: done** (commit `603a34c`).
+    - **Test:** a self-test check reads the graph's `$format` inheritance after the HLP-24 checks:
+      "INHERIT=Absolute".
+    - **Cause:** the clean-up went through `set_params`, which sets the value and (by design, HLP-24)
+      makes it Absolute.
+    - **Fix:** the clean-up sets the value and puts the inheritance back to RelativeToParent through
+      the API, and the check reads it back: "INHERIT=RelativeToParent".
+
+- [x] **TST-36 · `test_quit_fallback.py` claims more than its two tests cover** · `tests/unit/test_quit_fallback.py:1-3` · confirmed · found 2026-10-30
+  - **Defect.** The docstring names HLP-12, HLP-17 and HLP-19, but nothing runs the slow-close path
+    (`closing` still set at 5 s) or a window still visible at the give-up time; breaking either branch
+    passes. Questions TST-32's resolution.
+  - **Fix.** Add those two cases (a `close()` that advances the fake clock; a window that shows again
+    after closing), or trim the docstring.
+  - **Resolution: done** (commit `603a34c`).
+    - **Test:** two cases added, with a fake close handler that runs timers while it works (Qt's
+      event loop keeps running inside a slow handler): one busy for 7 s is left to finish (no exit
+      by 34 s); one that never returns is forced at 35 s. Each fails when its branch is taken out:
+      without `closing or` the slow handler is forced at 5 s; without the give-up time, neither the
+      stuck handler nor the all-closed case (HLP-23) is ever forced.
+    - **Fix:** the tests only; the docstring's claims now hold.
+
+- [x] **TST-37 · The `set_params` seed check's "VALUE=3" passes without `set_params` setting it** · `tests/test_all_tools.py` (HLP-25 checks, `SEED_OF`) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** `SEED_OF` ends with the graph seed at 3 (`look(s) for s in (0, 3, 3)`), and the check
+    then sets 3 and expects 3, so a `set_params` that skipped the value write still passes (the
+    inheritance half does fail without the fix). The seed also stays at 3 for the rest of the run,
+    the "graph unlike a new one" TST-35 just fixed for `$format`. Found by a reviewer and by hand.
+    Questions HLP-25's resolution.
+  - **Fix.** Set a value `SEED_OF` never used (5), and put the seed back to 0 after the sbsar_info
+    checks.
+  - **Resolution: done** (commit `b9d1036`).
+    - **Test:** the check now sets 5, which `SEED_OF` never used; with `set_params` changed not to
+      write the graph seed, it failed ("VALUE=3"), where before it would have passed. A new check
+      puts the seed back to 0 at the end and expects "5 -> 0".
+    - **Cause:** the check reused the value the earlier check had left. The new check first read
+      "0 -> 0": the Absolute-copy check (HLP-25) switched the seed's inheritance there and back, and
+      changing a parameter's inheritance resets its value to the default (measured: a graph's and a
+      node's `$randomseed`, `$outputsize` and `$format`; see HLP-26).
+    - **Fix:** `set_params` sets 5; the Absolute-copy check puts the value back after the inheritance;
+      the seed is set back to 0 after the render checks.
+
+- [x] **TST-38 · `SEED_OF` leaves its temporary output node behind when a step fails** · `tests/test_all_tools.py` (`SEED_OF`) · confirmed · found 2026-10-30
+  - **Defect.** `g.deleteNode(o)` runs only after `compute()` and `t.save(path)` succeed; if either
+    raises, an extra unnamed output stays in the test graph and later checks of its outputs
+    (`export_outputs`, `sbsar_info`) fail for an unrelated reason, hiding the real one. The other
+    snippets in the same change use `try/finally`.
+  - **Fix.** `try: ... finally: g.deleteNode(o)`.
+  - **Resolution: done** (commit `b9d1036`).
+    - **Test:** the same steps by hand on a throwaway graph, saving to a folder that doesn't exist:
+      without `try/finally` one output node was left behind, with it none.
+    - **Fix:** `SEED_OF` deletes its output node in a `finally`.
+
+- [x] **TST-39 · AGENTS.md's "(a seed offset)" has no test** · `AGENTS.md` (Graph size) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** The self-test checks only that an inherited graph seed's value changes the output in
+    Designer; that the stored value carries into the .sbsar and combines with the render-time seed
+    comes from the hand measurement in HLP-25's note. Found by a reviewer and by hand. Questions
+    HLP-25's resolution.
+  - **Fix.** A "designer facts" check rendering the saved graph with one `$randomseed` override for
+    two stored values (different renders), or drop "(a seed offset)".
+  - **Resolution: done** (commit `b9d1036`).
+    - **Test:** a "designer facts" check renders the saved graph (stored seed 5) and a copy storing
+      0, both with render seed 0: the height maps differ by up to 42141/65535, so the stored value
+      reaches the .sbsar and combines with the render seed.
+    - **Fix:** the check only; AGENTS.md's wording now has a test.
+  - Questioned by TST-40 (2026-10-30).
+
+- [x] **TST-42 · AGENTS.md's "changing the inheritance resets the value" says more than its check** · `AGENTS.md` (Graph size) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** "A node's or the graph's, either direction", but the check switches one node's
+    `$outputsize` to Absolute and back and reads 0, 0 at the end, so it can't tell which switch reset
+    it, and no check covers the graph; those come from hand probes. Found by a reviewer and by hand.
+    Questions HLP-26's resolution.
+  - **Fix.** Read the value after each switch, and add a graph case (`$randomseed`).
+  - **Resolution: done, with the claim narrowed** (commit `adf5f4d`).
+    - **Test:** the fact check now reads the value after each switch, on a node's `$outputsize` and the
+      graph's `$randomseed`: neither switch keeps the value, but a node's relative size made Absolute
+      read (8, 8), not the default, so "resets to the default" was too strong.
+    - **Fix:** AGENTS.md now says changing the inheritance doesn't keep the value (back to inherited
+      gave the default), measured on those two; the check asserts that.
+  - Questioned by TST-45, TST-46 (2026-10-30).
+
+- [x] **TST-43 · README overstates who clears the kept scratch folder** · `README.md` (Self-test), `tests/test_all_tools.py` (`main`) · plausible · found 2026-10-30
+  - **Defect.** "Left for the system to clear": macOS clears its temp folder of old files, but
+    Windows doesn't by default, so a folder of renders piles up per run; and the check "your Designer
+    survives the clean-up" no longer covers a deletion when Designer runs. Found by a reviewer.
+    Questions PLG-18's resolution.
+  - **Fix.** Say where the folder is and that it can be deleted once Designer is closed; rename the
+    check to what it covers.
+  - **Resolution: done** (commit `adf5f4d`).
+    - **Fix:** README says the folder is left with its path printed, to delete once Designer is closed
+      (macOS clears old temporary files, Windows doesn't by default); the check is now "your Designer
+      is still running after the run, with no crash dump". Wording only, no test to write.
+  - Questioned by TST-47 (2026-10-30).
+
+- [x] **TST-45 · The inheritance fact check is weaker than AGENTS.md's sentence** · `tests/test_all_tools.py` (`kept_any`), `AGENTS.md` (Graph size) · confirmed · found 2026-10-30
+  - **Defect.** It only rejects "kept the value"; "back to inherited gave the default" is unchecked, so
+    a switch back giving (1, 2) or a seed of 7 would pass. Found by a reviewer. Questions TST-42's
+    resolution.
+  - **Fix.** Assert that the switch back gives (0, 0) and 0.
+  - **Resolution: done** (commit `1b6006c`).
+    - **Test:** the check now also requires the switch back to inherited to read (0, 0) and 0; the
+      pattern was tried on the measured output (passes) and on (1, 2) and 7 (fails).
+    - **Fix:** the check only.
+
+- [x] **TST-46 · The fact check's `resets()` doesn't put the parameter back on an error** · `tests/test_all_tools.py` (`resets`) · confirmed · found 2026-10-30
+  - **Defect.** The restore of the inheritance and value runs after the loop, not in a `finally`, so a
+    failing API call (an `APIException`, a `BaseException`) leaves the graph seed Absolute and a later
+    check ("still exposed") fails for an unrelated reason. Found by a reviewer. Questions TST-42's
+    resolution.
+  - **Fix.** `try/finally` around the loop.
+  - **Resolution: done** (commit `1b6006c`).
+    - **Fix:** `resets()` puts the inheritance and value back in a `finally`. No failure to reproduce
+      (it needs an API call to fail); the same pattern as the other snippets.
+
+- [x] **TST-47 · README says Windows doesn't clear temporary files, unmeasured** · `README.md` (Self-test) · plausible · found 2026-10-30
+  - **Defect.** "Windows doesn't by default" isn't measured, and Storage Sense can clear temporary
+    files on some Windows 11 setups. Found by a reviewer. Questions TST-43's resolution.
+  - **Fix.** "May not", or just say to delete it once Designer is closed.
+  - **Resolution: done** (commit `1b6006c`).
+    - **Fix:** README now says to delete it once Designer is closed: "the system may clear old
+      temporary files itself, but don't count on it". Wording only.
+
+- [x] **TST-48 · A self-test comment still quotes AGENTS.md's old wording** · `tests/test_all_tools.py:1584-1586` · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** The comment above the seed copies says the stored seed is "combined with the seed a
+    render sets" and quotes AGENTS.md as "a seed offset"; AGENTS.md now says "an offset added to a
+    render's seed", and the check below shows the addition. Questions TST-44's resolution (the
+    comment wasn't updated with it).
+  - **Fix.** Reword the comment to what the checks below show.
+  - **Resolution: done** (commit `44ab3f8`).
+    - **Fix:** the comment now says the stored seed is added to the render's seed and quotes AGENTS.md's
+      current wording. Comment only; no test.
+
+- [x] **HLP-28 · A `quit_designer` comment still says a slow shutdown is never cut off** · `mcp_server/designer_helpers.py` (`quit_designer` comment) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** "The fallback fires only while a window is still open and the normal shutdown hasn't
+    begun, so a slow shutdown is never cut off (REVIEW.md HLP-12)"; since HLP-23 it forces the exit
+    35 s after the quit with every window closed too. Found by a reviewer. Questions HLP-23's
+    resolution.
+  - **Fix.** Reword: not cut off within about 35 s, forced after that if Designer is still running.
+  - **Resolution: done** (commit `44ab3f8`).
+    - **Fix:** the comment now says the shutdown isn't cut off until about 35 s after the quit and is
+      forced after that. Comment only; the behaviour is tested by `test_quit_fallback.py`.
+
+- [x] **PLG-19 · `sd_run.py` still prints tracebacks for two "can't reach Designer" cases** · `client/sd_run.py` (`_send_or_explain`, `main`) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** A full bridge closes the connection (`ConnectionError('the bridge closed the
+    connection')`), which isn't caught; and a timeout on `--status`/`--cancel` (10 s) is outside the
+    timeout handler, which wraps only the script path. Found by a reviewer. Questions PLG-16's
+    resolution.
+  - **Fix.** Catch `ConnectionError` (covers refused and reset) and the timeout in `_send_or_explain`.
+  - **Resolution: done** (commit `44ab3f8`).
+    - **Test:** two cases added to `test_sd_run_explains_a_closed_designer_or_a_missing_token`, each for
+      `--status` and `-c`: a `ConnectionError('the bridge closed the connection')` and a timeout; both
+      raised through (a traceback).
+    - **Fix:** `_send_or_explain` explains a timeout and a closed connection in one line each; the
+      script path's own timeout handler went into it.
+
+- [x] **PLG-20 · The accept loop retries every 0.1 s forever on a lasting error** · `plugin/sd_claude_bridge_kve/sd_claude_bridge_kve/__init__.py` (`_accept_loop`) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** Since PLG-15 an `OSError` from `accept()` while running prints a line and retries after
+    0.1 s; an error that lasts (EMFILE, a socket invalidated other than by `stop()`) writes ten lines a
+    second into Designer's log for as long as it lasts. Found by a reviewer. Questions PLG-15's
+    resolution.
+  - **Fix.** Back off (doubling up to a few seconds) and log only when the error changes.
+  - **Resolution: done** (commit `44ab3f8`).
+    - **Test:** `test_a_lasting_accept_error_backs_off_and_is_logged_once`: `accept()` fails six times
+      with EMFILE, then works; the old loop printed six lines (and slept 0.1 s each time).
+    - **Fix:** the pause doubles from 0.1 s up to 5 s and resets after a successful accept; a line is
+      printed only when the error changes. Reinstalled and Designer restarted; the self-test's "installed
+      plugin matches the repo" passes.
+  - Questioned by TST-55 (2026-10-30).
+
+- [x] **SRV-25 · `sweep_param`'s "same rules as set_params" no longer holds for an overridable graph's size** · `mcp_server/server.py` (`sweep_param` docstring) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** `set_params` refuses an overridable graph's `$outputsize` (HLP-22); `sweep_param` makes
+    it Absolute, sweeps absolute sizes and restores it. Found by a reviewer. Questions HLP-22's
+    resolution.
+  - **Fix.** Say so in the docstring (the sweep is temporary, so making it Absolute meanwhile is fine).
+  - **Resolution: done** (commit `44ab3f8`).
+    - **Fix:** the docstring says a `$` parameter is made Absolute for the sweep even where `set_params`
+      refuses it or leaves it inherited, and is put back with its inheritance. Docstring only.
+
+- [x] **TST-49 · The `$format` probe leaves its nodes behind when it fails** · `tests/test_all_tools.py` (`FORMAT_OF`) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** It adds a uniform and an output, computes and deletes them with no `try/finally` (what
+    TST-38 fixed for the seed probe); an extra output then breaks later output checks far from the
+    cause. Found by a reviewer. Questions HLP-24's resolution.
+  - **Fix.** Delete them in a `finally`.
+  - **Resolution: done** (commit `44ab3f8`).
+    - **Fix:** `FORMAT_OF` deletes its nodes in a `finally`, as `SEED_OF` does (TST-38 showed by hand
+      that the unguarded form leaves a node behind).
+
+- [x] **TST-50 · The INS-22 check doesn't confirm the rename happened** · `tests/test_all_tools.py` (example script, renamed previous build) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** "RENAMED True" prints `isModified()`, already true from the edit before; nothing reads
+    the identifier back, so if the rename did nothing the old name-based lookup would refuse too and
+    the check would pass for the wrong reason. Found by a reviewer. Questions INS-22's resolution.
+  - **Fix.** Print `getIdentifier()` after the rename and require the new name.
+  - **Resolution: done** (commit `44ab3f8`).
+    - **Fix:** the check prints the identifier after the rename and requires
+      "RENAMED True mcp_selftest_trimsheet_renamed"; it passed.
+
+- [x] **TST-51 · The library list at the start is read without a guard, before the `try`** · `tests/test_all_tools.py` (`libs_before`) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** `re.search(...).group(1)` raises on a bridge error before the `try/finally`, so the run
+    ends with no summary and a Designer the self-test started is never quit; TST-33 guarded only the
+    clean-up side. Found by a reviewer. Follows TST-33.
+  - **Fix.** Parse it like `restore_library_packages` does, failing one check instead.
+  - **Resolution: done** (commit `44ab3f8`).
+    - **Test:** `test_a_bridge_error_reading_the_library_packages_at_the_start_is_a_failed_check`; the
+      old inline line raises `AttributeError` on the same answer.
+    - **Fix:** `library_packages()` (sharing `libs()` with the clean-up) records a failed check and
+      returns None, and the clean-up then skips its library check instead of crashing.
+  - Note (2026-10-30): the `user_graph` line just above it (`CURRENT=`) has the same unguarded parse; it comes from `main`, outside this branch's diff, so a review of `main` should pick it up.
+
+- [x] **HLP-29 · The `set_params` docs read as if a seed always ends up inherited** · `mcp_server/server.py` (`set_params` docstring), `AGENTS.md` · confirmed · found 2026-10-30
+  - **Defect.** `set_params` leaves a seed's inheritance as it is, so one already Absolute stays so;
+    "leaves it inherited" doesn't say that, nor how to fix a seed on purpose. Found by a reviewer.
+    Questions HLP-27's resolution.
+  - **Fix.** "Its inheritance is left as it is (to fix a seed, change its inheritance with
+    execute_designer_code)".
+  - **Resolution: done** (commit `256211f`).
+    - **Test:** a live check makes the clouds node's seed Absolute, sets it with `set_params`, and reads
+      "INHERIT=Absolute VALUE=4"; the node is put back afterwards.
+    - **Fix:** the docstring says a seed's inheritance is left as it is and how to fix one on purpose;
+      AGENTS.md says `set_params` never changes a seed's inheritance (an Absolute one stays Absolute).
+  - Questioned by TST-57 (2026-10-30).
+
+- [x] **TST-53 · The node-seed fact check creates its output node before the `try`** · `tests/test_all_tools.py` (node `$randomseed` fact check) · confirmed · found 2026-10-30
+  - **Defect.** `o = g.newNode(...)` and the connection run before `try:`, so a failing connection
+    leaves an output in the test graph (the TST-49 pattern). Found by a reviewer. Questions HLP-27's
+    resolution.
+  - **Fix.** Create and connect it inside the `try`, deleting it in the `finally` when it exists.
+  - **Resolution: done** (commit `256211f`).
+    - **Fix:** the node-seed check and `SEED_OF` create and connect their output node inside the `try`
+      and delete it in the `finally` when it exists.
+
+- [x] **TST-54 · The node-seed pixel comparison assumes an integer format** · `tests/test_all_tools.py` (node `$randomseed` fact check) · confirmed · found 2026-10-30
+  - **Defect.** `'H' if '16' in format else 'B'`: a float format would be compared as raw bits, where
+    the tolerance of 8 means nothing (today the output is LUM16). Found by a reviewer. Questions
+    HLP-27's resolution.
+  - **Fix.** Fail the check on any format other than 8- or 16-bit integers.
+  - **Resolution: done** (commit `256211f`).
+    - **Fix:** a shared `PIXELS` snippet (`pixels()`, `apart()`) used by both seed checks raises on
+      any format other than 8- or 16-bit integers, so such a check fails instead of comparing bits.
+
+- [x] **TST-55 · The accept-loop backoff test doesn't cover the reset, the cap or a changed error** · `tests/unit/test_plugin.py` (`test_a_lasting_accept_error_backs_off_and_is_logged_once`) · confirmed · found 2026-10-30
+  - **Defect.** Removing the reset after a successful accept, or the 5 s cap (six failures stop at
+    3.2 s), or the new line when the error changes, would all pass it. Found by a reviewer. Questions
+    PLG-20's resolution.
+  - **Fix.** More failures (to reach the cap), a second error text, and a failure after a success
+    that must start again at 0.1 s.
+  - **Resolution: done** (commit `256211f`).
+    - **Test:** the test now scripts eight EMFILE failures, a different error, a success, one more
+      failure and a success, and expects three log lines and the pauses 0.1, 0.2, 0.4, 0.8, 1.6, 3.2,
+      5, 5, 5, then 0.1. Taking out the reset, the cap or the new line on a changed error each made it
+      fail.
+    - **Fix:** the test only.
+
+- [x] **TST-56 · The graph-seed fact check compares hashes of saved PNGs** · `tests/test_all_tools.py` (`SEED_OF`, "REPEATS") · plausible · verified by hand · found 2026-10-30
+  - **Defect.** "3 repeats" requires two computes of one seed to give identical PNG bytes, but two
+    computes of one setting were measured 2/65535 apart (HLP-27), so the check may fail now and then;
+    it has passed every run so far. Found by hand. Questions HLP-25's resolution.
+  - **Fix.** Compare pixels with a tolerance, as the node-seed check does.
+  - **Resolution: done** (commit `256211f`).
+    - **Fix:** `SEED_OF` compares computed pixels through `pixels()`/`apart()`: seeds 0 and 3 must
+      differ by more than 8 steps and two computes of 3 agree within 8.
+
+- [x] **TST-57 · "An Absolute seed stays Absolute" is checked for a node only** · `tests/test_all_tools.py` (`SEED_INHERIT`), `AGENTS.md`, `mcp_server/server.py` (`set_params` docstring) · confirmed · found 2026-10-30
+  - **Defect.** The docs say it for a node's or the graph's seed; the check uses the clouds node, so a
+    later change that made the graph's seed inherited again would pass. Found by a reviewer.
+    Questions HLP-29's resolution.
+  - **Fix.** The same three steps for `node_id='graph'` (make it Absolute, `set_params`, read back,
+    restore).
+  - **Resolution: done** (commit `8a28d3a`).
+    - **Fix:** the check runs on the clouds node and on the graph ("stays Absolute (node)" and
+      "(graph)", both "INHERIT=Absolute VALUE=4"), and puts each back as it was, inheritance then value
+      (the next check reads the graph seed going "3 -> 5", so it came back).
+
+- [x] **TST-58 · The Absolute-node render check doesn't confirm the render seed reached that copy** · `tests/test_all_tools.py` (`abs_node_seed0/5` renders) · confirmed · found 2026-10-30
+  - **Defect.** Its control (`override > 8`) comes from another copy; if `$randomseed` weren't exposed by
+    the Absolute-node copy, `render_sbs` would only warn, the two renders would match and the check
+    would pass without showing anything. Found by a reviewer. Questions TST-52's resolution.
+  - **Fix.** Require no "is not exposed" warning in those renders' output.
+  - **Resolution: done** (commit `8a28d3a`).
+    - **Fix:** the render outputs are kept per copy and the check requires no "is not exposed" warning
+      (the text `render_sbs` prints) for the Absolute-node renders; it reads "render seed exposed: True".

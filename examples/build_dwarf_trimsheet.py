@@ -91,17 +91,18 @@ class Builder:
         # Close the previous build (the package saved at OUT_SBS) so re-running doesn't pile up
         # packages; never discard edits: refuse if it has unsaved changes, and leave any other
         # package with a graph of this name (a copy saved elsewhere, an unsaved one) open
+        # The previous build is matched by its path, whatever its graph is called now (a renamed
+        # graph still lives in the file this run writes over; REVIEW.md INS-22)
         previous = []
+        out = os.path.normcase(os.path.abspath(OUT_SBS))
         for p in list(self.pkg_mgr.getUserPackages()):
-            if not any(r.getIdentifier() == GRAPH_ID for r in p.getChildrenResources(False)):
-                continue
             path = p.getFilePath() or ''
-            if not path or os.path.normcase(os.path.abspath(path)) != os.path.normcase(os.path.abspath(OUT_SBS)):
+            if path and os.path.normcase(os.path.abspath(path)) == out:
+                if p.isModified():
+                    raise RuntimeError('%s has unsaved changes; save or close it before rebuilding' % OUT_SBS)
+                previous.append(p)
+            elif any(r.getIdentifier() == GRAPH_ID for r in p.getChildrenResources(False)):
                 print('Note: left %s open; it also has a graph named %s' % (path or 'an unsaved package', GRAPH_ID))
-                continue
-            if p.isModified():
-                raise RuntimeError('%s has unsaved changes; save or close it before rebuilding' % OUT_SBS)
-            previous.append(p)
         for p in previous:
             self.pkg_mgr.unloadUserPackage(p)
         self.pkg = self.pkg_mgr.newUserPackage()

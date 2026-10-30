@@ -333,3 +333,23 @@ def test_set_link_displays_copy_of_the_saved_file_keeps_relative_paths_working(m
     assert 'sbs://pattern_shape.sbs' in paths                  # library references left alone
     assert '?himself' in paths                                 # the package's own graphs (REVIEW.md SRV-17)
     assert os.path.getmtime(copy) == 1000                      # still older than the live snapshot (SRV-1)
+
+
+def test_designer_status_answers_while_a_job_runs(monkeypatch):
+    # REVIEW.md SRV-22: the package listing queued behind the running job, so the status call
+    # waited up to ~31 minutes although the plugin knew at once that it was busy
+    monkeypatch.setattr(server, '_send', lambda request, wait: {'ok': True,
+                        'output': '%s v3: running for 412.0s, 0 queued' % server.PLUGIN})
+    queued = []
+    monkeypatch.setattr(server, '_bridge', lambda code, path=None, timeout=None: queued.append(code) or 'packages')
+    text = server.designer_status()
+    assert 'running for 412.0s' in text and not queued and 'package list' in text
+
+
+@pytest.mark.parametrize('crop, message', [([30, 0, 10, 8], 'empty'), ([100, 100, 120, 120], 'empty'),
+                                           ([0, 0, 4], 'x0, y0, x1, y1')])
+def test_preview_maps_checks_the_crop(tmp_path, crop, message):
+    # REVIEW.md SRV-23: an inverted box raised PIL's ValueError; one outside the image gave a black tile
+    Image.new('L', (32, 16), 200).save(tmp_path / 'height.png')
+    with pytest.raises(server.ToolError, match=message):
+        server.preview_maps(str(tmp_path), crop=crop)

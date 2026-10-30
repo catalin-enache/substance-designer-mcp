@@ -443,3 +443,64 @@ def test_cancel_does_not_count_abandoned_jobs(bridge):
     plugin.QUEUE_WAIT = 0.2
     assert 'was not run' in _call(plugin, {'code': "print('late')"})['error']
     assert 'queued dropped: 0' in _call(plugin, {'cmd': 'cancel'})['output']
+
+
+def test_one_failed_accept_does_not_stop_the_bridge(bridge):
+    # REVIEW.md PLG-15: any OSError from accept() ended the accept loop for good (a momentary
+    # EMFILE or ECONNABORTED), so every later connection waited unanswered
+    plugin, srv, _ = bridge
+    real = srv.sock
+
+    class FailsOnce:
+        failed = False
+
+        def accept(self):
+            if not FailsOnce.failed:
+                FailsOnce.failed = True
+                raise ConnectionAbortedError('aborted before accept')
+            return real.accept()
+
+        def __getattr__(self, name):
+            return getattr(real, name)
+    srv.sock = FailsOnce()
+    assert _call(plugin, {'code': "print('first')"})['output'] == 'first\n'   # served by the pending accept
+    assert _call(plugin, {'code': "print('after')"})['output'] == 'after\n'   # the loop went on
+    assert FailsOnce.failed
+
+
+def test_a_lasting_accept_error_backs_off_and_is_logged_once(bridge, monkeypatch, capsys):
+    # REVIEW.md PLG-20: since PLG-15 the loop retried every 0.1 s and printed every time, so an
+    # error that lasts (EMFILE) wrote ten lines a second into Designer's log
+    plugin, srv, _ = bridge
+    real = srv.sock
+    sleeps = []
+    real_sleep = plugin.time.sleep
+
+    def sleep(seconds):   # time.sleep is global: record the accept loop's, let the others sleep
+        if sys._getframe(1).f_code.co_name == '_accept_loop':
+            sleeps.append(seconds)
+        else:
+            real_sleep(seconds)
+    monkeypatch.setattr(plugin.time, 'sleep', sleep)
+
+    # eight failures (past the 5 s cap), one with another error (a new line), a success, then one
+    # more failure, which starts again at 0.1 s with a new line (REVIEW.md TST-55)
+    emfile, reset = OSError(24, 'Too many open files'), ConnectionAbortedError('aborted before accept')
+    script = [emfile] * 8 + [reset, None, emfile, None]
+
+    class Scripted:
+        def accept(self):
+            step = script.pop(0) if script else None
+            if step is not None:
+                raise step
+            return real.accept()
+
+        def __getattr__(self, name):
+            return getattr(real, name)
+    srv.sock = Scripted()
+    assert _call(plugin, {'code': "print('first')"})['output'] == 'first\n'    # served by the pending accept
+    assert _call(plugin, {'code': "print('second')"})['output'] == 'second\n'  # after nine failures
+    assert _call(plugin, {'code': "print('third')"})['output'] == 'third\n'    # after one more
+    assert not script
+    assert capsys.readouterr().out.count('accept failed') == 3
+    assert sleeps == pytest.approx([0.1, 0.2, 0.4, 0.8, 1.6, 3.2, 5, 5, 5, 0.1]), sleeps

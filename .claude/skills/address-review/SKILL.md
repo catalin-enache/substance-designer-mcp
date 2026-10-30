@@ -43,7 +43,21 @@ AGENTS.md ("Fix issues test first"); this is the procedure.
    before restarting (`quit_designer`, `launch_designer`).
 5. **Update the docs** the change touches, as AGENTS.md's "Keeping the docs current" table says:
    tool docstrings, AGENTS.md facts, README.md.
-6. **Mark the entry in `REVIEW.md`:**
+6. **Review your own fix as a reviewer would, and repeat until nothing is left.** Before calling
+   the finding done, step back and read the whole change (code, test, docs) as the next review
+   will, not as its author. Things the reviews here kept finding in fixes that were "done":
+   - the fix covers the case in the finding but not its neighbours (the node as well as the graph,
+     the other parameter, the other code path, the same unguarded pattern a few lines away);
+   - the test passes without the fix: state an earlier check left, a value that was already there,
+     a comparison that any rule would satisfy, hashes of data that differs run to run;
+   - the test leaves state behind for later checks, or cleans up only when every step succeeds
+     (no `finally`);
+   - an older test no longer guards what it was written for, because the fix changed the order;
+   - a comment, docstring, AGENTS.md or README sentence the fix made untrue, or a new sentence that
+     claims more than the test measures.
+   Adjust what you find, then step back and review the adjusted change the same way, again and
+   again, until a fresh look finds nothing a reviewer could report. Only then go on.
+7. **Mark the entry in `REVIEW.md`:**
    - check its box: `- [ ]` becomes `- [x]`;
    - add a resolution under it: **Resolution: done**, *not a bug*, *not reproduced* or *won't
      fix*, then the commit (`uncommitted on <branch>` until it is committed). It answers:
