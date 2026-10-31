@@ -58,7 +58,8 @@ def test_reminder_leaves_non_text_results_alone(monkeypatch: pytest.MonkeyPatch,
     assert not isinstance(result, str) and result.data
 
 
-@pytest.mark.parametrize('fact', [r'4,096', r'\b29\b'])  # the instructions limit; the atomic node count
+# the instructions limit; the atomic node count (not a ROADMAP item number `| 29 |` or an ID like HLP-29)
+@pytest.mark.parametrize('fact', [r'4,096', r'(?<!\| )(?<!-)\b29\b(?! \|)'])
 def test_facts_are_stated_once_in_the_docs(fact: str) -> None:
     # AGENTS.md, Keeping the docs current: each fact in one place, linked from elsewhere (REVIEW.md TST-10,
     # TST-18)
