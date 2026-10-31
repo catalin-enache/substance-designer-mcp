@@ -318,10 +318,12 @@ works**.
 `ca45fc4`, trimmed to its Python parts) before designing or changing tools: adding, merging or removing
 one, its parameters, description, errors or results. Use it for tool design, descriptions, error
 messages and evaluations; where it differs from this file (tests and docs follow the rules below), this
-file wins. Two of its defaults this project doesn't follow: it prefers comprehensive API coverage and
-service-prefixed names, while this project keeps few tools (node edits are `apply_edits` ops, not tools
-of their own) with unprefixed names. Its code is for mcp 1.x; this server runs mcp 2.x (the note at the
-top of its `SKILL.md`).
+file wins. Defaults of the skill this project doesn't follow: comprehensive API coverage and
+service-prefixed names (this project keeps few tools with unprefixed names: node edits are `apply_edits`
+ops, not tools of their own; a new capability is a parameter or op of an existing tool where one fits,
+a new tool only for a workflow none fits, ROADMAP.md "Fewer tools"); JSON next to Markdown results (the
+results are compact text for agents); Pydantic input models (inputs are typed parameters). Its code is
+for mcp 1.x; this server runs mcp 2.x (the note at the top of its `SKILL.md`).
 
 The server (`server_tools/core.py`) loads this file from the folder above `mcp_server/`, so keep it there. Its
 instructions (`INSTRUCTIONS` in `server_tools/core.py`) must stay under 4,096 characters, and every text tool result starts with a reminder until `get_guide()`
@@ -410,7 +412,7 @@ it; fix or delete notes that turn out to be wrong rather than adding a contradic
 | Architecture: what the plugin, server, helpers and CLI tools each do | **README.md**, "How it works" |
 | How to deploy changes, diagnostics an **agent** needs | **AGENTS.md**, this section |
 | New or changed tool | Its entry and the tool count in README.md's Tools table, and checks in `tests/test_all_tools/` |
-| Work still to do, ideas, follow-ups | **ROADMAP.md** (delete items when done; git keeps the record) |
+| Work still to do, ideas, follow-ups | **ROADMAP.md** (check an item when done; checked items can be deleted later, git keeps the record) |
 
 Open work lives in [ROADMAP.md](ROADMAP.md): check it before proposing improvements and add
 new ideas there.
@@ -451,7 +453,8 @@ new ideas there.
   takes it from its own folder. To rename: change `PLUGIN` there, rename both `plugin/<name>`
   folders, update README.md/AGENTS.md, and add the old name to `install.py`'s clean-up of old
   copies. `tests/unit/test_constants.py` fails on anything missed.
-- **Registration is per folder, never global** (README.md, "Where the tools are available"):
+- **Registration is per folder, never global, for now** (README.md, "Where the tools are available";
+  ROADMAP item 5 will make global registration the installer's choice):
   this repo's committed `.mcp.json`, or `claude mcp add --scope local` in another folder. The
   installer never registers; it writes a user skill (`skill_text` in `install.py`) that tells
   sessions elsewhere how to register, and `uninstall.py` removes the skill, the plugin, the token
