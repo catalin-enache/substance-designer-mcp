@@ -4,16 +4,23 @@ The road map for perfecting this MCP. It only lists **open** work: when an item 
 it here (git history keeps the record) and document the result as AGENTS.md describes. Effort is
 a rough guess: S = under an hour, M = a few hours, L = a day or more.
 
+Numbers are stable IDs (other docs cite them); within a section, the order of the rows is the
+priority. Items should come from real use (item 31) more than from reviewing the project itself.
+
 ## Next
 
 | # | Item | Why | Approach | Effort |
 |---|---|---|---|---|
-| 1 | **`compare_maps`** | Checking that a change didn't alter the output took ad-hoc numpy scripts each time; and parallel renders aren't bit-identical (see below), so a byte comparison is useless | Compare two folders of maps (or two renders): per map the largest difference, how many pixels differ, the mean, in 1/65535 and in 8-bit steps; a pass/fail `tolerance`; an amplified difference image to look at | S |
-| 2 | **Engine and core options for `render_sbs`** | Comparing CPU and GPU, or rendering bit-exactly, needed `sbsrender` by hand | `engine` (`neon`/`sse2` CPU, `mtl`/`ogl3`/`vk`/`d3d11` GPU) and `cpu_count` parameters, passed through as `--engine` / `--cpu-count` | S |
-| 3 | **Better cancel for long computations** | Timeouts and `cancel_designer_job` can't interrupt one long C++ call such as a huge `graph.compute()` | Try Designer's own Tools > **Cancel rendering** (Esc) action from the plugin's network thread, or via a queued Qt call, when a cancel arrives during a compute; verify it really aborts the compute | M |
-| 4 | **`export_for_blender`**: maps plus a small manifest | One-step hand-off of a material to Blender (with the Blender MCP) | Export outputs, then write a JSON with each map's role, colour space, bit depth and normal convention (OpenGL), plus the graph's size | S |
-| 5 | **`install.py should ask if should install globbaly or not`** |  |  |  |
+| 31 | **Make real materials and log every snag** | So far one material (the dwarf trim sheet) has been built; most items here came from reviewing the project, not from getting stuck making something (the direction check of 2026-10-29, TODO.md in git history). Real use is what should drive this list | Build 3-4 different materials: a tileable one from a photo reference, a change to an existing graph we didn't build, a stylized one, one that needs a Pixel Processor. Note every time the agent fell back to `execute_designer_code`, guessed, or needed the user; turn each into an item here (or a fix) and keep the best result as a second example | L |
 | 6 | **Review matthieuhuguet/substance-designer-mcp** | Another Substance Designer MCP; its [substance-designer-mcp](https://github.com/matthieuhuguet/substance-designer-mcp/tree/master) may list tools or fixes worth adopting | Read the changelog and code, list features we lack, add the useful ones here as items; verify any facts it states against Designer before relying on them (a public SD MCP's blend-mode table was wrong, see AGENTS.md) | S |
+| 32 | **`get_selection`** | Artists point at things: "fix this node", "why is this one dark". Today the agent needs ids from `describe_graph` | A tool returning the editor's current graph and its selected nodes (ids, kinds, positions), from `getQtForPythonUIMgr().getCurrentGraphSelection()` (the sd API has it, per graph view too); "nothing selected" said plainly | S |
+| 9 | **Function graph / Pixel Processor editing** | Custom maths inside materials currently needs hand-written scripts | Tools to create function graphs on parameters or in Pixel Processors: add function nodes, connect, set constants, set the output node (the `expose_param` code already builds a minimal function graph) | L |
+| 33 | **`material_report`** | "Is this material correct?" takes several calls today (render, tiling, ranges, normal convention) | One call: compute every output, check tiling, value ranges per usage (baseColor in sRGB range, roughness/metallic 0-1, height spread), the normal map's convention and flatness, missing usages; a short list of problems plus a contact sheet | M |
+| 1 | **`compare_maps`** | Checking that a change didn't alter the output took ad-hoc numpy scripts each time; and parallel renders aren't bit-identical (see below), so a byte comparison is useless | Compare two folders of maps (or two renders): per map the largest difference, how many pixels differ, the mean, in 1/65535 and in 8-bit steps; a pass/fail `tolerance`; an amplified difference image to look at | S |
+| 4 | **`export_for_blender`**: maps plus a small manifest | One-step hand-off of a material to Blender (with the Blender MCP) | Export outputs, then write a JSON with each map's role, colour space, bit depth and normal convention (OpenGL), plus the graph's size | S |
+| 3 | **Better cancel for long computations** | Timeouts and `cancel_designer_job` can't interrupt one long C++ call such as a huge `graph.compute()` | Try Designer's own Tools > **Cancel rendering** (Esc) action from the plugin's network thread, or via a queued Qt call, when a cancel arrives during a compute; verify it really aborts the compute | M |
+| 2 | **Engine and core options for `render_sbs`** | Comparing CPU and GPU, or rendering bit-exactly, needed `sbsrender` by hand | `engine` (`neon`/`sse2` CPU, `mtl`/`ogl3`/`vk`/`d3d11` GPU) and `cpu_count` parameters, passed through as `--engine` / `--cpu-count` | S |
+| 5 | **`install.py should ask if should install globbaly or not`** |  |  |  |
 
 ## Later
 
@@ -21,7 +28,6 @@ a rough guess: S = under an hour, M = a few hours, L = a day or more.
 |---|---|---|---|---|
 | 7 | **3D view control** | `screenshot_designer('3d')` shows whatever is displayed; checking a material on a plane or sphere needs the user | Drive the 3D View's Scene and Materials menus the same way the screenshot drives Camera > Copy Render (lazy menus, keep references); pick a mesh, assign a graph's outputs | M |
 | 8 | **Portals without a reload** | `set_link_display` must save, edit the file and reload, which resets the package's undo history | Look for an in-app path: the graph view's link items or context-menu actions (Qt), or an undocumented API property; fall back to the file edit | M |
-| 9 | **Function graph / Pixel Processor editing** | Custom maths inside materials currently needs hand-written scripts | Tools to create function graphs on parameters or in Pixel Processors: add function nodes, connect, set constants, set the output node (the `expose_param` code already builds a minimal function graph) | L |
 | 10 | **Slider ranges for atomic nodes** | `describe_node` shows ranges only for library nodes; the API exposes none for the atomic nodes | Curate a small table of sensible ranges for the commonly used atomic parameters (levels, blend opacity, warp intensity, blur, normal intensity...), clearly marked as recommendations | S |
 | 11 | **3D view inside window screenshots** | In `screenshot_designer('window')` the 3D area doesn't show the render (leftover content) | Composite the `3d` render into the window capture at the 3D dock's position | S |
 | 12 | **Large-graph output limits** | `diff_graph` on very large graphs can return very long text (`describe_graph` already has `limit`) | `offset` paging for `describe_graph`, a line limit and per-section summary for `diff_graph` | S |
@@ -63,7 +69,9 @@ only, and each fix adding a test and a doc sentence the next review then audited
 
 ## Ideas, not yet decided
 
-- A `material_report` tool: one call that renders all outputs, checks tiling, value ranges and
-  normal convention, and summarises problems.
 - Snapshot housekeeping: `prune_snapshots` (keep the last N per graph).
-- A `get_selection` tool: what the user has selected in the graph, so "this node" works naturally.
+- Fewer editing tools: keep `apply_edits` as the way to edit, and drop `add_node`, `connect`,
+  `disconnect`, `set_params`, `move_nodes` and `delete_nodes` or make them thin aliases of it. Claude
+  Code defers loading tool schemas, so the cost is small there; other MCP clients load all 43, and
+  fewer choices make the right one easier to pick. If they go: README's Tools table, the self-test
+  and the unit tests that check every tool is covered (the direction check of 2026-10-29, TODO.md in git history).
