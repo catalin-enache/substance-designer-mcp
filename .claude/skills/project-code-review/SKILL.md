@@ -47,6 +47,8 @@ review of code that isn't a diff, and whenever findings are to be recorded in `R
    - **Done:** does the fix address the cause it names, or only the symptom? Read the code at the
      fix and check that the test it names exists, would fail without the fix, and passes now. Is
      the fix reasonable in scope (not too broad, nothing it should also have covered left out)?
+     Check its **Also covered** list (address-review, step 3): a place with the same pattern that
+     the list misses is the follow-up finding; one the list explains needs no new entry.
    - **Not a bug / not reproduced:** is the "why not" convincing, and is its evidence still true
      of the current code (the guard test still there and passing, the behaviour it relies on
      unchanged)?
@@ -60,7 +62,9 @@ review of code that isn't a diff, and whenever findings are to be recorded in `R
    to read in full, AGENTS.md as context, what to look for (correctness, data safety, security,
    misreported results, docs that contradict the code), and the report format: severity, file and
    line, one-sentence defect, concrete scenario, suggested fix, confidence. Reviewers must quote
-   the code for every finding and drop what they can't support. Give each reviewer the notes from
+   the code for every finding and drop what they can't support. A defect that recurs (the same
+   pattern in several places) is **one** finding listing every location, not one finding per round:
+   reviewers search for the other instances before reporting. Give each reviewer the notes from
    steps 1 and 2 for its area (known findings with their status and resolution, and what was found
    fine), with the same rules, so they don't report them again.
 4. **Verify** at least the most severe finding of each area against the code yourself, and mark

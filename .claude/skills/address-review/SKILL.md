@@ -34,7 +34,20 @@ AGENTS.md ("Fix issues test first"); this is the procedure.
      behaviour that explain it);
    - resolve the entry as *not a bug* or *not reproduced* and check it.
    If the code path is real but can't be triggered, a small defensive change is fine; say so.
-3. **Fix the code**, as small as it can be, in the style of the code around it.
+3. **Fix the code**, as small as it can be, in the style of the code around it. Two things first,
+   because skipping them is what made findings come back round after round (the chains in
+   REVIEW.md: the seed chain HLP-22 → … ran 18 findings deep, one case per round):
+   - **Measure before fixing on Designer's behaviour.** When the fix depends on how Designer
+     behaves (inheritance, seeds, function graphs, shutdown, the UI), first measure every case the
+     code distinguishes in one "designer facts" probe (the node and the graph, each inheritance
+     mode, with and without a render override...), record the measured table in AGENTS.md, then
+     write the fix for that table. Never fix the one case in the finding and leave the next case
+     for the next review.
+   - **Fix the pattern, not the instance.** Search for every other place with the same pattern:
+     the other callers of the helper, the same check or message elsewhere, the sibling tool or
+     parameter (HLP-31 fixed `'graph'` in two tools; HLP-41 later found eight more). Fix each one
+     that has the defect, with its test, and list what you searched and what you found under
+     **Also covered** in the resolution, so the next reviewer can see the scope.
 4. **Run the test again: it must pass.** Then run both suites in full, since a fix can break
    something else:
    - `mcp_server/venv/bin/python -m pytest` (unit tests);
@@ -43,7 +56,10 @@ AGENTS.md ("Fix issues test first"); this is the procedure.
    (`quit_designer`, `launch_designer`); on this project, restart without asking when those tools
    can do it (AGENTS.md, Working on this project) and say that you did.
 5. **Update the docs** the change touches, as AGENTS.md's "Keeping the docs current" table says:
-   tool docstrings, AGENTS.md facts, README.md.
+   tool docstrings, AGENTS.md facts, README.md. Add a new sentence only when an agent or a user
+   needs it to act, and make it say exactly what its check measures, no more. Every claim is
+   something the next review audits against its test: a third of the links in REVIEW.md's
+   chains were "the sentence says more than the check".
 6. **Review your own fix as a reviewer would, and repeat until nothing is left.** Before calling
    the finding done, step back and read the whole change (code, test, docs) as the next review
    will, not as its author. Things the reviews here kept finding in fixes that were "done":
@@ -71,6 +87,8 @@ AGENTS.md ("Fix issues test first"); this is the procedure.
        example "each value was set right after it was checked, so a bad later value left the
        earlier ones changed");
      - **Fix** (when fixed): how it was fixed, what changed and where;
+     - **Also covered** (when fixed): the same pattern searched for elsewhere, where, and what
+       was found (fixed too, or not affected and why);
      - **Why not** (when false): why it doesn't happen, with the evidence;
    - update the status table (open and resolved counts per severity).
    *Won't fix* needs the user's agreement; ask before using it.

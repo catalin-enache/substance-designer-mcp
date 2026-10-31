@@ -321,7 +321,9 @@ real Designer); pure-Python logic gets a unit test in `tests/unit`. A claim in t
 without a test is a guess: test it or remove it.
 
 **Fix issues test first (TDD).** Reproduce the issue with a test and watch it fail; then fix
-the code until the test passes. If the test passes before any fix, the issue isn't real (or
+the code until the test passes. Before a fix that depends on Designer's behaviour, measure every
+case the code distinguishes, and fix the pattern everywhere it occurs, not just the reported
+instance (the `address-review` skill, step 3: skipping these made findings recur round after round). If the test passes before any fix, the issue isn't real (or
 the test doesn't reproduce it): say so rather than "fixing" it. For anything that depends on
 Designer, reproduce it in the live self-test too, since a unit test may take a path Designer
 never does. Two review findings were disproved this way: an abort raised again during cleanup

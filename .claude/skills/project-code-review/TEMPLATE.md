@@ -62,6 +62,7 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
     - **Test:** the test that reproduced it, and how it failed (or showed it doesn't happen).
     - **Cause:** why the code failed: the root cause, not the symptom. (When fixed.)
     - **Fix:** how it was fixed: what changed, and where. (When fixed.)
+    - **Also covered:** the same pattern searched for elsewhere, and what was found. (When fixed.)
     - **Why not:** why it doesn't happen, with the evidence. (When false.)
 
 ## Medium-high
