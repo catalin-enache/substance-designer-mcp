@@ -21,7 +21,7 @@ AGENTS.md ("Fix issues test first"); this is the procedure.
 1. **Reproduce it with a test that fails.**
    - Pure-Python logic (server, installer, CLI, test infrastructure): a unit test in `tests/unit`.
    - Anything that depends on Designer (helpers, plugin behaviour inside Designer, sd API facts):
-     a check in the live self-test (`tests/test_all_tools.py`), even when a unit test also covers
+     a check in the live self-test (`tests/test_all_tools/`, in its category's module), even when a unit test also covers
      it. A unit test can take a path Designer never does.
    - Run it and **read the failure**. It must fail *because of the bug*: compare the failure with
      the entry's scenario. A test that fails for another reason (a typo, a broken query, a wrong
@@ -38,9 +38,10 @@ AGENTS.md ("Fix issues test first"); this is the procedure.
 4. **Run the test again: it must pass.** Then run both suites in full, since a fix can break
    something else:
    - `mcp_server/venv/bin/python -m pytest` (unit tests);
-   - `mcp_server/venv/bin/python tests/test_all_tools.py` (live self-test).
-   Plugin changes only reach Designer after `install.py` and a Designer restart; ask the user
-   before restarting (`quit_designer`, `launch_designer`).
+   - `mcp_server/venv/bin/python tests/test_all_tools` (live self-test).
+   Plugin changes only reach Designer after `install.py` and a Designer restart
+   (`quit_designer`, `launch_designer`); on this project, restart without asking when those tools
+   can do it (AGENTS.md, Working on this project) and say that you did.
 5. **Update the docs** the change touches, as AGENTS.md's "Keeping the docs current" table says:
    tool docstrings, AGENTS.md facts, README.md.
 6. **Review your own fix as a reviewer would, and repeat until nothing is left.** Before calling
@@ -57,6 +58,10 @@ AGENTS.md ("Fix issues test first"); this is the procedure.
      claims more than the test measures.
    Adjust what you find, then step back and review the adjusted change the same way, again and
    again, until a fresh look finds nothing a reviewer could report. Only then go on.
+   When a sentence claims more than its test measures, prefer narrowing the sentence to writing a
+   stronger test, unless the extra claim is something an agent needs in order to act. For an entry
+   marked generation 3 or later (`project-code-review`, Follow-up chains), narrowing the claim is
+   the fix. Don't add a new check for it.
 7. **Mark the entry in `REVIEW.md`:**
    - check its box: `- [ ]` becomes `- [x]`;
    - add a resolution under it: **Resolution: done**, *not a bug*, *not reproduced* or *won't

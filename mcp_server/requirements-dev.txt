@@ -1,0 +1,8 @@
+# For working on this project: the tests, the type checker and the linter/formatter
+# (tests/unit/test_types.py runs mypy, tests/unit/test_lint.py runs ruff).
+# Install into the server's venv: mcp_server/venv/bin/python -m pip install -r mcp_server/requirements-dev.txt
+# Tested with pytest 9.2.0, mypy 2.4.1, ruff 0.17.3.
+-r requirements.txt
+pytest>=8,<10
+mypy>=2.4,<3
+ruff>=0.17,<0.18

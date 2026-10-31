@@ -11,7 +11,7 @@ but hasn't been tested yet. How the pieces fit together: [How it works](#how-it-
 **Documents:** this README is for people (what it does, install, configure, troubleshoot).
 [AGENTS.md](AGENTS.md) is for the AI agent (which tool when, workflow, Designer pitfalls); the
 server sends it to the agent automatically. Each tool's exact parameters are in its description
-in `mcp_server/server.py`.
+in `mcp_server/server_tools/`.
 
 ## What you can ask for
 
@@ -28,7 +28,7 @@ There are two programs, plus Designer's own command-line tools:
  Claude Code (MCP client)
       │  MCP over stdio: tool calls in, text and images back
       ▼
- MCP server ─ mcp_server/server.py + designer_helpers.py
+ MCP server ─ mcp_server/server.py + server_tools/ + designer_helpers/
  (a separate Python 3.10+ process in mcp_server/venv, started by Claude Code)
       │                                         │
       │  JSON over TCP 127.0.0.1:9877            │  runs as needed
@@ -44,8 +44,8 @@ There are two programs, plus Designer's own command-line tools:
 | Part | Runs where | What it does |
 |---|---|---|
 | **sd_claude_bridge_kve plugin** (`plugin/sd_claude_bridge_kve`) | Inside Designer, loaded at startup | A small, generic script runner. It listens on `127.0.0.1:9877`, checks that each request is signed with the secret token, queues the Python code it receives, runs it on Designer's main thread (the only place the `sd` API may be used), and sends back the printed output or the error. It also enforces timeouts, answers `status` / `cancel` while a script runs, and knows nothing about MCP or the individual tools. |
-| **MCP server** (`mcp_server/server.py`) | Its own process, started by Claude Code | Defines the 43 tools Claude sees. Its instructions to Claude are one short paragraph (MCP clients cut long ones; the limit is in [AGENTS.md](AGENTS.md), Working on this project): leave the Designer tools alone unless you ask for Designer work, and right before the first Designer tool call, call `get_guide()`, which returns the full [AGENTS.md](AGENTS.md). Sessions started for other things never load the guide. Each tool does one or more of: send Python code to the plugin (most tools), run Designer's command-line tools (`render_sbs`, `sbsar_info`), or do the work itself outside Designer (decoding pixels, building preview images, comparing `.sbs` files, reading the log, editing files for portals). |
-| **Designer helpers** (`mcp_server/designer_helpers.py`) | Sent to Designer with each request | The library of functions that actually do the work inside Designer: describing nodes, editing graphs, computing previews, layout, exposing inputs and so on. It's re-sent with every call, so updating it never needs a Designer restart. |
+| **MCP server** (`mcp_server/server.py`, the entry point; the code in `mcp_server/server_tools/`) | Its own process, started by Claude Code | Defines the 43 tools Claude sees, one module per area (`core.py`: configuration, the bridge connection and the tool decorator; `edits.py`, `views.py`, `output.py`...: the tools). Its instructions to Claude are one short paragraph (MCP clients cut long ones; the limit is in [AGENTS.md](AGENTS.md), Working on this project): leave the Designer tools alone unless you ask for Designer work, and right before the first Designer tool call, call `get_guide()`, which returns the full [AGENTS.md](AGENTS.md). Sessions started for other things never load the guide. Each tool does one or more of: send Python code to the plugin (most tools), run Designer's command-line tools (`render_sbs`, `sbsar_info`), or do the work itself outside Designer (decoding pixels, building preview images, comparing `.sbs` files, reading the log, editing files for portals). |
+| **Designer helpers** (`mcp_server/designer_helpers/`) | Sent to Designer with each request | The library of functions that actually do the work inside Designer: describing nodes, editing graphs, computing previews, layout, exposing inputs and so on. One file per area (`edits.py`, `editor.py`, `screenshots.py`...), joined into one script in the order of `PARTS` in its `__init__.py`, so they share one namespace. Each part imports what it uses from the others (`from .core import ...`) so editors see where names come from; those lines are dropped when the parts are joined. It's re-sent with every call, so updating it never needs a Designer restart. |
 | **sbscooker / sbsrender** | Separate processes | Designer's own tools for compiling a saved `.sbs` into `.sbsar` and rendering its outputs, independently of the open Designer. |
 | **CLI client** (`client/sd_run.py`) | Your terminal | The same connection to the plugin without MCP, for running scripts by hand. |
 | `install.py`, `uninstall.py`, `tests/` | Your terminal | Installation (including the Claude Code skill that tells sessions in other folders about the server), clean removal, the end-to-end self-test, and unit tests that need no Designer (`tests/unit`). |
@@ -101,10 +101,12 @@ changes to your graphs, Claude can take a snapshot and afterwards show you exact
 
 ## Requirements
 
-- Substance 3D Designer 16 (tested on 16.0.7; 14.1 or newer should work, untested)
+- Substance 3D Designer 16 (tested on 16.0.7, which bundles Python 3.13). An older Designer may work if
+  its bundled Python is 3.10 or newer (the code sent to it uses 3.10 syntax); untested.
 - Python **3.10+** (only for the MCP server; the plugin uses Designer's own Python). 3.10 is the
   minimum the installer accepts; the tests run on 3.12. The installer and `designer_status` show
-  which Python the server uses.
+  which Python the server uses. `install.py` and `uninstall.py` start on an older `python3` (a stock
+  Mac's is 3.9): the installer then says it needs 3.10+, and the uninstaller works.
 - Claude Code (`claude` command), or any MCP client
 
 ## Install
@@ -189,8 +191,8 @@ Check every tool end to end against the real Designer (about two minutes). If De
 running, the self-test starts it and closes it again at the end; if it is running, it's left open:
 
 ```bash
-mcp_server/venv/bin/python tests/test_all_tools.py        # macOS
-mcp_server\venv\Scripts\python tests\test_all_tools.py   # Windows
+mcp_server/venv/bin/python tests/test_all_tools        # macOS
+mcp_server\venv\Scripts\python tests\test_all_tools   # Windows
 ```
 
 It builds a temporary graph (`mcp_selftest`), checks every tool including error cases, removes
@@ -201,7 +203,7 @@ once Designer is closed (the system may clear old temporary files itself, but do
 one change is one undo step it triggers Undo and Redo, but only while its own graph is the one
 in the editor; it skips that check otherwise. It also re-checks the Designer behaviour the
 agent notes rely on ("designer facts"), so a Designer update that changes it shows up, and it
-checks the Security promises below (unsigned, wrongly signed and old-style requests refused, not
+checks the Security promises below (unsigned and wrongly signed requests refused, not
 reachable from the network, private token file), the command-line client, that the plugin Designer loaded matches
 this repo (re-run `install.py` if not), and that the example trim sheet still builds (a renamed
 copy, so a trim sheet you have open is never touched). The 3D screenshot check is skipped if no 3D View is visible; the clipboard check runs
@@ -216,12 +218,31 @@ Designer: the plugin's server and authentication (with Qt replaced), both client
 pixel decoding, image comparison, the tiling metric, `.sbs` parsing, diffing and portal
 selection, render command building, search ranking, the installer, launch/quit edge cases,
 environment variables and log reading. It also checks that this README lists every tool and that
-the self-test exercises every tool, parameter and `apply_edits` op. Run them after any change:
+the self-test exercises every tool, parameter and `apply_edits` op, runs mypy (strict,
+`mypy.ini`) over every Python file, checking the code that runs inside Designer against
+Designer's own `sd` API and PySide6 stubs when Designer is installed, and runs Ruff
+(`ruff.toml`): lint rules, and every file formatted. Run them after any change:
 
 ```bash
-mcp_server/venv/bin/pip install pytest
+mcp_server/venv/bin/pip install -r mcp_server/requirements-dev.txt   # pytest, mypy and ruff
+mcp_server/venv/bin/ruff check --fix . && mcp_server/venv/bin/ruff format .   # lint and format
 mcp_server/venv/bin/python -m pytest
 ```
+
+**Working in PyCharm.** The repo's `.idea` marks the source roots, excludes `mcp_server/venv`,
+sets pytest as the test runner, and switches on PyCharm's built-in Ruff integration. The rest is
+per user (not in git), so do this once:
+
+1. **Interpreter:** choose `mcp_server/venv/bin/python` (Settings → Python → Interpreter). Ruff
+   then runs the venv's `ruff` with `ruff.toml`.
+2. **Settings → Python → External Tools** (or search for "External Tools"): configure Ruff and
+   tick **Formatting** and **Import optimizer**, so PyCharm's Reformat Code and Optimize Imports
+   use Ruff instead of PyCharm's own formatter.
+3. **Settings → Tools → Actions on Save**: tick **Reformat code** and **Optimize imports**.
+
+To check it, change a `'quote'` to `"quote"` and press ⌥⌘L (Code → Reformat File): Ruff turns it
+back to single quotes. Lint fixes beyond imports (such as `raise ... from e`) show as warnings with
+a quick fix (⌥⏎), or apply them all with `ruff check --fix .`.
 
 ## Configuration (optional environment variables)
 
@@ -262,10 +283,11 @@ python client/sd_run.py --cancel              # abort the running script
   file's permissions), and replaces an empty or truncated one. Anything that can read that file
   can run code inside Designer. To rotate it, delete the file and restart Designer.
 - Requests are size- and time-limited (a whole request must arrive within 30 s, and at most 16
-  connections that haven't authenticated yet are served at once, so nothing can tie the plugin up
-  before authenticating, while `status` and `cancel` still get through behind queued jobs),
-  malformed ones get no details back, and on Windows the port is bound exclusively so a second
-  program can't share it.
+  connections that haven't authenticated yet are served at once, which bounds the memory and
+  threads they can take; `status` and `cancel` still get through behind queued jobs). That cap is
+  not a lock against other local programs: one holding 16 idle connections turns other clients away
+  until it stops. Malformed requests get no details back, only the last 8 million characters of a
+  script's output come back, and on Windows the port is bound exclusively so a second program can't share it.
 - Screenshots only ever capture Designer's own panels. The 3D view uses Designer's own render
   through the clipboard and puts back whatever was on your clipboard.
 - To turn the bridge off, disable it in Tools > Plugin Manager or delete the `sd_claude_bridge_kve`

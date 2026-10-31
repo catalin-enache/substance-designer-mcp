@@ -1,12 +1,14 @@
 import copy
 import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import cast
 
 import pytest
 
 from conftest import server
 
 
-def test_graph_model(sbs_path):
+def test_graph_model(sbs_path: str) -> None:
     m = server._graph_model(sbs_path, 'alpha')
     n = m['nodes']
     assert n['200']['kind'] == 'instance:gradient_linear_1'
@@ -22,27 +24,27 @@ def test_graph_model(sbs_path):
     assert m['size'] == {'outputsize': '0 0 (relative to parent)', 'defaultParentSize': '9x9'}
 
 
-def test_graph_model_unknown_graph(sbs_path):
+def test_graph_model_unknown_graph(sbs_path: str) -> None:
     with pytest.raises(server.ToolError, match="graph 'nope' not found"):
         server._graph_model(sbs_path, 'nope')
 
 
-def test_diff_identical(sbs_path):
+def test_diff_identical(sbs_path: str) -> None:
     m = server._graph_model(sbs_path, 'alpha')
     summary, lines = server._diff_models(m, copy.deepcopy(m), show_positions=True)
     assert lines == [] and summary == '0 added, 0 removed, 0 changed line(s), 0 node(s) moved'
 
 
-def test_diff_every_kind_of_change(sbs_path):
+def test_diff_every_kind_of_change(sbs_path: str) -> None:
     old = server._graph_model(sbs_path, 'alpha')
     new = copy.deepcopy(old)
     n = new['nodes']
-    n['201']['params']['blendingmode'] = '3'                    # changed
-    n['201']['params']['opacity'] = '0.5'                       # set from default
-    del n['200']['params']['rotation']                          # back to default
-    n['201']['links'] = {('destination', '200')}                # one link removed, one added
-    n['202']['display'][('inputNodeOutput', '201')] = 'wire'    # portal -> wire
-    n['202']['pos'] = '300 0 0'                                 # moved
+    n['201']['params']['blendingmode'] = '3'  # changed
+    n['201']['params']['opacity'] = '0.5'  # set from default
+    del n['200']['params']['rotation']  # back to default
+    n['201']['links'] = {('destination', '200')}  # one link removed, one added
+    n['202']['display'][('inputNodeOutput', '201')] = 'wire'  # portal -> wire
+    n['202']['pos'] = '300 0 0'  # moved
     n['999'] = {'kind': 'levels', 'params': {}, 'links': set(), 'display': {}, 'pos': ''}
     new['inputs'] = {'roughness': '0.7', 'metal': '1'}
     new['size']['defaultParentSize'] = '11x11'
@@ -65,7 +67,7 @@ def test_diff_every_kind_of_change(sbs_path):
     assert '~ node 202 output: moved 200 0 0 -> 300 0 0' in with_pos
 
 
-def test_diff_param_back_to_default(sbs_path):
+def test_diff_param_back_to_default(sbs_path: str) -> None:
     old = server._graph_model(sbs_path, 'alpha')
     new = copy.deepcopy(old)
     del new['nodes']['200']['params']['rotation']
@@ -74,14 +76,21 @@ def test_diff_param_back_to_default(sbs_path):
     assert lines == ['~ node 200 instance:gradient_linear_1: rotation 0.25 -> (default)', '- graph input roughness']
 
 
-@pytest.mark.parametrize('graph, expected', [('alpha', 9), ('beta', 11), ('pkg://beta', 11),
-                                             (None, None),     # the two graphs disagree: no single size
-                                             ('missing', None)])
-def test_default_parent_log2(sbs_path, graph, expected):
+@pytest.mark.parametrize(
+    'graph, expected',
+    [
+        ('alpha', 9),
+        ('beta', 11),
+        ('pkg://beta', 11),
+        (None, None),  # the two graphs disagree: no single size
+        ('missing', None),
+    ],
+)
+def test_default_parent_log2(sbs_path: str, graph: str | None, expected: int | None) -> None:
     assert server._default_parent_log2(sbs_path, graph) == expected
 
 
-def test_default_parent_log2_not_an_sbs(tmp_path, sbs_path):
+def test_default_parent_log2_not_an_sbs(tmp_path: Path, sbs_path: str) -> None:
     assert server._default_parent_log2(str(tmp_path / 'nope.sbs')) is None
     broken = tmp_path / 'broken.sbs'
     broken.write_text('<package><unclosed>')
@@ -89,22 +98,25 @@ def test_default_parent_log2_not_an_sbs(tmp_path, sbs_path):
     assert server._default_parent_log2(sbs_path.replace('.sbs', '.sbsar')) is None
 
 
-def test_fixture_is_well_formed(sbs_path):
-    assert [g.find('identifier').get('v') for g in ET.parse(sbs_path).getroot().iter('graph')] == ['alpha', 'beta']
+def test_fixture_is_well_formed(sbs_path: str) -> None:
+    assert [cast(ET.Element, g.find('identifier')).get('v') for g in ET.parse(sbs_path).getroot().iter('graph')] == [
+        'alpha',
+        'beta',
+    ]
 
 
-def test_sbsar_default_size(sbs_path):
+def test_sbsar_default_size(sbs_path: str) -> None:
     # cooked by sbscooker from a graph with an overridable size and a 512 px (9x9) default parent
     # size: the .sbsar keeps 256 px (8), not 512
     sbsar = sbs_path.replace('two_graphs.sbs', 'overridable_512.sbsar')
     assert server._sbsar_default_log2(sbsar) == 8
     assert server._sbsar_default_log2(sbsar, 'pkg://probe_size') == 8
     assert server._sbsar_default_log2(sbsar, 'other') is None
-    assert server._sbsar_default_log2(sbs_path) is None                  # not an archive
+    assert server._sbsar_default_log2(sbs_path) is None  # not an archive
 
 
 # ---- fixes from the review
-def test_size_inheritance_labels(tmp_path, sbs_path):
+def test_size_inheritance_labels(tmp_path: Path, sbs_path: str) -> None:
     # measured in Designer 16: 0 absolute, 1 relative to parent, 2 relative to input; a graph's
     # default (relative to parent) isn't stored
     assert server._graph_model(sbs_path, 'beta')['size']['outputsize'] == '(default: relative to parent)'
@@ -117,42 +129,54 @@ def test_size_inheritance_labels(tmp_path, sbs_path):
         assert server._graph_model(str(path), 'alpha')['size']['outputsize'] == '0 0 (%s)' % label
 
 
-def test_diff_sees_a_link_moving_to_another_output(tmp_path, sbs_path):
+def test_diff_sees_a_link_moving_to_another_output(tmp_path: Path, sbs_path: str) -> None:
     tree = ET.parse(sbs_path)
-    node = next(n for n in server._xml_graph(tree.getroot(), 'alpha', sbs_path).find('compNodes')
-                if n.find('uid').get('v') == '201')
+    node = next(
+        n
+        for n in server._xml_graph(tree.getroot(), 'alpha', sbs_path).find('compNodes')
+        if n.find('uid').get('v') == '201'
+    )
     c = next(x for x in node.findall('connections/connection') if x.find('identifier').get('v') == 'source')
     ET.SubElement(c, 'connRefOutput').set('v', '777')
     path = tmp_path / 'other_output.sbs'
     tree.write(path)
-    summary, lines = server._diff_models(server._graph_model(sbs_path, 'alpha'),
-                                         server._graph_model(str(path), 'alpha'), False)
+    _summary, lines = server._diff_models(
+        server._graph_model(sbs_path, 'alpha'), server._graph_model(str(path), 'alpha'), False
+    )
     assert '~ node 201 blend: link source <- 200.777 added' in lines
     assert '~ node 201 blend: link source <- 200 removed' in lines
 
 
-def test_select_links_ignores_function_graph_links(sbs_path):
+def test_select_links_ignores_function_graph_links(sbs_path: str) -> None:
     g = server._xml_graph(ET.parse(sbs_path).getroot(), 'alpha', sbs_path)
     chosen, _, total = server._select_links(g, 'portal', longer_than=1)
-    assert total == 2                                    # source<-200 and inputNodeOutput<-201, not a<-1
-    assert [c.find('identifier').get('v') for c in chosen] == ['source']   # the other is a portal already
+    assert total == 2  # source<-200 and inputNodeOutput<-201, not a<-1
+    assert [c.find('identifier').get('v') for c in chosen] == ['source']  # the other is a portal already
     chosen, _, _ = server._select_links(g, 'wire', fanout_at_least=1)
     assert [c.find('identifier').get('v') for c in chosen] == ['inputNodeOutput']
     chosen, _, _ = server._select_links(g, 'portal', links=[['202', 'inputNodeOutput']])
-    assert chosen == []                                  # already a portal: nothing to change
+    assert chosen == []  # already a portal: nothing to change
     chosen, _, _ = server._select_links(g, 'portal', from_nodes=['200'])
     assert [c.find('connRef').get('v') for c in chosen] == ['200']
 
 
-def test_default_parent_sizes(sbs_path):
+def test_default_parent_sizes(sbs_path: str) -> None:
     assert server._default_parent_sizes(sbs_path) == {'alpha': 9, 'beta': 11}
 
 
-def test_select_links_counts_selected_and_changed_apart(sbs_path):
+def test_select_links_counts_selected_and_changed_apart(sbs_path: str) -> None:
     # REVIEW.md SRV-7: the messages said "N of N selected" (or "0 of 0"): the selection count
     # was lost once links already in the wanted mode were filtered out
     g = server._xml_graph(ET.parse(sbs_path).getroot(), 'alpha', sbs_path)
     chosen, selected, total = server._select_links(g, 'portal', longer_than=1)
-    assert (len(chosen), selected, total) == (1, 2, 2)   # both selected, one is a portal already
+    assert (len(chosen), selected, total) == (1, 2, 2)  # both selected, one is a portal already
     chosen, selected, total = server._select_links(g, 'portal', links=[['202', 'inputNodeOutput']])
     assert (len(chosen), selected) == (0, 1)
+
+
+def test_links_of_a_graph_without_nodes() -> None:
+    # REVIEW.md SRV-12: a graph without <compNodes> raised TypeError instead of counting 0 links
+    import xml.etree.ElementTree as ET
+
+    g = ET.fromstring('<graph><identifier v="g"/></graph>')
+    assert server._select_links(g, 'portal', fanout_at_least=1) == ([], 0, 0)

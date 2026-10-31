@@ -54,7 +54,8 @@ review of code that isn't a diff, and whenever findings are to be recorded in `R
    If a resolution isn't satisfactory, don't uncheck or rewrite the old entry: add a new finding
    (next free ID, in the severity it deserves) that names the old ID and says what is wrong with
    the resolution, and add one line under the old entry: "Questioned by <new ID> (<date>)". Give
-   the reviewers these assessments too, so they look at the questioned fixes.
+   the reviewers these assessments too, so they look at the questioned fixes. Follow-up findings
+   have their own rules: see **Follow-up chains** below.
 3. **Split the work by area** and give each reviewer (a subagent, read-only) one area: the files
    to read in full, AGENTS.md as context, what to look for (correctness, data safety, security,
    misreported results, docs that contradict the code), and the report format: severity, file and
@@ -74,6 +75,30 @@ review of code that isn't a diff, and whenever findings are to be recorded in `R
    checked and found fine), and update the
    status table.
 7. Report the totals and the most severe new findings to the user; the file has the rest.
+
+## Follow-up chains
+
+Every fix here adds a test and often a sentence in the docs. The next review then finds the test
+weaker than the sentence, or a leftover in the test, and the fix for that adds another test and
+another sentence. Left alone, this runs round after round on wording and test precision long after
+the code defects are gone. Before 2a107b3, the seed chain HLP-22 → HLP-24 → HLP-25 → TST-39 →
+TST-40 → TST-44 → TST-48 ran seven generations, and the library-refusal message
+HLP-10 → HLP-14 → HLP-18 → HLP-20 → TST-26 → TST-27 ran six. So:
+
+- **Mark the chain.** A finding that questions a resolution puts `follows <old ID>, generation N`
+  in its title line (the old entry's own generation plus one; a finding that follows none is
+  generation 1).
+- **Generation 3 or later, Low or Low-medium, and only about tests or docs** (a check that measures
+  less than its sentence says, a stale comment, a docstring that says too much): the suggested fix
+  makes the claim smaller. Delete or narrow the sentence, or drop the extra assertion. It never
+  adds a check or makes one stronger. Say so in the entry's **Fix**.
+- **A leftover in a test that no later check depends on** (a temporary node, a value not put back)
+  isn't an entry. Add a note under the entry whose fix added that test ("Note (<date>): ...") and
+  mention it in the review log. Notes aren't open work.
+- **A defect in the tools' code** (a wrong or misreported result, lost or changed user work, a
+  hang, a security hole, a broken install) is always an entry, at any generation.
+- In the review log, give the longest chain still growing and its generation, so the user can see
+  whether reviews are converging.
 
 ## Resolving
 

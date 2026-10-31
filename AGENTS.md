@@ -14,7 +14,8 @@ work; right before the first Designer tool call, call `get_guide()` and confirm 
 - **Never trigger Undo while one of the user's graphs is open in the editor.** Undo is per
   document and hits theirs (it happened once; an immediate Redo restored it). See Undo below.
 - **Ask before `quit_designer`** (it's the user's app); never pass `discard_unsaved=True` unless
-  the user said to drop those changes.
+  the user said to drop those changes (or every package it lists is the self-test's own). Exception: while working on this project itself (see Working
+  on this project), restart Designer whenever the work needs it and the tools can, without asking.
 - **`snapshot_graph` before risky or large edits** to a user's graph, then `diff_graph` and
   report the diff. Prefer this over Undo.
 - **`set_link_display` saves and reloads the package** (undo history reset): tell the user.
@@ -147,8 +148,10 @@ Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `-c COD
   `node.getPropertyConnections(prop)`, `getOutputPropertyNode()` / `getOutputProperty()` is
   `node`/`prop` itself and `getInputPropertyNode()` is the **other** node, whatever direction
   the data flows.
-- `graph.compute()` only computes nodes that feed an **output node** (about 1 s for a 190-node
-  2048² graph); `node.getPropertyValue(outputProp).get()` is then an `SDTexture`.
+- `graph.compute()` computes the nodes that feed an **output node** (about 1 s for a 190-node
+  2048² graph); `node.getPropertyValue(outputProp).get()` is then an `SDTexture`. A node feeding no
+  output got no texture in a fresh graph, but in the self-test's busier graph one did, so rely on
+  neither: attach a temporary output node, as `preview_node` and `node_stats` do.
 - Exposing a parameter = graph input via `graph.newProperty(id, type, SDPropertyCategory.Input)`
   (annotations `label`, `min`, `max`, `step`, `group`…) plus a function graph on the node
   parameter (`node.newPropertyGraph(prop, 'SDSBSFunctionGraph')`) whose output node is
@@ -164,13 +167,12 @@ Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `-c COD
   `$outputsize` only take effect with inheritance set to Absolute (`set_params` and
   `sweep_param` do that). So does the graph's own `$format` (a new graph's follows its parent:
   setting 16 bits left a generator at RGBA8 until made Absolute); `set_params` does that too.
-  Not the graph's `$randomseed`: inherited, its value still changes the output (an offset added to
-  a render's seed: stored 3 rendered with seed 2 matches stored 0 with seed 5, within render noise), and
-  only an inherited one stays a control of the cooked .sbsar. A node's `$randomseed` likewise:
-  inherited, its value is added to the graph's (0 + 3, 3 + 0 and 1 + 2 gave one image); made Absolute
-  it no longer follows the graph's seed, nor a render's. So `set_params` never changes a seed's
-  inheritance (an Absolute one stays Absolute); to fix one on purpose, change it in code. (Compare computed pixels with a tolerance: two computes of one setting
-  differed by 2/65535, and raw buffers carry row padding.)
+  A `$randomseed` (the graph's or a node's) is the exception: inherited, its value is added to its
+  parent's seed (a render's, or the graph's), and only an inherited graph seed stays a control of
+  the cooked .sbsar; made Absolute, a seed stops following its parent. So `set_params` leaves a
+  seed's inheritance as it is; to fix one on purpose, change it in code. (Compare computed pixels
+  with a tolerance: two computes of one setting differed by 2/65535, and raw buffers carry row
+  padding.)
   **Changing a parameter's inheritance doesn't keep its value** (measured on a node's `$outputsize`
   and the graph's `$randomseed`, both directions; back to inherited gave the default): set the
   inheritance first, then the value (`sweep_param` restores in that order).
@@ -217,8 +219,8 @@ save, edit and reload it in a single call (the example script does, for its port
 - Current graph: `getQtForPythonUIMgr().getCurrentGraph()`; editor control via
   **`app.getUIMgr()`**: `openResourceInEditor(graph)`, `focusGraphNode(graphViewID, node)` (ids
   via `getGraphViewIDCount/At`, `getGraphFromGraphViewID`), `getGraphNodeBBox`,
-  `setExplorerSelection`. Fit the view: the graph dock's "Fit in view (selection)" (F) fits
-  everything when nothing is selected.
+  `setExplorerSelection`. The graph dock's "Fit in view (selection)" (F) fits the selection, or
+  everything when nothing is selected; `open_graph` fits every node, frame and free comment by wheel zoom instead.
 - `getQtForPythonUIMgr().getMainWindow()` is a **hidden** QMainWindow; closing it does nothing.
   The window the user sees is a top-level `QStackedWidget` ("Adobe Substance 3D Designer");
   closing the visible top-level widgets quits Designer normally. If a window refuses to close,
@@ -234,7 +236,8 @@ save, edit and reload it in a single call (the example script does, for its port
   signal: its slots run in connection order, after any connected earlier.) A modal
   dialog doesn't stop a programmatic close. Crash dumps: Designer's `Sentry-Crashpad/completed`.
 - That stack has two pages: the main window and the **Home screen** (current after a fresh
-  start). While Home shows, every dock reports `isVisible()` False and graphs open behind it.
+  start). While Home shows, no panel reports itself visible (`launch_designer` prints the count before and
+  after closing it), so `launch_designer` and `open_graph` close it first.
   Leave it with Home's own "Close home screen" button (`close_btn`); keep the stack and the page
   referenced while clicking, or PySide reports the button as already deleted.
 - PySide wrappers for Designer's Qt objects go stale ("Internal C++ object already deleted")
@@ -308,12 +311,12 @@ those assignments on one line.
 ## Working on this project
 
 How the plugin, server, helpers and command-line tools fit together: README.md, **How it
-works**. `server.py` loads this file from the folder above `mcp_server/`, so keep it there. Its
-instructions (`INSTRUCTIONS` in `server.py`) must stay under 4,096 characters, and every text tool result starts with a reminder until `get_guide()`
+works**. The server (`server_tools/core.py`) loads this file from the folder above `mcp_server/`, so keep it there. Its
+instructions (`INSTRUCTIONS` in `server_tools/core.py`) must stay under 4,096 characters, and every text tool result starts with a reminder until `get_guide()`
 has been called in the session (unit tests check both).
 
 **Every new feature or fix comes with a test, in the same change.** A tool, a parameter or a
-documented behaviour gets a check in the live self-test (`tests/test_all_tools.py`, against the
+documented behaviour gets a check in the live self-test (`tests/test_all_tools/`, against the
 real Designer); pure-Python logic gets a unit test in `tests/unit`. A claim in these docs
 without a test is a guess: test it or remove it.
 
@@ -349,11 +352,35 @@ The unit tests enforce part of this: they fail when a tool, a tool parameter or 
 op is never exercised by the self-test, or a tool is missing from README's Tools table.
 
 **Running the tests** (both must pass before a change is done):
-- `mcp_server/venv/bin/python -m pytest`: unit tests, no Designer needed, a few seconds.
-- `mcp_server/venv/bin/python tests/test_all_tools.py`: every tool over MCP against the real
+- `mcp_server/venv/bin/python -m pytest`: unit tests, no Designer needed, a few seconds
+  (`pip install -r mcp_server/requirements-dev.txt` once). They include `test_types.py`, which runs
+  mypy strict (`mypy.ini`) over every Python file: everything you write is fully annotated. The
+  helpers, the plugin and the example are checked against Designer's own `sd` package and PySide6
+  stubs (found in the Designer install). They run on Designer's Python 3.13, which evaluates
+  annotations when a `def` runs, so every name in an annotation there must exist at runtime: import
+  real types (`from sd.api.sdnode import SDNode`), never only under `if TYPE_CHECKING:`, and no
+  `from __future__ import annotations` (the helpers are joined into one script, where it can't come first).
+  The standalone scripts (`install.py`, `uninstall.py`, `client/sd_run.py`) are the opposite: they run on
+  the system Python, which can be 3.9, so they do start with `from __future__ import annotations` and
+  evaluate no `X | None` at module level (`tests/unit/test_old_python.py` runs them on an older Python
+  when one is installed).
+  `sd`'s modules star-import each other in cycles, so in the whole-repo run some sd return types come
+  out `Any` (`no-any-return`): annotate the local (`node: SDNode = g.newNode(...)`).
+  `test_lint.py` runs Ruff (`ruff.toml`): `ruff check` and `ruff format --check`. After editing, run
+  `mcp_server/venv/bin/ruff check --fix .` and `mcp_server/venv/bin/ruff format .`. The formatter can
+  move a trailing `# type: ignore` or `# noqa` off the line it was for when it rewraps a statement;
+  mypy then reports it, so put it back on the right line. Tests that read source text match
+  whitespace-tolerantly (`c\(\s*'tool'`): formatting may split a call over lines.
+- `mcp_server/venv/bin/python tests/test_all_tools`: every tool over MCP against the real
   Designer, about two minutes. It starts Designer if it isn't running and closes it again; a
   Designer that was already running stays open. Its "designer facts" checks re-measure the
   Designer behaviour this file states, so add one with each new fact.
+  The folder holds one module per category (`bridge.py`, `params.py`, `render.py`...), shared
+  helpers and snippets in `common.py`, and the index `__main__.py`, which runs the categories in
+  the order of its `CATEGORIES` list. They share one graph and run only in that order; what an
+  earlier category made (the graph `G`, node ids, the saved `.sbs`) reaches later ones through
+  `ctx`. Add a check to the category it belongs to; a new category is a module with an
+  `async def run(ctx)` added to `CATEGORIES`.
 
 **Keeping the docs current.** README.md is for people, AGENTS.md is for agents. With every
 change (a tool, a fix, a workaround, a fact learned about Designer), add a short note where it
@@ -363,11 +390,11 @@ it; fix or delete notes that turn out to be wrong rather than adding a contradic
 | Kind of knowledge | Where it goes |
 |---|---|
 | How to use the tools well, workflow, sd API / Designer pitfalls, verified facts | **AGENTS.md**, in the matching section |
-| A tool's parameters and behaviour | The tool's **docstring in `mcp_server/server.py`**, the single source; don't repeat parameters here |
+| A tool's parameters and behaviour | The tool's **docstring in its module of `mcp_server/server_tools/`**, the single source; don't repeat parameters here |
 | Install, configuration, security, troubleshooting, anything a **person** needs | **README.md** |
 | Architecture: what the plugin, server, helpers and CLI tools each do | **README.md**, "How it works" |
 | How to deploy changes, diagnostics an **agent** needs | **AGENTS.md**, this section |
-| New or changed tool | Its entry and the tool count in README.md's Tools table, and checks in `tests/test_all_tools.py` |
+| New or changed tool | Its entry and the tool count in README.md's Tools table, and checks in `tests/test_all_tools/` |
 | Work still to do, ideas, follow-ups | **ROADMAP.md** (delete items when done; git keeps the record) |
 
 Open work lives in [ROADMAP.md](ROADMAP.md): check it before proposing improvements and add
@@ -377,11 +404,33 @@ new ideas there.
   `py -3 install.py`) before anything else; without the venv the server can't start, and the
   `.mcp.json` command says so in `/mcp`. Then the user reconnects `/mcp`. `designer_status` shows
   which Python and library versions the server runs on.
-- **How changes reach Designer:** `server.py` and `designer_helpers.py` changes take effect when
+- **The helpers** (`mcp_server/designer_helpers/`) are parts joined into one script (README.md, How
+  it works). A part imports what it uses from other parts (`from .core import find_graph`), for PyCharm
+  and readers; `part_source()` drops those lines, since the joined script already has the names.
+  `tests/unit/test_designer_helpers.py` fails on a missing, extra or misplaced import, on a name no part
+  defines, and on a part file not in `PARTS`. Code that needs the helpers' text (the self-test's
+  snippets) takes it from `designer_helpers.source()`, never from one file.
+- **PyCharm** (the repo's `.idea` marks `client`, `mcp_server`, `tests` and `tests/unit` as source roots;
+  the interpreter is `mcp_server/venv`): tests patch a module loaded from its file with
+  `monkeypatch.setitem(vars(module), 'NAME', value)`, not `setattr`, whose name PyCharm checks against the
+  fixture and reports as missing; standard modules are patched directly (`time`, not `server.time`).
+- **The server** (`mcp_server/server.py`) only starts it and re-exports the names of
+  `mcp_server/server_tools/`, one module per area (`core` holds the bridge and the `_tool`
+  decorator; a new module goes into `MODULES` in its `__init__.py`). Unit tests replace a name with
+  `patch_server` (`tests/unit/conftest.py`), which patches every module that binds it: patching
+  `server` alone no longer reaches the tools.
+- **How changes reach Designer:** `server.py`, `server_tools/` and `designer_helpers/` changes take effect when
   the MCP server restarts (helpers are re-sent with every call; the user reconnects in `/mcp`,
   or test with a fresh MCP client such as the self-test). **Plugin** changes must be copied into
   Designer's plugin folder (re-run `install.py`; paths in README.md, Install) and need a
-  **Designer restart** (with the user's OK: `quit_designer`, then `launch_designer`).
+  **Designer restart** (`quit_designer`, then `launch_designer`). **When working on this project,
+  restart Designer whenever the work needs it (a plugin change, a crashed Designer that
+  `launch_designer` can start again, a run of the self-test from a closed Designer) without asking
+  first;** just say that you did. That covers what `quit_designer` and `launch_designer` can do: a
+  bridge that accepts connections but never answers still needs the user (When tools fail, below).
+  The rest still holds: `quit_designer` refuses unsaved changes, and `discard_unsaved=True` drops
+  every unsaved package, so pass it only when the user said so or every package it lists is the
+  self-test's own (`mcp_selftest...`).
 - **The plugin's name** (`sd_claude_bridge_kve`, also its folder names and the token file
   `~/.sd_claude_bridge_kve_token`) is defined once, in `project_constants.py`; the plugin itself
   takes it from its own folder. To rename: change `PLUGIN` there, rename both `plugin/<name>`
@@ -395,7 +444,7 @@ new ideas there.
   (it once rewrote a shell default away), so its `sh -c` command uses plain `$VARS`
   (`tests/unit/test_mcp_json.py`).
 - **The bridge protocol** (plugin docstring): the plugin sends a nonce, the client answers with
-  HMAC(token, nonce), so the token never crosses the socket. `server.py`, `client/sd_run.py`
+  HMAC(token, nonce), so the token never crosses the socket. `server_tools/core.py`, `client/sd_run.py`
   and the self-test's `raw_request` all speak it; change them together with the plugin.
 - Environment variables `SD_DESIGNER_BIN_DIR`, `SD_DESIGNER_APP`, `SD_DESIGNER_LOG`,
   `SD_SNAPSHOT_DIR`, `SD_BRIDGE_PORT`: README.md, Configuration. A port change must reach the

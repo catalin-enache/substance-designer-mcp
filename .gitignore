@@ -6,3 +6,10 @@ __pycache__/
 # macOS
 .DS_Store
 
+/.idea/misc.xml
+
+# mypy (mypy.ini)
+.mypy_cache/
+
+# ruff (ruff.toml)
+.ruff_cache/

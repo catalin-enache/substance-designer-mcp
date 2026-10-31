@@ -12,7 +12,7 @@ bug, not reproduced, won't fix), always with a resolution line. Format and rules
 - *Verified by hand*: checked against the code after the review, not only by the reviewer.
 
 **IDs.** One prefix per area, numbered on: **PLG** plugin and bridge protocol, **SRV**
-`mcp_server/server.py`, **HLP** `mcp_server/designer_helpers.py`, **INS** installer, uninstaller,
+`mcp_server/server.py` and `server_tools/`, **HLP** `mcp_server/designer_helpers/`, **INS** installer, uninstaller,
 command-line client and example, **TST** tests and docs. A new area gets a new prefix, added here.
 
 ## Status
@@ -21,10 +21,10 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
 |---|---|---|
 | High | 0 | 1 |
 | Medium-high | 0 | 1 |
-| Medium | 0 | 17 |
-| Low-medium | 0 | 31 |
-| Low | 0 | 103 |
-| **Total** | **0** | **153** |
+| Medium | 0 | 18 |
+| Low-medium | 0 | 41 |
+| Low | 0 | 142 |
+| **Total** | **0** | **203** |
 
 ## Review log
 
@@ -355,6 +355,143 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
   node's; a missing value falls back to 0, harmless after the check; "is not exposed" is the text
   `render_sbs` prints, and a failed render gives no map, so that check fails rather than passes.
 
+### 2026-10-30: whole project at `2a107b3` (main, after the review-2 squash)
+
+- **How:** five read-only reviewers, one per area (plugin and protocol; `server.py`; the helpers;
+  installer, configuration and example; tests and docs), each reading its files in full and assessing
+  the resolutions in its area. Unit tests passed (233). The top finding of each area was verified by
+  hand (INS-23 by reproducing a dangling-link venv; SRV-26 against sbsrender's own default name;
+  PLG-21 and PLG-23, HLP-30, TST-59, TST-60 and TST-62 against the code).
+- **Resolutions assessed:** all 153. Questioned: TST-51 (TST-59), TST-34 (TST-62), HLP-1 (HLP-30),
+  HLP-4 (HLP-31); PLG-23 follows PLG-19. The rest hold up.
+- **Findings:** 21, no regressions, none high or medium: 3 low-medium (INS-23, SRV-26, HLP-30), 18 low.
+- **Suggested order:** INS-23 (the documented repair doesn't repair), HLP-30 and SRV-26 (silent
+  changes or losses), PLG-22 and PLG-23, the other tool findings, then the tests and docs.
+- **Checked and found fine:** auth before any work and no details for malformed requests; cancel can't
+  abort the next job; slots released once; the token created atomically, 0600, never sent; loopback
+  only; the installer's ownership checks before any deletion and its rollback; the uninstaller's
+  per-step reporting; the example's path-first clean-up and failed-build unload; `APIException` caught
+  everywhere; inheritance before value everywhere; no view transform, Undo, `QScreen` grab or unload
+  of a modified package; `_crop_box`, `_decode_pixels`, `_cooked`'s temp folder; every `%` snippet in
+  the self-test; the meta-tests; no ROADMAP item already done.
+
+### 2026-10-30: branch `review-3` against `main`, the diff only, at `e6dd711`
+
+- **How:** two read-only reviewers on `git diff main...review-3` (the code and docs; the tests), each
+  finding checked against the code; TST-65, TST-68, HLP-35 and HLP-36 verified by hand. Unit tests passed
+  (252); the live self-test passed 281/281 from a closed Designer.
+- **Resolutions assessed:** the 21 in the diff. Questioned: HLP-32 (HLP-35, TST-68), HLP-34 (HLP-36),
+  PLG-22 (PLG-24), HLP-30 (HLP-37), TST-63 (TST-67), HLP-33 (TST-69), TST-64 (TST-70); plus two about the
+  new AGENTS.md restart rule (TST-65, TST-66). The rest hold up.
+- **Findings:** 10: 3 low-medium (TST-65, TST-67, TST-68), 7 low.
+- **Suggested order:** TST-65 (rules that disagree), TST-68 and HLP-35 (the open_graph change and its
+  check), TST-67, HLP-36, then the low ones.
+- **Checked and found fine:** `venv_runs` clears only this repo's venv and never a healthy one; `_drain`
+  sets the result before `done`; `_TailBuffer`'s count and what `redirect_stdout` needs; the per-thread
+  nesting count; `_local_path` leaves identifiers alone and skips non-dict ops; render naming only
+  changes with several graphs; `_node` covers the ops; `package_file_of` still serves user graphs; the
+  fake bridge, the decorator stand-in, the install test's patches and the sbsrender test match the code
+  paths; the `%` formatting in every new snippet; the new checks fail without their fixes (except
+  TST-68's).
+
+### 2026-10-30: branch `review-3` against `main`, the diff only, at `8e4ce99`
+
+- **How:** what changed since the previous round (`git diff 1047124..review-3`, about 160 lines), read
+  by hand plus one read-only reviewer given only that diff. Unit tests passed (253); the live self-test
+  passed 284/284 from a closed Designer.
+- **Resolutions assessed:** the 10 in that diff. Questioned: HLP-35 (HLP-38, HLP-39), TST-70 (TST-71),
+  PLG-24 (TST-72), HLP-37 (TST-73). TST-65..69, HLP-36 hold up.
+- **Findings:** 5: 2 low-medium (HLP-38, TST-71), 3 low.
+- **Suggested order:** HLP-38, TST-71, then the low ones.
+- **Checked and found fine:** `ScriptAborted` derives from `BaseException`, so the new
+  `except (Exception, APIException)` in `open_graph` can't swallow a cancel; `_TailBuffer` gives what
+  `redirect_stdout`/`print` need, and an abort between append and the size update only under-counts;
+  an empty graph skips the fit; the case-folded duplicates; the no-match error; the fit-failure check's
+  override; the TST-68 sequence; the restart and `discard_unsaved` wording agree across AGENTS.md, the
+  skill and the docstring.
+
+### 2026-10-31: branch `review-3` against `main`, the diff only, at `049bedd`
+
+- **How:** what changed since the previous round (`git diff 7c06312..review-3`): the fixes in `58d507f`, read
+  by hand, and the refactors (the self-test, the Designer helpers and `server.py` split into folders;
+  `test_review_fixes.py` regrouped by area), given to two read-only reviewers (the server split; the
+  helpers, self-test and test regroup). SRV-31, TST-74 and TST-77 verified by hand. Unit tests passed
+  (258); the live self-test passed 286/286 from a closed Designer after each refactor.
+- **Resolutions assessed:** the 5 in `58d507f` (HLP-38, HLP-39, TST-71, TST-72, TST-73): all hold up. The
+  HLP-38 check runs on the default path only, where the others already raise through `_fit_view_to`; the
+  HLP-39 and HLP-38 live checks passed ("2 comment(s)").
+- **Findings:** 5: 1 low-medium (TST-74), 4 low (SRV-31, TST-75, TST-76, TST-77). All generation 1.
+- **Suggested order:** TST-74, then TST-77 and TST-76 (tests that check less than they say), TST-75, SRV-31.
+- **Checked and found fine:** the moved code is the same statements (an AST comparison for the server and
+  the helpers; the self-test's category bodies concatenated in `CATEGORIES` order match the old `try` body
+  apart from the ctx lines); each ctx value is set once and before its first reader; the self-test's
+  `try`/`except`/`finally`, the clean-up and `lifecycle` only without a running Designer are as before;
+  `__main__.py`'s path handling resolves the categories only as `test_all_tools.*`; no `global` or runtime
+  rebinding of module state in `server_tools/` (`_session`, `_LIBRARY_CACHE` are mutated in place); no
+  default argument uses a module constant; the same `sys.path` order (repo root, then `mcp_server`); 43
+  tools and the resource registered once, no module imported twice when `server.py` runs as `__main__`;
+  `patch_server` reaches every name a test patches, and no function imports a server name in its body;
+  the UTF-8 probe patches where `run_designer_script` looks; the module guard test fails on a missing
+  module; no helper part needs a later part at load time, no name is defined twice, nothing parses helper
+  line numbers; the 26 moved tests and their two helpers are byte-identical and no destination has an
+  autouse fixture. Observation, not a finding: `tools/list` now follows the module order in `MODULES`
+  instead of the old file's order; nothing depends on it.
+- **Longest chain still growing:** none; this round's findings follow no resolution.
+
+### 2026-10-31: branch `review-3` against `main`, the diff only, at `c9baef6`
+
+- **How:** what changed since the previous round (`git diff 4145af9..review-3`, about 200 lines: the fixes
+  in `8d716d3`), read by hand; the new checks' helpers run on small inputs. Unit tests passed (260; the
+  commit message of `8d716d3` says 263, wrongly); the
+  live self-test passed 286/286 from a closed Designer.
+- **Resolutions assessed:** the 5 in that diff. Questioned: TST-76 (TST-78). TST-74, TST-75, TST-77 and
+  SRV-31 hold up.
+- **Findings:** 1 low (TST-78, follows TST-76, generation 2).
+- **Checked and found fine:** the `CATEGORIES` guard also catches a category module `__main__.py` never
+  imports (it scans the folder with `pkgutil`) and leaves out `common`'s helpers; the send-path test takes
+  the first `compile()` argument of the quick edit's undo wrapper, which is the helpers plus the call;
+  `_bindings` stops at function, lambda and comprehension scopes and catches `try`/`if` bindings; a name
+  rebound inside one part isn't reported as defined twice (a fallback in a `try` is normal); `del _module`
+  after the loop; the resolutions' wording matches the code.
+- **Longest chain still growing:** TST-76 → TST-78, generation 2.
+
+
+### 2026-10-31: full typing (mypy strict over every Python file), working tree on `review-3` after `5014f61`
+
+- **How:** not a review: while annotating every file, mypy strict pointed at places where a value can be
+  the wrong type; each was read by hand. Unit tests 265 passed; live self-test 286/286.
+- **Resolutions assessed:** none.
+- **Findings:** 1 low-medium (HLP-41, the same defect class as HLP-31).
+- **Checked and found fine:** the other narrowings mypy asked for (regex matches and `.sbs` elements the
+  code relies on, Optional sd getters) only fail where the code already reported a failure.
+
+
+### 2026-10-31: branch `review-3` against `main`, the full diff (30 commits), at `6846f6e`
+
+- **How:** five read-only reviewers, one per area (plugin/installer/example/docs, server tools, helpers,
+  unit tests, live self-test), each with the index of all 198 findings and this branch's earlier log
+  notes; the moves already compared in earlier rounds were not redone. The most severe finding of each
+  area verified by hand (INS-25 by loading each script's definitions with `/usr/bin/python3` 3.9.6 on
+  `main` and on the branch). Unit tests 267 passed; live self-test 295/295 at `0122534`.
+- **Resolutions assessed:** TST-78, HLP-40, TST-79, HLP-41 (the fixes not assessed before). Questioned:
+  HLP-40 (TST-80), HLP-41 (TST-81, its check only; the fix holds up). TST-78 and TST-79 hold up.
+- **Findings:** 5: 1 medium (INS-25), 4 low (TST-80, TST-81, TST-82, SRV-32). Two found by two reviewers.
+- **Suggested order:** INS-25 (a broken uninstaller on the system Python), then the low ones.
+- **Checked and found fine:** every `_target`/`_node` caller after HLP-41 (the graph allowed only for
+  `set_params` and `sweep_param`'s `node_id`; `apply_edits` routes through them; `_nodes_bbox` refuses
+  `graph`); the typing commit's casts and rewrites in the helpers, server and tests (normalised ASTs
+  compared: no behaviour change), and every annotation name in the joined helpers bound before its
+  `def`; tool schemas against `main` (only the four docstrings fixes changed on purpose; no output schema
+  gained or lost; image tools have none); `_tool`'s ParamSpec typing; `raise ... from e` (messages
+  unchanged); `_found`/`_v`; the RUF015 `next()` in `_library_index` (ends as the same tool error); the
+  typed `Ctx` (each attribute set before its first reader, `lifecycle.run` reads only constructor ones);
+  the self-test's deliberate `type: ignore[union-attr]` lines (same statements as on `main`, inside the
+  category `try`); `test_types.py`'s strict and relaxed modes both pass; the source-scanning regexes;
+  `test_quit_fallback.py`'s fake `sd` modules match an AST scan of the helpers' imports; the plugin's
+  `_drain`, `_TailBuffer` and timeout changes on Designer's 3.13; the example's `bary` rewrite and
+  `zip(strict=True)`; AGENTS.md's and README's new text against the code.
+- **Longest chain still growing:** HLP-40 → TST-80 and HLP-41 → TST-81, generation 2.
+
 ---
 
 ## High
@@ -425,6 +562,7 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
       earlier ones changed.
     - **Fix:** `set_params` in `designer_helpers.py` now looks up and converts every value in a
       first loop, and sets them in a second.
+  - Questioned by HLP-30 (2026-10-30).
 
 - [x] **HLP-2 · `set_params` reports success on a parameter driven by a graph input** · `designer_helpers.py:540-554` · confirmed · found 2026-10-29
   - **Defect.** After `expose_param` the parameter is driven by a function graph; `set_params`
@@ -722,6 +860,44 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
     - **Fix:** the inheritance goes back first, then the value (each still in its own `try/finally`
       step). AGENTS.md (Graph size) states the fact. The check now reads "VALUE=x: 1, y: 1".
   - Questioned by TST-42 (2026-10-30).
+
+- [x] **INS-25 · The type annotations break `install.py` and `uninstall.py` on Python 3.9, and `sd_run.py`'s timeout message** · `install.py:112`, `uninstall.py:121`, `client/sd_run.py:74` · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** 663d4a4 added `X | None` annotations, which these standalone scripts evaluate when their
+    `def`s and module-level aliases run (`def install_skill(...) -> str | None:`,
+    `Action = Callable[[], str | None]`); on Python 3.9 that raises `TypeError: unsupported operand
+    type(s) for |`. And 0122534 (UP041) narrowed `sd_run.py`'s `except (socket.timeout, TimeoutError)`
+    to `except TimeoutError`, but on 3.9 `socket.timeout` is not a `TimeoutError`. Two reviewers'
+    areas (installer, docs) met here.
+  - **Scenario.** On a stock Mac `python3` is 3.9.6: `python3 install.py` prints a traceback instead of
+    "Python 3.10+ is required" (its version check is never reached), and `python3 uninstall.py`, which
+    the uninstaller and README tell users to run with the system Python, fails on `import install`
+    (on `main` both load: measured by executing each file's definitions with `/usr/bin/python3`).
+    `sd_run.py` still loads, but against a bridge that never answers it prints `socket.timeout` with a
+    traceback again (PLG-19 removed that). Plausible, not measured: the plugin's module-level
+    `_Job = tuple[..., float | None, ...]` would fail on a Designer whose Python is older than 3.10
+    (README says 14.1+ should work).
+  - **Fix.** `from __future__ import annotations` in the three standalone scripts (AGENTS.md bans it only
+    for the joined helpers), with the module-level alias in `uninstall.py` written so it doesn't
+    evaluate `|` at runtime; restore `except (socket.timeout, TimeoutError)` in `sd_run.py` with a
+    `noqa: UP041` and its reason. Test: a unit test that loads those files with any Python older than
+    3.10 it finds (skipping when there is none). For the plugin, either the same fix or narrow README's
+    version claim.
+  - **Resolution: done** (commit `c73b98c`).
+    - **Test:** `tests/unit/test_old_python.py` runs the scripts with a Python older than 3.10 when one is
+      installed (here `/usr/bin/python3`, 3.9.6). Before the fix all three failed: `install.py` and
+      `uninstall.py --help` with `TypeError: unsupported operand type(s) for |`, and `sd_run.py`'s
+      `_send_or_explain` let a `socket.timeout` through as a traceback. Now the installer exits with
+      "Python 3.10+ is required" and creates nothing, the uninstaller runs, and the timeout gets its
+      one-line message.
+    - **Cause:** the typing commit wrote 3.10 syntax (`X | None`) where these scripts evaluate it when
+      they load (signatures, a module-level alias), and the lint commit narrowed the timeout clause to
+      `TimeoutError`, which `socket.timeout` only became an alias of in 3.10.
+    - **Fix:** `from __future__ import annotations` at the top of `install.py`, `uninstall.py` and
+      `client/sd_run.py`; `uninstall.py`'s `Action` alias quotes `'str | None'`; `sd_run.py` catches
+      `(socket.timeout, TimeoutError)` again (`noqa: UP041` with the reason). The plugin and helpers run
+      on Designer's own Python and the helpers can't take the future import (one joined script), so
+      README's requirements now say Designer 16 is tested and an older one needs a bundled Python 3.10+,
+      instead of "14.1 or newer should work". AGENTS.md says which files take the future import and why.
 
 ## Low-medium
 
@@ -1262,6 +1438,153 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
     - **Fix:** the check; the wording stays.
   - Questioned by TST-58 (2026-10-30).
 
+- [x] **INS-23 · Re-running the installer doesn't repair a venv whose Python is gone** · `install.py` (venv step) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** The venv is recreated only when `venv/bin/python` doesn't exist, but a venv whose base
+    Python was removed or upgraded has a dangling link: `os.path.exists` says False, `python -m venv`
+    over it exits 0 and keeps the dead link, and the pip step then fails with a traceback, after the
+    plugin was already replaced. `.mcp.json`, README (Troubleshooting) and AGENTS.md all send the user
+    to that re-run. (On Windows `python.exe` stays, with a stale `home` in `pyvenv.cfg`.)
+  - **Scenario.** Homebrew upgrades Python 3.12; the server no longer starts; `python3 install.py`
+    fails at pip. Reproduced: a venv with a dangling `python3` link, `-m venv` over it, rc 0, link kept.
+  - **Fix.** Run `[py, '--version']` first; if the file is missing or that fails, recreate with
+    `-m venv --clear` (the venv is ours); a unit test with a dangling-link venv.
+  - **Resolution: done** (commit `d6a33b6`).
+    - **Test:** `test_rerun_repairs_a_venv_whose_python_is_gone` points the installer at a repo folder
+      whose venv's `python` is a dangling link: it ran `-m venv` without `--clear` (the call that keeps
+      the dead link, reproduced by hand); `test_rerun_keeps_a_working_venv` guards the other side.
+    - **Cause:** the venv was judged by whether `python` exists, which a dead link doesn't, and
+      `-m venv` over an existing folder keeps its links.
+    - **Fix:** `venv_runs()` runs the venv's Python (`--version`); if it is missing or fails, the venv is
+      recreated with `--clear`. Windows (a stale `home`) takes the same path, untested there.
+
+- [x] **SRV-26 · `render_sbs` on a package with several graphs overwrites maps of the same name** · `mcp_server/server.py` (`_render_sbsar`) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** Without `graph`, every graph renders with `--output-name {outputNodeName}`, so two
+    graphs with a `baseColor` output write one file; the before/after file comparison counts what is
+    left ("Rendered 6 file(s)" for 12 maps). sbsrender's own default
+    (`{inputName}_{inputGraphUrl}_{outputNodeName}`) avoids it.
+  - **Fix.** With no `graph` and more than one graph in the package, add the graph to the name (or
+    refuse duplicates); a check rendering a two-graph package.
+  - **Resolution: done** (commit `d6a33b6`).
+    - **Test:** `test_render_sbs_keeps_every_graphs_maps_when_names_repeat` renders a new fixture
+      (`two_graphs_same_output.sbs`: two graphs with an `output` each) with the real sbsrender: one file,
+      "Rendered 1 file(s)". Measured by hand first: `{outputNodeName}` gave one file, the graph-qualified
+      pattern two.
+    - **Fix:** with no `graph` and several graphs (from `sbsrender info`, now `_sbsar_contents`), files are
+      named `{inputGraphUrl}_{outputNodeName}`; the docstring says so.
+
+- [x] **HLP-30 · `add_node(params=...)` with a bad value leaves the node in the graph, unreported** · `mcp_server/designer_helpers.py` (`add_node`) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** The node is created and then `set_params` raises; `_checked` keeps only the error's
+    last line, so the "added ..." line is lost and nothing is rolled back. The agent thinks nothing
+    happened and retries, leaving an orphan. HLP-5 fixed this message for `apply_edits` only; HLP-1
+    named `add_node(params)` but fixed only `set_params`' order. Questions HLP-1's resolution.
+  - **Scenario.** `add_node('levels', params={'levelinhigh': 0.5})`: "levelinhigh expects 4 values",
+    and a levels node stays in the graph.
+  - **Fix.** Check the params before creating the node (or delete it on failure) and say so; a live
+    check counting nodes before and after.
+  - **Resolution: done** (commit `d6a33b6`).
+    - **Test:** live: the node count went 4 -> 5 after the refused `add_node(params=...)`; now 4 -> 4
+      with "(the node was not added)". The HLP-5 check, which expected "its node was added" for an
+      `apply_edits` add whose params fail, now expects no node and "not added".
+    - **Fix:** `add_node` deletes the node when its params fail and says so (inside the call's undo group).
+  - Questioned by HLP-37 (2026-10-30).
+
+- [x] **TST-65 · The new "restart without asking" rule covers a stuck Designer, which the tools can't restart** · `AGENTS.md` (Working on this project), `.claude/skills/address-review/SKILL.md` · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** It names "a crashed or stuck Designer", but with a bridge that accepts and never answers
+    `quit_designer` says to close Designer by hand, and "When tools fail" in the same section says only
+    the user can fix that; the two rules point different ways. Found by a reviewer.
+  - **Fix.** Limit the rule to restarts `quit_designer`/`launch_designer` can do; a stuck bridge still
+    goes to the user.
+  - **Resolution: done** (commit `b208dff`).
+    - **Fix:** the rule now covers what `quit_designer` and `launch_designer` can do (a plugin change, a
+      crashed Designer, a run from a closed Designer) and says a bridge that accepts but never answers
+      still needs the user, as "When tools fail" does; the short rule and the skill say the same.
+
+- [x] **TST-67 · An exception caught by the self-test's new `except` is printed without its message** · `tests/test_all_tools.py` (`run`, "the run reaches its end") · confirmed · found 2026-10-30
+  - **Defect.** It passes `traceback.format_exc()[-400:]`, but `check()` prints the first 150 characters
+    of the detail, so the last line (`SomeError: message`) is cut. Found by a reviewer. Questions
+    TST-63's resolution.
+  - **Fix.** Print the traceback in full there, and give the check its last line.
+  - **Resolution: done** (commit `b208dff`).
+    - **Fix:** the whole traceback is printed and the check gets its last line (the exception).
+
+- [x] **TST-68 · The HLP-32 check passes even if `open_graph` leaves the view alone** · `tests/test_all_tools.py` ("fits the whole graph even with nodes selected") · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** The step before it fits everything with nothing selected, and the selection is then
+    made without fitting, so every node is already in view when `open_graph` runs; it fails only on
+    the old "fit the selection" behaviour. Found by a reviewer. Questions HLP-32's resolution.
+  - **Fix.** Select and fit the selection first (one node in view), then `open_graph`, then require all.
+  - **Resolution: done** (commit `b208dff`).
+    - **Test:** the view is first zoomed onto the selection (1 or 0 of 5 nodes in view), so the check now
+      sees `open_graph` bring the rest back; it also requires every frame inside (HLP-35), which failed
+      ("FRAMES=1/2") before that fix.
+    - **Fix:** the check only.
+
+- [x] **HLP-38 · `open_graph`'s default path now hides "the graph in the editor is another one"** · `mcp_server/designer_helpers.py` (`open_graph`) · confirmed (code path) · found 2026-10-30
+  - **Defect.** It prints every fit error instead of raising, including the one saying the editor shows
+    a different graph, so an open that didn't make the graph current reads as a success; the other
+    paths (`node_ids`, `frame`, `rect`) still raise it. Found by a reviewer. Questions HLP-35's
+    resolution.
+  - **Fix.** Report only a view that isn't visible; raise when the graph in the editor isn't the one asked.
+  - **Resolution: done** (commit `58d507f`).
+    - **Test:** live, with `_current_graph` made to report no graph: the open printed "could not fit the
+      view: the graph in the editor is none" and no error. Now it raises.
+    - **Fix:** the default path checks the graph in the editor is the one asked before fitting and raises
+      if not; only the fit itself (a view not visible) is reported instead of raised.
+
+- [x] **TST-71 · The TST-70 skip also hides a Home screen that wasn't closed** · `tests/test_all_tools.py` (Home-screen designer fact) · plausible · found 2026-10-30
+  - **Defect.** `_home_screen()` finds nothing when Home's close button isn't found, not only when Home
+    is absent; a renamed button would leave Home up with no panel visible, and the check would skip.
+    Found by a reviewer. Questions TST-70's resolution.
+  - **Fix.** Skip only when panels are visible after the launch; otherwise fail.
+  - **Resolution: done** (commit `58d507f`).
+    - **Fix:** the Home check skips only when no Home was closed and panels are visible (`_visible_panels`);
+      with none visible it fails. The helper source is now read before the launch, which this check needs
+      (one run stopped there with a `NameError` before that).
+
+- [x] **TST-74 · The coverage scans count self-test code that `CATEGORIES` never runs** · `tests/unit/conftest.py` (`selftest_sources`), `tests/unit/test_server.py` (the tool, parameter and op scans) · plausible · verified by hand · found 2026-10-31
+  - **Defect.** Since the self-test became a folder, the scans read every `.py` file in it
+    (`for name in sorted(os.listdir(SELFTEST_DIR)): if name.endswith('.py'):`), whether or not its
+    functions are listed in `__main__.py`'s `CATEGORIES`. Found by a reviewer.
+  - **Scenario.** A new category module, or a second function in an existing one (as `graph_edit` and
+    `editor` have), is written but not added to `CATEGORIES`: the parameter and `apply_edits` op scans
+    still pass on its calls although they never run, and live `summarize()` only notices a tool with no
+    check at all. Today every function is listed.
+  - **Fix.** A unit test that every top-level `async def` of the category modules (except
+    `lifecycle.run`, which the `finally` calls) is in `CATEGORIES`.
+  - **Resolution: done** (commit `8d716d3`).
+    - **Test:** `test_every_category_function_is_run` (`tests/unit/test_selftest_summary.py`): with
+      `editor.panels_and_fit` taken out of `CATEGORIES` it failed ("category functions not in CATEGORIES
+      (never run): ['editor.panels_and_fit']"); with the real list it passes.
+    - **Cause:** splitting the self-test into modules made it possible to write a check that the index never
+      calls, and the scans read files, not what runs.
+    - **Fix:** the new test compares every coroutine function defined in the category modules with
+      `CATEGORIES` (plus `lifecycle.run`, which the `finally` calls).
+
+- [x] **HLP-41 · Tools that need a node accept the id `graph` and fail with an unclear error** · `mcp_server/designer_helpers/` (`_target` callers: `connect`, `expose_param`, `save_node_output`, `dump_node_pixels`, `open_graph`, `add_comment`, `sweep_param`'s `view_node`) · confirmed (code path) · found 2026-10-31
+  - **Defect.** `_target(g, 'graph')` returns the graph itself, and these callers go on to call node-only
+    methods on it (`newPropertyConnectionFromId` as a source, `newPropertyGraph`, `focusGraphNode`,
+    `sNewAsChild`, a node's texture), as HLP-31 found for `delete_nodes` and `move_nodes`. Found while
+    adding types: mypy flagged each place (`_target` returns `SDSBSCompNode | SDSBSCompGraph`).
+  - **Scenario.** `open_graph(node_ids=['graph'])`, `add_comment(node_id='graph')` or
+    `connect(from_node='graph', ...)` on a graph with outputs: the agent gets an AttributeError or a
+    Designer API error instead of "'graph' is no node".
+  - **Fix.** Use `_node()` (edits.py, the lookup that never returns the graph) wherever a node is
+    required, with a live check per tool.
+  - **Resolution: done** (commit `c2a223a`).
+    - **Test:** live checks in `safeguards.py`, one per tool, each expecting "node 'graph' not found" and
+      nothing changed (the link, the graph inputs, the comments, the swept value). Before the fix:
+      `connect` said "output None not on node graph", `expose_param` raised an AttributeError
+      (`newPropertyGraph` on the graph; its input was removed again), `preview_node` and `node_stats`
+      said "output None not found", and **`open_graph(node_id='graph')` crashed Designer** (crash dump at
+      the call; the checks after it failed for want of a Designer). `connect`'s `to_node` and
+      `disconnect` already refused with other messages; they get the same check.
+    - **Cause:** `_target` maps `'graph'` to the graph for `set_params`'s graph parameters, and the tools
+      that need a node used it too, so the graph reached node-only calls (`focusGraphNode` among them).
+    - **Fix:** those callers use `_node()` (`connect` both ends, `disconnect`, `save_node_output`,
+      `dump_node_pixels`, `open_graph`'s `node_id`, `expose_param`, `add_comment`, `sweep_param`'s view
+      node); `_target` stays for parameters (`set_params`, `sweep_param`'s `node_id`). The casts and
+      the `type: ignore` that marked the places are gone. Unit tests 265 passed; self-test 295/295.
+  - Questioned by TST-81 (2026-10-31).
+
 ## Low
 
 - [x] **PLG-5 · `stop()` may keep the port bound and leaves queued clients hanging** · `__init__.py:250-256` · queued clients confirmed, port plausible · found 2026-10-29
@@ -1410,6 +1733,7 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
       valid node before raising, so the follow-up `move_nodes` check had nothing left to move.
     - **Cause:** each id was looked up and acted on in the same loop.
     - **Fix:** both look up every id first, then delete or move.
+  - Questioned by HLP-31 (2026-10-30).
 
 - [x] **HLP-5 · `apply_edits` says "its node was added" when the definition failed** · `designer_helpers.py:1128-1131` · confirmed · found 2026-10-29
   - **Fix.** Record whether the node was created before deciding the message.
@@ -2163,6 +2487,7 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
     - **Test:** none can fail here: any plugin refuses a dummy token, which is the finding.
     - **Fix:** the live case is dropped; a comment points to the unit test
       `test_the_old_protocol_sending_the_token_is_refused`, which uses the real token without a socket.
+  - Questioned by TST-62 (2026-10-30).
 
 - [x] **TST-35 · The HLP-24 live check leaves the test graph's `$format` Absolute** · `tests/test_all_tools.py` (`set_params` checks, after "graph $format takes effect") · confirmed · found 2026-10-30
   - **Defect.** It sets the value back to 8 bits but not the inheritance, so every later check
@@ -2322,6 +2647,7 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
       raised through (a traceback).
     - **Fix:** `_send_or_explain` explains a timeout and a closed connection in one line each; the
       script path's own timeout handler went into it.
+  - Note (2026-10-30): a third case, a connection closed with no reply, is PLG-23.
 
 - [x] **PLG-20 · The accept loop retries every 0.1 s forever on a lasting error** · `plugin/sd_claude_bridge_kve/sd_claude_bridge_kve/__init__.py` (`_accept_loop`) · confirmed · verified by hand · found 2026-10-30
   - **Defect.** Since PLG-15 an `OSError` from `accept()` while running prints a line and retries after
@@ -2375,6 +2701,7 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
     - **Fix:** `library_packages()` (sharing `libs()` with the clean-up) records a failed check and
       returns None, and the clean-up then skips its library check instead of crashing.
   - Note (2026-10-30): the `user_graph` line just above it (`CURRENT=`) has the same unguarded parse; it comes from `main`, outside this branch's diff, so a review of `main` should pick it up.
+  - Questioned by TST-59 (2026-10-30).
 
 - [x] **HLP-29 · The `set_params` docs read as if a seed always ends up inherited** · `mcp_server/server.py` (`set_params` docstring), `AGENTS.md` · confirmed · found 2026-10-30
   - **Defect.** `set_params` leaves a seed's inheritance as it is, so one already Absolute stays so;
@@ -2448,3 +2775,489 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
   - **Resolution: done** (commit `8a28d3a`).
     - **Fix:** the render outputs are kept per copy and the check requires no "is not exposed" warning
       (the text `render_sbs` prints) for the Absolute-node renders; it reads "render seed exposed: True".
+
+- [x] **PLG-21 · README says nothing can tie the plugin up before authenticating** · `README.md` (Security), `plugin/.../__init__.py` (`MAX_CLIENTS`) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** Sixteen idle unauthenticated connections, renewed every 30 s, turn every other client
+    away ("closed the connection"); the cap bounds memory and threads but is no guard against that.
+  - **Fix.** Say what the cap does and doesn't do (closing a connection early whose first bytes
+    aren't an `auth` would need the protocol change PLG-4 deferred).
+  - **Resolution: done** (commit `d6a33b6`).
+    - **Fix:** README's Security text says the cap bounds the memory and threads unauthenticated
+      connections take but doesn't lock other local programs out. Wording only.
+
+- [x] **PLG-22 · If a job's output can't be read, its client waits ~31 minutes with no reply** · `plugin/.../__init__.py` (`_drain`, `_run`) · plausible · found 2026-10-30
+  - **Defect.** `done.set()` is outside the `finally` and `buf.getvalue()` outside `_run`'s `try`, so
+    a `MemoryError` there (a script printing without limit) leaves `done` unset and the connection
+    thread waiting with no timeout; `json.dumps(reply)` is guarded for `OSError` only. Output isn't
+    capped.
+  - **Fix.** `done.set()` in the `finally` with a failure result as fallback; cap the captured output
+    (keep the tail, say it was cut).
+  - **Resolution: done** (commit `d6a33b6`).
+    - **Test:** `test_a_job_whose_run_fails_still_answers_its_client` (a `_run` that raises
+      MemoryError): the client timed out with no reply; `test_a_scripts_output_is_capped_keeping_the_end`
+      found no cap.
+    - **Cause:** `done.set()` came after the `try/finally`, so an exception there left the client
+      waiting with no timeout; output was buffered without limit.
+    - **Fix:** `_drain` answers a bridge failure with a failure result and sets `done` in the
+      `finally`; `_TailBuffer` keeps the last `MAX_OUTPUT` (8 million) characters and says how many were
+      cut. README mentions the cap. Plugin reinstalled and Designer restarted.
+  - Questioned by PLG-24 (2026-10-30).
+
+- [x] **PLG-23 · `sd_run.py` prints a traceback when the connection closes with no reply** · `client/sd_run.py` (`send`, `_send_or_explain`) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** `send()` ends with `json.loads(...)` of whatever arrived; an empty reply (Designer quit
+    or crashed mid-script) or another program on the port raises `JSONDecodeError`/`KeyError`, not
+    caught; `server.py` handles the same case. (`server.py`'s nonce parse also misses `TypeError` for
+    a non-object greeting.) Follows PLG-19.
+  - **Fix.** Catch `(ValueError, KeyError, TypeError)` with a one-line message; add the case to the
+    unit test.
+  - **Resolution: done** (commit `d6a33b6`).
+    - **Test:** a fake bridge on a free port sends no reply, a greeting without a nonce, or a list;
+      `sd_run` raised `JSONDecodeError`/`KeyError`/`TypeError` for all three, the server `TypeError` for
+      the list (`test_sd_run_explains_...` and `test_the_server_explains_a_bridge_that_answers_nothing_useful`).
+    - **Fix:** `sd_run`'s `_send_or_explain` explains them in one line; the server also catches
+      `TypeError`.
+
+- [x] **SRV-27 · Relative paths are resolved inside Designer, against its working directory** · `mcp_server/designer_helpers.py` (`export_outputs`, `save_package`, `import_bitmap`, `create_graph`), `mcp_server/server.py` · confirmed (code path) · found 2026-10-30
+  - **Defect.** These tools `abspath` their paths in Designer (likely `/` when started with `open`),
+    unlike `render_sbs`, `preview_maps` and `run_designer_script`, which resolve them in the server.
+  - **Scenario.** `export_outputs('Mat', 'renders')` tries `/renders`; `import_bitmap('ref.png')` looks
+    for `/ref.png`.
+  - **Fix.** Resolve them in `server.py` before sending, including paths inside `apply_edits` ops.
+  - **Resolution: done** (commit `d6a33b6`).
+    - **Test:** `test_relative_paths_are_resolved_here_not_in_designer` sends relative paths through
+      `export_outputs`, `save_package` (save_as and a package path), `import_bitmap`, `create_graph` and an
+      `apply_edits` bitmap op: they went to Designer as given.
+    - **Fix:** `_local_path()` resolves them in the server first; a graph identifier given to
+      `save_package` stays as it is.
+
+- [x] **SRV-28 · `set_link_display` repeats the guide reminder inside its result** · `mcp_server/server.py` (`set_link_display`) · confirmed · found 2026-10-30
+  - **Defect.** It calls the decorated `snapshot_graph` and `open_graph` tools and pastes their
+    results, so before `get_guide()` the reminder appears twice.
+  - **Fix.** Undecorated helpers that both tools call.
+  - **Resolution: done** (commit `d6a33b6`).
+    - **Test:** `test_a_tool_calling_another_tool_shows_the_guide_reminder_once` builds two tools with
+      the real decorator (no registration), the outer calling the inner: two reminders.
+    - **Fix:** the decorator adds the reminder only on the outermost call (a per-thread nesting
+      count, since tools may run on worker threads side by side).
+
+- [x] **SRV-29 · A failed reload after `set_link_display`'s unload doesn't say the package was closed** · `mcp_server/server.py` (`_reload_package_file`) · plausible · found 2026-10-30
+  - **Defect.** If the unload succeeds and the load fails, the user's package is closed in Designer and
+    the error gives only Designer's last line, not where the edited file and the snapshot are.
+  - **Fix.** Catch the load failure and say: package unloaded, edited file at ..., snapshot ..., open it
+    by hand.
+  - **Resolution: done** (commit `d6a33b6`).
+    - **Test:** `test_a_failed_reload_says_the_package_was_closed_and_where_it_is` (the unload answers,
+      the load fails) expects the error to say the package was closed and name the file and snapshot.
+    - **Fix:** `_reload_package_file` takes the snapshot path and, when the load fails, says the package
+      was closed, where the edited file and the snapshot are, and to open it by hand.
+
+- [x] **SRV-30 · `sweep_param` with no values and `diff_graph` with a missing file give raw errors** · `mcp_server/server.py` (`sweep_param`, `diff_graph`) · confirmed · found 2026-10-30
+  - **Defect.** `values=[]` fails with "restored X.p to ..." as the error; `against='/missing.sbs'` raises
+    a raw `FileNotFoundError` or `ParseError` (the kind SRV-12 fixed elsewhere).
+  - **Fix.** Refuse empty `values`; check the file exists and catch the parse error.
+  - **Resolution: done** (commit `d6a33b6`).
+    - **Test:** `test_a_sweep_with_no_values_is_refused_before_designer` ("sweep produced nothing") and
+      `test_diff_graph_explains_a_missing_or_unreadable_file` (FileNotFoundError, ParseError).
+    - **Fix:** `sweep_param` refuses an empty `values` before calling Designer; `diff_graph` checks the
+      file exists and reports an unreadable one.
+
+- [x] **HLP-31 · `delete_nodes` and `move_nodes` accept the id `graph` and fail halfway** · `mcp_server/designer_helpers.py` (`delete_nodes`, `move_nodes`, the `apply_edits` ops) · confirmed · found 2026-10-30
+  - **Defect.** `_target` returns the graph for `'graph'`, so "every id found first" (HLP-4) passes and
+    the earlier ids are deleted or moved before the graph itself fails. Questions HLP-4's resolution.
+  - **Fix.** Look the ids up with `getNodeFromId`, as `_nodes_bbox` does.
+  - **Resolution: done** (commit `d6a33b6`).
+    - **Test:** live: `delete_nodes([spare, 'graph'])` deleted the spare node before failing; now both
+      `delete_nodes` and `move_nodes` refuse and leave it.
+    - **Fix:** `_node()`, a node lookup that never returns the graph, for both (and the `apply_edits` ops).
+
+- [x] **HLP-32 · `open_graph` says "fitted the whole graph" when the user has nodes selected** · `mcp_server/designer_helpers.py` (`open_graph`) · plausible · found 2026-10-30
+  - **Defect.** "Fit in view (selection)" fits the selection when there is one (AGENTS.md); the tool
+    still reports a whole-graph fit.
+  - **Fix.** Fit all nodes with `_fit_view_to(g, node_ids=...)`, which reports what it fitted.
+  - **Resolution: done** (commit `d6a33b6`).
+    - **Test:** live, with one node selected: `open_graph` left 1 of 5 nodes in view; now 5 of 5,
+      "fitted 5 node(s)". A "designer facts" check measures the reason: F fits the selection (1 of 5),
+      or all 5 with nothing selected.
+    - **Fix:** the default view fits every node with `_fit_view_to` (wheel zoom), which reports what it
+      fitted; AGENTS.md says so. The check runs after the screenshot checks: before them it left a graph
+      dock being deleted that the screenshot check's widget scan met (that scan now also skips dead
+      wrappers).
+  - Questioned by HLP-35, TST-68 (2026-10-30).
+
+- [x] **HLP-33 · `package_file_of(save=True)` has no library-package guard** · `mcp_server/designer_helpers.py` (`package_file_of`) · confirmed (missing guard), contrived path · found 2026-10-30
+  - **Defect.** With no graph given it takes the editor's graph even in a library package; today the
+    snapshot step stops `set_link_display` unless a user package has a graph of the same name, when the
+    XML edit would go to the library file inside Designer's install folder.
+  - **Fix.** Refuse library packages as `_package_of` does.
+  - **Resolution: done** (commit `d6a33b6`).
+    - **Test:** live, in a Designer the self-test started, with a library graph in the editor:
+      `package_file_of(None, save=True)` now refuses ("its file is not edited").
+    - **Fix:** `package_file_of` refuses library packages, as `_package_of` does.
+  - Questioned by TST-69 (2026-10-30).
+
+- [x] **HLP-34 · `export_outputs` skips unknown names and overwrites duplicates silently** · `mcp_server/designer_helpers.py` (`export_outputs`) · confirmed · found 2026-10-30
+  - **Defect.** `outputs=['baseColor', 'normall']` exports one file with no word about the typo; two
+    outputs with the same identifier write one file and both are listed as saved.
+  - **Fix.** Report requested names that matched nothing; refuse or suffix duplicates.
+  - **Resolution: done** (commit `d6a33b6`).
+    - **Test:** live: `outputs=['height', 'heigth']` exported one file with no word; a second output
+      named `height` gave two "height.png" lines. Now the typo is listed and the duplicate refused.
+    - **Fix:** `export_outputs` collects the outputs first, refuses duplicate identifiers before writing,
+      and lists requested names that matched nothing; docstring updated.
+  - Questioned by HLP-36 (2026-10-30).
+
+- [x] **INS-24 · The installer tells Windows users to use `.mcp.json`, which needs `sh`** · `install.py` (step 3 message) · confirmed · found 2026-10-30
+  - **Defect.** Step 3 says `.mcp.json` registers the server in this folder on every platform; README
+    and `test_mcp_json.py` say Windows registers per folder (`claude mcp add --scope local`).
+  - **Fix.** On Windows, print the `claude mcp add` command for this folder; a unit test.
+  - **Resolution: done** (commit `d6a33b6`).
+    - **Test:** `test_on_windows_step_3_gives_this_folders_command_not_mcp_json` (platform set to
+      win32) found the `.mcp.json` sentence in step 3.
+    - **Fix:** on Windows step 3 prints the `claude mcp add --scope local` command for this folder or
+      any other.
+
+- [x] **TST-59 · The `CURRENT=` parse at the start of the self-test is unguarded** · `tests/test_all_tools.py` (`user_graph`) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** It runs before the `try` (the leftover noted under TST-51): an error answer ends the run
+    with no summary, and a Designer the self-test started is never quit. Questions TST-51's resolution.
+  - **Fix.** Parse it like `library_packages()`: a failed check and an empty `user_graph`.
+  - **Resolution: done** (commit `d6a33b6`).
+    - **Test:** `test_a_bridge_error_reading_the_editors_graph_at_the_start_is_a_failed_check`; the old
+      inline parse raises `AttributeError` on the same answer.
+    - **Fix:** `editor_graph()` records a failed check and returns ''.
+
+- [x] **TST-60 · The graph `$outputsize` check sets the size the graph already has** · `tests/test_all_tools.py` ("graph $outputsize"), `AGENTS.md` (Graph size) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** `create_graph` made the graph 9, and the check sets 9 and looks for "(9, 9)", printed
+    either way. No live check covers a successful `set_params` on a node's `$outputsize`/`$format`
+    (made Absolute, taking effect), which AGENTS.md states.
+  - **Fix.** Set 10 and require "-> (10, 10)"; a node check reading back Absolute and the computed size.
+  - **Resolution: done** (commit `d6a33b6`).
+    - **Fix:** the graph check sets 10 and requires "-> (10, 10)", then puts 9 back; a new check sets a
+      node's `$outputsize` to 7 and reads back Absolute, 7 and a 128x128 compute, then puts the node back.
+
+- [x] **TST-61 · `set_link_display`'s "output unchanged" compares `node_stats` text exactly** · `tests/test_all_tools.py` · plausible · found 2026-10-30
+  - **Defect.** Two computes can differ by about 2/65535 (AGENTS.md), enough to flip a 4-decimal digit;
+    the flake TST-22 fixed elsewhere.
+  - **Fix.** Compare the numbers within a tolerance.
+  - **Resolution: done** (commit `d6a33b6`).
+    - **Fix:** "output unchanged" compares the parsed numbers within 0.002, as TST-22 did elsewhere.
+
+- [x] **TST-62 · README still says the self-test refuses old-style requests** · `README.md` (Self-test) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** TST-34 dropped that live case (only the unit test covers it). Questions TST-34's
+    resolution.
+  - **Fix.** Drop "and old-style" or say it is unit-tested.
+  - **Resolution: done** (commit `d6a33b6`).
+    - **Fix:** README no longer lists old-style requests among the live checks.
+
+- [x] **TST-63 · Unguarded parses inside the self-test's `try` end the run without a summary** · `tests/test_all_tools.py` (`batch_blend`, `two`, `max_empty`, `os.listdir(snap_dir)`) · confirmed · found 2026-10-30
+  - **Defect.** If one fails, the clean-up runs but every later check is skipped and only a traceback
+    is printed.
+  - **Fix.** Guard them (a failed check), or catch an exception in `run()` as a failed check and still
+    print the summary.
+  - **Resolution: done** (commit `d6a33b6`).
+    - **Fix:** an exception escaping the run's `try` is recorded as a failed check ("the run reaches its
+      end") with its traceback, so the clean-up and the summary still run; the `max_empty`/`max_set`
+      comparisons check for `None` first.
+  - Questioned by TST-67 (2026-10-30).
+
+- [x] **TST-64 · Two AGENTS.md facts have no check** · `AGENTS.md` (sd API gotchas, Designer UI) · confirmed · found 2026-10-30
+  - **Defect.** "`graph.compute()` only computes nodes that feed an output node" and "While Home shows,
+    every dock reports `isVisible()` False" aren't measured, against the rule that a claim without a
+    test is a guess.
+  - **Fix.** "Designer facts" checks for both (the self-test already passes through the Home screen),
+    or soften the wording.
+  - **Resolution: done** (commit `d6a33b6`).
+    - **Test:** the compute fact first failed in the self-test's graph (a lone node came back computed),
+      while two probes in fresh graphs found it not computed; the Home fact couldn't be shown again once
+      closed (no page with its close button stays in the stack).
+    - **Fix:** the compute fact is measured in a package of its own and AGENTS.md says to rely on neither
+      (attach a temporary output, as the tools do); `leave_home_screen` prints the visible panels before
+      and after closing Home ("0 before, 6 after"), checked when the self-test starts Designer, and
+      AGENTS.md keeps only that. A third fact tried along the way (reopening a graph kills the main
+      window's wrapper) held in a probe but not in the self-test, so it was not added.
+  - Questioned by TST-70 (2026-10-30).
+
+- [x] **PLG-24 · A cancel inside `_TailBuffer.write`'s trim can lose the kept output** · `plugin/.../__init__.py` (`_TailBuffer.write`) · plausible · found 2026-10-30
+  - **Defect.** The abort tracer runs inside `write`; an abort between `truncate()` and the write of the
+    kept tail leaves the buffer empty and `cut` already counted. A narrow window. Found by a reviewer.
+    Questions PLG-22's resolution.
+  - **Fix.** Build the new contents first and swap them in one step (or keep the tail in a list).
+  - **Resolution: done** (commit `b208dff`).
+    - **Test:** `test_an_abort_anywhere_in_a_write_keeps_the_output_written_before` aborts a trimming
+      write at each of its lines in turn: an abort right after `truncate()` left only the "output cut"
+      note.
+    - **Fix:** `_TailBuffer` keeps a list of pieces and replaces it in one assignment when trimming;
+      plugin reinstalled (the self-test started Designer with it).
+  - Questioned by TST-72 (2026-10-30).
+
+- [x] **HLP-35 · `open_graph`'s new default fit can fail an open that worked, and leaves out frames** · `mcp_server/designer_helpers.py` (`open_graph`) · confirmed (the error), plausible (frames) · verified by hand · found 2026-10-30
+  - **Defect.** `_fit_view_to` raises when the graph view isn't visible or the current graph differs,
+    where Designer's F returned quietly, so the open is reported as an error (and `set_link_display`
+    warns it couldn't reopen); the fit covers nodes only, so frame titles and comments outside them can
+    be cut off on a small graph. Found by a reviewer. Questions HLP-32's resolution.
+  - **Fix.** On the default path report a failed fit instead of failing the open; fit nodes and graph
+    objects together.
+  - **Resolution: done** (commit `b208dff`).
+    - **Test:** live: with the view zoomed onto one node, `open_graph` brought back all nodes but 1 of 2
+      frames; with the fit patched to raise, the open failed. Now 5/5 nodes and 2/2 frames, and "could not
+      fit the view: ..." after "opened".
+    - **Fix:** the default view fits the rectangle around every node and frame (`_whole_graph_rect`),
+      and a failed fit is printed, not raised; AGENTS.md says nodes and frames.
+  - Questioned by HLP-38, HLP-39 (2026-10-30).
+
+- [x] **HLP-36 · `export_outputs`: names differing only in case collide, and a pure typo lists nothing** · `mcp_server/designer_helpers.py` (`export_outputs`) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** The duplicate check is case-sensitive, but `baseColor` and `basecolor` write one file on
+    the default macOS and Windows file systems; and when no requested name matches, "no outputs
+    exported" is raised before the new line listing the outputs. Found by a reviewer. Questions HLP-34's
+    resolution.
+  - **Fix.** Compare identifiers case-insensitively; put the outputs in that error too.
+  - **Resolution: done** (commit `b208dff`).
+    - **Test:** live: outputs `Height` and `height` were both "exported" (one file on this disk), and a
+      typo-only request said "no outputs exported (names ['heigth'])" alone.
+    - **Fix:** duplicates are compared ignoring case; the no-match error lists the outputs there are.
+
+- [x] **HLP-37 · If deleting the half-made node fails, `add_node` reports the wrong error** · `mcp_server/designer_helpers.py` (`add_node`) · plausible · found 2026-10-30
+  - **Defect.** An exception from `g.deleteNode` replaces the `set_params` error and the node stays.
+    Found by a reviewer. Questions HLP-30's resolution.
+  - **Fix.** Delete in its own `try` and report both.
+  - **Resolution: done** (commit `b208dff`).
+    - **Test:** live, with `deleteNode` patched to fail: only "delete failed on purpose" came back.
+    - **Fix:** the removal has its own `try`; the error then gives the parameter error, says the node
+      could not be removed and names it.
+  - Questioned by TST-73 (2026-10-30).
+
+- [x] **TST-66 · AGENTS.md's `discard_unsaved` wording suggests it can be aimed at some packages** · `AGENTS.md` (Working on this project) · confirmed · found 2026-10-30
+  - **Defect.** "Never pass `discard_unsaved=True` for packages that aren't the self-test's own" — the
+    flag drops every unsaved package, and the `quit_designer` docstring says "only when the user said
+    so". Found by a reviewer.
+  - **Fix.** "Unless the user said so, or every unsaved package it lists is the self-test's own"; the
+    docstring to match.
+  - **Resolution: done** (commit `b208dff`).
+    - **Fix:** AGENTS.md (both places) and the `quit_designer` docstring say the flag drops every unsaved
+      package, so only when the user said so or every package listed is the self-test's own.
+
+- [x] **TST-69 · The HLP-33 check asks for a save it doesn't need** · `tests/test_all_tools.py` (`package_file_of(None, save=True)`) · confirmed · found 2026-10-30
+  - **Defect.** If the refusal ever regressed (or the check ran before the fix), it would save a Designer
+    library package into Designer's install folder. Found by a reviewer. Questions HLP-33's resolution.
+  - **Fix.** `save=False`: the refusal comes before the save, and without it the check still fails.
+  - **Resolution: done** (commit `b208dff`).
+    - **Fix:** the check calls `package_file_of(None, save=False)`; the refusal comes first either way.
+
+- [x] **TST-70 · The Home-screen fact fails when Designer starts without Home** · `tests/test_all_tools.py` (Home-screen designer fact) · plausible · found 2026-10-30
+  - **Defect.** `leave_home_screen` prints nothing when no Home shows, so the check fails instead of
+    skipping (if Designer can be set not to show Home). Found by a reviewer. Questions TST-64's
+    resolution.
+  - **Fix.** Skip when `launch_designer` printed no panel count.
+  - **Resolution: done** (commit `b208dff`).
+    - **Fix:** the check is skipped when `launch_designer` closed no Home screen.
+  - Questioned by TST-71 (2026-10-30).
+
+- [x] **TST-72 · The PLG-24 unit test doesn't check that its abort fired** · `tests/unit/test_plugin.py` (`test_an_abort_anywhere_in_a_write_keeps_the_output_written_before`) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** If the tracer never fired (another code object, a tracer set elsewhere), every write would
+    finish and the assertion would hold; and it ends with `sys.settrace(None)`, not the tracer that was
+    set before. Found by a reviewer. Questions PLG-24's resolution.
+  - **Fix.** Record and assert the abort for each line; restore `sys.gettrace()`'s value.
+  - **Resolution: done** (commit `58d507f`).
+    - **Fix:** the test asserts the abort fired on every line and restores the tracer that was set before.
+
+- [x] **TST-73 · The HLP-37 check leaves an attribute on `SDSBSCompGraph` in a running Designer** · `tests/test_all_tools.py` (HLP-37 check) · confirmed · verified by hand · found 2026-10-30
+  - **Defect.** `deleteNode` is defined on `SDGraph` (`sd/api/sdgraph.py`), so assigning the inherited
+    function back creates a class attribute that stays in a Designer that keeps running (harmless in
+    behaviour). Found by a reviewer. Questions HLP-37's resolution.
+  - **Fix.** Delete the attribute afterwards when the class didn't have its own.
+  - **Resolution: done** (commit `58d507f`).
+    - **Fix:** the check deletes the patched attribute afterwards, so `SDGraph.deleteNode` is what
+      `SDSBSCompGraph` uses again.
+
+- [x] **HLP-39 · The default fit covers frames but not comments** · `mcp_server/designer_helpers.py` (`_whole_graph_rect`) · confirmed · found 2026-10-30
+  - **Defect.** HLP-35 named comments outside the nodes too; a free comment away from the nodes is still
+    cut off. Found by a reviewer. Questions HLP-35's resolution.
+  - **Fix.** Include comments (their positions, sizes where they have them), or say frames only.
+  - **Resolution: done** (commit `58d507f`).
+    - **Test:** live: a free comment at (2500, -1500) stayed out of view after `open_graph`; now inside
+      ("the whole graph (5 node(s), 2 frame(s), 2 comment(s))").
+    - **Fix:** `_whole_graph_rect` includes free comments by position (they have no size; a comment
+      attached to a node sits with it); AGENTS.md says nodes, frames and free comments.
+
+- [x] **SRV-31 · `server.py`'s docstring says it re-exports what the modules define; it copies every binding** · `mcp_server/server.py:8-11, 19-20` · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** "every name those modules define is re-exported here", but the loop copies every
+    non-dunder binding, imports included (`os`, `np`, `ToolError`, `_bridge` from each importer), and leaves
+    `_module` behind. Harmless today: a reviewer checked that no name is bound to different objects in two
+    modules. Found by a reviewer.
+  - **Scenario.** A reader takes `server.X` to exist only for names a module defines.
+  - **Fix.** Say "every name bound in those modules (definitions and imports)"; optionally `del _module`.
+  - **Resolution: done** (commit `8d716d3`).
+    - **Test:** none for wording; the unit suite (which imports `server` and starts it over stdio) passes.
+    - **Fix:** the docstring says every name bound in the modules (definitions and the names they import) is
+      re-exported, and the loop's `_module` is deleted afterwards.
+
+- [x] **TST-75 · The "no name defined by two parts" test sees only defs, classes and plain assignments** · `tests/unit/test_designer_helpers.py` (`test_no_name_is_defined_by_two_parts`) · confirmed · found 2026-10-31
+  - **Defect.** It collects `FunctionDef`, `ClassDef` and `Assign` to plain names only, so an `async def`,
+    an import alias, an annotated or tuple assignment, or a definition inside a top-level `try`/`if` in
+    two parts goes unnoticed, though the test's comment says a second definition would silently replace
+    the first. None exists today (a reviewer's wider check found none). Found by a reviewer.
+  - **Scenario.** Two parts both do `try: from PySide6 ... import X`-style definitions of one name with
+    different values: the later one wins in Designer and the test passes.
+  - **Fix.** Collect every top-level store (names, import aliases, def/class names, nested in `try`/`if`).
+  - **Resolution: done** (commit `8d716d3`).
+    - **Test:** `test_the_checks_below_can_fail` (`tests/unit/test_designer_helpers.py`) feeds the check an
+      import alias in a `try` and an `async def` of the same name, and a tuple and an annotated target: each
+      is reported. The old test collected neither.
+    - **Cause:** the test listed only `FunctionDef`, `ClassDef` and plain-name `Assign` statements.
+    - **Fix:** `_bindings()` collects every name a top-level statement binds (def/class names, import
+      aliases, any assignment target, `except ... as`), also inside a top-level `try`/`if`/`with`/`for`, and
+      `test_no_name_is_defined_by_two_parts` uses it.
+
+- [x] **TST-76 · "Nothing else depends on the order" of the helper parts is untested, and the core check leans on a docstring** · `mcp_server/designer_helpers/__init__.py` (docstring), `tests/unit/test_designer_helpers.py` (`test_core_comes_first_and_defines_what_the_others_use_at_load_time`) · confirmed · found 2026-10-31
+  - **Defect.** The test takes core as the joined text up to the next part's docstring
+    (`source().split('\n\n"""', 1)[0]`), so if that part lost its docstring the slice would run into later
+    parts and pass with `_APP`/`_PM` moved out of core; and no test checks that no part's load-time code
+    (module statements, defaults, decorators) uses a later part's name, as the docstring claims. True
+    today (a reviewer checked). Found by a reviewer.
+  - **Scenario.** A part gets a module-level dict built from a later part's function: it breaks only in
+    Designer, at the first tool call.
+  - **Fix.** Read `core.py` itself in the test; add the load-time check, or narrow the docstring to "core
+    comes first".
+  - **Resolution: done** (commit `8d716d3`).
+    - **Test:** `test_the_checks_below_can_fail` feeds the load-time check a module-level dict, a decorator
+      and a default value that use names a later part binds: all three are reported; a comprehension's own
+      variable isn't.
+    - **Cause:** core was taken as the joined text up to the next docstring, and the claim about the order
+      had no check.
+    - **Fix:** `test_core_comes_first_and_nothing_else_depends_on_the_order` reads `core.py` itself for `sd`,
+      `_APP`, `_PM`, and checks with `_used_before_bound()` that no part reads at load time (module or class
+      level, decorators, defaults) a name not yet bound by an earlier part or earlier in its own.
+
+- [x] **TST-77 · `test_the_server_sends_the_joined_parts` can't fail** · `tests/unit/test_designer_helpers.py` (`test_the_server_sends_the_joined_parts`) · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** `server.HELPERS` is defined as `_helpers_source()` (`server_tools/core.py:47`), so
+    `server.HELPERS == designer_helpers.source()` holds by construction; what a tool actually sends
+    (`HELPERS + '\n\n' + call`) isn't checked. Found by a reviewer.
+  - **Scenario.** A change that sends something else ahead of the call (a stale copy, a part left out of
+    `HELPERS` but not of `source()`) keeps this test green.
+  - **Fix.** Patch `_bridge` and check that the code a tool sends starts with `source()`; or rename the test
+    to what it checks.
+  - **Resolution: done** (commit `8d716d3`).
+    - **Test:** `test_tools_send_the_joined_parts_ahead_of_their_call` captures what `describe_graph` and
+      `add_node` (a quick edit, whose script is the argument of `compile()` inside an undo group) send to the
+      bridge. With `HELPERS` replaced by a copy missing its last part, it failed; with the real one it passes.
+    - **Cause:** the old test compared `server.HELPERS` with `source()`, which it is defined as.
+    - **Fix:** the test checks that both kinds of call start with `source()` and then the tool's call.
+
+- [x] **TST-78 · The load-time check misses annotations and misreads class bodies · follows TST-76, generation 2** · `tests/unit/test_designer_helpers.py` (`_load_time_uses`) · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** It visits decorators and defaults of a `def` but not its annotations, which Python also
+    evaluates at load time; and it walks a class body as module code, so a class attribute read later in
+    the same body counts as an unbound name. Measured with the test's own helpers: `def f(x: Later) -> Later2`
+    before `Later` is bound gives no report; `class A: X = 1; Y = X` reports `X`. No part has annotations or
+    classes today. Questions TST-76's resolution, which says no part reads at load time a name not yet bound.
+  - **Scenario.** A part gains a typed signature using a later part's name: it breaks only in Designer,
+    while `test_core_comes_first_and_nothing_else_depends_on_the_order` passes. Or a part gains a class
+    with a constant reused in its body: the test fails though the script is fine.
+  - **Fix.** Visit argument and return annotations with the decorators and defaults; inside a class body,
+    count the class's own earlier bindings as bound.
+  - **Resolution: done** (commit `f96d48e`).
+    - **Test:** two cases added to `test_the_checks_below_can_fail`: a signature whose argument, `*args`,
+      keyword-only and return annotations use names a later part binds, and a class body reusing its own
+      attribute. Before the fix the first reported nothing (`[] == [('a', 'Back'), ...]`); now it reports
+      all four, and the class body reports only its base and the later name, not its own attribute.
+    - **Cause:** `_load_time_uses` took only decorators and defaults from a `def`, and walked a class body
+      like module code, without its own scope.
+    - **Fix:** it also visits every parameter annotation and the return annotation, and goes through a
+      class body statement by statement, counting the class's own earlier bindings as bound (bases,
+      keywords and decorators are read as before).
+
+- [x] **TST-79 · A `.DS_Store` written by Finder fails the plugin-folder checks** · `tests/unit/test_constants.py` (`test_plugin_folders_match_the_constant`), `tests/test_all_tools/bridge.py` (installed plugin check) · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** The unit test compared `os.listdir('plugin')` with `[PLUGIN]` exactly, and the self-test compares
+    the repo's plugin package with the installed copy ignoring only `__pycache__`; macOS Finder writes a
+    `.DS_Store` into any folder it shows (git ignores it). Found while setting up PyCharm: browsing folders in
+    its file dialog left `.DS_Store` files in `plugin/` and `plugin/sd_claude_bridge_kve/`.
+  - **Scenario.** After a Finder visit the unit suite fails with "Left contains one more item: '.DS_Store'"; one
+    in the package folder would make the self-test report the installed plugin as stale.
+  - **Fix.** Leave hidden files out of the folder listing; ignore `.DS_Store` in the comparison.
+  - **Resolution: done** (commit `18f275d`).
+    - **Test:** the unit test itself failed with the `.DS_Store` present; `filecmp.dircmp` on a temporary copy
+      with a `.DS_Store` only in the repo's side reported `['.DS_Store']` with the old ignore list, `[]` with
+      the new one.
+    - **Cause:** both checks assumed the folders hold only what the repo tracks.
+    - **Fix:** the unit test lists `plugin/` without hidden files; the self-test's comparison ignores
+      `.DS_Store` as well as `__pycache__`.
+
+- [x] **HLP-40 · After the helpers split, editors can't resolve the names a part takes from the others** · `mcp_server/designer_helpers/` (every part but `core`) · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** The parts share one namespace only once joined, so each part read `find_graph`, `_APP`,
+    `SDPropertyCategory`... without importing them; PyCharm, checking each file alone, reported every such
+    name as unresolved (dozens per part). In the single file it had resolved them, so a misspelled name in a
+    helper showed in the editor; after the split it showed nowhere until Designer ran it. Found by the user.
+  - **Scenario.** A typo in a helper's body passes every unit test and fails only inside Designer, on the
+    first call that reaches it; meanwhile the real names are all flagged red.
+  - **Fix.** Explicit imports of other parts, dropped when the parts are joined, kept exact by a test.
+  - **Resolution: done** (commit `18f275d`).
+    - **Test:** `test_each_part_imports_what_it_uses_from_the_others` (`tests/unit/test_designer_helpers.py`)
+      reads, scope by scope (`symtable`), the global names each part uses, and fails on a name not imported
+      from the part that defines it, an import not used, or a name no part defines;
+      `test_the_import_check_can_fail` shows each of the three on small parts. The first run of the real
+      check found one import the generating script had missed (`SDSBSCompGraph` in `editor.py`).
+    - **Fix:** each part starts with `from .<part> import ...` for what it uses from the others;
+      `part_source()` (in `__init__.py`) drops those statements and `source()` joins the rest, so the script
+      sent to Designer is byte-for-byte what it was (compared). PyCharm reports no unresolved names in any
+      part. Related, in the tests: modules loaded from a file are patched with
+      `monkeypatch.setitem(vars(module), ...)`, whose key PyCharm doesn't check (it checks `setattr`'s name
+      against the fixture function and reported each as missing), standard modules are patched directly,
+      and `client` is a PyCharm source root (AGENTS.md, Working on this project).
+  - Questioned by TST-80 (2026-10-31).
+
+- [x] **TST-80 · The helpers' import check misses a part import written inside a function** · `tests/unit/test_designer_helpers.py` (`test_each_part_imports_what_it_uses_from_the_others`) · follows HLP-40, generation 2 · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** `part_source()` drops only top-level `from .<part> import ...`, and both halves of the test
+    look only at `tree.body`; `_import_mismatches([('core', 'X = 1'), ('b', 'def g():\n    from .core import X\n    return X')])`
+    returns `[]`. Found by two reviewers (helpers, unit tests).
+  - **Scenario.** A part import moved into a function body (the parts already import `time`, `json`
+    inside functions) passes the unit tests, mypy and ruff, stays in the joined script, and fails in
+    Designer the first time that function runs ("attempted relative import with no known parent
+    package"). None exists today.
+  - **Fix.** The second assertion walks the whole joined script (`ast.walk`) and refuses any
+    `ImportFrom` with `level >= 1`.
+  - **Resolution: done** (commit `c73b98c`).
+    - **Test:** `test_the_import_check_can_fail` now has the finding's sample (a part import inside a
+      function): `_import_mismatches` returns `[]` for it, and so did the old top-level assertion
+      (`is_part_import` over `tree.body`: False); the new `_relative_imports` finds `.core (line 2)`.
+    - **Cause:** both halves of the check looked only at top-level statements, as `part_source()` does.
+    - **Fix:** `test_each_part_imports_what_it_uses_from_the_others` asserts that the joined script has no
+      relative import at any depth (`_relative_imports`, an `ast.walk`).
+
+- [x] **TST-81 · HLP-41's `sweep_param` check: the "value kept" half can't fail** · `tests/test_all_tools/safeguards.py` (the `view_node 'graph'` check) · follows HLP-41, generation 2 · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** It compares `describe_graph` text before and after, but `describe_graph` prints parameter
+    values only with `include_params=True` (`describe.py`, `if include_params:`), so the texts match
+    whatever `scale` is; and before the fix `sweep_param`'s own `finally` restored the value anyway. Only
+    `refused in text(r_)` fails without the fix. HLP-41's resolution repeats the claim ("nothing changed
+    (... the swept value)"). Found by two reviewers (self-test, helpers).
+  - **Scenario.** A regression that sets the value before refusing and doesn't restore it still passes
+    that half.
+  - **Fix.** Narrow it: name the check "view_node 'graph' is refused" and drop the `describe_graph`
+    comparison (with the fix, the view is resolved before anything is set).
+  - **Resolution: done** (commit `c73b98c`).
+    - **Test:** the finding's reading confirmed: `describe_graph` without `include_params` prints no
+      values, so the comparison held either way; the refusal message alone separates the fixed code.
+    - **Fix:** narrowed, as the follow-up rule asks: the check is "view_node 'graph' is refused" and the
+      `describe_graph` comparison is gone. This also takes back "the swept value" in HLP-41's resolution.
+      Self-test 295/295.
+
+- [x] **TST-82 · `test_types.py`'s docstring says the relaxed check "still checks everything else"** · `tests/unit/test_types.py:5-7` · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** Without Designer the test passes `--no-warn-unused-ignores --no-warn-return-any` for the
+    whole repository (`relaxed = [] if 'sd' in packages else [...]`), not only for the Designer-side code.
+  - **Scenario.** On a machine without Designer, a stale `type: ignore` or an Any return in the server,
+    the client or the tests goes unreported, although the docstring says the rest is still checked.
+  - **Fix.** Narrow the sentence: those two warnings are dropped for the whole repository there.
+  - **Resolution: done** (commit `c73b98c`).
+    - **Fix:** the docstring now says that without Designer the two warnings (unused ignores, Any
+      returns) are dropped for the whole repository, the rest of strict mode kept.
+
+- [x] **SRV-32 · Two comments no longer sit next to the code they describe after the reformat** · `mcp_server/server_tools/lifecycle.py:10`, `mcp_server/server_tools/output.py:105` · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** Ruff's import sorting moved `from project_constants import PLUGIN  # on sys.path once
+    .core is imported` above the `.core` import (it works because `server_tools/__init__.py` imports
+    `.core` first); and splitting `render_sbs`'s command list left `# render_sbs checked SBSRENDER`, which
+    explains the `cast(str, SBSRENDER)`, on the `output_dir` line.
+  - **Scenario.** A reader trusts the import comment and the order it describes, or wonders what the
+    `output_dir` comment refers to.
+  - **Fix.** Reword the import comment (the package `__init__` imports `.core` first) and move the other
+    to the `cast` line.
+  - **Resolution: done** (commit `c73b98c`).
+    - **Fix:** the `project_constants` import's comment says why it works where it now stands (the
+      package `__init__` imports `.core` first); `# render_sbs checked SBSRENDER` is back on the
+      `cast(str, SBSRENDER)` line.

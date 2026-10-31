@@ -1,0 +1,34 @@
+# Linting and formatting for every Python file in the repository (tests/unit/test_lint.py runs both).
+#   mcp_server/venv/bin/ruff check .      lint (--fix applies the safe fixes)
+#   mcp_server/venv/bin/ruff format .     format
+target-version = "py310"
+line-length = 120
+extend-exclude = ["mcp_server/venv"]
+
+[lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes: unused imports and names, undefined names
+    "I",        # import order
+    "B",        # bugbear: likely bugs
+    "UP",       # newer syntax for the minimum Python (3.10)
+    "SIM",      # simplifications
+    "C4",       # comprehensions
+    "PIE",      # misc. lints
+    "RUF",      # ruff's own
+]
+ignore = [
+    "UP031",    # %-formatting is this project's style
+    "E501",     # line length: the formatter wraps code; long strings stay as written
+    "E741",     # `l` as a name (lines, links) is used throughout
+    "SIM105",   # an explicit try/except/pass over contextlib.suppress
+]
+
+[lint.isort]
+# imported by bare name through sys.path entries (mypy.ini's mypy_path lists the same folders)
+known-first-party = ["project_constants", "server", "server_tools", "designer_helpers", "test_all_tools",
+                     "conftest", "sd_run"]
+combine-as-imports = true
+
+[format]
+quote-style = "single"

@@ -8,6 +8,11 @@ Installer for the Substance Designer bridge plugin + MCP server (macOS and Windo
 Run it with a Python 3.10+ interpreter. Re-running is safe (it updates in place).
 uninstall.py undoes all of it.
 """
+
+# Annotations stay unevaluated: this script must run, or refuse with a message, on the system Python,
+# which can be older than 3.10 (REVIEW.md INS-25)
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -19,6 +24,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from project_constants import PLUGIN, PLUGIN_DIR  # noqa: E402  (the plugin's name lives there)
+
 SERVER_NAME = 'substance-designer'
 # Before the rename the plugin was "sd_bridge" with its token in ~/.sd_bridge_token. Both copies
 # loaded together fight over the port, so an old copy of *this* plugin is removed.
@@ -32,31 +38,31 @@ OLD_TOKEN = os.path.join(os.path.expanduser('~'), '.sd_bridge_token')
 SKILL_MARKER = '<!-- Written by substance-designer-mcp install.py; uninstall.py removes it. -->'
 
 
-def claude_config_dir():
+def claude_config_dir() -> str:
     return os.environ.get('CLAUDE_CONFIG_DIR') or os.path.join(os.path.expanduser('~'), '.claude')
 
 
-def default_skills_dir():
+def default_skills_dir() -> str:
     return os.path.join(claude_config_dir(), 'skills')
 
 
-def register_args(py, server):
+def register_args(py: str, server: str) -> list[str]:
     return ['claude', 'mcp', 'add', '--scope', 'local', SERVER_NAME, '--', py, server]
 
 
-def register_command(py, server):
+def register_command(py: str, server: str) -> str:
     """For the user's own terminal (cmd/PowerShell quoting on Windows)."""
     return subprocess.list2cmdline(register_args(py, server))
 
 
-def shell_command(args):
+def shell_command(args: list[str]) -> str:
     """For Claude Code's Bash tool, a POSIX shell on every platform (Git Bash on Windows): quoted,
     with forward slashes, since that shell drops unquoted backslashes."""
     return shlex.join(a.replace('\\', '/') if sys.platform == 'win32' else a for a in args)
 
 
-def skill_text(py, server):
-    return '''---
+def skill_text(py: str, server: str) -> str:
+    return """---
 name: %(name)s
 description: Use when the user asks for work in Adobe Substance 3D Designer (materials, node graphs, .sbs or .sbsar files, trim sheets) and this session has no mcp__%(name)s__* tools, not even deferred ones. Explains how to enable the local %(name)s MCP server in the current folder.
 ---
@@ -88,12 +94,18 @@ Otherwise:
 
 To disable it here again: `claude mcp remove %(name)s -s local`. To remove everything (plugin,
 token, this skill, every folder's registration): `%(uninstall)s`.
-''' % {'name': SERVER_NAME, 'marker': SKILL_MARKER, 'repo': HERE, 'cmd': shell_command(register_args(py, server)),
-       'uninstall': shell_command((['py', '-3'] if sys.platform == 'win32' else ['python3'])
-                                  + [os.path.join(HERE, 'uninstall.py')])}
+""" % {
+        'name': SERVER_NAME,
+        'marker': SKILL_MARKER,
+        'repo': HERE,
+        'cmd': shell_command(register_args(py, server)),
+        'uninstall': shell_command(
+            (['py', '-3'] if sys.platform == 'win32' else ['python3']) + [os.path.join(HERE, 'uninstall.py')]
+        ),
+    }
 
 
-def is_our_skill(folder):
+def is_our_skill(folder: str) -> bool:
     try:
         with open(os.path.join(folder, 'SKILL.md'), encoding='utf-8') as f:
             return SKILL_MARKER in f.read()
@@ -101,7 +113,7 @@ def is_our_skill(folder):
         return False
 
 
-def install_skill(skills_dir, py, server):
+def install_skill(skills_dir: str, py: str, server: str) -> str | None:
     """Write <skills_dir>/substance-designer/SKILL.md, unless that folder holds someone else's skill."""
     folder = os.path.join(skills_dir, SERVER_NAME)
     if os.path.exists(folder) and not is_our_skill(folder):
@@ -114,42 +126,59 @@ def install_skill(skills_dir, py, server):
     return path
 
 
-def default_plugins_dir():
+def default_plugins_dir() -> str:
     # Designer's default user plugin path on both platforms
     docs = os.path.join(os.path.expanduser('~'), 'Documents')
     return os.path.join(docs, 'Adobe', 'Adobe Substance 3D Designer', 'python', 'sduserplugins')
 
 
-def venv_python(venv):
+def venv_python(venv: str) -> str:
     if sys.platform == 'win32':
         return os.path.join(venv, 'Scripts', 'python.exe')
     return os.path.join(venv, 'bin', 'python')
 
 
-def is_our_plugin(folder):
+def venv_runs(py: str) -> bool:
+    """True when the venv's Python exists and starts."""
+    if not os.path.exists(py):
+        return False
+    try:
+        subprocess.check_output([py, '--version'], stderr=subprocess.STDOUT)
+        return True
+    except (OSError, subprocess.CalledProcessError):
+        return False
+
+
+def is_our_plugin(folder: str) -> bool:
     """True when an installed plugin folder is this project's: its pluginInfo.json names the same
     plugin as the repo's (the installer and the uninstaller both decide by this)."""
     try:
-        with open(os.path.join(folder, 'pluginInfo.json'), encoding='utf-8') as f, \
-                open(os.path.join(PLUGIN_DIR, 'pluginInfo.json'), encoding='utf-8') as g:
-            return json.load(f).get('name') == json.load(g).get('name')
+        with (
+            open(os.path.join(folder, 'pluginInfo.json'), encoding='utf-8') as f,
+            open(os.path.join(PLUGIN_DIR, 'pluginInfo.json'), encoding='utf-8') as g,
+        ):
+            return bool(json.load(f).get('name') == json.load(g).get('name'))
     except (OSError, ValueError):
         return False
 
 
-def install_plugin(src, dst):
+def install_plugin(src: str, dst: str) -> None:
     """Copy the plugin to dst, replacing this project's earlier copy (a fresh copy drops files an
     older version had). Copied beside it first and swapped in, so a failing copy leaves the
     installed plugin as it was; a folder of the same name that isn't ours is refused."""
     if os.path.isdir(dst) and not is_our_plugin(dst):
-        sys.exit('%s exists but is not this project\'s plugin (its pluginInfo.json differs); move it '
-                 'away and run the installer again' % dst)
+        sys.exit(
+            "%s exists but is not this project's plugin (its pluginInfo.json differs); move it "
+            'away and run the installer again' % dst
+        )
     new, old = dst + '.new', dst + '.old'
     for leftover in (new, old):
         if os.path.isdir(leftover):
             if not is_our_plugin(leftover):
-                sys.exit('%s exists but is not this project\'s (or is a partly deleted copy); move it away '
-                         'and run the installer again' % leftover)
+                sys.exit(
+                    "%s exists but is not this project's (or is a partly deleted copy); move it away "
+                    'and run the installer again' % leftover
+                )
             shutil.rmtree(leftover)
     try:
         shutil.copytree(src, new, ignore=shutil.ignore_patterns('__pycache__'))
@@ -178,23 +207,23 @@ def install_plugin(src, dst):
         print('Note: could not remove %s (the previous plugin); delete it by hand' % old)
 
 
-def is_old_plugin(folder):
+def is_old_plugin(folder: str) -> bool:
     """True if <folder> is this project's plugin from before the rename (its pluginInfo.json name)."""
     try:
         with open(os.path.join(folder, 'pluginInfo.json'), encoding='utf-8') as f:
-            return json.load(f).get('name') == OLD_PLUGIN_NAME
+            return bool(json.load(f).get('name') == OLD_PLUGIN_NAME)
     except (OSError, ValueError):
         return False
 
 
-def remove_old_plugin(plugins_dir):
+def remove_old_plugin(plugins_dir: str) -> None:
     """Delete <plugins_dir>/sd_bridge and the old token, but only if that folder is this
     project's plugin; anything else called sd_bridge is left alone."""
     old = os.path.join(plugins_dir, OLD_PLUGIN)
     if not os.path.isdir(old):
         return
     if not is_old_plugin(old):
-        print('      Note: %s exists but is not this project\'s old plugin; left as it is.' % old)
+        print("      Note: %s exists but is not this project's old plugin; left as it is." % old)
         return
     shutil.rmtree(old)
     print('      Removed the old plugin (renamed to %s): %s' % (PLUGIN, old))
@@ -203,15 +232,16 @@ def remove_old_plugin(plugins_dir):
         print('      Removed its old token file: %s' % OLD_TOKEN)
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument('--plugins-dir', default=default_plugins_dir())
-    ap.add_argument('--skills-dir', default=default_skills_dir(),
-                    help='Claude Code user skills folder (default: ~/.claude/skills)')
+    ap.add_argument(
+        '--skills-dir', default=default_skills_dir(), help='Claude Code user skills folder (default: ~/.claude/skills)'
+    )
     ap.add_argument('--no-skill', action='store_true', help="don't add the Claude Code skill")
     args = ap.parse_args()
 
-    if sys.version_info < (3, 10):
+    if sys.version_info < (3, 10):  # noqa: UP036 (install.py is run by whatever python3 is installed)
         sys.exit('Python 3.10+ is required (found %s)' % sys.version.split()[0])
 
     # 1. Designer plugin
@@ -224,13 +254,16 @@ def main():
 
     # 2. Virtual environment for the MCP server
     venv = os.path.join(HERE, 'mcp_server', 'venv')
-    if not os.path.exists(venv_python(venv)):
-        subprocess.check_call([sys.executable, '-m', 'venv', venv])
     py = venv_python(venv)
+    if not venv_runs(py):
+        # also a venv whose Python was removed or upgraded: its python is a dead link (or, on Windows,
+        # points at a missing home), and `-m venv` over it keeps that unless told to clear it (INS-23)
+        subprocess.check_call([sys.executable, '-m', 'venv'] + (['--clear'] if os.path.isdir(venv) else []) + [venv])
     subprocess.check_call([py, '-m', 'pip', 'install', '-q', '--upgrade', 'pip'])
-    subprocess.check_call([py, '-m', 'pip', 'install', '-q', '-r',
-                           os.path.join(HERE, 'mcp_server', 'requirements.txt')])
-    try:   # which Python the server runs on (the one that ran this installer, when it made the venv)
+    subprocess.check_call(
+        [py, '-m', 'pip', 'install', '-q', '-r', os.path.join(HERE, 'mcp_server', 'requirements.txt')]
+    )
+    try:  # which Python the server runs on (the one that ran this installer, when it made the venv)
         version = subprocess.check_output([py, '--version'], text=True).strip()
     except (OSError, subprocess.CalledProcessError):
         version = 'Python version unknown'
@@ -239,9 +272,18 @@ def main():
     # 3. Registration: never global. This repo's .mcp.json registers the server for this folder
     # (Claude Code asks once to approve it); other folders opt in one by one.
     server = os.path.join(HERE, 'mcp_server', 'server.py')
-    print('[3/4] Not registered globally. In this folder, .mcp.json registers it: start `claude` here and\n'
-          '      approve "substance-designer" when asked. To use it in another folder, run there:\n'
-          '      %s' % register_command(py, server))
+    if sys.platform == 'win32':
+        # .mcp.json runs `sh`, which Windows may not have, so a folder registers itself (INS-24)
+        print(
+            '[3/4] Not registered globally. To use it in this folder, or any other, run there:\n'
+            '      %s' % register_command(py, server)
+        )
+    else:
+        print(
+            '[3/4] Not registered globally. In this folder, .mcp.json registers it: start `claude` here and\n'
+            '      approve "substance-designer" when asked. To use it in another folder, run there:\n'
+            '      %s' % register_command(py, server)
+        )
 
     # 4. The skill: lets sessions in other folders know about the server (and how to register it)
     if args.no_skill:
@@ -249,8 +291,10 @@ def main():
     else:
         path = install_skill(args.skills_dir, py, server)
         if path:
-            print('[4/4] Claude Code skill added: %s\n'
-                  '      Sessions in other folders now know this server exists and offer to enable it.' % path)
+            print(
+                '[4/4] Claude Code skill added: %s\n'
+                '      Sessions in other folders now know this server exists and offer to enable it.' % path
+            )
     print('\nDone. Restart Substance Designer so it loads the plugin, then restart Claude Code.')
 
 

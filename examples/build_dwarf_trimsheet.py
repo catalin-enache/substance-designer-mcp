@@ -23,36 +23,62 @@ Layout (pixels from the top, all strips tile horizontally):
     J 1600-1664  round-ish bead
     K 1664-2048  wood planks (3 rows)
 """
+
 import os
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
+from typing import Any, TypedDict, cast
+
 import sd
+from sd.api.apiexception import APIException
 from sd.api.sbs.sdsbscompgraph import SDSBSCompGraph
-from sd.api.sdbasetypes import float2, float4, int2, ColorRGBA
-from sd.api.sdproperty import SDPropertyCategory, SDPropertyInheritanceMethod
-from sd.api.sdapplication import SDApplicationPath
+from sd.api.sbs.sdsbscompnode import SDSBSCompNode
+from sd.api.sdapplication import SDApplication, SDApplicationPath
+from sd.api.sdbasetypes import ColorRGBA, float2, float4, int2
+from sd.api.sddefinition import SDDefinition
+from sd.api.sdgraphobjectframe import SDGraphObjectFrame
+from sd.api.sdnode import SDNode
+from sd.api.sdpackage import SDPackage
+from sd.api.sdproperty import SDProperty, SDPropertyCategory, SDPropertyInheritanceMethod
+from sd.api.sdresource import SDResource
+from sd.api.sdtypeenum import SDTypeEnum
+from sd.api.sdtypeusage import SDTypeUsage
+from sd.api.sdusage import SDUsage
+from sd.api.sdvalue import SDValue
+from sd.api.sdvaluearray import SDValueArray
+from sd.api.sdvaluebool import SDValueBool
+from sd.api.sdvaluecolorrgba import SDValueColorRGBA
+from sd.api.sdvalueenum import SDValueEnum
 from sd.api.sdvaluefloat import SDValueFloat
 from sd.api.sdvaluefloat2 import SDValueFloat2
 from sd.api.sdvaluefloat4 import SDValueFloat4
 from sd.api.sdvalueint import SDValueInt
 from sd.api.sdvalueint2 import SDValueInt2
-from sd.api.sdvaluebool import SDValueBool
-from sd.api.sdvaluecolorrgba import SDValueColorRGBA
-from sd.api.sdvalueenum import SDValueEnum
 from sd.api.sdvaluestring import SDValueString
-from sd.api.sdvaluearray import SDValueArray
 from sd.api.sdvalueusage import SDValueUsage
-from sd.api.sdtypeusage import SDTypeUsage
-from sd.api.sdusage import SDUsage
-from sd.api.sdtypeenum import SDTypeEnum
-from sd.api.sdgraphobjectframe import SDGraphObjectFrame
-from sd.api.apiexception import APIException
+from sd.context import Context
 
 ERRORS = (Exception, APIException)
+
+RGBA = tuple[float, float, float, float]
+# What Builder.set accepts: a bool, int or float, an int2 / float2, or a colour / float4 (3 or 4 numbers)
+Param = bool | int | float | tuple[float, ...]
+# (source node, source output id, target node, target input id)
+Link = tuple[SDNode, str, SDNode, str]
+
+
+class Section(TypedDict):
+    title: str
+    column: int
+    color: RGBA
+    description: str | None
+    nodes: list[SDNode]
+
 
 OUT_SBS = os.path.join(os.path.expanduser('~'), 'Documents', 'dwarf_trimsheet', 'dwarf_trimsheet.sbs')
 GRAPH_ID = 'dwarf_trimsheet'
 SIZE_LOG2 = 11
-H = 2 ** SIZE_LOG2
+H: int = 2**SIZE_LOG2
 
 # Atomic blend modes
 COPY, ADD, SUBTRACT, MULTIPLY, MAX, MIN = 0, 1, 2, 3, 5, 6
@@ -61,7 +87,7 @@ SQUARE = 2
 
 BEVEL_DIST = 0.04
 NORMAL_INTENSITY = 6.0
-NORMAL_OPENGL = True        # Blender expects OpenGL normals
+NORMAL_OPENGL = True  # Blender expects OpenGL normals
 
 STONE_LIGHT = (0.62, 0.60, 0.56)
 STONE_DARK = (0.42, 0.40, 0.37)
@@ -72,11 +98,11 @@ CAVITY = (0.08, 0.07, 0.06)
 STONE_ROUGH, WOOD_ROUGH = 0.86, 0.68
 
 # Graph layout (graph units; a node is 96x96 and positions are node centres)
-NODE, DX, DY = 96.0, 200.0, 150.0      # node size, column and row spacing inside a section
-MARGIN, TITLE_BAR = 40.0, 30.0         # frame padding around its nodes, room for the frame title
+NODE, DX, DY = 96.0, 200.0, 150.0  # node size, column and row spacing inside a section
+MARGIN, TITLE_BAR = 40.0, 30.0  # frame padding around its nodes, room for the frame title
 SECTION_GAP, COLUMN_GAP = 80.0, 240.0  # between stacked frames, between columns of frames
-PORTAL_LONGER_THAN = 1000.0            # a link between sections longer than this becomes a portal,
-PORTAL_FANOUT = 4                      # and so does one from an output feeding this many inputs
+PORTAL_LONGER_THAN = 1000.0  # a link between sections longer than this becomes a portal,
+PORTAL_FANOUT = 4  # and so does one from an output feeding this many inputs
 STONE_FRAME = (0.45, 0.45, 0.50, 0.25)
 WOOD_FRAME = (0.55, 0.36, 0.20, 0.25)
 MAPS_FRAME = (0.25, 0.38, 0.55, 0.25)
@@ -84,8 +110,10 @@ OUT_FRAME = (0.25, 0.50, 0.32, 0.25)
 
 
 class Builder:
-    def __init__(self, ctx):
-        self.app = ctx.getSDApplication()
+    grad: SDNode  # the shared vertical gradient, set by build_into
+
+    def __init__(self, ctx: Context) -> None:
+        self.app: SDApplication = ctx.getSDApplication()  # type: ignore[no-untyped-call]  # Adobe's Context isn't annotated
         self.pkg_mgr = self.app.getPackageMgr()
         self.lib_dir = os.path.join(self.app.getPath(SDApplicationPath.DefaultResourcesDir), 'packages')
         # Close the previous build (the package saved at OUT_SBS) so re-running doesn't pile up
@@ -93,7 +121,7 @@ class Builder:
         # package with a graph of this name (a copy saved elsewhere, an unsaved one) open
         # The previous build is matched by its path, whatever its graph is called now (a renamed
         # graph still lives in the file this run writes over; REVIEW.md INS-22)
-        previous = []
+        previous: list[SDPackage] = []
         out = os.path.normcase(os.path.abspath(OUT_SBS))
         for p in list(self.pkg_mgr.getUserPackages()):
             path = p.getFilePath() or ''
@@ -110,54 +138,60 @@ class Builder:
             self.graph = SDSBSCompGraph.sNew(self.pkg)
             self.graph.setIdentifier(GRAPH_ID)
             self._set_graph_size()
-        except BaseException:             # don't leave the new, unsaved package behind (REVIEW.md INS-17)
+        except BaseException:  # don't leave the new, unsaved package behind (REVIEW.md INS-17)
             self.pkg_mgr.unloadUserPackage(self.pkg)
             raise
-        self._lib_cache = {}
-        self.sections = []      # [{'title', 'column', 'color', 'description', 'nodes'}] in build order
-        self.warnings = []
+        self._lib_cache: dict[tuple[str, str], SDResource] = {}
+        self.sections: list[Section] = []  # [{'title', 'column', 'color', 'description', 'nodes'}] in build order
+        self.warnings: list[str] = []
 
     # ---------------------------------------------------------------- basics
-    def _set_graph_size(self):
+    def _set_graph_size(self) -> None:
         """Relative to the parent with a 2^SIZE_LOG2 default, so a render can override the size
         (a fixed, Absolute size isn't exposed and overrides would be ignored)."""
-        prop = self.graph.getPropertyFromId('$outputsize', SDPropertyCategory.Input)
+        # every graph has one
+        prop = cast(SDProperty, self.graph.getPropertyFromId('$outputsize', SDPropertyCategory.Input))
         self.graph.setPropertyInheritanceMethod(prop, SDPropertyInheritanceMethod.RelativeToParent)
-        self.graph.setDefaultParentSize(int2(H, H))     # pixels, not log2
+        self.graph.setDefaultParentSize(int2(H, H))  # pixels, not log2
         self.graph.setPropertyValue(prop, SDValueInt2.sNew(int2(0, 0)))
 
-    def section(self, title, column, color, description=None):
+    def section(self, title: str, column: int, color: RGBA, description: str | None = None) -> None:
         """Nodes created from now on belong to this section: one frame, laid out together."""
-        self.sections.append({'title': title, 'column': column, 'color': color,
-                              'description': description, 'nodes': []})
+        self.sections.append(
+            {'title': title, 'column': column, 'color': color, 'description': description, 'nodes': []}
+        )
 
-    def _place(self, node):
+    def _place(self, node: SDNode) -> SDNode:
         self.sections[-1]['nodes'].append(node)
         return node
 
-    def _force_16bit(self, node):
+    def _force_16bit(self, node: SDNode) -> None:
         try:
-            node.setInputPropertyInheritanceMethodFromId('$format', SDPropertyInheritanceMethod.Absolute)
-            node.setInputPropertyValueFromId('$format', SDValueEnum.sFromValueId('sbs::compositing::format', '16_bits_per_channel'))
+            cast(SDSBSCompNode, node).setInputPropertyInheritanceMethodFromId(
+                '$format', SDPropertyInheritanceMethod.Absolute
+            )
+            node.setInputPropertyValueFromId(
+                '$format', SDValueEnum.sFromValueId('sbs::compositing::format', '16_bits_per_channel')
+            )
         except ERRORS:
             pass
 
-    def atomic(self, name, **params):
+    def atomic(self, name: str, **params: Param) -> SDNode:
         node = self._place(self.graph.newNode('sbs::compositing::' + name))
         self._force_16bit(node)
         for k, v in params.items():
             self.set(node, k, v)
         return node
 
-    def lib(self, pkg_file, graph_id, **params):
+    def lib(self, pkg_file: str, graph_id: str, **params: Param) -> SDNode:
         res = self._lib_resource(pkg_file, graph_id)
-        node = self._place(self.graph.newInstanceNode(res))
+        node = self._place(cast(SDNode, self.graph.newInstanceNode(res)))  # a library graph always instantiates
         self._force_16bit(node)
         for k, v in params.items():
             self.set(node, k, v)
         return node
 
-    def _lib_resource(self, pkg_file, graph_id):
+    def _lib_resource(self, pkg_file: str, graph_id: str) -> SDResource:
         key = (pkg_file, graph_id)
         if key not in self._lib_cache:
             path = os.path.join(self.lib_dir, pkg_file)
@@ -175,19 +209,20 @@ class Builder:
             self._lib_cache[key] = res
         return self._lib_cache[key]
 
-    def set(self, node, prop_id, v):
+    def set(self, node: SDNode, prop_id: str, v: Param) -> None:
         prop = node.getPropertyFromId(prop_id, SDPropertyCategory.Input)
         if prop is None:
-            self.warnings.append('no input %s on %s' % (prop_id, node.getDefinition().getId()))
+            self.warnings.append('no input %s on %s' % (prop_id, cast(SDDefinition, node.getDefinition()).getId()))
             return
         ptype = prop.getType()
         if isinstance(ptype, SDTypeEnum) and isinstance(v, int) and not isinstance(v, bool):
             for e in ptype.getEnumerators():
-                if e.getDefaultValue().get() == v:
-                    node.setPropertyValue(prop, e.getDefaultValue())
+                if cast(SDValueEnum, e.getDefaultValue()).get() == v:
+                    node.setPropertyValue(prop, cast(SDValueEnum, e.getDefaultValue()))
                     return
             self.warnings.append('enum value %d not found for %s' % (v, prop_id))
             return
+        candidates: list[Callable[[], SDValue]]
         if isinstance(v, bool):
             candidates = [lambda: SDValueBool.sNew(v)]
         elif isinstance(v, int):
@@ -207,45 +242,53 @@ class Builder:
                 return
             except ERRORS:
                 continue
-        self.warnings.append('could not set %s=%r on %s' % (prop_id, v, node.getDefinition().getId()))
+        self.warnings.append(
+            'could not set %s=%r on %s' % (prop_id, v, cast(SDDefinition, node.getDefinition()).getId())
+        )
 
     @staticmethod
-    def _output_id(node, name=None):
+    def _output_id(node: SDNode, name: str | None = None) -> str:
         outs = node.getProperties(SDPropertyCategory.Output)
         ids = [outs.getItem(i).getId() for i in range(outs.getSize())]
         if name:
             return name
         return ids[0]
 
-    def link(self, src, dst, dst_input, src_output=None):
+    def link(self, src: SDNode, dst: SDNode, dst_input: str, src_output: str | None = None) -> SDNode:
         src.newPropertyConnectionFromId(self._output_id(src, src_output), dst, dst_input)
         return dst
 
     # ------------------------------------------------------- height building
-    def gy(self, y):
+    def gy(self, y: float) -> float:
         # gradient_linear_1 (rotation 0) is 1.0 at the top row, 0.0 at the bottom
         return 1.0 - float(y) / H
 
-    def levels(self, src, in_lo=0.0, in_hi=1.0, out_lo=0.0, out_hi=1.0):
-        n = self.atomic('levels',
-                        levelinlow=(in_lo,) * 4, levelinhigh=(in_hi,) * 4,
-                        leveloutlow=(out_lo,) * 4, levelouthigh=(out_hi,) * 4)
+    def levels(
+        self, src: SDNode, in_lo: float = 0.0, in_hi: float = 1.0, out_lo: float = 0.0, out_hi: float = 1.0
+    ) -> SDNode:
+        n = self.atomic(
+            'levels',
+            levelinlow=(in_lo,) * 4,
+            levelinhigh=(in_hi,) * 4,
+            leveloutlow=(out_lo,) * 4,
+            levelouthigh=(out_hi,) * 4,
+        )
         return self.link(src, n, 'input1')
 
-    def ramp(self, y_from, y_to, h):
+    def ramp(self, y_from: int, y_to: int, h: float) -> SDNode:
         """0 at row y_from rising linearly to h at row y_to, clamped beyond."""
         if y_from < y_to:
             return self.levels(self.grad, self.gy(y_to), self.gy(y_from), h, 0.0)
         return self.levels(self.grad, self.gy(y_from), self.gy(y_to), 0.0, h)
 
-    def band(self, y0, y1, h, bevel_top=1, bevel_bottom=None):
+    def band(self, y0: int, y1: int, h: float, bevel_top: int = 1, bevel_bottom: int | None = None) -> SDNode:
         """Horizontal plateau of height h between rows y0 and y1 with chamfered edges."""
         bevel_bottom = bevel_top if bevel_bottom is None else bevel_bottom
         top = self.ramp(y0, y0 + max(bevel_top, 1), h)
         bottom = self.ramp(y1, y1 - max(bevel_bottom, 1), h)
         return self.blend(top, bottom, MIN)
 
-    def blend(self, src, dst, mode, opacity=1.0, mask=None):
+    def blend(self, src: SDNode, dst: SDNode, mode: int, opacity: float = 1.0, mask: SDNode | None = None) -> SDNode:
         n = self.atomic('blend', blendingmode=mode, opacitymult=opacity)
         self.link(src, n, 'source')
         self.link(dst, n, 'destination')
@@ -253,57 +296,94 @@ class Builder:
             self.link(mask, n, 'opacity')
         return n
 
-    def max_all(self, nodes):
+    def max_all(self, nodes: list[SDNode]) -> SDNode:
         acc = nodes[0]
         for n in nodes[1:]:
             acc = self.blend(n, acc, MAX)
         return acc
 
-    def tiles(self, nb_x, nb_y, scale, offset=0.0, offset_random=0.0, rotation=0.0, seed=0, luminance_random=0.0):
-        return self.lib('tile_generator.sbs', 'tile_generator',
-                        Nb_X=nb_x, Nb_Y=nb_y, Pattern_Type=SQUARE, Scale=scale,
-                        Offset=offset, Offset_Random=offset_random, Offset_Random_Seed=seed,
-                        Free_Rotation=rotation, **{'Luminance_Variation-Contrast': (luminance_random, 0.0)})
+    def tiles(
+        self,
+        nb_x: int,
+        nb_y: int,
+        scale: float,
+        offset: float = 0.0,
+        offset_random: float = 0.0,
+        rotation: float = 0.0,
+        seed: int = 0,
+        luminance_random: float = 0.0,
+    ) -> SDNode:
+        return self.lib(
+            'tile_generator.sbs',
+            'tile_generator',
+            Nb_X=nb_x,
+            Nb_Y=nb_y,
+            Pattern_Type=SQUARE,
+            Scale=scale,
+            Offset=offset,
+            Offset_Random=offset_random,
+            Offset_Random_Seed=seed,
+            Free_Rotation=rotation,
+            **{'Luminance_Variation-Contrast': (luminance_random, 0.0)},
+        )
 
-    def bevel(self, src, distance=BEVEL_DIST, smoothing=0.0):
+    def bevel(self, src: SDNode, distance: float = BEVEL_DIST, smoothing: float = 0.0) -> SDNode:
         n = self.lib('bevel.sbs', 'bevel', distance=distance, smoothing=smoothing)
         return self.link(src, n, 'input')
 
-    def clip(self, height, y0, y1):
+    def clip(self, height: SDNode, y0: int, y1: int) -> SDNode:
         """Keep `height` only inside rows y0..y1."""
         return self.blend(height, self.band(y0, y1, 1.0, 1), MIN)
 
-    def blocks(self, y0, y1, nb_x, nb_y, scale, h, offset=0.0, seed=0, mortar=0.12):
+    def blocks(
+        self,
+        y0: int,
+        y1: int,
+        nb_x: int,
+        nb_y: int,
+        scale: float,
+        h: float,
+        offset: float = 0.0,
+        seed: int = 0,
+        mortar: float = 0.12,
+    ) -> SDNode:
         t = self.bevel(self.tiles(nb_x, nb_y, scale, offset=offset, offset_random=0.35, seed=seed))
         raised = self.clip(self.levels(t, out_hi=h), y0, y1)
         return self.blend(raised, self.band(y0, y1, mortar, 1), MAX)
 
     # ------------------------------------------------------- readable graph
-    def links(self):
+    def links(self) -> list[Link]:
         """(source node, source output id, target node, target input id) for every link."""
-        found = []
+        found: list[Link] = []
         for node in self.graph.getNodes():
             for prop in node.getProperties(SDPropertyCategory.Input):
                 if not prop.isConnectable():
                     continue
                 for c in node.getPropertyConnections(prop):
                     # reported from the queried node's side: the "input" end is the other node
-                    found.append((c.getInputPropertyNode(), c.getInputProperty().getId(), node, prop.getId()))
+                    found.append(
+                        (
+                            cast(SDNode, c.getInputPropertyNode()),
+                            cast(SDProperty, c.getInputProperty()).getId(),
+                            node,
+                            prop.getId(),
+                        )
+                    )
         return found
 
-    def _arrange(self, nodes, links):
+    def _arrange(self, nodes: list[SDNode], links: list[Link]) -> tuple[dict[str, tuple[int, float]], int, int]:
         """Columns by data flow inside one section (longest path from the section's own sources),
         each column ordered by its inputs' rows to reduce crossings. Returns {node id: (col, row)}
         and the section's size in columns and rows."""
         ids = [n.getIdentifier() for n in nodes]
         inside = set(ids)
-        preds = {i: [] for i in ids}
+        preds: dict[str, list[str]] = {i: [] for i in ids}
         for src, _, dst, _ in links:
             a, b = src.getIdentifier(), dst.getIdentifier()
             if a in inside and b in inside:
                 preds[b].append(a)
-        layer = {i: 0 for i in ids}
-        for _ in ids:                                 # longest path; at most len(ids) passes
+        layer = dict.fromkeys(ids, 0)
+        for _ in ids:  # longest path; at most len(ids) passes
             changed = False
             for b in ids:
                 for a in preds[b]:
@@ -311,36 +391,41 @@ class Builder:
                         layer[b], changed = layer[a] + 1, True
             if not changed:
                 break
-        columns = {}
-        for i in ids:                                 # build order as the starting order
+        columns: dict[int, list[str]] = {}
+        for i in ids:  # build order as the starting order
             columns.setdefault(layer[i], []).append(i)
-        row = {}
+        row: dict[str, int] = {}
         for L in sorted(columns):
-            def bary(i, start={i: k for k, i in enumerate(columns[L])}):
+            start = {i: k for k, i in enumerate(columns[L])}
+
+            def bary(i: str, start: dict[str, int] = start) -> float:
                 ps = [row[p] for p in preds[i] if p in row]
                 return sum(ps) / len(ps) if ps else start[i]
+
             columns[L].sort(key=bary)
             row.update({i: k for k, i in enumerate(columns[L])})
         tallest = max(len(c) for c in columns.values())
-        cells = {}
+        cells: dict[str, tuple[int, float]] = {}
         for L, col in columns.items():
             for k, i in enumerate(col):
-                cells[i] = (L, k + (tallest - len(col)) / 2.0)   # centre short columns
+                cells[i] = (L, k + (tallest - len(col)) / 2.0)  # centre short columns
         return cells, len(columns), tallest
 
-    def layout(self):
+    def layout(self) -> None:
         """Place every section's nodes, stack sections in their columns, frame each section."""
         links = self.links()
         arranged = [self._arrange(s['nodes'], links) for s in self.sections]
         column_ids = sorted({s['column'] for s in self.sections})
-        widths = {c: max(n_cols for s, (_, n_cols, _) in zip(self.sections, arranged) if s['column'] == c)
-                  for c in column_ids}
+        widths = {
+            c: max(n_cols for s, (_, n_cols, _) in zip(self.sections, arranged, strict=True) if s['column'] == c)
+            for c in column_ids
+        }
         x0, left = {}, 0.0
         for c in column_ids:
             x0[c] = left
             left += (widths[c] - 1) * DX + NODE + 2 * MARGIN + COLUMN_GAP
-        top = {c: 0.0 for c in column_ids}
-        for s, (cells, n_cols, n_rows) in zip(self.sections, arranged):
+        top = dict.fromkeys(column_ids, 0.0)
+        for s, (cells, n_cols, n_rows) in zip(self.sections, arranged, strict=True):
             c = s['column']
             frame_top = top[c]
             first_x = x0[c] + MARGIN + NODE / 2.0
@@ -359,17 +444,17 @@ class Builder:
                 frame.setDescription(s['description'])
             top[c] = frame_top + height + SECTION_GAP
 
-    def portal_links(self):
+    def portal_links(self) -> list[tuple[str, str]]:
         """[(target node id, target input id)] to show as portals: links between sections that
         are long, or that come from an output feeding many inputs. Links inside a section stay
         wires, so each frame still reads on its own."""
         links = self.links()
         section_of = {n.getIdentifier(): k for k, s in enumerate(self.sections) for n in s['nodes']}
-        fanout = {}
+        fanout: dict[tuple[str, str], int] = {}
         for src, out, _, _ in links:
             key = (src.getIdentifier(), out)
             fanout[key] = fanout.get(key, 0) + 1
-        picked = []
+        picked: list[tuple[str, str]] = []
         for src, out, dst, inp in links:
             a, b = src.getIdentifier(), dst.getIdentifier()
             if section_of.get(a) == section_of.get(b):
@@ -381,7 +466,7 @@ class Builder:
         return picked
 
 
-def save_with_portals(b, portals):
+def save_with_portals(b: Builder, portals: list[tuple[str, str]]) -> SDSBSCompGraph:
     """Save the package, then mark the chosen links as portals in the saved file and load it
     again: the sd API can't set a link's display mode (a .sbs <displayType v="1"/> on the
     target node's <connection>). The new graph has never been opened in an editor view, so
@@ -393,50 +478,59 @@ def save_with_portals(b, portals):
         return b.graph
     b.pkg_mgr.unloadUserPackage(b.pkg)
     tree = ET.parse(OUT_SBS)
-    graph = next(g for g in tree.getroot().iter('graph') if g.find('identifier').get('v') == GRAPH_ID)
+    # the file was just written by Designer: every element looked up here is there
+    graph = next(g for g in tree.getroot().iter('graph') if cast(ET.Element, g.find('identifier')).get('v') == GRAPH_ID)
     wanted = set(portals)
-    for node in graph.find('compNodes'):
-        uid = node.find('uid').get('v')
+    for node in cast(ET.Element, graph.find('compNodes')):
+        uid = cast(ET.Element, node.find('uid')).get('v')
         for c in node.findall('connections/connection'):
-            if (uid, c.find('identifier').get('v')) in wanted:
+            if (uid, cast(ET.Element, c.find('identifier')).get('v')) in wanted:
                 dt = c.find('displayType')
                 if dt is None:
                     dt = ET.SubElement(c, 'displayType')
                 dt.set('v', '1')
     tree.write(OUT_SBS, encoding='UTF-8', xml_declaration=True)
     pkg = b.pkg_mgr.loadUserPackage(OUT_SBS)
-    return pkg.findResourceFromUrl(GRAPH_ID)
+    return cast(SDSBSCompGraph, pkg.findResourceFromUrl(GRAPH_ID))
 
 
-def build(ctx):
+def build(ctx: Context) -> None:
     """Build the trim sheet. If the build fails before the package was first saved, its unsaved
     package is closed, so failed runs don't leave packages with the graph's name behind."""
     b = Builder(ctx)
     try:
         build_into(b)
-    except BaseException:                 # also the bridge's abort, which is raised on
+    except BaseException:  # also the bridge's abort, which is raised on
         try:
             if not b.pkg.getFilePath():
                 b.pkg_mgr.unloadUserPackage(b.pkg)
                 print('Build failed; closed its unsaved package.')
         except ERRORS:
-            pass                          # already saved and reloaded by save_with_portals
+            pass  # already saved and reloaded by save_with_portals
         raise
 
 
-def build_into(b):
-    def strip(title, desc, color=STONE_FRAME):
+def build_into(b: Builder) -> None:
+    def strip(title: str, desc: str, color: RGBA = STONE_FRAME) -> None:
         # two columns of strips, A-F and G-K, so the graph isn't one very tall column
         b.section(title, 1 if title < 'G' else 2, color, desc)
 
-    b.section('Coordinate', 0, MAPS_FRAME, 'Shared by every strip: 1.0 at the top row, 0.0 at the bottom. '
-                                           'Levels on it give each strip its per-row height profile.')
+    b.section(
+        'Coordinate',
+        0,
+        MAPS_FRAME,
+        'Shared by every strip: 1.0 at the top row, 0.0 at the bottom. '
+        'Levels on it give each strip its per-row height profile.',
+    )
     b.grad = b.lib('gradient_linear_1.sbs', 'gradient_linear_1', rotation=0)
     strips = []
 
     strip('A: stepped cornice', 'Rows 0-256')
-    strips.append(b.max_all([b.band(0, 256, 0.30, 4), b.band(24, 232, 0.50, 12),
-                             b.band(56, 200, 0.72, 20), b.band(92, 164, 0.88, 18)]))
+    strips.append(
+        b.max_all(
+            [b.band(0, 256, 0.30, 4), b.band(24, 232, 0.50, 12), b.band(56, 200, 0.72, 20), b.band(92, 164, 0.88, 18)]
+        )
+    )
 
     # B: tile rows are 256px tall, row 1
     strip('B: large ashlar blocks', 'Rows 256-512')
@@ -452,8 +546,7 @@ def build_into(b):
     strips.append(b.blend(ribs, framed, MAX))
 
     strip('D: stepped bead', 'Rows 704-768')
-    strips.append(b.max_all([b.band(704, 768, 0.35, 3), b.band(712, 760, 0.55, 10),
-                             b.band(722, 750, 0.66, 8)]))
+    strips.append(b.max_all([b.band(704, 768, 0.35, 3), b.band(712, 760, 0.55, 10), b.band(722, 750, 0.66, 8)]))
 
     # E: 256px cells, centre row at 896
     strip('E: diamond medallion plaques', 'Rows 768-1024')
@@ -479,17 +572,20 @@ def build_into(b):
     strips.append(b.blend(b.band(1556, 1580, 0.30, 12), b.band(1536, 1600, 0.60, 4), SUBTRACT))
 
     strip('J: round-ish bead', 'Rows 1600-1664')
-    strips.append(b.max_all([b.band(1600, 1664, 0.30, 6), b.band(1608, 1656, 0.50, 14),
-                             b.band(1618, 1646, 0.60, 8)]))
+    strips.append(b.max_all([b.band(1600, 1664, 0.30, 6), b.band(1608, 1656, 0.50, 14), b.band(1618, 1646, 0.60, 8)]))
 
     # K: 128px rows, rows 13-15
-    strip('K: wood planks', 'Rows 1664-2048: three rows of planks. The plank id tiles share the plank '
-                            'ends\' layout and seed: a random grey per plank shifts the grain and varies '
-                            'the wood colour.', WOOD_FRAME)
+    strip(
+        'K: wood planks',
+        'Rows 1664-2048: three rows of planks. The plank id tiles share the plank '
+        "ends' layout and seed: a random grey per plank shifts the grain and varies "
+        'the wood colour.',
+        WOOD_FRAME,
+    )
     # Rows get their own chamfered band so the long seams read as V-grooves
     rows = b.max_all([b.band(1664, 1792, 0.5, 6), b.band(1792, 1920, 0.5, 6), b.band(1920, 2048, 0.5, 6)])
     # Same layout/seed twice: once for end-joint bevels, once for a random grey per plank
-    plank_layout = dict(offset_random=0.5, seed=5)
+    plank_layout: dict[str, Any] = {'offset_random': 0.5, 'seed': 5}
     ends = b.levels(b.bevel(b.tiles(3, 16, 0.99, **plank_layout), distance=0.02), out_hi=0.5)
     plank_id = b.tiles(3, 16, 1.0, luminance_random=1.0, **plank_layout)
     # Grain shifted vertically by a different amount per plank, so it breaks at every joint
@@ -513,13 +609,14 @@ def build_into(b):
     b.section('Normal, AO, curvature', 3, MAPS_FRAME, 'From the height; normals are OpenGL (Blender)')
     normal = b.link(height, b.atomic('normal', intensity=NORMAL_INTENSITY, inversedy=NORMAL_OPENGL), 'input1')
     ao = b.link(height, b.lib('hbao.sbs', 'hbao', height_depth=0.12, radius=1.0), 'input')
-    curvature = b.link(normal, b.lib('curvature_smooth.sbs', 'curvature_smooth',
-                                     normal_format=0 if NORMAL_OPENGL else 1), 'input')
+    curvature = b.link(
+        normal, b.lib('curvature_smooth.sbs', 'curvature_smooth', normal_format=0 if NORMAL_OPENGL else 1), 'input'
+    )
 
     # ---------------------------------------------------------- base color
     b.section('Base colour', 3, MAPS_FRAME, 'Stone and wood tones, grime, worn edges, dark cavities')
 
-    def uni(rgb):
+    def uni(rgb: tuple[float, float, float]) -> SDNode:
         return b.atomic('uniform', colorswitch=True, outputcolor=rgb)
 
     stone = b.blend(uni(STONE_LIGHT), uni(STONE_DARK), COPY, mask=clouds)
@@ -536,7 +633,7 @@ def build_into(b):
     # ---------------------------------------------------------- roughness / metallic
     b.section('Roughness, metallic', 3, MAPS_FRAME, 'Stone rougher than wood; grime and worn edges a bit smoother')
 
-    def gray(v):
+    def gray(v: float) -> SDNode:
         return b.atomic('uniform', colorswitch=False, outputcolor=(v, v, v, 1.0))
 
     rough = b.blend(gray(WOOD_ROUGH), gray(STONE_ROUGH), COPY, mask=wood_mask)
@@ -546,16 +643,18 @@ def build_into(b):
 
     # ---------------------------------------------------------- outputs
     b.section('Outputs', 4, OUT_FRAME, 'Identifiers become the exported file names')
-    outputs = [('basecolor', 'baseColor', 'RGBA', 'sRGB', color),
-               ('normal', 'normal', 'RGBA', 'Linear', normal),
-               ('roughness', 'roughness', 'R', 'Linear', rough),
-               ('metallic', 'metallic', 'R', 'Linear', metallic),
-               ('height', 'height', 'R', 'Linear', height),
-               ('ambientocclusion', 'ambientOcclusion', 'R', 'Linear', ao)]
+    outputs = [
+        ('basecolor', 'baseColor', 'RGBA', 'sRGB', color),
+        ('normal', 'normal', 'RGBA', 'Linear', normal),
+        ('roughness', 'roughness', 'R', 'Linear', rough),
+        ('metallic', 'metallic', 'R', 'Linear', metallic),
+        ('height', 'height', 'R', 'Linear', height),
+        ('ambientocclusion', 'ambientOcclusion', 'R', 'Linear', ao),
+    ]
     for ident, usage, comps, space, src in outputs:
         out = b.atomic('output')
-        usages = SDValueArray.sNew(SDTypeUsage.sNew(), 0)
-        usages.pushBack(SDValueUsage.sNew(SDUsage.sNew(usage, comps, space)))
+        usages = cast(SDValueArray, SDValueArray.sNew(SDTypeUsage.sNew(), 0))
+        usages.pushBack(cast(SDValueUsage, SDValueUsage.sNew(SDUsage.sNew(usage, comps, space))))
         out.setAnnotationPropertyValueFromId('usages', usages)
         out.setAnnotationPropertyValueFromId('identifier', SDValueString.sNew(ident))
         out.setAnnotationPropertyValueFromId('label', SDValueString.sNew(ident))
@@ -563,11 +662,13 @@ def build_into(b):
 
     b.layout()
     portals, n_links = b.portal_links(), len(b.links())
-    graph = save_with_portals(b, portals)      # b.graph is closed after this; use `graph`
-    print('Saved trim sheet to %s (%d nodes, %d frames, %d of %d links as portals)' % (
-        OUT_SBS, graph.getNodes().getSize(), len(b.sections), len(portals), n_links))
+    graph = save_with_portals(b, portals)  # b.graph is closed after this; use `graph`
+    print(
+        'Saved trim sheet to %s (%d nodes, %d frames, %d of %d links as portals)'
+        % (OUT_SBS, graph.getNodes().getSize(), len(b.sections), len(portals), n_links)
+    )
     for w in b.warnings:
         print('WARNING:', w)
 
 
-build(sd.getContext())
+build(sd.getContext())  # type: ignore[no-untyped-call]  # Adobe's sd.getContext() isn't annotated

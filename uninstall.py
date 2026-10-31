@@ -12,6 +12,11 @@ added it), and mcp_server/venv. Only things that are this project's are touched:
 or registration with the same name that points elsewhere is reported and left alone. This folder
 itself is left for you to delete.
 """
+
+# Annotations stay unevaluated: this script must run, or refuse with a message, on the system Python,
+# which can be older than 3.10 (REVIEW.md INS-25)
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -19,38 +24,40 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
+from typing import Any, cast
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import install  # noqa: E402  (shares paths, names and the skill marker with the installer)
-from project_constants import PLUGIN, PLUGIN_DIR, TOKEN_FILE  # noqa: E402
+from project_constants import PLUGIN, TOKEN_FILE  # noqa: E402
 
 SERVER = os.path.join(HERE, 'mcp_server', 'server.py')
 VENV = os.path.join(HERE, 'mcp_server', 'venv')
 
 
-def claude_json():
+def claude_json() -> str:
     """Claude Code's own config, where local- and user-scope MCP registrations live."""
     if os.environ.get('CLAUDE_CONFIG_DIR'):
         return os.path.join(os.environ['CLAUDE_CONFIG_DIR'], '.claude.json')
     return os.path.join(os.path.expanduser('~'), '.claude.json')
 
 
-def snapshot_dir():
-    # same default as SNAPSHOT_DIR in mcp_server/server.py (which needs the venv to import)
+def snapshot_dir() -> str:
+    # same default as SNAPSHOT_DIR in mcp_server/server_tools/snapshots.py (which needs the venv to import)
     return os.environ.get('SD_SNAPSHOT_DIR') or os.path.join(os.path.expanduser('~'), '.sd_mcp', 'snapshots')
 
 
 is_our_plugin = install.is_our_plugin
 
 
-def _points_here(entry):
+def _points_here(entry: dict[str, Any]) -> bool:
     """A registration is ours when it runs this folder's server.py."""
     parts = [entry.get('command') or ''] + [str(a) for a in entry.get('args') or []]
     return any(os.path.normcase(SERVER) in os.path.normcase(p) for p in parts)
 
 
-def find_registrations(path=None):
+def find_registrations(path: str | None = None) -> tuple[list[tuple[str, str | None]], list[str]]:
     """([(scope, folder or None)] that run this server, [notes about other ones]) from ~/.claude.json.
     This repo's committed .mcp.json is project scope and goes away with the folder."""
     path = path or claude_json()
@@ -59,7 +66,8 @@ def find_registrations(path=None):
             config = json.load(f)
     except (OSError, ValueError):
         return [], []
-    found, notes = [], []
+    found: list[tuple[str, str | None]] = []
+    notes: list[str] = []
     entry = (config.get('mcpServers') or {}).get(install.SERVER_NAME)
     if entry:
         if _points_here(entry):
@@ -77,7 +85,7 @@ def find_registrations(path=None):
     return found, notes
 
 
-def remove_registration(scope, folder, claude):
+def remove_registration(scope: str, folder: str | None, claude: str) -> str | None:
     """Through Claude Code's own CLI (it owns ~/.claude.json); a local entry is keyed by the
     folder Claude Code started in, so the command runs there. Returns an error text or None."""
     cmd = [claude, 'mcp', 'remove', install.SERVER_NAME, '-s', scope]
@@ -87,7 +95,7 @@ def remove_registration(scope, folder, claude):
     return None if result.returncode == 0 else (result.stderr or result.stdout).strip()
 
 
-# <folder>/<graph>/<YYYYmmdd-HHMMSS>[_n][-label].sbs, as server.py names them
+# <folder>/<graph>/<YYYYmmdd-HHMMSS>[_n][-label].sbs, as mcp_server/server_tools/snapshots.py names them
 SNAPSHOT_FILE = re.compile(r'^\d{8}-\d{6}(?:_\d+)?(?:-.*)?\.sbs$')
 
 
@@ -95,7 +103,7 @@ class Kept(str):
     """What an action returns when it did its part but something stays (not an error)."""
 
 
-def remove_snapshots(folder):
+def remove_snapshots(folder: str) -> Kept | None:
     """Only the snapshot files the server wrote, then the folders they leave empty: the folder may
     be a shared one (SD_SNAPSHOT_DIR). Says so when the folder stays."""
     for graph in os.listdir(folder):
@@ -110,37 +118,46 @@ def remove_snapshots(folder):
     if os.listdir(folder):
         return Kept('the snapshots were deleted; folder kept, other files are in it')
     os.rmdir(folder)
+    return None
 
 
-def plan(args):
+# an uninstall step: returns None when done, or an error text (Kept: done, but something stays)
+Action = Callable[[], 'str | None']  # quoted: a module-level alias is evaluated even so (INS-25)
+
+
+def plan(args: argparse.Namespace) -> list[tuple[str, Action | None]]:
     """[(description, action or None)]; an action of None is only reported. An action returns
     None when done, or an error text."""
-    items = []
+    items: list[tuple[str, Action | None]] = []
     plugin = os.path.join(args.plugins_dir, PLUGIN)
     if os.path.isdir(plugin):
         if is_our_plugin(plugin):
             items.append(('Designer plugin: %s' % plugin, lambda: shutil.rmtree(plugin)))
         else:
-            items.append(('%s is not this project\'s plugin; left as it is' % plugin, None))
-    for suffix in ('.new', '.old'):   # left by an interrupted install (REVIEW.md INS-16)
+            items.append(("%s is not this project's plugin; left as it is" % plugin, None))
+    for suffix in ('.new', '.old'):  # left by an interrupted install (REVIEW.md INS-16)
         leftover = plugin + suffix
         if os.path.isdir(leftover):
             if is_our_plugin(leftover):
-                items.append(('leftover plugin copy: %s' % leftover, lambda f=leftover: shutil.rmtree(f)))
-            else:   # not ours, or a partly deleted copy (REVIEW.md INS-20)
-                items.append(('%s is not this project\'s plugin (or a partly deleted copy); left as it is'
-                              % leftover, None))
+                items.append(('leftover plugin copy: %s' % leftover, cast(Action, lambda f=leftover: shutil.rmtree(f))))
+            else:  # not ours, or a partly deleted copy (REVIEW.md INS-20)
+                items.append(
+                    ("%s is not this project's plugin (or a partly deleted copy); left as it is" % leftover, None)
+                )
     old = os.path.join(args.plugins_dir, install.OLD_PLUGIN)
     if os.path.isdir(old):
         if install.is_old_plugin(old):
-            items.append(('old plugin (before the rename): %s' % old,
-                          lambda: install.remove_old_plugin(args.plugins_dir)))
+            items.append(
+                ('old plugin (before the rename): %s' % old, lambda: install.remove_old_plugin(args.plugins_dir))
+            )
         else:
-            items.append(('%s is not this project\'s old plugin; left as it is' % old, None))
+            items.append(("%s is not this project's old plugin; left as it is" % old, None))
     for token in (TOKEN_FILE, install.OLD_TOKEN):
         if os.path.exists(token):
             # remove_old_plugin may already have deleted the old token
-            items.append(('bridge token: %s' % token, lambda t=token: os.remove(t) if os.path.exists(t) else None))
+            items.append(
+                ('bridge token: %s' % token, cast(Action, lambda t=token: os.remove(t) if os.path.exists(t) else None))
+            )
     skill = os.path.join(args.skills_dir, install.SERVER_NAME)
     if os.path.isdir(skill):
         if install.is_our_skill(skill):
@@ -153,11 +170,20 @@ def plan(args):
     for scope, folder in found:
         where = 'user scope (every folder)' if scope == 'user' else folder
         if claude:
-            items.append(('MCP registration, %s' % where,
-                          lambda scope=scope, folder=folder: remove_registration(scope, folder, claude)))
+            items.append(
+                (
+                    'MCP registration, %s' % where,
+                    cast(Action, lambda scope=scope, folder=folder: remove_registration(scope, folder, claude)),
+                )
+            )
         else:
-            items.append(('MCP registration, %s: `claude` not found; run there: claude mcp remove %s -s %s'
-                          % (where, install.SERVER_NAME, scope), None))
+            items.append(
+                (
+                    'MCP registration, %s: `claude` not found; run there: claude mcp remove %s -s %s'
+                    % (where, install.SERVER_NAME, scope),
+                    None,
+                )
+            )
     for note in notes:
         items.append(('%s; left as it is' % note, None))
 
@@ -172,7 +198,7 @@ def plan(args):
     return items
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument('--plugins-dir', default=install.default_plugins_dir())
     ap.add_argument('--skills-dir', default=install.default_skills_dir())
@@ -183,15 +209,17 @@ def main():
 
     if os.path.normcase(os.path.realpath(sys.prefix)) == os.path.normcase(os.path.realpath(VENV)):
         # its own files can't be deleted while it runs on Windows, and it removes them
-        print("Note: this runs with the MCP server's own Python (mcp_server/venv), which it removes. "
-              "Run it with your system Python instead: python3 uninstall.py (Windows: py -3 uninstall.py).\n")
+        print(
+            "Note: this runs with the MCP server's own Python (mcp_server/venv), which it removes. "
+            'Run it with your system Python instead: python3 uninstall.py (Windows: py -3 uninstall.py).\n'
+        )
     items = plan(args)
     actions = [(text, act) for text, act in items if act]
     if not items:
         print('Nothing to remove: the plugin, token, skill, registrations and venv are already gone.')
         return
     print('Will remove:' if actions else 'Nothing to remove.')
-    for text, act in actions:
+    for text, _act in actions:
         print('  - ' + text)
     kept = [text for text, act in items if not act]
     if kept:
@@ -207,7 +235,7 @@ def main():
     for text, act in actions:
         try:
             error = act()
-        except OSError as e:   # a locked or vanished file (Windows: a running server): go on
+        except OSError as e:  # a locked or vanished file (Windows: a running server): go on
             error = str(e)
         if isinstance(error, Kept):
             print('Removed %s (%s)' % (text, error))
@@ -218,8 +246,10 @@ def main():
             print('Removed ' + text)
     if failed:
         print('\nSome items were not removed (see above).')
-    print('\nDone. Restart Substance Designer (it still has the plugin loaded) and Claude Code.\n'
-          'To finish, delete this folder: %s' % HERE)
+    print(
+        '\nDone. Restart Substance Designer (it still has the plugin loaded) and Claude Code.\n'
+        'To finish, delete this folder: %s' % HERE
+    )
 
 
 if __name__ == '__main__':

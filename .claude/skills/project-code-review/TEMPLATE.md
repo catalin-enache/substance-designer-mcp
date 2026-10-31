@@ -12,7 +12,7 @@ bug, not reproduced, won't fix), always with a resolution line. Format and rules
 - *Verified by hand*: checked against the code after the review, not only by the reviewer.
 
 **IDs.** One prefix per area, numbered on: **PLG** plugin and bridge protocol, **SRV**
-`mcp_server/server.py`, **HLP** `mcp_server/designer_helpers.py`, **INS** installer, uninstaller,
+`mcp_server/server.py` and `server_tools/`, **HLP** `mcp_server/designer_helpers/`, **INS** installer, uninstaller,
 command-line client and example, **TST** tests and docs. A new area gets a new prefix, added here.
 
 ## Status
@@ -56,6 +56,9 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
   - **Scenario.** …
   - **Fix.** …
   - **Resolution: done | not a bug | not reproduced | won't fix** (commit `abc1234`).
+    <!-- A finding that questions an earlier resolution adds "· follows ID, generation N" to its
+         title line (SKILL.md, Follow-up chains). -->
+
     - **Test:** the test that reproduced it, and how it failed (or showed it doesn't happen).
     - **Cause:** why the code failed: the root cause, not the symptom. (When fixed.)
     - **Fix:** how it was fixed: what changed, and where. (When fixed.)
