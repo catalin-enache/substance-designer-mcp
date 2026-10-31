@@ -80,12 +80,36 @@ async def run(ctx: Ctx) -> None:
         r_.is_error and 'not added' in text(r_) and 'its node was added' not in text(r_) and before == after,
         text(r_),
     )
+    # a ref reused after its first node is deleted names the new node: the pre-check's tracking of
+    # deleted nodes (REVIEW.md HLP-42) doesn't refuse it
+    r_ = await c(
+        'apply_edits',
+        {
+            'ops': [
+                {'op': 'add', 'definition': 'blur', 'ref': 'r', 'position': [900, 900]},
+                {'op': 'delete', 'node': 'r'},
+                {'op': 'add', 'definition': 'blur', 'ref': 'r', 'position': [900, 900]},
+                {'op': 'move', 'node': 'r', 'position': [950, 900]},
+                {'op': 'delete', 'node': 'r'},
+            ],
+            **G,
+        },
+    )
+    check(
+        'apply_edits', 'a ref reused after a delete names the new node', 'applied 5 op(s)' in text(r_), text(r_)[-150:]
+    )
     # an enum value as a numeric string, like int parameters accept (REVIEW.md HLP-11)
-    r_ = await c('set_params', {'node_id': batch_blend, 'params': {'blendingmode': '3'}, **G})
-    check('set_params', 'enum value as a numeric string', not r_.is_error, text(r_))
+    r_ = await c('apply_edits', {'ops': [{'op': 'set', 'node': batch_blend, 'params': {'blendingmode': '3'}}], **G})
+    check('apply_edits', 'set: enum value as a numeric string', not r_.is_error, text(r_))
     t = text(await c('describe_graph', G))
     x_ids = [l.split()[0] for l in t.splitlines() if ' levels ' in l and l.split()[0] != lv]
     await c(
-        'delete_nodes',
-        {'node_ids': x_ids + [batch_blend] + [l.split()[0] for l in t.splitlines() if ' uniform ' in l], **G},
+        'apply_edits',
+        {
+            'ops': [
+                {'op': 'delete', 'node': n}
+                for n in x_ids + [batch_blend] + [l.split()[0] for l in t.splitlines() if ' uniform ' in l]
+            ],
+            **G,
+        },
     )

@@ -113,17 +113,64 @@ def _dispatched_ops() -> dict[str, set[str]]:
     """apply_edits op -> the op fields its branch reads, from the helpers' dispatcher (the code
     that runs), not from the docstring (REVIEW.md TST-6)."""
     body = designer_helpers.source().split('def apply_edits(', 1)[1].split('\ndef ', 1)[0]
-    branches = re.split(r"\n\s+(?:el)?if kind == '(\w+)':", body.split('else:\n                raise', 1)[0])
+    parts = re.split(r'\n\s+else:[^\n]*\n\s+raise', body, maxsplit=1)
+    # the dispatcher ends at its else branch; without it the last op would take in the rest of
+    # apply_edits (REVIEW.md TST-83)
+    assert len(parts) == 2, "apply_edits' dispatcher has no `else: raise` branch to end at"
+    branches = re.split(r"\n\s+(?:el)?if kind == '(\w+)':", parts[0])
     return {
         kind: {a or b for a, b in re.findall(r"op(?:\['(\w+)'\]|\.get\('(\w+)')", code)}
         for kind, code in zip(branches[1::2], branches[2::2], strict=False)
     }
 
 
-def test_every_apply_edits_op_is_exercised_live() -> None:
+def test_every_apply_edits_op_is_passed_live() -> None:
+    # passed, not necessarily run: a batch the pre-check refuses counts too (REVIEW.md TST-92, as TST-88)
     ops = set(re.findall(r"\{\s*'op': '(\w+)'", '\n'.join(selftest_sources().values())))
     dispatched = set(_dispatched_ops())
     assert dispatched and dispatched <= ops, 'apply_edits ops never run live: %s' % sorted(dispatched - ops)
+
+
+def _selftest_op_fields() -> dict[str, set[str]]:
+    """apply_edits op -> the fields the self-test passes in literal op dicts ({'op': 'set', ...}),
+    comprehensions included. Passed, not necessarily run: a batch the pre-check refuses counts too
+    (REVIEW.md TST-88), so a field needs a batch that runs as well, which the reviews check by hand."""
+    import ast
+
+    fields: dict[str, set[str]] = {}
+    for source in selftest_sources().values():
+        for node in ast.walk(ast.parse(source)):
+            if not isinstance(node, ast.Dict):
+                continue
+            keys = [k.value if isinstance(k, ast.Constant) else None for k in node.keys]
+            if 'op' not in keys:
+                continue
+            kind = node.values[keys.index('op')]
+            if isinstance(kind, ast.Constant) and isinstance(kind.value, str):
+                fields.setdefault(kind.value, set()).update(cast(str, k) for k in keys if k not in (None, 'op'))
+    return fields
+
+
+def test_every_apply_edits_op_field_is_passed_live() -> None:
+    # what test_every_tool_parameter_is_exercised_live did for the single-edit tools apply_edits replaced
+    passed = _selftest_op_fields()
+    missing = sorted(
+        '%s.%s' % (kind, f) for kind, fields in _dispatched_ops().items() for f in fields - passed.get(kind, set())
+    )
+    assert not missing, 'apply_edits op fields never passed by tests/test_all_tools/: %s' % missing
+
+
+def test_apply_edits_checks_the_node_fields_of_every_op() -> None:
+    # the pre-check (_check_batch) knows every op the dispatcher runs and checks each field that names
+    # a node; an op or a node field added only to the dispatcher would run unchecked
+    import ast
+
+    block = designer_helpers.source().split('_NODE_FIELDS: dict[str, tuple[str, ...]] = ', 1)[1].split('\n}', 1)[0]
+    node_fields = cast(dict[str, tuple[str, ...]], ast.literal_eval(block + '\n}'))
+    dispatched = _dispatched_ops()
+    assert dispatched and set(node_fields) == set(dispatched)
+    for kind, fields in dispatched.items():
+        assert fields & {'node', 'from', 'to'} == set(node_fields[kind]), (kind, fields, node_fields[kind])
 
 
 def test_apply_edits_docstring_lists_every_op_and_field() -> None:
@@ -155,10 +202,9 @@ def test_relative_paths_are_resolved_here_not_in_designer(monkeypatch: pytest.Mo
     server.export_outputs('Mat', 'renders')
     server.save_package('Mat', 'out/mat.sbs')
     server.save_package('pkg.sbs')
-    server.import_bitmap('ref.png', graph='Mat')
     server.create_graph('Mat2', save_path='mat2.sbs')
     server.apply_edits([{'op': 'bitmap', 'path': 'img.png', 'ref': 'i'}], graph='Mat')
-    for name in ('renders', 'out/mat.sbs', 'pkg.sbs', 'ref.png', 'mat2.sbs', 'img.png'):
+    for name in ('renders', 'out/mat.sbs', 'pkg.sbs', 'mat2.sbs', 'img.png'):
         # the absolute path, however the call is quoted (an edit wraps it in one more string)
         assert any(os.path.join(here, name) in code for code in sent), (name, [c[-200:] for c in sent])
     server.save_package('Mat')  # a graph identifier stays as it is

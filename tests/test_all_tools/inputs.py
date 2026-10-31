@@ -1,4 +1,4 @@
-"""Exposed inputs and graph size: set_graph_size, expose_param, list_graph_inputs,
+"""Exposed inputs and graph size: set_graph_size, apply_edits' expose op, list_graph_inputs,
 remove_graph_input, and parameters driven by functions."""
 
 import re
@@ -24,22 +24,27 @@ async def run(ctx: Ctx) -> None:
     await c('set_graph_size', {'size_log2': 9, 'overridable': True, **G})  # render checks need it
     t = text(
         await c(
-            'expose_param',
+            'apply_edits',
             {
-                'node_id': lv,
-                'param': 'leveloutlow',
-                'input_id': 'floor',
-                'label': 'Floor',
-                'default': [0.25] * 4,
-                'min': 0,
-                'max': 1,
+                'ops': [
+                    {
+                        'op': 'expose',
+                        'node': lv,
+                        'param': 'leveloutlow',
+                        'input_id': 'floor',
+                        'label': 'Floor',
+                        'default': [0.25] * 4,
+                        'min': 0,
+                        'max': 1,
+                    }
+                ],
                 **G,
             },
         )
     )
-    check('expose_param', 'float4 with range', "graph input 'floor'" in t, t)
-    t = text(await c('expose_param', {'node_id': slope, 'param': 'Samples', **G}))
-    check('expose_param', 'int, defaults to current value', "'Samples'" in t and 'default 16' in t, t)
+    check('apply_edits', 'expose: float4 with range', "graph input 'floor'" in t, t)
+    t = text(await c('apply_edits', {'ops': [{'op': 'expose', 'node': slope, 'param': 'Samples'}], **G}))
+    check('apply_edits', 'expose: int, defaults to current value', "'Samples'" in t and 'default 16' in t, t)
     # a failure after the function graph was created leaves no function graph behind
     # (REVIEW.md HLP-3): the getter for float4 renamed to a type that doesn't exist
     helpers_src = helpers_source()
@@ -65,8 +70,8 @@ async def run(ctx: Ctx) -> None:
     )
     # ...and the parameter keeps the value it had (adding the graph reset it; REVIEW.md HLP-21)
     check(
-        'expose_param',
-        'a failure midway leaves nothing behind',
+        'apply_edits',
+        'expose: a failure midway leaves nothing behind',
         'FAILED' in t and 'LEFT_GRAPH=False LEFT_INPUT=False VALUE=0.80' in t,
         t.strip()[-160:],
     )
@@ -98,21 +103,25 @@ async def run(ctx: Ctx) -> None:
         )
     )
     check(
-        'expose_param',
-        'a failure on a reused empty function graph leaves no node in it',
+        'apply_edits',
+        'expose: a failure on a reused empty function graph leaves no node in it',
         'FAILED' in t and 'LEFT_NODES=0 LEFT_INPUT=False' in t,
         t.strip()[-160:],
     )
     # setting a driven parameter would change only a hidden constant (REVIEW.md HLP-2)
-    r_ = await c('set_params', {'node_id': lv, 'params': {'leveloutlow': [0.5] * 4}, **G})
+    r_ = await c('apply_edits', {'ops': [{'op': 'set', 'node': lv, 'params': {'leveloutlow': [0.5] * 4}}], **G})
     check(
-        'set_params',
-        'refuses a parameter driven by a graph input',
+        'apply_edits',
+        'set: refuses a parameter driven by a graph input',
         r_.is_error and "driven by graph input 'floor'" in text(r_),
         text(r_),
     )
-    r_ = await c('expose_param', {'node_id': lv, 'param': 'leveloutlow', 'input_id': 'floor', **G})
-    check('expose_param', 'error on duplicate input', r_.is_error and 'already has an input' in text(r_), text(r_))
+    r_ = await c(
+        'apply_edits', {'ops': [{'op': 'expose', 'node': lv, 'param': 'leveloutlow', 'input_id': 'floor'}], **G}
+    )
+    check(
+        'apply_edits', 'expose: error on duplicate input', r_.is_error and 'already has an input' in text(r_), text(r_)
+    )
     t = text(await c('list_graph_inputs', G))
     check(
         'list_graph_inputs',
@@ -121,23 +130,28 @@ async def run(ctx: Ctx) -> None:
         t,
     )
     await c(
-        'expose_param',
+        'apply_edits',
         {
-            'node_id': slope,
-            'param': 'Intensity',
-            'input_id': 'slope_amount',
-            'group': 'Shape',
-            'step': 0.5,
-            'min': 0,
-            'max': 20,
+            'ops': [
+                {
+                    'op': 'expose',
+                    'node': slope,
+                    'param': 'Intensity',
+                    'input_id': 'slope_amount',
+                    'group': 'Shape',
+                    'step': 0.5,
+                    'min': 0,
+                    'max': 20,
+                }
+            ],
             **G,
         },
     )
     t = text(await c('list_graph_inputs', G))
     line = next((l for l in t.splitlines() if l.startswith('slope_amount')), '')
-    check('expose_param', 'group + step', "group='Shape'" in line and 'step=0.5' in line, line)
+    check('apply_edits', 'expose: group + step', "group='Shape'" in line and 'step=0.5' in line, line)
     await c('remove_graph_input', {'input_id': 'slope_amount', **G})
-    await c('expose_param', {'node_id': lv, 'param': 'levelinmid', 'input_id': 'mid', **G})
+    await c('apply_edits', {'ops': [{'op': 'expose', 'node': lv, 'param': 'levelinmid', 'input_id': 'mid'}], **G})
     extra = (
         GRAPH_OF % TEST_GRAPH
         + (
@@ -161,7 +175,7 @@ async def run(ctx: Ctx) -> None:
 
     # an empty function graph on a parameter drives nothing (REVIEW.md HLP-13, HLP-16),
     # measured: adding one resets the stored value to its default and the output follows
-    # that value; set_params then sets the value (which deletes the empty graph) and the
+    # that value; a set op then sets the value (which deletes the empty graph) and the
     # output follows again
     def stats_max(text_: str) -> float | None:
         m = re.search(r'^\w: min [0-9.]+  max ([0-9.]+)', text_, re.M)
@@ -176,7 +190,7 @@ async def run(ctx: Ctx) -> None:
         % lv
     )
     max_default = stats_max(text(await c('node_stats', {'node_id': lv, **G})))
-    await c('set_params', {'node_id': lv, 'params': {'levelouthigh': [0.5, 0.5, 0.5, 1]}, **G})
+    await c('apply_edits', {'ops': [{'op': 'set', 'node': lv, 'params': {'levelouthigh': [0.5, 0.5, 0.5, 1]}}], **G})
     max_half = stats_max(text(await c('node_stats', {'node_id': lv, **G})))
     empty_fn = text(
         await c(
@@ -205,7 +219,9 @@ async def run(ctx: Ctx) -> None:
         % (max_default, max_half, max_empty, empty_fn.strip()),
     )
     t = text(await c('describe_graph', {'node_ids': [lv], 'include_params': True, **G}))
-    r_ = await c('set_params', {'node_id': lv, 'params': {'levelouthigh': [0.5, 0.5, 0.5, 1]}, **G})
+    r_ = await c(
+        'apply_edits', {'ops': [{'op': 'set', 'node': lv, 'params': {'levelouthigh': [0.5, 0.5, 0.5, 1]}}], **G}
+    )
     kept = text(
         await c(
             'execute_designer_code', {'code': probe + "print('GRAPH_KEPT=%s' % (n.getPropertyGraph(p) is not None))"}
@@ -213,8 +229,8 @@ async def run(ctx: Ctx) -> None:
     )
     max_set = stats_max(text(await c('node_stats', {'node_id': lv, **G})))
     check(
-        'set_params',
-        'an empty function graph is not "driven": the value is set and drives the output',
+        'apply_edits',
+        'set: an empty function graph is not "driven": the value is set and drives the output',
         not r_.is_error
         and 'levelouthigh <-' not in t
         and 'GRAPH_KEPT=False' in kept
@@ -223,17 +239,20 @@ async def run(ctx: Ctx) -> None:
         and abs(max_set - max_half) < 0.002,
         '%s | %s | max %s' % (text(r_).strip()[-80:], kept.strip(), max_set),
     )
-    # sweep_param and expose_param agree (they use the same test, REVIEW.md TST-20)
+    # sweep_param and the expose op agree (they use the same test, REVIEW.md TST-20)
     await c('execute_designer_code', {'code': probe + "n.newPropertyGraph(p, 'SDSBSFunctionGraph')"})
     r_sweep = await c(
         'sweep_param', {'node_id': lv, 'param': 'levelouthigh', 'values': [[0.4] * 4, [0.6] * 4], 'tile_size': 64, **G}
     )
     await c('execute_designer_code', {'code': probe + "n.newPropertyGraph(p, 'SDSBSFunctionGraph')"})
-    r_expose = await c('expose_param', {'node_id': lv, 'param': 'levelouthigh', 'input_id': 'empty_fn_check', **G})
+    r_expose = await c(
+        'apply_edits',
+        {'ops': [{'op': 'expose', 'node': lv, 'param': 'levelouthigh', 'input_id': 'empty_fn_check'}], **G},
+    )
     await c('remove_graph_input', {'input_id': 'empty_fn_check', **G})
     check(
         'sweep_param',
-        'an empty function graph is not "driven" for sweep_param and expose_param',
+        'an empty function graph is not "driven" for sweep_param and the expose op',
         not r_sweep.is_error and not r_expose.is_error,
         (text(r_sweep) if r_sweep.is_error else '') + (text(r_expose) if r_expose.is_error else '') or 'both ran',
     )
@@ -245,10 +264,10 @@ async def run(ctx: Ctx) -> None:
         "leveloutlow <- graph input 'floor'" in t and 'levelinmid <- a function' in t,
         t,
     )
-    r_ = await c('expose_param', {'node_id': lv, 'param': 'levelinmid', 'input_id': 'mid2', **G})
+    r_ = await c('apply_edits', {'ops': [{'op': 'expose', 'node': lv, 'param': 'levelinmid', 'input_id': 'mid2'}], **G})
     check(
-        'expose_param',
-        'refuses a parameter driven by a function',
+        'apply_edits',
+        'expose: refuses a parameter driven by a function',
         r_.is_error and 'already driven by a function' in text(r_),
         text(r_),
     )

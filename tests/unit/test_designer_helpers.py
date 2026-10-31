@@ -253,7 +253,7 @@ def test_no_name_is_defined_by_two_parts() -> None:
 
 
 def _sent_by_tools(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """The scripts two tools send to Designer: describe_graph (helpers + call) and add_node (a quick edit,
+    """The scripts two tools send to Designer: describe_graph (helpers + call) and apply_edits (an edit,
     the helpers + call wrapped in an undo group, as the argument of compile())."""
     sent: list[str] = []
 
@@ -263,7 +263,7 @@ def _sent_by_tools(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
     patch_server(monkeypatch, '_bridge', bridge)
     server.describe_graph('g')
-    server.add_node('levels', graph='g')
+    server.apply_edits([{'op': 'add', 'definition': 'levels'}], graph='g')
     wrapped = next(
         n for n in ast.walk(ast.parse(sent[1])) if isinstance(n, ast.Call) and getattr(n.func, 'id', None) == 'compile'
     )
@@ -275,5 +275,5 @@ def test_tools_send_the_joined_parts_ahead_of_their_call(monkeypatch: pytest.Mon
     # other); this checks what a tool actually sends, on both paths (plain call, quick edit)
     expected = designer_helpers.source() + '\n\n'
     for code in _sent_by_tools(monkeypatch):
-        assert code.startswith(expected) and code[len(expected) :].split('(')[0] in ('describe_graph', 'add_node')
+        assert code.startswith(expected) and code[len(expected) :].split('(')[0] in ('describe_graph', 'apply_edits')
     compile(designer_helpers.source(), 'designer_helpers', 'exec')

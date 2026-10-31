@@ -146,7 +146,7 @@ def clipboard_fingerprint() -> str | None:
 
 
 # Designer's library packages loaded right now (their paths), so the run can unload the ones it
-# loaded itself (describe_node, add_node of library graphs) and leave the user's (REVIEW.md TST-30)
+# loaded itself (describe_node, add ops of library graphs) and leave the user's (REVIEW.md TST-30)
 LIBRARY_PACKAGES = (
     'import os, sd\nfrom sd.api.sdapplication import SDApplicationPath\napp = sd.getContext().getSDApplication()\n'
     "lib = os.path.normcase(os.path.join(app.getPath(SDApplicationPath.DefaultResourcesDir), 'packages'))\n"

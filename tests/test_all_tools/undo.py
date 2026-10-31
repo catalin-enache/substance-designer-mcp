@@ -8,22 +8,24 @@ from .common import NODE_EXISTS, TEST_GRAPH, UNDO_REDO, Ctx, added_id, check, sk
 async def run(ctx: Ctx) -> None:
     c, G = ctx.c, ctx.G
     # --- one tool call = one undo step (only acts while the self-test graph is in the editor)
-    ub = added_id(text(await c('add_node', {'definition': 'blur', 'position': [0, 400], **G})))
+    ub = added_id(
+        text(await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'blur', 'position': [0, 400]}], **G}))
+    )
     t = text(await c('execute_designer_code', {'code': UNDO_REDO % (TEST_GRAPH, 'Undo')}))
     if 'SCHEDULED' not in t:
-        skip('add_node', 'one undo step', 'self-test graph not in focus or Undo unavailable (%s)' % t.strip())
+        skip('apply_edits', 'add: one undo step', 'self-test graph not in focus or Undo unavailable (%s)' % t.strip())
     else:
         gone = 'EXISTS=False' in text(await c('execute_designer_code', {'code': NODE_EXISTS % (TEST_GRAPH, ub)}))
         if not gone:
             # Undo hit some other step: put it back at once
             await c('execute_designer_code', {'code': UNDO_REDO % (TEST_GRAPH, 'Redo')})
             await c('execute_designer_code', {'code': NODE_EXISTS % (TEST_GRAPH, ub)})
-        check('add_node', 'one Undo removes the added node', gone, '')
+        check('apply_edits', 'add: one Undo removes the added node', gone, '')
         if gone:
             await c('execute_designer_code', {'code': UNDO_REDO % (TEST_GRAPH, 'Redo')})
             back = 'EXISTS=True' in text(await c('execute_designer_code', {'code': NODE_EXISTS % (TEST_GRAPH, ub)}))
-            check('add_node', 'Redo restores it', back, '')
-    await c('delete_nodes', {'node_ids': [ub], **G})
+            check('apply_edits', 'add: Redo restores it', back, '')
+    await c('apply_edits', {'ops': [{'op': 'delete', 'node': ub}], **G})
     t = text(
         await c(
             'execute_designer_code',
@@ -60,4 +62,4 @@ async def run(ctx: Ctx) -> None:
                 for i in two
             ]
             check('execute_designer_code', 'one Redo restores it', all(states), str(states))
-    await c('delete_nodes', {'node_ids': list(two), **G})
+    await c('apply_edits', {'ops': [{'op': 'delete', 'node': n} for n in list(two)], **G})

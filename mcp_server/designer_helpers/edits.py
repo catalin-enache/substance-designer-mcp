@@ -24,12 +24,13 @@ from .graph_inputs import _driving_graph, _plain_binding
 
 
 def _target(g: SDSBSCompGraph, node_id: str | None) -> SDSBSCompNode | SDSBSCompGraph:
-    """'graph' (or empty) addresses the graph's own parameters, e.g. $outputsize."""
-    if node_id in (None, '', 'graph'):
+    """'graph' addresses the graph's own parameters, e.g. $outputsize (only that name: an empty id is
+    no node, as in apply_edits' pre-check; REVIEW.md HLP-45)."""
+    if node_id == 'graph':
         return g
     node = g.getNodeFromId(str(node_id))
     if node is None:
-        raise RuntimeError('node %s not found in graph %s' % (node_id, g.getIdentifier()))
+        raise RuntimeError('node %r not found in graph %s' % (node_id, g.getIdentifier()))
     return cast(SDSBSCompNode, node)  # the nodes of a compositing graph
 
 
@@ -117,14 +118,14 @@ def set_params(graph_id: str | SDSBSCompGraph | None, node_id: str | None, param
 
     g = find_graph(graph_id)
     target = _target(g, node_id)
-    is_graph = node_id in (None, '', 'graph')
+    is_graph = node_id == 'graph'
     checked = []  # every value is checked before any is set
     for pid, value in params.items():
         prop = target.getPropertyFromId(pid, SDPropertyCategory.Input)
         if prop is None:
             raise RuntimeError('no parameter %r on %s; see describe_node' % (pid, node_id or 'graph'))
         if prop.isConnectable():
-            raise RuntimeError('%r is an input connector; use connect' % pid)
+            raise RuntimeError('%r is an input connector; connect to it (a connect op)' % pid)
         if (
             is_graph
             and pid == '$outputsize'
@@ -141,7 +142,7 @@ def set_params(graph_id: str | SDSBSCompGraph | None, node_id: str | None, param
             # setting it would cut the parameter loose from its graph input or function
             source = _plain_binding(driven)
             raise RuntimeError(
-                "%s.%s is driven by %s; set that instead (set_params node_id='graph')"
+                "%s.%s is driven by %s; set that instead (a set op on node 'graph')"
                 % (node_id, pid, 'graph input %r' % source if source else 'a function')
             )
         checked.append((pid, prop, _make_value(prop, value)))

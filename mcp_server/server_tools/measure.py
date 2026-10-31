@@ -198,8 +198,8 @@ def sweep_param(
     strip plus per-value channel ranges, then restores the original value. node_id='graph' with
     param=<input id> sweeps an exposed graph input (then view_node is required). view_node: the
     node to look at (default: the swept node), e.g. the final output while sweeping an early
-    node. Values are converted as in set_params, but a $ parameter is made Absolute for the sweep
-    even where set_params refuses it or leaves it inherited (an overridable graph's $outputsize, the
+    node. Values are converted as in apply_edits' set op, but a $ parameter is made Absolute for the sweep
+    even where a set op refuses it or leaves it inherited (an overridable graph's $outputsize, the
     graph's $randomseed), so its values are absolute ones. The parameter ends where it started,
     inheritance included, but the sweep is an undo step and marks the package as modified."""
     if not values:

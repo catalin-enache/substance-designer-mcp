@@ -1,5 +1,5 @@
-"""The temporary graph and the one-off edit tools (create_graph, add_node, connect, disconnect,
-move_nodes, delete_nodes, execute_designer_code, describe_graph, preview_node)."""
+"""The temporary graph and one-op edits (create_graph; apply_edits' add, connect, disconnect, move
+and delete ops; execute_designer_code, describe_graph, preview_node)."""
 
 import os
 
@@ -21,20 +21,29 @@ async def create(ctx: Ctx) -> None:
     check('diff_graph', 'error: never saved', r_.is_error and 'never been saved' in text(r_), text(r_))
     r_ = await c('diff_graph', {'against': 'latest', 'graph': SAVED_GRAPH})
     check('diff_graph', 'error: no snapshots yet', r_.is_error and 'no snapshots for' in text(r_), text(r_))
-    t = text(await c('add_node', {'definition': 'noise_clouds_2.sbs/clouds_2', 'params': {'scale': 4}, **G}))
-    check('add_node', 'library + param', 'instance:clouds_2' in t and '-> 4' in t, t)
+    t = text(
+        await c(
+            'apply_edits',
+            {'ops': [{'op': 'add', 'definition': 'noise_clouds_2.sbs/clouds_2', 'params': {'scale': 4}}], **G},
+        )
+    )
+    check('apply_edits', 'add: library + param', 'instance:clouds_2' in t and '-> 4' in t, t)
     clouds = added_id(t)
-    slope = added_id(text(await c('add_node', {'definition': 'slope_blur.sbs/slope_blur_grayscale_2', **G})))
-    t = text(await c('add_node', {'definition': 'levels', **G}))
-    check('add_node', 'atomic', 'levels' in t, t.splitlines()[0])
+    slope = added_id(
+        text(
+            await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'slope_blur.sbs/slope_blur_grayscale_2'}], **G})
+        )
+    )
+    t = text(await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'levels'}], **G}))
+    check('apply_edits', 'add: atomic', 'levels' in t, t.splitlines()[0])
     lv = added_id(t)
-    out = added_id(text(await c('add_node', {'definition': 'output', **G})))
-    r_ = await c('add_node', {'definition': 'not_a_real_node', **G})
-    check('add_node', 'error on unknown type', r_.is_error and 'neither an atomic' in text(r_), '')
+    out = added_id(text(await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'output'}], **G})))
+    r_ = await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'not_a_real_node'}], **G})
+    check('apply_edits', 'add: error on unknown type', r_.is_error and 'neither an atomic' in text(r_), '')
     # a bad param refuses the whole add, and says so: the node isn't left behind (REVIEW.md HLP-30)
     COUNT_NODES = GRAPH_OF % TEST_GRAPH + "print('NODES=%d' % len(g.getNodes()))"
     before = text(await c('execute_designer_code', {'code': COUNT_NODES}))
-    r_ = await c('add_node', {'definition': 'levels', 'params': {'levelinhigh': 0.5}, **G})
+    r_ = await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'levels', 'params': {'levelinhigh': 0.5}}], **G})
     after = text(await c('execute_designer_code', {'code': COUNT_NODES}))
     # if removing it fails too, both errors are reported (REVIEW.md HLP-37)
     t = text(
@@ -58,14 +67,14 @@ async def create(ctx: Ctx) -> None:
         )
     )
     check(
-        'add_node',
-        'a failed removal is reported with the error that caused it',
+        'apply_edits',
+        'add: a failed removal is reported with the error that caused it',
         'expects 4' in t and 'delete failed on purpose' in t,
         t.strip()[-200:],
     )
     check(
-        'add_node',
-        'a bad param leaves no node behind, and says so',
+        'apply_edits',
+        'add: a bad param leaves no node behind, and says so',
         r_.is_error and 'expects 4' in text(r_) and 'not added' in text(r_) and before == after and 'NODES=' in before,
         text(r_).strip()[-120:] + ' | ' + before.strip() + ' -> ' + after.strip(),
     )
@@ -87,11 +96,11 @@ async def wire(ctx: Ctx) -> None:
         (slope, lv, 'input1'),
         (lv, out, 'inputNodeOutput'),
     ]:
-        t = text(await c('connect', {'from_node': a, 'to_node': b, 'to_input': port, **G}))
+        t = text(await c('apply_edits', {'ops': [{'op': 'connect', 'from': a, 'to': b, 'input': port}], **G}))
         linked.append('-> %s.%s' % (b, port) in t)
-    check('connect', '4 links', all(linked), str(linked))
-    r_ = await c('connect', {'from_node': clouds, 'to_node': lv, 'to_input': 'nope', **G})
-    check('connect', 'error on bad port', r_.is_error and 'connectors:' in text(r_), text(r_))
+    check('apply_edits', 'connect: 4 links', all(linked), str(linked))
+    r_ = await c('apply_edits', {'ops': [{'op': 'connect', 'from': clouds, 'to': lv, 'input': 'nope'}], **G})
+    check('apply_edits', 'connect: error on bad port', r_.is_error and 'connectors:' in text(r_), text(r_))
     t = text(
         await c(
             'execute_designer_code',
@@ -160,16 +169,27 @@ async def wire(ctx: Ctx) -> None:
     else:
         skip('quit_designer', 'refuses with unsaved changes', 'self-test package not reported as modified')
     t = text(
-        await c('move_nodes', {'positions': {clouds: [-600, 0], slope: [-300, 0], lv: [0, 0], out: [300, 0]}, **G})
+        await c(
+            'apply_edits',
+            {
+                'ops': [
+                    {'op': 'move', 'node': clouds, 'position': [-600, 0]},
+                    {'op': 'move', 'node': slope, 'position': [-300, 0]},
+                    {'op': 'move', 'node': lv, 'position': [0, 0]},
+                    {'op': 'move', 'node': out, 'position': [300, 0]},
+                ],
+                **G,
+            },
+        )
     )
-    check('move_nodes', '4 moved', t.count('moved') == 4, '')
+    check('apply_edits', 'move: 4 moved', t.count('moved') == 4, '')
     await c('open_graph', {'graph': TEST_GRAPH})  # fit the view to the nodes so far
     t = text(await c('describe_graph', {'include_params': True, **G}))
     check('describe_graph', 'links + params', 'Effect<-%s' % clouds in t and 'Samples = 16' in t, t.splitlines()[0])
     r_ = await c('preview_node', {'node_id': slope, **G})
     check('preview_node', 'intermediate node', is_image(r_), '' if is_image(r_) else text(r_))
-    t = text(await c('disconnect', {'node_id': slope, 'input_id': 'Effect', **G}))
-    check('disconnect', 'one link', 'removed 1' in t, t)
-    tmp = added_id(text(await c('add_node', {'definition': 'blur', **G})))
-    t = text(await c('delete_nodes', {'node_ids': [tmp], **G}))
-    check('delete_nodes', 'one node', 'deleted %s blur' % tmp in t, t)
+    t = text(await c('apply_edits', {'ops': [{'op': 'disconnect', 'node': slope, 'input': 'Effect'}], **G}))
+    check('apply_edits', 'disconnect: one link', 'removed 1' in t, t)
+    tmp = added_id(text(await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'blur'}], **G})))
+    t = text(await c('apply_edits', {'ops': [{'op': 'delete', 'node': tmp}], **G}))
+    check('apply_edits', 'delete: one node', 'deleted %s blur' % tmp in t, t)

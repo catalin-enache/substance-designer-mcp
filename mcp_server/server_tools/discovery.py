@@ -93,7 +93,7 @@ def _library_index() -> _LibraryIndex:
 def search_nodes(query: str, limit: int = 30, include_hidden: bool = False) -> str:
     """Find node types by name, label, category or description, across atomic nodes and
     Designer's whole node library (not just loaded packages). Results show the `definition`
-    to pass to add_node / describe_node. Words in the query must all match."""
+    to pass to describe_node and to apply_edits' add op. Words in the query must all match."""
     index = _library_index()
     words = [w.lower() for w in query.split()]
 

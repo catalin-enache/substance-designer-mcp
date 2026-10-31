@@ -4,6 +4,8 @@ sweep_param, Designer library packages, two open graphs with one name."""
 import os
 import re
 import time
+from collections.abc import Callable
+from typing import Any
 
 from .common import TEST_GRAPH, Ctx, added_id, check, helpers_source, skip, text
 
@@ -38,32 +40,133 @@ async def run(ctx: Ctx) -> None:
         'REFUSED' in t and 'unsaved' in t and 'STILL_OPEN=1' in t,
         t.strip()[-200:],
     )
-    # several ids: a bad one changes nothing, not even the ones before it (REVIEW.md HLP-4)
-    spare = added_id(text(await c('add_node', {'definition': 'blur', 'position': [900, 900], **G})))
-    r_ = await c('delete_nodes', {'node_ids': [spare, 'no_such_node'], **G})
-    t = text(await c('describe_graph', {'node_ids': [spare], **G}))
-    check('delete_nodes', 'a bad id deletes nothing', r_.is_error and '%s blur @(900,900)' % spare in t, t[-120:])
-    r_ = await c('move_nodes', {'positions': {spare: [100, 100], 'no_such_node': [0, 0]}, **G})
-    t = text(await c('describe_graph', {'node_ids': [spare], **G}))
-    check('move_nodes', 'a bad id moves nothing', r_.is_error and '@(900,900)' in t, t[-120:])
-    # 'graph' is no node: refused before anything is deleted or moved (REVIEW.md HLP-31)
-    r_ = await c('delete_nodes', {'node_ids': [spare, 'graph'], **G})
-    t = text(await c('describe_graph', {'node_ids': [spare], **G}))
-    check(
-        'delete_nodes',
-        "the id 'graph' deletes nothing",
-        r_.is_error and '%s blur @(900,900)' % spare in t,
-        text(r_).strip()[-100:] + ' | ' + t[-80:],
+    # apply_edits checks every node a batch names before running any op: a bad id, 'graph' where a
+    # node is needed, or a ref used before its add changes nothing, not even the ops before it (as
+    # delete_nodes and move_nodes did for several ids, REVIEW.md HLP-4 and HLP-31, and HLP-41)
+    # each case's first op changes a fresh probe node visibly (a move, or the delete in the delete-then-use
+    # case), which describe_graph shows (its position, or the node gone), so
+    # a batch applied up to the bad op shows as a change; one "before" per case, so one failure
+    # doesn't fail the cases after it (REVIEW.md TST-86)
+    first = {'op': 'move', 'position': [100, 100]}
+    cases: tuple[tuple[str, Callable[[str], list[dict[str, Any]]], str], ...] = (
+        (
+            'a bad id',
+            lambda p: [{**first, 'node': p}, {'op': 'set', 'node': 'no_such_node', 'params': {}}],
+            "node 'no_such_node' not found",
+        ),
+        (
+            'a bad id to delete',
+            lambda p: [{**first, 'node': p}, {'op': 'delete', 'node': 'no_such_node'}],
+            "node 'no_such_node' not found",
+        ),
+        (
+            "'graph' as a node to delete",
+            lambda p: [{**first, 'node': p}, {'op': 'delete', 'node': 'graph'}],
+            "node 'graph' not found",
+        ),
+        (
+            "'graph' as a node to move",
+            lambda p: [{**first, 'node': p}, {'op': 'move', 'node': 'graph', 'position': [0, 0]}],
+            "node 'graph' not found",
+        ),
+        (
+            "'graph' as a connect source",
+            lambda p: [{**first, 'node': p}, {'op': 'connect', 'from': 'graph', 'to': p, 'input': 'input1'}],
+            "node 'graph' not found",
+        ),
+        (
+            "'graph' as a connect target",
+            lambda p: [{**first, 'node': p}, {'op': 'connect', 'from': p, 'to': 'graph', 'input': 'input1'}],
+            "node 'graph' not found",
+        ),
+        (
+            "'graph' to disconnect",
+            lambda p: [{**first, 'node': p}, {'op': 'disconnect', 'node': 'graph', 'input': 'input1'}],
+            "node 'graph' not found",
+        ),
+        ('an unknown op', lambda p: [{**first, 'node': p}, {'op': 'bogus', 'node': p}], "unknown op 'bogus'"),
+        (
+            'a ref used before its add',
+            lambda p: [
+                {**first, 'node': p},
+                {'op': 'set', 'node': 'later', 'params': {}},
+                {'op': 'add', 'definition': 'blur', 'ref': 'later'},
+            ],
+            "node 'later' not found",
+        ),
+        # a node an earlier op of the batch deletes is gone by the time a later op uses it (REVIEW.md HLP-42)
+        (
+            'a node an earlier op deletes',
+            lambda p: [{'op': 'delete', 'node': p}, {**first, 'node': p}],
+            'deleted by op 0',
+        ),
+        (
+            'a node deleted twice',
+            lambda p: [{**first, 'node': p}, {'op': 'delete', 'node': p}, {'op': 'delete', 'node': p}],
+            'deleted by op 1',
+        ),
+        (
+            'a ref deleted, then used',
+            lambda p: [
+                {**first, 'node': p},
+                {'op': 'add', 'definition': 'blur', 'ref': 'x'},
+                {'op': 'delete', 'node': 'x'},
+                {'op': 'set', 'node': 'x', 'params': {}},
+            ],
+            'deleted by op 2',
+        ),
+        # an op kind or a ref that isn't text gets the batch's own refusal (REVIEW.md HLP-43)
+        (
+            'a ref that is not text',
+            lambda p: [{**first, 'node': p}, {'op': 'add', 'definition': 'blur', 'ref': 1}],
+            'ref must be a string',
+        ),
+        ('an op kind that is not text', lambda p: [{**first, 'node': p}, {'op': ['set'], 'node': p}], 'unknown op'),
+        # 'graph' names the graph, never a ref: the check and the run would read it differently (REVIEW.md HLP-44)
+        (
+            'a ref named graph',
+            lambda p: [
+                {**first, 'node': p},
+                {'op': 'add', 'definition': 'blur', 'ref': 'graph'},
+                {'op': 'delete', 'node': 'graph'},
+                {'op': 'set', 'node': 'graph', 'params': {}},
+            ],
+            "ref 'graph' is reserved",
+        ),
+        # only 'graph' names the graph; an empty node isn't one (REVIEW.md HLP-45)
+        (
+            'an empty node in a set op',
+            lambda p: [{**first, 'node': p}, {'op': 'set', 'node': '', 'params': {}}],
+            "node '' not found",
+        ),
     )
-    r_ = await c('move_nodes', {'positions': {spare: [100, 100], 'graph': [0, 0]}, **G})
-    t = text(await c('describe_graph', {'node_ids': [spare], **G}))
-    check(
-        'move_nodes',
-        "the id 'graph' moves nothing",
-        r_.is_error and '@(900,900)' in t,
-        text(r_).strip()[-100:] + ' | ' + t[-80:],
-    )
-    await c('delete_nodes', {'node_ids': [spare], **G})
+
+    def node_ids(t: str) -> set[str]:
+        return {l.split()[0] for l in t.splitlines() if l.split() and l.split()[0].isdigit()}
+
+    for name, ops, bad in cases:
+        r_had = await c('describe_graph', {'limit': 1000, **G})
+        # a failed describe gives no ids: then the cleanup deletes the probe only, not the whole graph
+        # (REVIEW.md TST-89)
+        had = None if r_had.is_error else node_ids(text(r_had))
+        probe = added_id(
+            text(await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'blur', 'position': [900, 900]}], **G}))
+        )
+        try:
+            graph_before = text(await c('describe_graph', {'include_params': True, **G}))
+            r_ = await c('apply_edits', {'ops': ops(probe), **G})
+            graph_after = text(await c('describe_graph', {'include_params': True, **G}))
+            check(
+                'apply_edits',
+                '%s: refused before any op runs, nothing changed' % name,
+                r_.is_error and bad in text(r_) and 'nothing was applied' in text(r_) and graph_after == graph_before,
+                text(r_).strip()[-150:],
+            )
+        finally:
+            # the probe, and whatever a broken pre-check let a batch add
+            r_now = await c('describe_graph', {'limit': 1000, **G})
+            new = node_ids(text(r_now)) - had if had is not None and not r_now.is_error else {probe}
+            await c('apply_edits', {'ops': [{'op': 'delete', 'node': n} for n in sorted(new)], **G})
     # nor for the tools that need a node: a clear refusal, nothing changed (REVIEW.md HLP-41)
     refused = "node 'graph' not found"
 
@@ -71,26 +174,14 @@ async def run(ctx: Ctx) -> None:
         m = re.search(r'comments: (\d+)', t)
         return int(m.group(1)) if m else 0
 
-    links_before = text(await c('describe_graph', {'node_ids': [lv], **G}))
-    r_ = await c('connect', {'from_node': 'graph', 'to_node': lv, 'to_input': 'input1', **G})
-    t = text(await c('describe_graph', {'node_ids': [lv], **G}))
-    check(
-        'connect',
-        "from_node 'graph' is refused, the link left as it was",
-        r_.is_error and refused in text(r_) and t == links_before,
-        text(r_).strip()[-100:] + ' | ' + t[-100:],
+    r_ = await c(
+        'apply_edits',
+        {'ops': [{'op': 'expose', 'node': 'graph', 'param': '$randomseed', 'input_id': 'hlp41_probe'}], **G},
     )
-    for tool, args in (
-        ('connect', {'from_node': lv, 'to_node': 'graph', 'to_input': 'input1'}),
-        ('disconnect', {'node_id': 'graph', 'input_id': 'input1'}),
-    ):
-        r_ = await c(tool, {**args, **G})
-        check(tool, "the id 'graph' is refused as a node", r_.is_error and refused in text(r_), text(r_).strip()[-120:])
-    r_ = await c('expose_param', {'node_id': 'graph', 'param': '$randomseed', 'input_id': 'hlp41_probe', **G})
     t = text(await c('list_graph_inputs', G))
     check(
-        'expose_param',
-        "node_id 'graph' is refused, no graph input left",
+        'apply_edits',
+        "expose: node 'graph' is refused, no graph input left",
         r_.is_error and refused in text(r_) and 'hlp41_probe' not in t,
         text(r_).strip()[-100:],
     )
@@ -114,6 +205,14 @@ async def run(ctx: Ctx) -> None:
     )
     r_ = await c('sweep_param', {'node_id': ctx.clouds, 'param': 'scale', 'values': [7], 'view_node': 'graph', **G})
     check('sweep_param', "view_node 'graph' is refused", r_.is_error and refused in text(r_), text(r_).strip()[-120:])
+    # an empty node_id is no name for the graph either, as in apply_edits' set op (REVIEW.md HLP-45)
+    r_ = await c('sweep_param', {'node_id': '', 'param': 'scale', 'values': [7], 'view_node': ctx.clouds, **G})
+    check(
+        'sweep_param',
+        'an empty node_id is refused, not read as the graph',
+        r_.is_error and "node '' not found" in text(r_),
+        text(r_).strip()[-120:],
+    )
     # a failed restore in sweep_param still restores the inheritance and keeps the first
     # error (REVIEW.md HLP-7): setPropertyValue made to fail when it puts the original back
     t = text(

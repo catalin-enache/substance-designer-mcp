@@ -91,13 +91,13 @@ from test_all_tools.common import (  # noqa: E402
 CATEGORIES: list[Callable[[Ctx], Awaitable[None]]] = [
     bridge.run,  # designer_status, cancel_designer_job, bridge security and queue, sd_run.py
     discovery.run,  # search_nodes, describe_node
-    graph_edit.create,  # create_graph, add_node: the self-test graph and its nodes
-    params.run,  # set_params, inheritance and seed facts
-    graph_edit.wire,  # connect, execute_designer_code, move/disconnect/delete, describe_graph, preview_node
-    bitmaps.run,  # import_bitmap, compare_to_reference
+    graph_edit.create,  # create_graph, add ops: the self-test graph and its nodes
+    params.run,  # set ops, inheritance and seed facts
+    graph_edit.wire,  # connect/move/disconnect/delete ops, execute_designer_code, describe_graph, preview_node
+    bitmaps.run,  # bitmap ops, compare_to_reference
     measure.run,  # node_stats, sweep_param, check_tiling, read_designer_log
     batch.run,  # apply_edits
-    inputs.run,  # set_graph_size, expose_param, list_graph_inputs, remove_graph_input
+    inputs.run,  # set_graph_size, expose ops, list_graph_inputs, remove_graph_input
     layout.run,  # snapshot_graph, list_snapshots, diff_graph, arrange_graph, add_frame, add_comment
     facts.run,  # Designer facts AGENTS.md relies on
     lookup.run,  # same-named and library graphs; a node with several outputs

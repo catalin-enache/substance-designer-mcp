@@ -15,10 +15,10 @@ async def run(ctx: Ctx) -> None:
     check('export_outputs', 'from Designer', 'height.png  512x512' in t, t)
     t = text(await c('sbsar_info', {'sbs_path': sbs}))
     check('sbsar_info', 'graph + output', 'pkg://%s' % TEST_GRAPH in t and 'OUTPUT height' in t, t.splitlines()[0])
-    # the graph seed set with set_params is still a control of the cooked graph (REVIEW.md HLP-25)
+    # the graph seed set with a set op is still a control of the cooked graph (REVIEW.md HLP-25)
     check(
         'sbsar_info',
-        'the graph seed set with set_params is still exposed',
+        'the graph seed set with a set op is still exposed',
         'INPUT $randomseed' in t,
         ' / '.join(l for l in t.splitlines() if 'INPUT' in l),
     )
@@ -143,7 +143,7 @@ async def run(ctx: Ctx) -> None:
         'inherited: %d (/65535); render seed exposed: %s' % (frozen, override, reached),
     )
     # and back to a new graph's seed for the later checks (REVIEW.md TST-37)
-    t = text(await c('set_params', {'node_id': 'graph', 'params': {'$randomseed': 0}, **G}))
+    t = text(await c('apply_edits', {'ops': [{'op': 'set', 'node': 'graph', 'params': {'$randomseed': 0}}], **G}))
     check('self-test', 'the graph seed checks put the seed back as it was', '5 -> 0' in t, t)
     render_dir = os.path.join(scratch, 'render')
     t = text(await c('render_sbs', {'sbs_path': sbs, 'output_dir': render_dir, 'outputs': ['height']}))
@@ -228,7 +228,7 @@ async def run(ctx: Ctx) -> None:
         text(r_).strip()[-150:],
     )
     if twin_id:
-        await c('delete_nodes', {'node_ids': [twin_id.group(1)], **G})
+        await c('apply_edits', {'ops': [{'op': 'delete', 'node': twin_id.group(1)}], **G})
     t = text(await c('sbsar_info', {'sbs_path': sbs}))
     check('sbsar_info', 'exposed input + size', 'INPUT floor FLOAT4' in t and 'INPUT $outputsize' in t, '')
     means = []

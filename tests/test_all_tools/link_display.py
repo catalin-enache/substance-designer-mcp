@@ -62,9 +62,11 @@ async def run(ctx: Ctx) -> None:
     t = text(await c('set_link_display', {'mode': 'wire', 'from_nodes': [clouds], **G}))
     check('set_link_display', 'nothing to change: no save, no reload', 'nothing to do' in t, t)
     # automatic selection, as AGENTS.md recommends: clouds feeds 3 inputs once this blend is in
-    tb = added_id(text(await c('add_node', {'definition': 'blend', 'position': [-400, -300], **G})))
+    tb = added_id(
+        text(await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'blend', 'position': [-400, -300]}], **G}))
+    )
     for port in ('source', 'destination'):
-        await c('connect', {'from_node': clouds, 'to_node': tb, 'to_input': port, **G})
+        await c('apply_edits', {'ops': [{'op': 'connect', 'from': clouds, 'to': tb, 'input': port}], **G})
     t = text(await c('set_link_display', {'mode': 'portal', 'fanout_at_least': 3, **G}))
     check(
         'set_link_display',
@@ -102,4 +104,4 @@ async def run(ctx: Ctx) -> None:
         t.split(';')[0],
     )
     await c('set_link_display', {'mode': 'wire', 'longer_than': 1, **G})
-    await c('delete_nodes', {'node_ids': [tb], **G})
+    await c('apply_edits', {'ops': [{'op': 'delete', 'node': tb}], **G})

@@ -19,8 +19,8 @@ async def run(ctx: Ctx) -> None:
     check('list_snapshots', 'all graphs', snap_path in t, t[:200])
     r_ = await c('diff_graph', {'against': 'no such label', **G})
     check('diff_graph', 'error: unknown snapshot label', r_.is_error and 'no snapshot matching' in text(r_), text(r_))
-    await c('set_params', {'node_id': lv, 'params': {'levelinhigh': [0.8] * 4}, **G})
-    tmp_node = added_id(text(await c('add_node', {'definition': 'blur', **G})))
+    await c('apply_edits', {'ops': [{'op': 'set', 'node': lv, 'params': {'levelinhigh': [0.8] * 4}}], **G})
+    tmp_node = added_id(text(await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'blur'}], **G})))
     t = text(await c('diff_graph', {'against': 'latest', **G}))
     check(
         'diff_graph',
@@ -30,8 +30,9 @@ async def run(ctx: Ctx) -> None:
     )
     t = text(await c('diff_graph', {'against': 'before tweak', **G}))
     check('diff_graph', 'by label', 'levelinhigh' in t, '')
-    await c('delete_nodes', {'node_ids': [tmp_node], **G})
-    await c('set_params', {'node_id': lv, 'params': {'levelinhigh': [1.0] * 4}, **G})  # undo the tweak
+    await c('apply_edits', {'ops': [{'op': 'delete', 'node': tmp_node}], **G})
+    # undo the tweak
+    await c('apply_edits', {'ops': [{'op': 'set', 'node': lv, 'params': {'levelinhigh': [1.0] * 4}}], **G})
     t = text(await c('diff_graph', {'against': 'latest', **G}))
     check(
         'diff_graph',

@@ -14,11 +14,16 @@ async def run(ctx: Ctx) -> None:
         'node_stats', 'stats + region + point', 'min' in t and 'pixel (0,0)' in t and 'region' in t, t.splitlines()[0]
     )
     uni = added_id(
-        text(await c('add_node', {'definition': 'uniform', 'params': {'outputcolor': [0.2, 0.4, 0.6, 0.8]}, **G}))
+        text(
+            await c(
+                'apply_edits',
+                {'ops': [{'op': 'add', 'definition': 'uniform', 'params': {'outputcolor': [0.2, 0.4, 0.6, 0.8]}}], **G},
+            )
+        )
     )
     t = text(await c('node_stats', {'node_id': uni, 'points': [[1, 1]], **G}))
     check('node_stats', 'exact known colour', 'R=0.2000, G=0.4000, B=0.6000, A=0.8000' in t, t.splitlines()[-1])
-    await c('delete_nodes', {'node_ids': [uni], **G})
+    await c('apply_edits', {'ops': [{'op': 'delete', 'node': uni}], **G})
 
     # --- parameter sweep, tiling, log
     before = text(await c('describe_graph', {'node_ids': [clouds], 'include_params': True, **G}))
@@ -119,12 +124,12 @@ async def run(ctx: Ctx) -> None:
     check('sweep_param', 'error on bad param', r_.is_error and 'not a parameter' in text(r_), text(r_))
     t = text(await c('check_tiling', {'node_id': clouds, **G}))
     check('check_tiling', 'tileable noise passes both axes', t.count('tiles seamlessly') == 2, t)
-    grad = added_id(text(await c('add_node', {'definition': 'gradient_linear_1', **G})))
+    grad = added_id(text(await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'gradient_linear_1'}], **G})))
     r_ = await c('check_tiling', {'node_id': grad, 'axis': 'diagonal', **G})
     check('check_tiling', 'error on bad axis', r_.is_error and 'axis must be' in text(r_), text(r_))
     t = text(await c('check_tiling', {'node_id': grad, 'axis': 'vertical', **G}))
     check('check_tiling', 'vertical gradient has a seam', 'VISIBLE SEAM' in t, t.splitlines()[-1])
-    await c('delete_nodes', {'node_ids': [grad], **G})
+    await c('apply_edits', {'ops': [{'op': 'delete', 'node': grad}], **G})
     t = text(await c('read_designer_log', {'contains': PLUGIN, 'lines': 5}))
     check('read_designer_log', 'finds bridge start', 'listening on' in t, t.splitlines()[0])
     # a warning of our own, so the filter has something to find (REVIEW.md TST-4)

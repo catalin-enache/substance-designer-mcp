@@ -1,4 +1,4 @@
-"""set_params: value types, $outputsize / $format / $randomseed and their inheritance, refusals; and
+"""apply_edits' set op: value types, $outputsize / $format / $randomseed and their inheritance, refusals; and
 the Designer facts about inheritance and seeds those checks rely on."""
 
 import re
@@ -8,21 +8,27 @@ from .common import GRAPH_OF, INHERIT, PIXELS, TEST_GRAPH, Ctx, added_id, check,
 
 async def run(ctx: Ctx) -> None:
     c, G, clouds, slope, lv = ctx.c, ctx.G, ctx.clouds, ctx.slope, ctx.lv
-    t = text(await c('set_params', {'node_id': slope, 'params': {'Samples': 16, 'Intensity': 8.0}, **G}))
-    check('set_params', 'int + float', '-> 16' in t and '-> 8.0' in t, t)
-    t = text(await c('set_params', {'node_id': lv, 'params': {'levelinlow': [0.3] * 4}, **G}))
-    check('set_params', 'float4', '(0.3, 0.3, 0.3, 0.3)' in t, t)
+    t = text(
+        await c(
+            'apply_edits', {'ops': [{'op': 'set', 'node': slope, 'params': {'Samples': 16, 'Intensity': 8.0}}], **G}
+        )
+    )
+    check('apply_edits', 'set: int + float', '-> 16' in t and '-> 8.0' in t, t)
+    t = text(await c('apply_edits', {'ops': [{'op': 'set', 'node': lv, 'params': {'levelinlow': [0.3] * 4}}], **G}))
+    check('apply_edits', 'set: float4', '(0.3, 0.3, 0.3, 0.3)' in t, t)
     # 10, not the 9 the graph was made with, so the check sees a change (REVIEW.md TST-60)
-    t = text(await c('set_params', {'node_id': 'graph', 'params': {'$outputsize': [10, 10]}, **G}))
-    check('set_params', 'graph $outputsize', '-> (10, 10)' in t, t)
-    await c('set_params', {'node_id': 'graph', 'params': {'$outputsize': [9, 9]}, **G})
+    t = text(
+        await c('apply_edits', {'ops': [{'op': 'set', 'node': 'graph', 'params': {'$outputsize': [10, 10]}}], **G})
+    )
+    check('apply_edits', 'set: graph $outputsize', '-> (10, 10)' in t, t)
+    await c('apply_edits', {'ops': [{'op': 'set', 'node': 'graph', 'params': {'$outputsize': [9, 9]}}], **G})
     # a node's $outputsize: made Absolute and taking effect (AGENTS.md, Graph size; TST-60)
-    t = text(await c('set_params', {'node_id': lv, 'params': {'$outputsize': [7, 7]}, **G}))
+    t = text(await c('apply_edits', {'ops': [{'op': 'set', 'node': lv, 'params': {'$outputsize': [7, 7]}}], **G}))
     inherit = text(await c('execute_designer_code', {'code': INHERIT % (TEST_GRAPH, lv)}))
     size = text(await c('node_stats', {'node_id': lv, **G}))
     check(
-        'set_params',
-        "a node's $outputsize is made Absolute and takes effect",
+        'apply_edits',
+        "set: a node's $outputsize is made Absolute and takes effect",
         'INHERIT=Absolute' in inherit and 'x: 7, y: 7' in inherit and '128x128' in size,
         inherit.strip() + ' | ' + size.splitlines()[0] if size else inherit,
     )
@@ -39,7 +45,7 @@ async def run(ctx: Ctx) -> None:
     # on an overridable graph it is refused (it would quietly make the size fixed), pointing
     # to set_graph_size, and the graph stays overridable (REVIEW.md HLP-22)
     await c('set_graph_size', {'size_log2': 9, 'overridable': True, **G})
-    r_ = await c('set_params', {'node_id': 'graph', 'params': {'$outputsize': [10, 10]}, **G})
+    r_ = await c('apply_edits', {'ops': [{'op': 'set', 'node': 'graph', 'params': {'$outputsize': [10, 10]}}], **G})
     still = text(
         await c(
             'execute_designer_code',
@@ -54,14 +60,14 @@ async def run(ctx: Ctx) -> None:
         )
     )
     check(
-        'set_params',
-        'graph $outputsize on an overridable graph: refused, still overridable',
+        'apply_edits',
+        'set: graph $outputsize on an overridable graph: refused, still overridable',
         r_.is_error and 'set_graph_size' in text(r_) and 'INHERIT=RelativeToParent' in still,
         text(r_).strip()[-120:] + ' | ' + still.strip(),
     )
     await c('set_graph_size', {'size_log2': 9, 'overridable': False, **G})
     # the graph's other $ parameters follow its parent too, and a value set while they do
-    # changes nothing, so set_params makes them Absolute (REVIEW.md HLP-24); measured on a
+    # changes nothing, so the set op makes them Absolute (REVIEW.md HLP-24); measured on a
     # generator that inherits the graph's format
     FORMAT_OF = GRAPH_OF % TEST_GRAPH + (
         'from sd.api.sdproperty import SDPropertyCategory\n'
@@ -91,11 +97,15 @@ async def run(ctx: Ctx) -> None:
         'FORMAT=RGBA8' in fact and 'INHERIT=RelativeToParent' in fact,
         fact.strip(),
     )
-    t = text(await c('set_params', {'node_id': 'graph', 'params': {'$format': '16_bits_per_channel'}, **G}))
+    t = text(
+        await c(
+            'apply_edits', {'ops': [{'op': 'set', 'node': 'graph', 'params': {'$format': '16_bits_per_channel'}}], **G}
+        )
+    )
     fmt16 = text(await c('execute_designer_code', {'code': FORMAT_OF % ''}))
     check(
-        'set_params',
-        'graph $format takes effect (made Absolute)',
+        'apply_edits',
+        'set: graph $format takes effect (made Absolute)',
         'FORMAT=RGBA16' in fmt16 and 'INHERIT=Absolute' in fmt16,
         t.strip() + ' | ' + fmt16.strip(),
     )
@@ -123,7 +133,7 @@ async def run(ctx: Ctx) -> None:
         back.strip(),
     )
     # the graph's $randomseed is different: one that follows its parent is exposed in a
-    # .sbsar (an Absolute one isn't) and its value still counts, so set_params leaves its
+    # .sbsar (an Absolute one isn't) and its value still counts, so the set op leaves its
     # inheritance (REVIEW.md HLP-25; sbsar_info checks the exposure further down)
     SEED_OF = (
         GRAPH_OF % TEST_GRAPH
@@ -186,7 +196,7 @@ async def run(ctx: Ctx) -> None:
         fact.strip(),
     )
     # a node's seed: inherited, its value is added to the graph's; Absolute, it no longer follows
-    # the graph's seed (nor a .sbsar's), so set_params leaves it inherited (REVIEW.md HLP-27).
+    # the graph's seed (nor a .sbsar's), so the set op leaves it inherited (REVIEW.md HLP-27).
     # Pixels compared with a tolerance: two computes of one setting differ by a step or two
     fact = text(
         await c(
@@ -231,7 +241,7 @@ async def run(ctx: Ctx) -> None:
         m is not None and int(m.group(1)) <= 8 and int(m.group(2)) > 8 and int(m.group(3)) <= 8,
         fact.strip(),
     )
-    t = text(await c('set_params', {'node_id': clouds, 'params': {'$randomseed': 7}, **G}))
+    t = text(await c('apply_edits', {'ops': [{'op': 'set', 'node': clouds, 'params': {'$randomseed': 7}}], **G}))
     still = text(
         await c(
             'execute_designer_code',
@@ -247,12 +257,12 @@ async def run(ctx: Ctx) -> None:
         )
     )
     check(
-        'set_params',
-        "a node's $randomseed keeps following the graph's",
+        'apply_edits',
+        "set: a node's $randomseed keeps following the graph's",
         'INHERIT=RelativeToParent VALUE=7' in still,
         t.strip() + ' | ' + still.strip(),
     )
-    # and one already Absolute stays Absolute, on a node and on the graph: set_params never
+    # and one already Absolute stays Absolute, on a node and on the graph: the set op never
     # changes a seed's inheritance (AGENTS.md; REVIEW.md HLP-29, TST-57)
     SEED_INHERIT = GRAPH_OF % TEST_GRAPH + (
         'from sd.api.sdproperty import SDPropertyCategory, SDPropertyInheritanceMethod as IM\n'
@@ -267,11 +277,11 @@ async def run(ctx: Ctx) -> None:
         await c(
             'execute_designer_code', {'code': SEED_INHERIT % (target, 'n.setPropertyInheritanceMethod(p, IM.Absolute)')}
         )
-        t = text(await c('set_params', {'node_id': node_id, 'params': {'$randomseed': 4}, **G}))
+        t = text(await c('apply_edits', {'ops': [{'op': 'set', 'node': node_id, 'params': {'$randomseed': 4}}], **G}))
         still = text(await c('execute_designer_code', {'code': SEED_INHERIT % (target, '')}))
         check(
-            'set_params',
-            'an Absolute $randomseed stays Absolute (%s)' % ('node' if node_id != 'graph' else 'graph'),
+            'apply_edits',
+            'set: an Absolute $randomseed stays Absolute (%s)' % ('node' if node_id != 'graph' else 'graph'),
             'INHERIT=Absolute VALUE=4' in still,
             t.strip() + ' | ' + still.strip(),
         )
@@ -289,9 +299,9 @@ async def run(ctx: Ctx) -> None:
                 )
             },
         )
-    await c('set_params', {'node_id': clouds, 'params': {'$randomseed': 0}, **G})
-    # 5: a value SEED_OF never set, so the check sees set_params write it (REVIEW.md TST-37)
-    t = text(await c('set_params', {'node_id': 'graph', 'params': {'$randomseed': 5}, **G}))
+    await c('apply_edits', {'ops': [{'op': 'set', 'node': clouds, 'params': {'$randomseed': 0}}], **G})
+    # 5: a value SEED_OF never set, so the check sees the set op write it (REVIEW.md TST-37)
+    t = text(await c('apply_edits', {'ops': [{'op': 'set', 'node': 'graph', 'params': {'$randomseed': 5}}], **G}))
     still = text(
         await c(
             'execute_designer_code',
@@ -306,24 +316,27 @@ async def run(ctx: Ctx) -> None:
         )
     )
     check(
-        'set_params',
-        'graph $randomseed keeps following its parent (stays exposed)',
+        'apply_edits',
+        'set: graph $randomseed keeps following its parent (stays exposed)',
         'INHERIT=RelativeToParent VALUE=5' in still,
         t.strip() + ' | ' + still.strip(),
     )
-    r_ = await c('set_params', {'node_id': lv, 'params': {'levelinlow': [1, 2]}, **G})
-    check('set_params', 'error on bad length', r_.is_error and 'expects 4' in text(r_), text(r_))
+    r_ = await c('apply_edits', {'ops': [{'op': 'set', 'node': lv, 'params': {'levelinlow': [1, 2]}}], **G})
+    check('apply_edits', 'set: error on bad length', r_.is_error and 'expects 4' in text(r_), text(r_))
     before = text(await c('execute_designer_code', {'code': INHERIT % (TEST_GRAPH, lv)}))
-    r_ = await c('set_params', {'node_id': lv, 'params': {'$outputsize': 11}, **G})
+    r_ = await c('apply_edits', {'ops': [{'op': 'set', 'node': lv, 'params': {'$outputsize': 11}}], **G})
     after = text(await c('execute_designer_code', {'code': INHERIT % (TEST_GRAPH, lv)}))
     check(
-        'set_params',
-        'rejected value changes nothing (not even inheritance)',
+        'apply_edits',
+        'set: rejected value changes nothing (not even inheritance)',
         r_.is_error and 'expects 2' in text(r_) and 'INHERIT=' in before and before == after,
         before + after,
     )
     # every value is checked before any is set (REVIEW.md HLP-1): levelinlow stays at 0.3
-    r_ = await c('set_params', {'node_id': lv, 'params': {'levelinlow': [0.6] * 4, 'levelinhigh': [1, 2]}, **G})
+    r_ = await c(
+        'apply_edits',
+        {'ops': [{'op': 'set', 'node': lv, 'params': {'levelinlow': [0.6] * 4, 'levelinhigh': [1, 2]}}], **G},
+    )
     t = text(
         await c(
             'execute_designer_code',
@@ -338,16 +351,18 @@ async def run(ctx: Ctx) -> None:
         )
     )
     check(
-        'set_params',
-        'a bad later value changes nothing',
+        'apply_edits',
+        'set: a bad later value changes nothing',
         r_.is_error and 'expects 4' in text(r_) and 'LOW=0.30' in t,
         text(r_)[-120:] + ' / ' + t.strip(),
     )
-    r_ = await c('set_params', {'node_id': slope, 'params': {'Samples': 16.5}, **G})
-    check('set_params', 'error on a fractional integer', r_.is_error and 'not a whole number' in text(r_), text(r_))
-    tmp_u = added_id(text(await c('add_node', {'definition': 'uniform', **G})))
-    r_ = await c('set_params', {'node_id': tmp_u, 'params': {'outputcolor': [1, 0.5]}, **G})
-    check('set_params', 'error on a 2-value colour', r_.is_error and 'expects a colour' in text(r_), text(r_))
-    t = text(await c('set_params', {'node_id': tmp_u, 'params': {'colorswitch': 'false'}, **G}))
-    check('set_params', "bool from the string 'false'", '-> False' in t, t)
-    await c('delete_nodes', {'node_ids': [tmp_u], **G})
+    r_ = await c('apply_edits', {'ops': [{'op': 'set', 'node': slope, 'params': {'Samples': 16.5}}], **G})
+    check(
+        'apply_edits', 'set: error on a fractional integer', r_.is_error and 'not a whole number' in text(r_), text(r_)
+    )
+    tmp_u = added_id(text(await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'uniform'}], **G})))
+    r_ = await c('apply_edits', {'ops': [{'op': 'set', 'node': tmp_u, 'params': {'outputcolor': [1, 0.5]}}], **G})
+    check('apply_edits', 'set: error on a 2-value colour', r_.is_error and 'expects a colour' in text(r_), text(r_))
+    t = text(await c('apply_edits', {'ops': [{'op': 'set', 'node': tmp_u, 'params': {'colorswitch': 'false'}}], **G}))
+    check('apply_edits', "set: bool from the string 'false'", '-> False' in t, t)
+    await c('apply_edits', {'ops': [{'op': 'delete', 'node': tmp_u}], **G})

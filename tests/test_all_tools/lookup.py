@@ -28,12 +28,21 @@ async def run(ctx: Ctx) -> None:
     check('describe_graph', 'library graphs are not user graphs', r_.is_error and 'not found' in text(r_), text(r_))
 
     # --- a node with several outputs (bevel: height, normal)
-    bev = added_id(text(await c('add_node', {'definition': 'bevel', 'position': [-400, 300], **G})))
-    await c('connect', {'from_node': clouds, 'to_node': bev, 'to_input': 'input', **G})
-    lvn = added_id(text(await c('add_node', {'definition': 'levels', 'position': [-200, 300], **G})))
-    t = text(await c('connect', {'from_node': bev, 'to_node': lvn, 'to_input': 'input1', 'from_output': 'normal', **G}))
+    bev = added_id(
+        text(await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'bevel', 'position': [-400, 300]}], **G}))
+    )
+    await c('apply_edits', {'ops': [{'op': 'connect', 'from': clouds, 'to': bev, 'input': 'input'}], **G})
+    lvn = added_id(
+        text(await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'levels', 'position': [-200, 300]}], **G}))
+    )
+    t = text(
+        await c(
+            'apply_edits',
+            {'ops': [{'op': 'connect', 'from': bev, 'to': lvn, 'input': 'input1', 'output': 'normal'}], **G},
+        )
+    )
     t2 = text(await c('describe_graph', {'node_ids': [lvn], **G}))
-    check('connect', 'from_output picks the output', 'input1<-%s.normal' % bev in t2, t2)
+    check('apply_edits', "connect: 'output' picks the output", 'input1<-%s.normal' % bev in t2, t2)
     r_ = await c('preview_node', {'node_id': bev, 'output': 'normal', 'max_size': 128, **G})
     check(
         'preview_node',
@@ -91,4 +100,4 @@ async def run(ctx: Ctx) -> None:
         '.normal' in t.splitlines()[0] and '(32x16)' in t.splitlines()[0],
         t.splitlines()[0],
     )
-    await c('delete_nodes', {'node_ids': [bev, lvn], **G})
+    await c('apply_edits', {'ops': [{'op': 'delete', 'node': bev}, {'op': 'delete', 'node': lvn}], **G})

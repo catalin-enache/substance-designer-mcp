@@ -44,7 +44,7 @@ There are two programs, plus Designer's own command-line tools:
 | Part | Runs where | What it does |
 |---|---|---|
 | **sd_claude_bridge_kve plugin** (`plugin/sd_claude_bridge_kve`) | Inside Designer, loaded at startup | A small, generic script runner. It listens on `127.0.0.1:9877`, checks that each request is signed with the secret token, queues the Python code it receives, runs it on Designer's main thread (the only place the `sd` API may be used), and sends back the printed output or the error. It also enforces timeouts, answers `status` / `cancel` while a script runs, and knows nothing about MCP or the individual tools. |
-| **MCP server** (`mcp_server/server.py`, the entry point; the code in `mcp_server/server_tools/`) | Its own process, started by Claude Code | Defines the 43 tools Claude sees, one module per area (`core.py`: configuration, the bridge connection and the tool decorator; `edits.py`, `views.py`, `output.py`...: the tools). Its instructions to Claude are one short paragraph (MCP clients cut long ones; the limit is in [AGENTS.md](AGENTS.md), Working on this project): leave the Designer tools alone unless you ask for Designer work, and right before the first Designer tool call, call `get_guide()`, which returns the full [AGENTS.md](AGENTS.md). Sessions started for other things never load the guide. Each tool does one or more of: send Python code to the plugin (most tools), run Designer's command-line tools (`render_sbs`, `sbsar_info`), or do the work itself outside Designer (decoding pixels, building preview images, comparing `.sbs` files, reading the log, editing files for portals). |
+| **MCP server** (`mcp_server/server.py`, the entry point; the code in `mcp_server/server_tools/`) | Its own process, started by Claude Code | Defines the 35 tools Claude sees, one module per area (`core.py`: configuration, the bridge connection and the tool decorator; `edits.py`, `views.py`, `output.py`...: the tools). Its instructions to Claude are one short paragraph (MCP clients cut long ones; the limit is in [AGENTS.md](AGENTS.md), Working on this project): leave the Designer tools alone unless you ask for Designer work, and right before the first Designer tool call, call `get_guide()`, which returns the full [AGENTS.md](AGENTS.md). Sessions started for other things never load the guide. Each tool does one or more of: send Python code to the plugin (most tools), run Designer's command-line tools (`render_sbs`, `sbsar_info`), or do the work itself outside Designer (decoding pixels, building preview images, comparing `.sbs` files, reading the log, editing files for portals). |
 | **Designer helpers** (`mcp_server/designer_helpers/`) | Sent to Designer with each request | The library of functions that actually do the work inside Designer: describing nodes, editing graphs, computing previews, layout, exposing inputs and so on. One file per area (`edits.py`, `editor.py`, `screenshots.py`...), joined into one script in the order of `PARTS` in its `__init__.py`, so they share one namespace. Each part imports what it uses from the others (`from .core import ...`) so editors see where names come from; those lines are dropped when the parts are joined. It's re-sent with every call, so updating it never needs a Designer restart. |
 | **sbscooker / sbsrender** | Separate processes | Designer's own tools for compiling a saved `.sbs` into `.sbsar` and rendering its outputs, independently of the open Designer. |
 | **CLI client** (`client/sd_run.py`) | Your terminal | The same connection to the plugin without MCP, for running scripts by hand. |
@@ -77,7 +77,7 @@ for example showing a connection as a portal. For those, the server edits the sa
 directly and reloads it in Designer, after keeping a snapshot of the graph and a copy of your
 saved file (details: [AGENTS.md](AGENTS.md), Portals).
 
-## Tools (43)
+## Tools (35)
 
 | Area | Tools |
 |---|---|
@@ -88,8 +88,8 @@ saved file (details: [AGENTS.md](AGENTS.md), Portals).
 | Safety | `snapshot_graph`, `list_snapshots`, `diff_graph` (what changed vs the saved file or a snapshot) |
 | Readability | `arrange_graph` (tidy layout by data flow), `add_frame`, `add_comment`, `set_link_display` (show wires as portals to hide clutter; saves and reloads the package after a snapshot) |
 | Viewing | `screenshot_designer` (window, graph, 2D view, 3D view, panels; only Designer is captured, never other apps), `open_graph` (open a graph, fitted whole, zoomed to a frame, nodes or rectangle, or centred on a node) |
-| Editing | `add_node`, `import_bitmap` (image file as a Bitmap node), `set_params`, `connect`, `disconnect`, `move_nodes`, `delete_nodes`, `apply_edits` (many edits at once), `create_graph`, `set_graph_size` |
-| Controls | `expose_param`, `remove_graph_input` (turn node parameters into graph inputs) |
+| Editing | `apply_edits` (add nodes and image files, set parameters, connect, disconnect, move, delete, expose parameters as graph inputs: one or many edits per call, one undo step; a typo'd node id changes nothing), `create_graph`, `set_graph_size` |
+| Controls | `remove_graph_input` (exposing a parameter is `apply_edits`' `expose` op) |
 | Scripting | `execute_designer_code`, `run_designer_script` (with timeout) |
 | Output | `save_package`, `export_outputs` (straight from Designer), `sbsar_info`, `render_sbs` (parameters, size, PNG/EXR…), `preview_maps` |
 
@@ -218,7 +218,7 @@ Designer: the plugin's server and authentication (with Qt replaced), both client
 pixel decoding, image comparison, the tiling metric, `.sbs` parsing, diffing and portal
 selection, render command building, search ranking, the installer, launch/quit edge cases,
 environment variables and log reading. It also checks that this README lists every tool and that
-the self-test exercises every tool, parameter and `apply_edits` op, runs mypy (strict,
+the self-test exercises every tool and parameter and passes every `apply_edits` op, runs mypy (strict,
 `mypy.ini`) over every Python file, checking the code that runs inside Designer against
 Designer's own `sd` API and PySide6 stubs when Designer is installed, and runs Ruff
 (`ruff.toml`): lint rules, and every file formatted. Run them after any change:

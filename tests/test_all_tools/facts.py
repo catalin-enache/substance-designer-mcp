@@ -169,7 +169,14 @@ async def run(ctx: Ctx) -> None:
         and 'Brick=9' in pattern.group(2),
         pattern.group(0).strip()[:150] if pattern else 'Pattern_Type not found',
     )
-    aniso = added_id(text(await c('add_node', {'definition': 'noise_anisotropic_noise.sbs/anisotropic_noise', **G})))
+    aniso = added_id(
+        text(
+            await c(
+                'apply_edits',
+                {'ops': [{'op': 'add', 'definition': 'noise_anisotropic_noise.sbs/anisotropic_noise'}], **G},
+            )
+        )
+    )
     r_ = await c('preview_node', {'node_id': aniso, 'max_size': 256, **G})
     if is_image(r_):
         import io as _io
@@ -188,7 +195,7 @@ async def run(ctx: Ctx) -> None:
         )
     else:
         check(F, 'anisotropic noise streaks run horizontally by default', False, text(r_))
-    await c('delete_nodes', {'node_ids': [aniso], **G})
+    await c('apply_edits', {'ops': [{'op': 'delete', 'node': aniso}], **G})
     # exposing a parameter logs these until the function node is named: count each
     # message before and after an exposure made here, so earlier lines can't satisfy the
     # check (REVIEW.md TST-13: it once compared against a header it could never match)
@@ -203,11 +210,14 @@ async def run(ctx: Ctx) -> None:
         return found
 
     before = await noise_counts()
-    log_lv = added_id(text(await c('add_node', {'definition': 'levels', **G})))
-    await c('expose_param', {'node_id': log_lv, 'param': 'levelinlow', 'input_id': 'log_noise_check', **G})
+    log_lv = added_id(text(await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'levels'}], **G})))
+    await c(
+        'apply_edits',
+        {'ops': [{'op': 'expose', 'node': log_lv, 'param': 'levelinlow', 'input_id': 'log_noise_check'}], **G},
+    )
     after = await noise_counts()
     await c('remove_graph_input', {'input_id': 'log_noise_check', **G})
-    await c('delete_nodes', {'node_ids': [log_lv], **G})
+    await c('apply_edits', {'ops': [{'op': 'delete', 'node': log_lv}], **G})
     check(
         F,
         'exposing an input logs the documented harmless messages',
@@ -272,16 +282,32 @@ async def run(ctx: Ctx) -> None:
     )
     check(F, 'bitmaps cannot be embedded (NotSupported)', 'EMBED=SDApiError.NotSupported' in t, t)
     check(F, 'setDefaultParentSize takes pixels, not log2', 'PARENT=256' in t, t)
-    grad = added_id(text(await c('add_node', {'definition': 'gradient_linear_1', 'position': [-600, 600], **G})))
-    nrm = added_id(
+    grad = added_id(
         text(
             await c(
-                'add_node',
-                {'definition': 'normal', 'position': [-400, 600], 'params': {'intensity': 5.0, 'inversedy': True}, **G},
+                'apply_edits', {'ops': [{'op': 'add', 'definition': 'gradient_linear_1', 'position': [-600, 600]}], **G}
             )
         )
     )
-    await c('connect', {'from_node': grad, 'to_node': nrm, 'to_input': 'input1', **G})
+    nrm = added_id(
+        text(
+            await c(
+                'apply_edits',
+                {
+                    'ops': [
+                        {
+                            'op': 'add',
+                            'definition': 'normal',
+                            'position': [-400, 600],
+                            'params': {'intensity': 5.0, 'inversedy': True},
+                        }
+                    ],
+                    **G,
+                },
+            )
+        )
+    )
+    await c('apply_edits', {'ops': [{'op': 'connect', 'from': grad, 'to': nrm, 'input': 'input1'}], **G})
     px = pixel_values(
         text(await c('node_stats', {'node_id': grad, 'points': [[0, 0], [511, 0], [0, 511], [300, 511]], **G}))
     )
@@ -293,7 +319,7 @@ async def run(ctx: Ctx) -> None:
     )
     # height rises towards the top: OpenGL (Y up) normals lean down there, so green < 0.5
     gl = pixel_values(text(await c('node_stats', {'node_id': nrm, 'points': [[256, 256]], **G})))[(256, 256)]
-    await c('set_params', {'node_id': nrm, 'params': {'inversedy': False}, **G})
+    await c('apply_edits', {'ops': [{'op': 'set', 'node': nrm, 'params': {'inversedy': False}}], **G})
     dx = pixel_values(text(await c('node_stats', {'node_id': nrm, 'points': [[256, 256]], **G})))[(256, 256)]
     # a full-height ramp is a gentle slope (G about 0.49 vs 0.51); the sign is what matters
     check(
@@ -302,4 +328,4 @@ async def run(ctx: Ctx) -> None:
         gl[1] < 0.497 and dx[1] > 0.503 and abs(gl[1] + dx[1] - 1) < 0.002,
         'OpenGL G=%.3f, DirectX G=%.3f' % (gl[1], dx[1]),
     )
-    await c('delete_nodes', {'node_ids': [grad, nrm], **G})
+    await c('apply_edits', {'ops': [{'op': 'delete', 'node': grad}, {'op': 'delete', 'node': nrm}], **G})

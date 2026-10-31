@@ -22,9 +22,9 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
 | High | 0 | 1 |
 | Medium-high | 0 | 1 |
 | Medium | 0 | 18 |
-| Low-medium | 0 | 41 |
-| Low | 0 | 142 |
-| **Total** | **0** | **203** |
+| Low-medium | 0 | 46 |
+| Low | 0 | 153 |
+| **Total** | **0** | **219** |
 
 ## Review log
 
@@ -491,6 +491,84 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
   `_drain`, `_TailBuffer` and timeout changes on Designer's 3.13; the example's `bary` rewrite and
   `zip(strict=True)`; AGENTS.md's and README's new text against the code.
 - **Longest chain still growing:** HLP-40 → TST-80 and HLP-41 → TST-81, generation 2.
+
+### 2026-10-31: branch `remove-single-edit-tools` against `main`, the diff only, at `5d9dea2`
+
+- **How:** three read-only reviewers on the diff hunks (code: helpers and tool docstrings; tests: the
+  self-test conversion and the unit tests; docs: AGENTS.md, README, ROADMAP and a repo-wide search for
+  the removed tool names). HLP-42, TST-83 and TST-84 verified by hand (TST-83 by running the split:
+  the marker isn't found). Unit tests 272 passed; live self-test 297/297, 35/35 tools.
+- **Resolutions assessed:** HLP-4, HLP-5, HLP-30, HLP-31, HLP-41 / TST-81, SRV-27, TST-77, TST-6.
+  The guarantees hold through `apply_edits` (HLP-5, HLP-30, SRV-27, TST-77 hold up as they are).
+  Questioned: TST-6 (TST-83, its parser), HLP-4, HLP-31, HLP-41 (TST-87, their tests now stop at the
+  pre-check). HLP-4's guarantee has the gap HLP-42 describes.
+- **Findings:** 8: 3 low-medium (HLP-42, TST-83, TST-84), 5 low (HLP-43, TST-85, TST-86, TST-87,
+  TST-88). TST-83 found by two reviewers.
+- **Suggested order:** HLP-42 (a batch can still half-apply where the docs say it can't), TST-83 (one
+  regex, restores TST-6's guard), TST-84, then the low ones.
+- **Simplifications:** `delete_nodes` / `move_nodes` take one id now (TST-87).
+- **Checked and found fine:** no doc, docstring, tool description, message or skill tells anyone to
+  call a removed tool (repo-wide `git grep`; remaining hits are helper names); README's count (35) and
+  table against the code; every rule of the removed docstrings reached its op in `apply_edits`'
+  description, and each matches the helper; `'graph'` allowed only for `set` in the pre-check and at
+  run time, a ref shadowing a node id, duplicate refs, non-dict ops, missing node fields, the refusal
+  inside the undo group (an empty group); the converted self-test's substring checks against the
+  wrapped "op N (kind) failed:" messages and the extra "applied N op(s)" line; multi-id cleanups split
+  into ops; AGENTS.md's facts now attributed to the `set` op match the checks that measure them;
+  ROADMAP items 9, 21, 22 and 34; the commit message.
+- **Longest chain still growing:** TST-6 → TST-83 and HLP-31 → TST-87, generation 2.
+
+### 2026-10-31: branch `remove-single-edit-tools` against `main`, the whole diff (3 commits), at `c77e307`
+
+- **How:** three read-only reviewers (code, tests, docs and REVIEW.md) on the diff hunks, with the
+  previous round's log and the in-scope entries. HLP-44 verified by hand against `_check_batch`; TST-89
+  by checking that the self-test's `c` is `ClientSession.call_tool`, which returns an error result rather
+  than raising. Unit tests 272 passed; live self-test 303/303 at `c77e307`.
+- **Resolutions assessed:** HLP-42, HLP-43, TST-83, TST-84, TST-85, TST-86, TST-87, TST-88. HLP-43,
+  TST-83, TST-84 and TST-85 hold up. Questioned: HLP-42 (HLP-44: its "Also covered" missed set's
+  `graph`), TST-86 (TST-89, TST-90), TST-87 (TST-91), TST-88 (TST-92).
+- **Findings:** 6: 1 low-medium (HLP-44, found by two reviewers), 5 low (HLP-45, TST-89, TST-90, TST-91,
+  TST-92).
+- **Suggested order:** HLP-44 (a batch can half-apply again, one line), HLP-45 (a decision), TST-89, then
+  the wording ones.
+- **Simplifications:** `safeguards.py`'s `node_ids()` repeats `positions()` in `common.py` (stricter
+  regex): `set(positions(t))` would do. Note: `_dispatched_ops` ends at the first `else: ... raise` in
+  `apply_edits`; a future one inside a branch would cut it short (partly guarded by the node-fields
+  test), not raised as a finding.
+- **Checked and found fine:** falsy non-string refs (refused, the safe side), a ref equal to an existing
+  node id, an id deleted then reused as a ref, int ids against their string form in `deleted`, key
+  collisions, ops after a failed add (a run-time failure, as documented); `node_ids()` against
+  describe.py's line format; each pre-check case would fail without its part of `_check_batch`; the ref
+  reuse check is a real positive control; no text tells anyone to call a removed tool; the AGENTS.md Edit
+  bullet's pointer and the description's list; README, ROADMAP; the status table against the entries;
+  the commit messages.
+- **Longest chain still growing:** HLP-31 → TST-87 → TST-91, generation 3 (a docs-only note, narrowed).
+
+### 2026-10-31: branch `remove-single-edit-tools` against `main`, the whole diff (6 commits), at `c767565`
+
+- **How:** three read-only reviewers (code; tests; docs, config and the vendored `mcp-builder` skill)
+  on the diff hunks, with this branch's earlier logs and the in-scope entries. TST-93 verified by hand
+  (in the venv, mcp 2.3.0: `import mcp.server.fastmcp` and `streamablehttp_client` both fail). Unit
+  tests 272 passed; live self-test 306/306 at `825890e`.
+- **Resolutions assessed:** HLP-44, HLP-45, TST-89, TST-90, TST-91, TST-92: all hold up. Narrowing
+  `_target` to `'graph'` changes no caller (`set_params` via the set op and `add_node`, the helper
+  `sweep_param`; nothing passes None or `''` for the graph); the pre-check and the run now read every
+  node field and ref the same way.
+- **Findings:** 2, both about the vendored skill: 1 low-medium (TST-93), 1 low (TST-94). The code and
+  tests reviewers found nothing new.
+- **Suggested order:** TST-93 (an agent following the skill gets import errors), then TST-94; both are
+  a few sentences.
+- **Simplifications:** three messages keep a dead `node_id or 'graph'` fallback (`edits.py` twice,
+  `sweep.py` once): `_target` now refuses a falsy id first. mypy skips dot-directories, so its
+  `.claude/skills/mcp-builder` exclude is redundant but harmless.
+- **Checked and found fine:** every `_target` / `set_params` / `sweep_param` caller after HLP-45; no
+  `(None, '', 'graph')` check left; the TST-89 cleanup in each branch (first describe failed, the one in
+  `finally` failed, both fine); each new check would fail without its fix, and "an empty node in a set
+  op" is described as guarding the pre-check only; the skill copy against upstream `ca45fc4` (`diff
+  -r`: only the stated trims, no link to a deleted file, no TypeScript left); the ruff and mypy
+  excludes (nothing else excluded); ROADMAP item 35's spacing and default position; the REVIEW.md
+  resolutions, notes and status table; no text tells anyone to call a removed tool.
+- **Longest chain still growing:** none from the code; the skill findings are generation 1.
 
 ---
 
@@ -1584,6 +1662,124 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
       node); `_target` stays for parameters (`set_params`, `sweep_param`'s `node_id`). The casts and
       the `type: ignore` that marked the places are gone. Unit tests 265 passed; self-test 295/295.
   - Questioned by TST-81 (2026-10-31).
+  - Questioned by TST-87 (2026-10-31).
+  - Note (2026-10-31): the tool-level guarantee is now tested through `apply_edits`' pre-check (`_check_batch`, the table in `safeguards.py`); this entry's helper guard stays as a second line for scripts, not reached by the self-test (TST-87).
+  - Note (2026-10-31, TST-91): correcting the note above: only connect, disconnect and expose moved to the pre-check; `preview_node`, `node_stats`, `open_graph`, `add_comment` and `sweep_param`'s `view_node` keep their `_node()` guard, still checked live in `safeguards.py`.
+
+- [x] **HLP-42 · The `apply_edits` pre-check passes a node an earlier op of the batch deletes** · `mcp_server/designer_helpers/batch.py` (`_check_batch`) · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** `_check_batch` looks each node up in the graph as it is before the batch
+    (`g.getNodeFromId(str(value)) is None`) and `refs` only grows; nothing removes what a `delete` op
+    takes out. The docstring (`server_tools/edits.py`) and AGENTS.md promise that a bad id "refuses the
+    whole batch, nothing changed".
+  - **Scenario.** `[move A, delete A, connect from A]`, `[delete A, delete A]` or
+    `[add ref x, delete x, set x]` pass the check; the last op fails in `_node` at run time with the
+    earlier ops applied (HLP-4's "halfway" pattern, in a new form; `delete_nodes([a, a])` had it too).
+  - **Fix.** In `_check_batch`, keep the set of live nodes (existing ids plus refs) and drop what a
+    `delete` op names (the id, or the ref and the id it maps to); refuse a later use with "deleted by op
+    N; nothing was applied". Self-test cases for "delete then use" and "delete twice".
+  - **Resolution: done** (commit `c77e307`).
+    - **Test:** `safeguards.py`, three new cases in the pre-check table: "a node an earlier op deletes",
+      "a node deleted twice", "a ref deleted, then used". They failed with "op 1 (move) failed: node ...
+      not found ... ops 0-0 were applied" (and 0-1, 0-2): the batch half-applied.
+    - **Cause:** `_check_batch` looked each node up in the graph as it was before the batch, and nothing
+      recorded what a `delete` op removes.
+    - **Fix:** `_check_batch` keeps `deleted` (node id, or a key per ref'd add op -> the deleting op) and
+      refuses a later use with "node X was deleted by op N; nothing was applied". A ref reused by a later
+      add gets a new key, so it names the new node; a positive check in `batch.py` ("a ref reused after a
+      delete names the new node", 5 ops applied) guards that. The `apply_edits` docstring lists the case.
+    - **Also covered:** every op field that names a node goes through the same lookup (`_NODE_FIELDS`:
+      set, connect from/to, disconnect, move, delete, expose); a node an op of the batch *adds* can't be
+      named by id before it exists (only by its ref), so there is no other "changed by an earlier op" case
+      for node ids. Self-test 302/302, unit tests 272.
+  - Questioned by HLP-44 (2026-10-31).
+
+- [x] **TST-83 · `_dispatched_ops` no longer finds the end of the dispatcher** · follows TST-6, generation 2 · `tests/unit/test_server.py` (`_dispatched_ops`), `mcp_server/designer_helpers/batch.py` (the `else:` line) · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** The parser cuts the dispatcher at the literal `'else:\n                raise'`; the branch
+    now reads `else:  # _check_batch refused it already; ...`, so the split finds nothing and the last
+    branch (`expose`) runs on through the `else`, the `except` block and the final print. Two reviewers
+    found it.
+  - **Scenario.** An `op.get(...)` added later to that tail is counted as an `expose` field by the
+    three tests built on the parser (the docstring test, the op-field coverage test, the pre-check
+    fields test): spurious failures or a field credited to the wrong op. Nothing fails today, because
+    the tail reads no op field; the parse fails silently.
+  - **Fix.** Split on a regex that allows a comment (`else:[^\n]*\n\s+raise`) and assert the marker was
+    found.
+  - **Resolution: done** (commit `c77e307`).
+    - **Test:** `_dispatched_ops` now asserts it found the dispatcher's `else: raise`; with the old split
+      the four tests built on it failed on that assertion.
+    - **Cause:** the split matched a literal `else:` + newline, and the branch gained a trailing comment.
+    - **Fix:** split on `\n\s+else:[^\n]*\n\s+raise`, and the assertion makes a missed split fail loudly.
+    - **Also covered:** the other source-scanning parsers in `test_server.py` (`_selftest_calls`,
+      `_selftest_op_fields`, the docstring regex) work on ASTs or on text this branch didn't change.
+
+- [x] **TST-84 · AGENTS.md says any typo in a batch changes nothing; only node ids are checked first** · `AGENTS.md` (Which tool for what, Edit) · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** "Every node id is checked before any op runs, so a typo changes nothing; an op failing
+    later (a bad value) leaves the earlier ops applied". `_check_batch` checks op kinds and node fields
+    only: a mistyped connector, parameter id, definition or path still fails partway. The same behaviour
+    is also described in README's Editing row and in the `apply_edits` docstring (the single source, by
+    AGENTS.md's own table); this copy is the one that drifted.
+  - **Scenario.** An agent sends `[add ref a, connect from a input 'inpt1']` trusting the guide; the
+    add stays applied when the connect fails.
+  - **Fix.** Narrow the sentence to "a mistyped node id or ref changes nothing; any other failure
+    leaves the earlier ops applied", or replace the behaviour with a pointer to the tool's description.
+  - **Resolution: done** (commit `c77e307`).
+    - **Fix:** the Edit bullet no longer describes the failure behaviour; it points to the tool's
+      description, which now says which mistakes refuse the whole batch (unknown id, ref not added yet, a
+      node an earlier delete op removes, `graph` outside set) and that others (a wrong connector or
+      parameter id, a bad value) stop it partway. README's row ("a typo'd node id changes nothing") is
+      accurate and stays. Docs only, so no test.
+
+- [x] **HLP-44 · A ref named `graph` gets past the pre-check, and the run reads it as the node** · follows HLP-42, generation 2 · `mcp_server/designer_helpers/batch.py` (`_check_batch`) · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** For a set op the pre-check reads `'graph'` as the graph before it looks at refs, and
+    skips the `deleted` test (`if kind in _GRAPH_OK and value == 'graph': continue`); the run resolves
+    refs first (`refs.get(value, value)`), and nothing stops an add or bitmap op from defining the ref
+    `graph`. Two reviewers found it.
+  - **Scenario.** `[add blur ref 'graph', delete 'graph', set node 'graph' ...]` passes the check and
+    fails at the set with ops 0-1 applied (HLP-42's half-applied batch again); without the delete, the set
+    silently changes the new node instead of the graph; and `connect from 'graph'` is accepted once the
+    ref exists, though the description says `graph` outside a set op is refused.
+  - **Fix.** Refuse the ref `graph` at its add/bitmap op ("ref 'graph' is reserved; nothing was
+    applied"), with a row in the pre-check table.
+  - **Resolution: done** (commit `825890e`).
+    - **Test:** `safeguards.py`, pre-check case "a ref named graph" (`[move probe, add ref 'graph',
+      delete 'graph', set 'graph']`). It failed with "op 3 (set) failed: node ... not found ... ops 0-2
+      were applied".
+    - **Cause:** two readings of one name: the pre-check takes `graph` in a set op as the graph (before
+      refs), the run takes it as a ref (`refs.get(value, value)` first).
+    - **Fix:** an add or bitmap op whose ref is `graph` is refused ("ref 'graph' is reserved; nothing was
+      applied"), so the name has one meaning in both; the description says refs are strings other than
+      "graph".
+    - **Also covered:** the other place a name is read two ways: an empty node id, which `_target` read as
+      the graph and the pre-check doesn't (HLP-45, fixed with it). Refs equal to an existing node id
+      resolve the same way in both (checked in the review). Self-test 306/306.
+
+- [x] **TST-93 · The vendored `mcp-builder` skill teaches the mcp 1.x API; this server runs mcp 2.x** · `.claude/skills/mcp-builder/` (`reference/python_mcp_server.md`, `SKILL.md`, `reference/mcp_best_practices.md`, `scripts/`) · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** The Python guide imports `from mcp.server.fastmcp import FastMCP` (four places) and
+    `SKILL.md` says "FastMCP"; `scripts/connections.py` imports `streamablehttp_client`, and
+    `scripts/requirements.txt` asks for `mcp>=1.1.0` with no upper bound. This repo pins `mcp>=2.3,<3`
+    (2.3.0 in the venv), where `mcp.server.fastmcp` raises "FastMCP was renamed to MCPServer" and
+    `streamablehttp_client` doesn't exist (now `streamable_http_client`); the server imports
+    `MCPServer` and `ToolError` from `mcp.server.mcpserver`. The Python example this branch put into
+    `mcp_best_practices.md` raises `ToolError` without importing it, and says the client sees "this
+    message", while 2.x prefixes it with "Error executing tool <name>: ". The scripts' default model
+    (`claude-3-7-sonnet-20250219`) is likely retired (not checked).
+  - **Scenario.** AGENTS.md sends agents to the skill before changing tools and for evaluations; one
+    copies the guide's server skeleton or runs `scripts/evaluation.py` and gets an import error on the
+    first line.
+  - **Fix.** Say in the AGENTS.md reminder (or at the top of `SKILL.md`) that this repo is on mcp 2.x,
+    so names come from `server_tools/core.py` (`MCPServer`, `mcp.server.mcpserver.exceptions.ToolError`),
+    and that the guide's code and `scripts/` are 1.x; fix the added example (import, the prefix).
+  - **Resolution: done** (commit `3736000`).
+    - **Test:** none (docs and a pin); the claims checked by hand in the venv's mcp 2.3.0:
+      `import mcp.server.fastmcp` and `streamablehttp_client` fail, a raised `ToolError` becomes
+      "Error executing tool <name>: ..." with `is_error=True` (`mcpserver/tools/base.py`, `server.py`).
+    - **Fix:** a note at the top of the skill's `SKILL.md`: this server runs mcp 2.x (`MCPServer`,
+      `mcp.server.mcpserver.exceptions.ToolError`, names as in `server_tools/core.py`), the guide's code and
+      `scripts/` are 1.x, run the scripts in their own environment and pass a current model with `-m`;
+      `scripts/requirements.txt` pins `mcp<2`; the best-practices example imports `ToolError` and says
+      what the client sees (the prefix). AGENTS.md's reminder points to the note.
+    - **Also covered:** every mcp import in the skill (`grep`): the guide's four `mcp.server.fastmcp`
+      imports and `connections.py`'s client imports are left as 1.x code under the note, not rewritten.
 
 ## Low
 
@@ -1734,6 +1930,8 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
     - **Cause:** each id was looked up and acted on in the same loop.
     - **Fix:** both look up every id first, then delete or move.
   - Questioned by HLP-31 (2026-10-30).
+  - Questioned by TST-87 (2026-10-31).
+  - Note (2026-10-31): the tool-level guarantee is now tested through `apply_edits`' pre-check (`_check_batch`, the table in `safeguards.py`); this entry's helper guard stays as a second line for scripts, not reached by the self-test (TST-87).
 
 - [x] **HLP-5 · `apply_edits` says "its node was added" when the definition failed** · `designer_helpers.py:1128-1131` · confirmed · found 2026-10-29
   - **Fix.** Record whether the node was created before deciding the message.
@@ -1932,6 +2130,7 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
       `test_server.py` takes op names and fields from the dispatcher, for this test and for the
       "every op runs live" test. The live `expose` op now passes `step` and `group` too, and a new
       check reads them back from `list_graph_inputs`.
+  - Questioned by TST-83 (2026-10-31).
 
 - [x] **TST-7 · README's Uninstall section omits the user-scope registration** · `README.md:265-268` · confirmed · found 2026-10-29
   - **Fix.** One clause: a user-scope registration of this server is removed too.
@@ -2869,6 +3068,8 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
     - **Test:** live: `delete_nodes([spare, 'graph'])` deleted the spare node before failing; now both
       `delete_nodes` and `move_nodes` refuse and leave it.
     - **Fix:** `_node()`, a node lookup that never returns the graph, for both (and the `apply_edits` ops).
+  - Questioned by TST-87 (2026-10-31).
+  - Note (2026-10-31): the tool-level guarantee is now tested through `apply_edits`' pre-check (`_check_batch`, the table in `safeguards.py`); this entry's helper guard stays as a second line for scripts, not reached by the self-test (TST-87).
 
 - [x] **HLP-32 · `open_graph` says "fitted the whole graph" when the user has nodes selected** · `mcp_server/designer_helpers.py` (`open_graph`) · plausible · found 2026-10-30
   - **Defect.** "Fit in view (selection)" fits the selection when there is one (AGENTS.md); the tool
@@ -3261,3 +3462,171 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
     - **Fix:** the `project_constants` import's comment says why it works where it now stands (the
       package `__init__` imports `.core` first); `# render_sbs checked SBSRENDER` is back on the
       `cast(str, SBSRENDER)` line.
+
+- [x] **HLP-43 · The pre-check mishandles non-string refs and op kinds** · `mcp_server/designer_helpers/batch.py` (`_check_batch`) · confirmed · found 2026-10-31
+  - **Defect.** Refs are matched only as strings (`isinstance(value, str) and value in refs`) while the
+    run resolves any hashable (`refs.get(value, value)`); and an unhashable op kind or ref
+    (`kind not in _NODE_FIELDS`, `refs.add(op['ref'])`) raises a bare `TypeError`.
+  - **Scenario.** `[add ref 1, set node 1]` worked before the branch and is now refused as "node 1 not
+    found"; `{'op': ['set']}` or `'ref': ['x']` ends with only "unhashable type: 'list'", without the op
+    index or "nothing was applied" (nothing was changed).
+  - **Fix.** Refuse a non-string `op` or `ref` up front with the usual "op N ...; nothing was applied"
+    message (or match refs for any hashable value).
+  - **Resolution: done** (commit `c77e307`).
+    - **Test:** `safeguards.py`, "a ref that is not text" (it ran: the add applied with ref 1) and "an op
+      kind that is not text" (failed with only "TypeError: unhashable type: 'list'").
+    - **Cause:** the pre-check assumed text: `kind not in _NODE_FIELDS` hashes the kind, and refs were
+      matched only as strings while the run accepted any value.
+    - **Fix:** a kind that isn't a string is an unknown op; an add or bitmap op whose ref isn't a string
+      is refused ("ref must be a string, not 1; nothing was applied").
+    - **Also covered:** node fields that aren't text (a list, None) were already refused as "not found";
+      `params` and other fields are checked by the helpers when their op runs, as the docstring says.
+
+- [x] **TST-85 · Self-test docstrings, comments and one printed label still name the removed tools** · `tests/test_all_tools/` (`graph_edit.py:1-2, 90`, `__main__.py:94-100`, `bitmaps.py:1`, `inputs.py:1, 255`, `params.py:1`, `render.py:18, 21`) · confirmed · found 2026-10-31
+  - **Defect.** They describe the categories as exercising `add_node`, `set_params`, `import_bitmap`,
+    `expose_param`... as tools; the calls now go through `apply_edits` ops. `render.py:21` prints "the
+    graph seed set with set_params is still exposed" in every run. (Helper-level calls through
+    `execute_designer_code` are fine.)
+  - **Scenario.** A reader of the self-test or its output looks for tools that no longer exist.
+  - **Fix.** Say "apply_edits' add/set/... op" there; keep helper names only where the helper is meant.
+  - **Resolution: done** (commit `c77e307`).
+    - **Fix:** module docstrings (`bitmaps.py`, `graph_edit.py`, `inputs.py`, `params.py`), the
+      `CATEGORIES` comments in `__main__.py`, comments in `params.py`, `inputs.py`, `common.py`, and the
+      labels in `render.py` and `inputs.py` now say "the set op", "expose op" and so on. Helper names stay
+      where a snippet calls the helper. Text only, so no test.
+
+- [x] **TST-86 · The pre-check checks share one "before" and two of them can't show a half-applied batch** · `tests/test_all_tools/safeguards.py` (the pre-check table) · plausible · found 2026-10-31
+  - **Defect.** `graph_before` is taken once before the loop, so one case that half-applies (the delete
+    case removes `probe`) fails every later case too. The `set ... intensity 7` first ops rely on
+    `describe_graph(include_params=True)` printing a non-default value, which nothing shows; and the two
+    one-op cases ("'graph' as a connect target", "'graph' to disconnect") have no earlier op, yet share
+    the label "nothing changed".
+  - **Scenario.** With `_check_batch` broken, case 4 deletes `probe` and cases 5-9 fail for "probe
+    missing", hiding which of them guards anything; if the set weren't visible, those cases would
+    measure only the message.
+  - **Fix.** Take the "before" per case and recreate `probe` when gone (or put the delete case last);
+    use a `move` as the first op where the earlier op matters; label the one-op cases by what they check.
+  - **Resolution: done** (commit `c77e307`).
+    - **Fix:** each case gets a fresh probe node and its own "before"; the `finally` deletes every node
+      the case added (the probe, and whatever a broken pre-check let through), so one failure doesn't fail
+      the cases after it (seen in the red run: the five failing cases didn't spread). Every case's first
+      op is a `move` of the probe, which `describe_graph` shows as a position, so "nothing changed"
+      measures something in every case, the one-op cases included.
+  - Questioned by TST-89, TST-90 (2026-10-31).
+  - Note (2026-10-31, TST-90): one case's first op is the delete (delete, then use), not a move; it changes the probe visibly too.
+
+- [x] **TST-87 · HLP-4, HLP-31 and HLP-41's helper guards are no longer reached by any check** · follows HLP-31, generation 2 · `tests/test_all_tools/safeguards.py`, `mcp_server/designer_helpers/edits.py` (`delete_nodes`), `editor.py` (`move_nodes`) · confirmed · found 2026-10-31
+  - **Defect.** `_check_batch` refuses `'graph'` and bad ids before `delete_nodes`, `move_nodes`,
+    `connect`, `disconnect` or `expose_param` runs, so the `_node()` guards those resolutions name as
+    tested are never reached; `delete_nodes` / `move_nodes` are only ever called with one id, so their
+    several-ids lookup (HLP-4) is unreachable.
+  - **Scenario.** A helper going back to `_target` would pass every check; the tool-level guarantee
+    holds (it moved to `_check_batch`), the resolutions' test claims no longer do.
+  - **Fix.** Narrow the claim (generation 2, but the fix is cheap): note under those entries that the
+    guarantee is now `_check_batch`'s, and simplify `delete_nodes` / `move_nodes` to one node, or leave
+    the helpers as they are. No new check.
+  - **Resolution: done** (commit `c77e307`).
+    - **Fix:** the claim narrowed, as the entry suggests: notes under HLP-4, HLP-31 and HLP-41 say their
+      tool-level guarantee is now tested through `_check_batch` (the pre-check table in `safeguards.py`),
+      and that the helpers' own guards (`_node`, `delete_nodes` / `move_nodes` finding every id first)
+      stay as a second line for scripts that call the helpers, untested from the self-test. The helpers
+      are left as they are (scripts may pass several ids). No new check.
+  - Questioned by TST-91 (2026-10-31).
+
+- [x] **TST-88 · `_selftest_op_fields` counts op fields from batches that are refused** · `tests/unit/test_server.py` (`_selftest_op_fields`) · plausible · found 2026-10-31
+  - **Defect.** Every dict with an `'op'` key counts, including the safeguards table's batches, which
+    `_check_batch` refuses before anything runs (and `{'op': 'bogus'}`).
+  - **Scenario.** A field passed only in a refused batch would count as exercised live. Not the case
+    today: every dispatched field also appears in a batch that runs.
+  - **Fix.** Say in the test's docstring that "passed" doesn't mean "run", or skip `safeguards.py`'s
+    case table.
+  - **Resolution: done** (commit `c77e307`).
+    - **Fix:** the claim narrowed: `_selftest_op_fields`' docstring says a field counts when passed, not
+      necessarily run, and the test is renamed `test_every_apply_edits_op_field_is_passed_live`. Checked by
+      hand that every dispatched field also appears in a batch that runs (the reviewer's mapping holds).
+  - Questioned by TST-92 (2026-10-31).
+
+- [x] **HLP-45 · A set op with node `""` now fails; on `main` it set the graph** · `mcp_server/designer_helpers/batch.py` (`_check_batch`), `edits.py` (`_target`) · confirmed · found 2026-10-31
+  - **Defect.** The pre-check accepts only the literal `'graph'` for the graph
+    (`value not in (None, '') and g.getNodeFromId(...)`), while `_target` still treats `''` and None as
+    the graph (`if node_id in (None, '', 'graph'): return g`).
+  - **Scenario.** `{'op': 'set', 'node': '', 'params': {...}}` worked on `main` and is now refused as
+    "node '' not found". No caller in the repo passes `''`, and the description documents only "graph".
+  - **Fix.** Pick one: accept only `'graph'` everywhere (narrow `_target` / `set_params`' `is_graph`), or
+    accept `''` in the pre-check too.
+  - **Resolution: done** (commit `825890e`).
+    - **Test:** `safeguards.py`: "an empty node in a set op" (passed already: the pre-check refuses it) and
+      `sweep_param` "an empty node_id is refused, not read as the graph", which failed with "'scale' is not
+      a parameter of" (the empty id taken for the graph).
+    - **Cause:** `_target`, `set_params`' `is_graph` and `sweep_param` treated None and `''` as the graph,
+      while the pre-check (and the descriptions) know only "graph".
+    - **Fix:** only `'graph'` names the graph: `_target`, `is_graph` and the two checks in `sweep.py`.
+      `_target`'s message quotes the id (`%r`), as `_node`'s does, so an empty id reads `node ''`.
+    - **Also covered:** every `(None, '', 'graph')` test in the helpers (`grep`): `edits.py` (2), `sweep.py`
+      (2); `_node` already refused `''` and None. No caller passes `''` or None for the graph.
+
+- [x] **TST-89 · A failed `describe_graph` before a pre-check case makes its cleanup delete every node of the graph** · follows TST-86, generation 2 · `tests/test_all_tools/safeguards.py` (the pre-check table's `had` / `finally`) · confirmed (code path) · verified by hand · found 2026-10-31
+  - **Defect.** `had = node_ids(text(await c('describe_graph', ...)))`: `c` returns an error result
+    without raising, its text has no line starting with a digit, so `had` is empty, and the `finally`
+    deletes `node_ids(after) - had`, which is the whole graph.
+  - **Scenario.** One describe call errors (a bridge timeout); the case's cleanup deletes `clouds`, `lv`
+    and the output node, and later checks (`sweep_param`'s view node, `link_display`, `render`) fail for
+    that reason: the cascade TST-86 set out to stop. Rare: it needs a failed describe.
+  - **Fix.** Check the describe result; if it failed, delete only the probe.
+  - **Resolution: done** (commit `825890e`).
+    - **Fix:** the case's first describe is checked: on an error `had` is None, and the cleanup then
+      deletes only the probe (likewise when the describe in the `finally` fails). A defensive change: a
+      failing describe can't be triggered on demand, so there is no red run; the path is short enough to
+      read.
+
+- [x] **TST-90 · TST-86's resolution and the table's comment say every case starts with a move; one starts with the delete** · follows TST-86, generation 2 · `REVIEW.md` (TST-86's resolution), `tests/test_all_tools/safeguards.py` (the comment above the table) · confirmed · found 2026-10-31
+  - **Defect.** "each case starts with a move of a fresh probe node" / "Every case's first op is a
+    `move`"; the case "a node an earlier op deletes" starts with `delete`. The check is still sound (a
+    delete shows in `describe_graph` too); the sentence says more.
+  - **Fix.** Narrow both: "every case's first op changes the probe visibly (a move, or the delete in the
+    delete-then-use case)".
+  - **Resolution: done** (commit `825890e`).
+    - **Fix:** the comment above the table now says each case's first op changes the probe visibly (a
+      move, or the delete in the delete-then-use case); a note under TST-86 corrects its resolution's
+      sentence the same way.
+
+- [x] **TST-91 · The note under HLP-41 says its guard isn't reached by the self-test; for five tools it still is** · follows TST-87, generation 3 · `REVIEW.md` (the note under HLP-41) · confirmed · found 2026-10-31
+  - **Defect.** The note copied from HLP-4/HLP-31 holds for HLP-41's connect, disconnect and expose paths
+    only; `preview_node`, `node_stats`, `open_graph`, `add_comment` and `sweep_param`'s `view_node` don't
+    go through `_check_batch`, and their `_node()` guard is still checked live (`safeguards.py`, the loop
+    over those tools).
+  - **Scenario.** A reader concludes `open_graph(node_id='graph')`, which once crashed Designer, has no
+    live check.
+  - **Fix (generation 3: narrow the claim).** Reword HLP-41's note: only connect, disconnect and expose
+    moved to the pre-check; the other five tools' guard is still tested live.
+  - **Resolution: done** (commit `825890e`).
+    - **Fix (narrowed, generation 3):** a note under HLP-41 corrects the earlier one: only connect,
+      disconnect and expose moved to the pre-check; `preview_node`, `node_stats`, `open_graph`,
+      `add_comment` and `sweep_param`'s `view_node` keep their `_node()` guard, checked live in
+      `safeguards.py`.
+
+- [x] **TST-92 · AGENTS.md still says each op and field is "exercised" by the self-test; the tests count ops and fields passed, run or not** · follows TST-88, generation 2 · `AGENTS.md` (Working on this project, the unit-test sentence), `tests/unit/test_server.py` (`test_every_apply_edits_op_is_exercised_live`) · confirmed · found 2026-10-31
+  - **Defect.** TST-88 narrowed the field test ("passed, not necessarily run") but not AGENTS.md's
+    sentence ("an `apply_edits` op or an op's field is never exercised"), nor the op-level test, whose
+    regex also counts `'op': 'x'` in batches the pre-check refuses.
+  - **Fix (narrow the claim).** "passed in an op" in AGENTS.md; the op-level test gets the same name and
+    docstring caveat.
+  - **Resolution: done** (commit `825890e`).
+    - **Fix (narrowed):** AGENTS.md says an op or field must be passed in one (run or not); the op-level
+      test is renamed `test_every_apply_edits_op_is_passed_live` with the same caveat as TST-88's.
+    - **Also covered:** README's "How it works" sentence said the self-test "exercises every ... op";
+      now "passes every `apply_edits` op".
+
+- [x] **TST-94 · The skill's "comprehensive API coverage" and tool-prefix advice contradict this project's choices, and AGENTS.md doesn't say so** · `.claude/skills/mcp-builder/SKILL.md` (Phase 1.1, 1.4), `AGENTS.md` (the mcp-builder reminder) · confirmed · found 2026-10-31
+  - **Defect.** The skill says "When uncertain, prioritize comprehensive API coverage" and to use
+    service prefixes (`github_create_issue`); this branch merged eight single-edit tools into
+    `apply_edits` ops, and the tools have no prefix. The reminder's "where it differs from this file,
+    this file wins" covers nothing here, because AGENTS.md states neither choice.
+  - **Scenario.** An agent loads the skill "before adding, merging or removing" a tool, as told, and
+    proposes splitting `apply_edits` back into one tool per edit, or renaming the tools `sd_*`.
+  - **Fix.** One sentence in the reminder: this project prefers few tools (node edits are
+    `apply_edits` ops) and unprefixed names; don't follow the skill's coverage and prefix advice here.
+  - **Resolution: done** (commit `3736000`).
+    - **Fix:** AGENTS.md's reminder names the two defaults this project doesn't follow (comprehensive
+      coverage, service prefixes): few tools, node edits as `apply_edits` ops, unprefixed names. The
+      paragraph is also split from the next one, which a previous edit had run together. Docs only.

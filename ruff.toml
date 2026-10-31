@@ -3,7 +3,7 @@
 #   mcp_server/venv/bin/ruff format .     format
 target-version = "py310"
 line-length = 120
-extend-exclude = ["mcp_server/venv"]
+extend-exclude = ["mcp_server/venv", ".claude/skills/mcp-builder"]  # the last: Anthropic's skill, vendored
 
 [lint]
 select = [

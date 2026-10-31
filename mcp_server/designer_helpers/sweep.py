@@ -37,12 +37,12 @@ def sweep_param(
     prop = target.getPropertyFromId(param, SDPropertyCategory.Input)
     if prop is None or prop.isConnectable():
         raise RuntimeError('%r is not a parameter of %s; see describe_node / list_graph_inputs' % (param, node_id))
-    if node_id not in (None, '', 'graph') and _driving_graph(cast(SDNode, target), prop) is not None:
+    if node_id != 'graph' and _driving_graph(cast(SDNode, target), prop) is not None:
         raise RuntimeError(
             '%s.%s is driven by a graph input or function; sweep the graph input '
             'instead (node_id="graph", param=<input id>, see list_graph_inputs)' % (node_id, param)
         )
-    view = _node(g, view_node or node_id) if (view_node or node_id not in (None, '', 'graph')) else None
+    view = _node(g, view_node or node_id) if (view_node or node_id != 'graph') else None
     if view is None:
         raise RuntimeError('sweeping a graph input needs view_node (the node to look at)')
     original = cast(SDValue, target.getPropertyValue(prop))  # a parameter always has a value

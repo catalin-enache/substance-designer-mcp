@@ -43,7 +43,7 @@ Parameters are in each tool's description; this is when to reach for which.
   with `open_graph` rather than taking a big shot of the whole graph.
 - **Measure:** `node_stats` (exact numbers; prefer them over eyeballing), `check_tiling`
   (trim sheets only need horizontal), `compare_to_reference` for tones against a reference
-  image (`import_bitmap` it too if you want it in the graph). Compare **like with like**: a
+  image (add it to the graph with an `apply_edits` `bitmap` op if you want it there). Compare **like with like**: a
   `reference_region` of plain, lit material against the matching `region` of the node. A whole
   product shot is dominated by its background, and lit renders or photos include shading, so
   their contrast is higher than a baseColor's should be (on the dwarf house: whole image EMD
@@ -51,10 +51,11 @@ Parameters are in each tool's description; this is when to reach for which.
   suggested `x*gain + bias` as a starting point for levels, not a target.
 - **Tune a value:** `sweep_param` instead of edit-rebuild-look loops; `view_node` watches the
   final output while sweeping an early node.
-- **Edit:** one-off `add_node` / `import_bitmap` (reference images, masks, painted maps) /
-  `set_params` / `connect` / `disconnect` / `move_nodes` / `delete_nodes`; several changes at
-  once with `apply_edits` (one call, one undo step, refs for new nodes); `create_graph`;
-  controls with `expose_param` / `remove_graph_input`; size with `set_graph_size`.
+- **Edit:** `apply_edits` for every node edit, one change or many: ops `add`, `bitmap`
+  (reference images, masks, painted maps), `set`, `connect`, `disconnect`, `move`, `delete`,
+  `expose` (a parameter as a graph input). One call is one undo step; refs name nodes added
+  earlier in the batch. Which mistakes refuse the whole batch and which stop it partway: the
+  tool's description. Also `create_graph`; `remove_graph_input`; size with `set_graph_size`.
 - **Make graphs readable** (every graph you build or restructure): `arrange_graph` (positions
   only), then `add_frame` per logical section and `add_comment` for non-obvious choices.
   - **Use portals when the wires get too cluttered.** Check with `screenshot_designer('graph')`
@@ -81,7 +82,7 @@ Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `-c COD
 
 - Each code run and each edit tool is one Designer undo transaction
   (`SDHistoryUtils.UndoGroup`), so Ctrl+Z reverts a whole run (the self-test checks one Undo and
-  one Redo for `add_node` and for a code run).
+  one Redo for an `apply_edits` add op and for a code run).
 - Undo history is **per document** (Edit > Undo reverts the last step of the graph in focus).
   If you must trigger it yourself: the actions live in a `QMenu` (find them via
   `QApplication.instance().allWidgets()`, not `mainWindow.findChildren`) and apply
@@ -125,8 +126,8 @@ Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `-c COD
 - Property types matter (`node.getPropertyFromId(id, SDPropertyCategory.Input).getType()`):
   levels `levelin*/levelout*` are **float4**; uniform `outputcolor` is **ColorRGBA**;
   `blendingmode`, `$format`, `$tiling` are **enums** (set via an enumerator's
-  `getDefaultValue()` or `SDValueEnum.sFromValueId(type, id)`). `set_params` converts for you
-  and validates before changing anything.
+  `getDefaultValue()` or `SDValueEnum.sFromValueId(type, id)`). `apply_edits`' `set` op converts
+  for you and validates before changing anything.
 - `$format` enum ids: `8_bits_per_channel`, `16_bits_per_channel`, `hdr_low_precision`,
   `hdr_high_precision` (type `sbs::compositing::format`).
 - Blend modes: copy 0, add 1, subtract 2 (enum id spelled `substract`), multiply 3, addsub 4,
@@ -158,18 +159,18 @@ Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `-c COD
   `sbs::function::get_<type>` with `__constant__` = the input id (`get_float1..4`,
   `get_integer1..4`, `get_bool`, `get_string`). Use the parameter's own type; enums → int.
   Adding a function graph to a parameter resets its stored value to the default; setting the
-  value deletes an empty function graph (measured with `set_params`; not checked for a graph with
+  value deletes an empty function graph (measured with a `set` op; not checked for a graph with
   nodes). An empty function graph drives nothing: the output follows the stored value (the tools
   treat such a parameter as not driven).
 - Graph size is log2 (`$outputsize` 11 = 2048), set with
   `graph.setInputPropertyValueFromId('$outputsize', SDValueInt2.sNew(int2(11, 11)))`.
   Generators inherit the graph size; filters inherit from their input. A node's `$format` /
-  `$outputsize` only take effect with inheritance set to Absolute (`set_params` and
-  `sweep_param` do that). So does the graph's own `$format` (a new graph's follows its parent:
-  setting 16 bits left a generator at RGBA8 until made Absolute); `set_params` does that too.
+  `$outputsize` only take effect with inheritance set to Absolute (`apply_edits`' `set` op
+  and `sweep_param` do that). So does the graph's own `$format` (a new graph's follows its parent:
+  setting 16 bits left a generator at RGBA8 until made Absolute); the `set` op does that too.
   A `$randomseed` (the graph's or a node's) is the exception: inherited, its value is added to its
   parent's seed (a render's, or the graph's), and only an inherited graph seed stays a control of
-  the cooked .sbsar; made Absolute, a seed stops following its parent. So `set_params` leaves a
+  the cooked .sbsar; made Absolute, a seed stops following its parent. So the `set` op leaves a
   seed's inheritance as it is; to fix one on purpose, change it in code. (Compare computed pixels
   with a tolerance: two computes of one setting differed by 2/65535, and raw buffers carry row
   padding.)
@@ -311,7 +312,18 @@ those assignments on one line.
 ## Working on this project
 
 How the plugin, server, helpers and command-line tools fit together: README.md, **How it
-works**. The server (`server_tools/core.py`) loads this file from the folder above `mcp_server/`, so keep it there. Its
+works**.
+
+**Load the `mcp-builder` skill** (`.claude/skills/mcp-builder/`: Anthropic's, from `anthropics/skills` at
+`ca45fc4`, trimmed to its Python parts) before designing or changing tools: adding, merging or removing
+one, its parameters, description, errors or results. Use it for tool design, descriptions, error
+messages and evaluations; where it differs from this file (tests and docs follow the rules below), this
+file wins. Two of its defaults this project doesn't follow: it prefers comprehensive API coverage and
+service-prefixed names, while this project keeps few tools (node edits are `apply_edits` ops, not tools
+of their own) with unprefixed names. Its code is for mcp 1.x; this server runs mcp 2.x (the note at the
+top of its `SKILL.md`).
+
+The server (`server_tools/core.py`) loads this file from the folder above `mcp_server/`, so keep it there. Its
 instructions (`INSTRUCTIONS` in `server_tools/core.py`) must stay under 4,096 characters, and every text tool result starts with a reminder until `get_guide()`
 has been called in the session (unit tests check both).
 
@@ -350,8 +362,9 @@ The rules:
   commit and the evidence.
 - A new review **appends** its findings to the sections they belong in, plus an entry in the
   review log; it never replaces or rewrites what is already there.
-The unit tests enforce part of this: they fail when a tool, a tool parameter or an `apply_edits`
-op is never exercised by the self-test, or a tool is missing from README's Tools table.
+The unit tests enforce part of this: they fail when a tool or a tool parameter is never exercised by
+the self-test, when an `apply_edits` op or an op's field is never passed in one (run or not), or when a
+tool is missing from README's Tools table.
 
 **Running the tests** (both must pass before a change is done):
 - `mcp_server/venv/bin/python -m pytest`: unit tests, no Designer needed, a few seconds
