@@ -9,6 +9,12 @@ from typing import Any
 
 from .common import TEST_GRAPH, Ctx, added_id, check, helpers_source, skip, text
 
+# what the refusal for Designer's library packages says to do (designer_helpers/core.py)
+LIBRARY_WAY = (
+    "With it in focus in Designer's editor (the user opens it; open_graph can't reach it), read tools work with "
+    'no graph given, and snapshot_graph with no graph keeps a copy'
+)
+
 
 async def run(ctx: Ctx) -> None:
     c, scratch, was_running, G, lv = ctx.c, ctx.scratch, ctx.was_running, ctx.G, ctx.lv
@@ -342,12 +348,12 @@ async def run(ctx: Ctx) -> None:
         t.strip()[-200:],
     )
     # and the refusal doesn't suggest save_as, which is refused too (REVIEW.md HLP-14), and
-    # says to open the graph first, since snapshot_graph can't find a library graph by
+    # says to have the graph open first, since snapshot_graph can't find a library graph by
     # name (HLP-18)
     check(
         'save_package',
         'the library refusal points to a way that works',
-        'save_as' not in t and 'open it in the editor' in t and 'snapshot_graph with no graph' in t,
+        'save_as' not in t and LIBRARY_WAY in t,
         t.strip()[-200:],
     )
     # ...and that way works: a library graph open in the editor, snapshot_graph with no graph
@@ -355,11 +361,67 @@ async def run(ctx: Ctx) -> None:
     # the library graph's tab again, so it isn't left in yours (TST-27)
     if was_running:
         skip(
+            'save_package',
+            'a package in a subfolder of the library folder is a library package',
+            'it loads and unloads a library package, which may be in use in your Designer',
+        )
+        skip(
             'snapshot_graph',
             'snapshots a library graph open in the editor, with no graph given',
             "it opens a library graph in an editor tab, which can't be closed again from code",
         )
     else:
+        # a package in a subfolder of `packages` is Designer's own too, and refused by name (REVIEW.md HLP-57). Loaded
+        # and unloaded here, so not in your Designer, where that package may be in use (TST-111)
+        t = text(
+            await c(
+                'execute_designer_code',
+                {
+                    'code': helpers
+                    + (
+                        '\nfrom sd.api.sdapplication import SDApplicationPath as _Paths\n'
+                        "root = os.path.join(_APP.getPath(_Paths.DefaultResourcesDir), 'packages')\n"
+                        "path = next(os.path.join(d, f) for d, _, fs in sorted(os.walk(root)) if d != root for f in sorted(fs) if f.endswith('.sbs'))\n"
+                        'had = [p for p in _PM.getUserPackages() if p.getFilePath() == path]\n'
+                        'pkg = had[0] if had else _PM.loadUserPackage(path)\n'
+                        'try:\n'
+                        "    print('SUBFOLDER=' + os.path.relpath(path, root))\n"
+                        "    print('LIBRARY=' + str(_is_library_package(pkg)))\n"
+                        '    name = next(r.getIdentifier() for r in pkg.getChildrenResources(True) if isinstance(r, SDSBSCompGraph))\n'
+                        '    try:\n'
+                        '        find_graph(name)\n'
+                        "        print('BY_NAME=found')\n"
+                        '    except RuntimeError as e:\n'
+                        "        print('BY_NAME=' + str(e))\n"
+                        'finally:\n'
+                        '    if not had:\n'
+                        '        _PM.unloadUserPackage(pkg)\n'
+                    )
+                },
+            )
+        )
+        check(
+            'save_package',
+            'a package in a subfolder of the library folder is a library package',
+            os.sep in t.split('SUBFOLDER=')[-1].splitlines()[0] and 'LIBRARY=True' in t and LIBRARY_WAY in t,
+            t.strip()[-300:],
+        )
+        # the refusal says open_graph can't open it, so the user does (below, code stands in for the user):
+        # each tool refuses by name, with that same way (ROADMAP item 27). bevel.sbs is loaded by now
+        # (describe_node)
+        for tool, args in (('open_graph', {'graph': 'bevel'}), ('snapshot_graph', {'graph': 'bevel', 'label': 'x'})):
+            r_ = await c(tool, args)
+            check(
+                tool,
+                'refuses a library graph by name, saying what works',
+                r_.is_error and LIBRARY_WAY in text(r_),
+                text(r_).strip()[-200:],
+            )
+            if not r_.is_error and 'saved: ' in text(r_):  # a regression: don't leave its snapshot behind
+                wrong = text(r_).split('saved: ', 1)[1].strip().splitlines()[0]
+                for leftover in (wrong, wrong + '.json'):
+                    if os.path.isfile(leftover):
+                        os.remove(leftover)
         t = text(
             await c(
                 'execute_designer_code',
@@ -375,24 +437,66 @@ async def run(ctx: Ctx) -> None:
             )
         )
         lib_graph = re.search(r'LIBRARY_GRAPH=(\S+)', t)
-        r_ = await c('snapshot_graph', {'label': 'library graph check'})
+        lib_snapshot = await c('snapshot_graph', {'label': 'library graph check'})
         check(
             'snapshot_graph',
             'snapshots a library graph open in the editor, with no graph given',
-            lib_graph is not None and not r_.is_error and 'saved: ' in text(r_),
-            text(r_).strip()[-150:],
+            lib_graph is not None and not lib_snapshot.is_error and 'saved: ' in text(lib_snapshot),
+            text(lib_snapshot).strip()[-150:],
+        )
+        # no tool edits it: Designer would take the edit, and graphs using it would see it (REVIEW.md HLP-55).
+        # Every call goes to the editor's graph, the library one
+        lib_state = (
+            'import sd\ng = sd.getContext().getSDApplication().getQtForPythonUIMgr().getCurrentGraph()\n'
+            "print('STATE', g.getIdentifier(), len(g.getNodes()), g.getPackage().isModified())"
+        )
+        state = text(await c('execute_designer_code', {'code': lib_state}))
+        edits: list[tuple[str, dict[str, Any]]] = [
+            ('apply_edits', {'ops': [{'op': 'add', 'definition': 'levels'}]}),
+            ('arrange_graph', {}),
+            ('add_frame', {'node_ids': ['1'], 'title': 'x'}),
+            ('add_comment', {'text': 'x', 'position': [0, 0]}),
+            ('set_graph_size', {'size_log2': 9}),
+            ('remove_graph_input', {'input_id': 'x'}),
+            ('sweep_param', {'node_id': '1', 'param': 'x', 'values': [1]}),
+        ]
+        for tool, edit in edits:
+            r_ = await c(tool, edit)
+            check(
+                tool, 'refuses a library graph in the editor', r_.is_error and LIBRARY_WAY in text(r_), text(r_)[-200:]
+            )
+        lib_after = text(await c('execute_designer_code', {'code': lib_state}))
+        check(
+            'apply_edits',
+            'a library graph in the editor stays as it was',
+            'STATE' in state and 'False' in state and state == lib_after,
+            state + ' -> ' + lib_after,
+        )
+        # reading it still works, with no graph given
+        r_ = await c('describe_graph', {})
+        check('describe_graph', 'reads a library graph in the editor', not r_.is_error, text(r_)[:120])
+        r_ = await c('export_outputs', {'output_dir': os.path.join(scratch, 'library_export')})  # REVIEW.md SRV-53
+        check(
+            'export_outputs',
+            'exports a library graph in the editor',
+            # with no graph given it could be any graph, so the result names it (REVIEW.md SRV-54)
+            not r_.is_error and lib_graph is not None and "of graph '%s'" % lib_graph.group(1) in text(r_),
+            text(r_)[:200],
         )
         # and set_link_display's file step refuses it: the edit would go into Designer's install
         # folder (REVIEW.md HLP-33)
         # save=False: the refusal comes first, and a regression must not save a library file (TST-69)
         t = text(await c('execute_designer_code', {'code': helpers + '\npackage_file_of(None, save=False)'}))
         check(
-            'set_link_display', "never edits a library graph's file", 'ERROR' in t and 'library' in t, t.strip()[-150:]
+            'set_link_display',
+            "never edits a library graph's file",
+            'ERROR' in t and 'library' in t and LIBRARY_WAY in t,
+            t.strip()[-150:],
         )
         # delete only this snapshot, and its folder only if nothing else is in it: the user may
         # have snapshots of a graph with the same name (REVIEW.md TST-26)
-        if not r_.is_error and 'saved: ' in text(r_):
-            lib_snap = text(r_).split('saved: ', 1)[1].strip().splitlines()[0]
+        if not lib_snapshot.is_error and 'saved: ' in text(lib_snapshot):
+            lib_snap = text(lib_snapshot).split('saved: ', 1)[1].strip().splitlines()[0]
             for leftover in (lib_snap, lib_snap + '.json'):  # the snapshot and its package note
                 if os.path.isfile(leftover):
                     os.remove(leftover)

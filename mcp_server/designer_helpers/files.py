@@ -1,7 +1,7 @@
 """Package files: snapshot copies, and saving, unloading and reloading for edits the API can't
 make."""
 
-from .core import _APP, _PM, Any, SDSBSCompGraph, _is_library_package, _same_graph, find_graph, os
+from .core import _APP, _PM, Any, SDSBSCompGraph, _is_library_package, _library_refusal, _same_graph, find_graph, os
 
 
 def save_package_copy(identifier: str | SDSBSCompGraph | None, path: str) -> None:
@@ -43,7 +43,7 @@ def package_file_of(identifier: str | SDSBSCompGraph | None, save: bool = False)
     if _is_library_package(pkg):
         # with no graph given, the editor's graph can be a library one: never edit Designer's own
         # files (REVIEW.md HLP-33)
-        raise RuntimeError("%s is in one of Designer's library packages; its file is not edited" % g.getIdentifier())
+        raise _library_refusal("Graph %r belongs to Designer's library; its file is not edited" % g.getIdentifier())
     path = pkg.getFilePath()
     if not path:
         raise RuntimeError('the package has never been saved; save it first (the save_package tool, save_as=...)')

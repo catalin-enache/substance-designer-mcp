@@ -93,7 +93,8 @@ def _library_index() -> _LibraryIndex:
 @_tool()
 def search_nodes(query: str, limit: int = 30, include_hidden: bool = False) -> str:
     """Find node types by name, label, category or description, across atomic nodes and
-    Designer's whole node library (not just loaded packages). Results show the `definition`
+    Designer's node library (not just loaded packages), except the ready-made materials in its
+    materials/pbr subfolder (a script can load those). Results show the `definition`
     to pass to describe_node and to apply_edits' add op. Words in the query must all match."""
     index = _library_index()
     words = [w.lower() for w in query.split()]

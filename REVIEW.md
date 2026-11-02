@@ -22,9 +22,9 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
 | High | 0 | 1 |
 | Medium-high | 0 | 2 |
 | Medium | 0 | 20 |
-| Low-medium | 0 | 60 |
-| Low | 0 | 186 |
-| **Total** | **0** | **269** |
+| Low-medium | 0 | 63 |
+| Low | 0 | 194 |
+| **Total** | **0** | **280** |
 
 ## Review log
 
@@ -889,6 +889,125 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
   hold no personal paths, email, scratch paths, debugging code or stray files.
 - **Longest chain still growing:** none in the code: the file-writing chain found nothing this round (SRV-52 holds).
   TST-108 is generation 2 of SRV-47's chain, a sentence on `main` that this branch's rule made wrong.
+
+### 2026-11-02: branch `library-refusal` against `main`, the diff only, at `1751e99` plus the working tree
+
+- **How:** two read-only reviewers on scratch copies, no Designer: the library refusal and `_graph_to_edit`, with
+  mutations and an AST list of every helper that writes; the fit report, docs and tests, with the real helper source
+  and a fake view at the measured 5 % floor. By hand: `find` in Designer's `packages` folder (HLP-57), the code and the
+  arithmetic of HLP-58 and HLP-59. Unit tests 364 passed; live self-test 341/341 with the working tree.
+- **Resolutions assessed:** HLP-55 holds: each of the 15 helpers put back on `find_graph` fails its own row and the
+  grouping test, and the check runs before any write. HLP-56's false report is fixed but over-corrected (HLP-59); its
+  account of the cause stays honest. Questioned: HLP-55 (HLP-57, HLP-58, TST-109), HLP-56 (HLP-59).
+- **Findings:** 4: 2 low-medium (HLP-57, HLP-58), 2 low (HLP-59, TST-109). No lost or changed work. HLP-58's closed
+  graph case found by both reviewers.
+- **Suggested order:** HLP-57 (the check itself), then HLP-58 (the one message), HLP-59, TST-109.
+- **Notes (not entries):** `check_tiling` and `compare_to_reference` reach the same temporary node as `preview_node` and
+  `node_stats`, which HLP-55's resolution names alone. The `was_running` skip names one check, so the other new library
+  checks are silently absent from that mode's run. With `apply_edits` alone put back, the live checks still pass,
+  because `add_node` refuses inside it (only the unit row with no ops catches that; the graph stays protected). Failure
+  only: a dead session leaves the `slope_blur` snapshot, and a by-name regression an empty `bevel/` folder. After the
+  100000-wide rect check the test graph's view stays at 5 %; the checks after it compare sizes only.
+- **Checked and found fine:** every helper that writes is behind `_graph_to_edit` or its own check; refs never select a
+  graph; a user's graph object, an unsaved package and odd path spellings pass as before (none counts as library); the
+  check costs little per op, and the library scan runs only when a name isn't found; nothing parses "not found in open
+  user packages", "fitted" or `zoom N%` except the self-test's `visible()`, which matches both messages; `target * 1.001`
+  is the exact complement of the loop's break; a 0x0 viewport; the 80-step limit stays bounded; the `QApplication`
+  import is function-local and works in the joined script; a regression in a Designer the self-test started stays in
+  memory and is unloaded; `save_as` is no longer suggested; no personal paths or tokens in the diff.
+- **Longest chain still growing:** the library refusal, HLP-10 → HLP-14 → HLP-18 → HLP-20 → TST-26 / TST-27, then HLP-55
+  → HLP-58, generation 2 since item 27 restarted it, again a message pointing at a step that refuses next.
+
+### 2026-11-02: branch `library-refusal` against `main`, the diff only, second round, at `1751e99` plus the working tree
+
+- **How:** one read-only reviewer on a scratch copy, no Designer: `_is_library_package` with real files and links, the
+  refusal's clauses against each tool's schema, `_fit_view_to` on a real offscreen `QGraphicsView` (PySide6, wheel faked
+  with a 5 % floor; 4000 fuzz cases). Verified by hand: SRV-53 (the signature), TST-110 (the docstring and `os.listdir`).
+  Unit tests 375 passed; live self-test 343/343 at the last fix, no code change since.
+- **Resolutions assessed:** HLP-57, HLP-59 and TST-109 hold. HLP-58 is questioned by SRV-53 (one tool of the message's
+  "read tools" requires a graph), HLP-57 by TST-110 (a sentence it left beside a new fact).
+- **Findings:** 2 low: SRV-53 (a message leading to a call that fails), TST-110 (wording: narrow). No lost or changed work.
+- **Suggested order:** SRV-53, then TST-110.
+- **Notes (not entries):** a rect outside the scene's range, clamped by a pan, says "could not fit ... it would need 100.0%"
+  at zoom 100 %: true, the reason odd (whether Designer's scene clamps isn't measured). `open_graph`'s docstring doesn't
+  name "fitted ..., above 100 %", which explains itself. Within a pixel of the view's edge a fit can say "could not fit"
+  (15841 wide in a 792 view). A different case on macOS stays unrecognised, as on `main`. A dangling link into the library
+  counts as library, harmlessly.
+- **Checked and found fine:** `_is_library_package` old against new on a subfolder, a user's link to a library file, a folder
+  link either way, a library file linked to a user's file (the one True to False, rightly), a loop, relative names, a
+  missing library folder, a NUL; `realpath` always absolute, so `commonpath` raises only on another drive or a NUL; every
+  caller still answers correctly; the other clauses of the refusal; each caller's reason true in its situation; "fitted"
+  never with the area out of view; the `above 100 %` branch never with a working wheel, from stored zooms of 1.0 to 8; the
+  whole-graph path; Qt's `contains` refusing an empty rect, as HLP-59 says.
+- **Longest chain still growing:** HLP-55 → HLP-58 → SRV-53, generation 3, again a message and a step that refuses, now its
+  last known case; TST-110 is generation 3, wording.
+
+### 2026-11-02: branch `library-refusal` against `main`, the diff only, third round, at `1751e99` plus the working tree
+
+- **How:** one read-only reviewer on a scratch copy, no Designer, high bar: `export_outputs`' new signature and every caller;
+  the new sentences against the install folder and `_library_path`; the whole diff from the side of an agent on a user's own
+  graph. Unit tests 376 passed; live self-test 344/344 at the last fix, no code change since.
+- **Resolutions assessed:** SRV-53 and TST-110 hold (making another tool's `graph` required fails the new test; `required:
+  ['output_dir']` in the schema; `None` reaches the helper; `materials/pbr` is the only subfolder with `.sbs` files).
+- **Findings:** none.
+- **Notes (not entries):** `export_outputs` with no graph prints "exported N file(s) to <dir>" without naming the graph; on `main`
+  the schema refused a missing graph. If focus moved and the agent left `graph` out, another graph's maps overwrite that
+  folder and the message doesn't say so. The docstring states the default, and `apply_edits` is alike. A `getPath` of `''` or
+  `.` would make `<cwd>/packages` the library folder (never seen; `search_nodes` would fail too).
+- **Checked and found fine:** every caller of `export_outputs` (by name, or in the unit tests); its refusals with no graph open or
+  a function graph in focus; the 35 tools the new test walks; 519 + 30 `.sbs` files; "a script can load those" (loaded live,
+  HLP-57); ROADMAP item 41's claim, traced through `_library_path`, and its clear error; an unsaved package; old against new
+  for a trailing slash, a missing folder and `/` as the resources folder; no helper catches or parses the new refusal; two
+  `realpath` calls per package lookup.
+- **Longest chain still growing:** none: HLP-55 → HLP-58 → SRV-53 found nothing this round.
+
+### 2026-11-02: branch `library-refusal` against `main`, the diff only, fourth round, at `1751e99` plus the working tree
+
+- **How:** one read-only reviewer on a scratch copy, no Designer: the export message and SRV-54; the self-test on this branch as run in
+  a Designer that was already running, from the code; the status table and ROADMAP items 27 and 41. Verified by hand: TST-111 (the
+  block and its place before `if was_running:`). Unit tests 376 passed; live self-test 344/344 at the last fix, no code change since.
+- **Resolutions assessed:** SRV-54 holds (nothing reads the old message; `example.py`'s `exported 6 file(s)` is still a substring). HLP-57 is
+  questioned by TST-111 (its live check runs in the user's Designer).
+- **Findings:** 1 low-medium (TST-111, not measured: Designer was off limits for the reviewer).
+- **Suggested order:** TST-111, then commit.
+- **Notes (not entries):** unloading a library package with 18 dependencies, whether that leaves those for a user's graph using them too, is
+  unmeasured; `main`'s end-of-run clean-up carries the same question. In a Designer already running, only one of the new library checks prints a
+  SKIP; the others are silently absent. `save_package(save_as=...)` names the target, not the source package, as on `main`.
+- **Checked and found fine:** the message with odd characters in a name (one line, nothing parses it); `lib_graph` set before its use; `open_graph`'s
+  rect checks touch only the test graph's view; `lookup.py` only reads; the status table (1 / 2 / 20 / 62 / 193 resolved before this entry, none
+  rewritten); ROADMAP 27 and 41 against the code and the install; no personal paths or scratch files in the diff.
+- **Longest chain still growing:** HLP-55 → HLP-57 → TST-111, generation 3, now in the test rather than the tools; the tools' code had no finding
+  for a second round.
+
+### 2026-11-02: branch `library-refusal` against `main`, the diff only, fifth round, at `1751e99` plus the working tree
+
+- **How:** one read-only reviewer on a scratch copy, no Designer: `test_selftest_safety.py` on every branch shape, with mutations; every other way the
+  self-test loads library packages; TST-111's resolution; the whole diff read as one change. Verified by hand: TST-112 (the docstring). Unit tests 378
+  passed; live self-test 344/344 at the last code fix, no tool or self-test code changed since.
+- **Resolutions assessed:** TST-111 holds, apart from TST-112's wording: the guard fails with the branch inverted or `if True:`; `safeguards.py` gives one
+  load, protected; the other six `loadUserPackage` snippets load scratch or snapshot files.
+- **Findings:** 1 low (TST-112, wording: narrow). No contradiction between the docs and the code.
+- **Suggested order:** TST-112, then commit.
+- **Notes (not entries):** TST-111's measurement is a graph using Bricks 001 itself; a graph using only one of its dependencies wasn't measured, the shape
+  `main`'s clean-up could meet. That a package loaded as a dependency is in `getPackages()` only, promoted by `loadUserPackage` and demoted by the unload,
+  is recorded only here. Before committing: `git add` `test_selftest_safety.py` (untracked), and `test_fit_view.py` and `test_library_refusal.py`, whose
+  staged versions are stale.
+- **Checked and found fine:** `_protected` on `elif`, `else` and nested branches; `(?<!un)`; `describe_node` and `add` ops in the user's Designer: `_load_library`
+  and the example check `getPackages()` with `normpath` first, and `restore_library_packages` unloads only what wasn't there at the start; "30 packages", the 18
+  dependencies and the status table; the `materials/pbr` exception reads the same everywhere; no old "open it in the editor" wording; nothing unwanted in the diff.
+- **Longest chain still growing:** HLP-55 → HLP-57 → TST-111 → TST-112, generation 4, wording only; no tool code finding for a third round.
+
+### 2026-11-02: branch `library-refusal` against `main`, the diff only, sixth round, at `1751e99` plus the working tree
+
+- **How:** by hand, no subagent: only `test_selftest_safety.py`'s docstring and REVIEW.md changed since the fifth round, so there was no independent reading of the code this round.
+  Unit tests 378 passed; live self-test 344/344 on this tree, from a closed Designer.
+- **Resolutions assessed:** TST-112 holds: the guard's own function, run on samples, finds one string naming both and nothing for `+`, an f-string, a path built elsewhere or a tool
+  call, as the docstring says.
+- **Findings:** none.
+- **Notes (not entries):** before committing, `git add` `test_selftest_safety.py` (untracked) and the two staged tests with newer changes.
+- **Checked and found fine:** the status table against the checkboxes, section by section; every test named by this branch's entries exists; every entry has a resolution; no old
+  wording of the refusal or "whole library" left; only the expected folders in the diff; no personal paths or debugging in it; nothing left in the snapshot folder after the live run.
+- **Longest chain still growing:** none.
 
 ---
 
@@ -2541,6 +2660,87 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
     - **Also covered:** the other reads of that path follow links already (`ET.parse`, the on-disk copy).
 
   - Questioned by SRV-51 (2026-11-01).
+
+- [x] **HLP-57 · 30 of Designer's own packages aren't recognised as library packages** · follows HLP-55, generation 2 · `mcp_server/designer_helpers/core.py` (`_is_library_package`) · confirmed · verified by hand · found 2026-11-02
+  - **Defect.** `os.path.normcase(os.path.dirname(pkg.getFilePath() or '')) == lib` accepts only a file directly in the
+    `packages` folder. Designer 16.0.7 has 519 `.sbs` files there and 30 more in subfolders (`materials/pbr/...`).
+    Symlinks aren't resolved either (not measured). On `main` too; `_graph_to_edit` now relies on it.
+  - **Scenario.** The user opens `materials/pbr/concrete_070.sbs` from Designer's library: every guard of the last change
+    passes it. `apply_edits` changes it in memory, `save_package` tries to save over it, `set_link_display` tries to edit
+    its file, and it can be found by name, as if it were the user's own.
+  - **Fix.** Compare resolved paths, the file anywhere under the folder (`os.path.realpath` of both, `os.path.commonpath`,
+    which raises on another drive on Windows). The API has no flag for this: `SDPackage` has none, and the folder comes
+    from Designer's `getPath`. A unit table of spellings, and a live check loading one package from a subfolder.
+  - **Resolution: done** (commit `4fa6981`).
+    - **Test:** live: `materials/pbr/bricks_001.sbs` loaded gave "LIBRARY=False / BY_NAME=found", a built-in material taken for
+      the user's own graph. Unit (`test_library_refusal.py`): a table of locations (a subfolder, `..`, a doubled separator
+      failed; a folder whose name only starts the same, beside the folder, a project's own `packages` passed), a linked
+      install, an unsaved package, another drive.
+    - **Cause:** the check compared the file's parent folder with the library folder, unresolved.
+    - **Fix:** `_is_library_package` resolves both paths with `realpath` and uses `commonpath`, so any file under the folder
+      counts; a `ValueError` (another drive) means no. Live: refused by name, with the shared message.
+    - **Also covered:** the other `packages` paths: `describe_node`, `search_nodes` and the example build paths to files there,
+      directly in the folder, and don't classify; the self-test's `LIBRARY_PACKAGES` snippets use `startswith`, so they
+      include subfolders (and a `packages_extra` folder, which Designer doesn't have). Not measured: a different letter case
+      on macOS, where `normcase` does nothing (both paths come from Designer); Windows (ROADMAP item 18).
+  - Questioned by TST-110 (2026-11-02).
+  - Questioned by TST-111 (2026-11-02).
+
+
+
+- [x] **HLP-58 · The one library refusal misleads in three situations** · follows HLP-55, generation 2 · `mcp_server/designer_helpers/core.py` (`_library_refusal`, `find_graph`) · confirmed · verified by hand · found 2026-11-02
+  - **Defect.** (1) By name, the message gives the name as the only obstacle, because `find_graph` doesn't know the caller
+    wants to edit: "tools don't find its graphs by name". (2) "open in Designer's editor" really means in focus:
+    `snapshot_graph` with no graph copies `_current_graph()`. (3) With no open user graph of that name and a loaded
+    library graph of it, the message asserts the graph "belongs to Designer's library", though the user may mean their
+    own closed package; `main` rightly said "not found in open user packages". Reads aren't told they work with no graph.
+    The third found by both reviewers.
+  - **Scenario.** (1) `apply_edits('bevel', ops)`: the agent asks the user to open a library tab, retries with no graph, and
+    is refused with "tools don't edit it", the user's action wasted: the pattern this chain began with. (2) The library
+    graph is in a background tab: the agent gets a copy of the user's graph instead (the result does name it). (3) The
+    user's `tile_generator` package is closed after `describe_node` loaded the library's: the agent tells the user their
+    graph is a library one, instead of asking to open it.
+  - **Fix (wording, one message, no new check).** By name: "No open user graph is named %r; a loaded Designer library graph
+    is, and tools don't find those by name or edit them." The way: "With it in focus in Designer's editor (the user opens
+    it; open_graph can't reach it), read tools work with no graph given, and snapshot_graph with no graph keeps a copy."
+    The tests' `WAY`, `LIBRARY_WAY` and `start` strings follow.
+  - **Resolution: done** (commit `4fa6981`).
+    - **Test:** the unit and live checks changed to the new wording first; each failed on the old message.
+    - **Fix:** `_library_refusal` takes the whole reason. By name: "No open user graph is named 'bevel'; a loaded Designer
+      library graph is, and tools don't find those by name or edit them." (a closed user graph stays possible, and an edit is
+      refused up front). The way, on every path: "With it in focus in Designer's editor (the user opens it; open_graph can't
+      reach it), read tools work with no graph given, and snapshot_graph with no graph keeps a copy." Live: 343/343; the
+      self-test runs `describe_graph` and `snapshot_graph` that way.
+    - **Also covered:** all four callers (`find_graph`, `_graph_to_edit`, `_package_of`, `package_file_of`) and the one-line
+      requirement of `set_link_display`'s report. "In focus" isn't checked with a background tab live (read from
+      `_current_graph`; a reviewer's fake probe showed the copy of the graph in focus).
+  - Questioned by SRV-53 (2026-11-02).
+
+
+- [x] **TST-111 · The self-test's subfolder check can unload a package it didn't load, in the user's Designer** · follows HLP-57, generation 3 · `tests/test_all_tools/safeguards.py` (the subfolder block) · plausible · verified by hand · found 2026-11-02
+  - **Defect.** The block runs before `if was_running:`, so also in the user's own Designer, and it decides whether the package was already
+    loaded with `p.getFilePath() == path` over `getUserPackages()`, narrower than AGENTS.md's "check `getPackages()` first" and than
+    `_load_library`, which uses `getPackages()` and `normpath`. A miss means loading, then unloading, a package the block doesn't own.
+  - **Scenario.** (1) The target is always `materials/pbr/bricks_001.sbs`. The user's open graph uses Bricks 001, so it's loaded as a dependency: if
+    such a package isn't in `getUserPackages()`, `loadUserPackage` may return it and the `finally` unloads it from under the user's graph. (2) On
+    Windows, a backslash path against a `getFilePath()` with forward slashes never matches, even with the package open in a tab, and
+    `loadUserPackage` defaults to reloading a modified one, so unsaved edits could go. Neither measured.
+  - **Fix.** Move the block into the `else` branch, as TST-27 did for the library tab: it needs no user's Designer, and no comparison can then miss.
+  - **Resolution: done; the first scenario not reproduced, the second not measurable here** (commit `4fa6981`).
+    - **Measured (by hand, Designer 16, scratch files only):** a saved package using Bricks 001, loaded: Bricks 001 is in `getPackages()`, not
+      `getUserPackages()`, so the check does load it (`had` 0); `loadUserPackage` makes it a user package, and unloading only makes it a
+      dependency again: 30 packages loaded throughout, the instance still resolves, the graph computes, nothing modified. So scenario 1 loses
+      nothing. This also answers the fourth round's note: that unload leaves the dependencies of a graph still open. Scenario 2 needs Windows.
+    - **Test:** before the move, a run in a Designer already running printed PASS for the subfolder check, so it ran there; after it, SKIP
+      with the reason; a run from a closed Designer still runs it and passes. `test_selftest_safety.py` keeps it so, at the user's request
+      and as an exception to the generation 3 rule: a snippet that loads a library package must sit in a branch that runs only in a Designer
+      the self-test started (it fails with `if was_running:` inverted). The self-test's own scratch packages may load anywhere.
+    - **Fix:** the block moved into the `else` branch, with a `skip` naming why. Live: 344/344 from a closed Designer; 317/317 with 6 skipped in
+      one already running.
+  - Questioned by TST-112 (2026-11-02).
+  - Note (2026-11-02): the guard named above sees one string naming both `loadUserPackage` and `DefaultResourcesDir`, not a snippet joined by `+`, an f-string, a path
+    built elsewhere or tool calls (TST-112).
+
 
 ## Low
 
@@ -4885,3 +5085,140 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
     taken by this version" (older ones can't be told apart, as its uninstall section says). What the sentence relies
     on already has a test: `list_snapshots`' mark and `uninstall.py` keeping them (SRV-47's tests).
     - **Also covered:** "safe to delete" appears nowhere else in README.md, AGENTS.md, ROADMAP.md or the tools.
+
+- [x] **HLP-55 · Edit tools called with no graph reach a library graph open in the editor** · `mcp_server/designer_helpers/core.py` (`find_graph`), `mcp_server/designer_helpers/batch.py:69` · plausible · found 2026-11-02
+  - **Defect.** `find_graph(None)` returns the graph in the editor, library or not, and only saving and the file
+    edit refuse a library one. Found while working on ROADMAP item 27, from the code; not measured in Designer.
+  - **Scenario.** The user has a library graph open to look at it, and an agent calls `apply_edits` with no `graph`
+    (likewise the other edit helpers using `find_graph`): the edit would land in the loaded library package in
+    memory, where every graph using it may see it, and Designer's own Save would overwrite the file in its
+    install folder.
+  - **Fix.** First measure that Designer takes such an edit, and which tools reach it. Then refuse in the tools that
+    change a graph, keeping the read-only ones and `snapshot_graph` working, since `_library_refusal`'s way relies on
+    the latter.
+  - **Resolution: done** (commit `4fa6981`).
+    - **Measured first (by hand, Designer 16):** with bevel.sbs open in the editor, `newNode` works and the package
+      counts as modified; an input added to it appears at once on another package's instance of the graph; the
+      file on disk is unchanged. The install folder isn't writable by this user here, so the entry's "Designer's own
+      Save would overwrite the file" doesn't hold on this machine (not checked elsewhere); the change reaching other
+      graphs does. A temporary node, added and deleted, leaves the package marked modified.
+    - **Test:** live: `apply_edits` added a node to `slope_blur`, `arrange_graph` moved its 68 nodes, `add_comment`
+      and `set_graph_size` changed it, "STATE slope_blur 67 False -> 68 True". Unit (`test_library_refusal.py`):
+      all 15 edit helpers carried on into the library graph; `test_every_helper_either_edits_through_the_check_or_only_reads`
+      makes any new helper using `find_graph` choose a group.
+    - **Cause:** `find_graph(None)` returns the editor's graph, whatever package it is in; only saving and the file
+      edit checked.
+    - **Fix:** `_graph_to_edit` in `core.py`, used by every helper that changes a graph, `sweep_param` included (it
+      writes values, and a failed restore would leave them); it refuses with `_library_refusal`'s one message.
+    - **Also covered:** every `find_graph` caller. Left as reads: `describe_graph`, `list_graph_inputs`, `open_graph`,
+      `export_outputs`, the snapshot copy, and `preview_node` / `node_stats`, whose temporary output node can leave a
+      library package marked modified, so `quit_designer` may then list it as unsaved (content unchanged). Not
+      covered, on purpose: `execute_designer_code`. Live 341/341.
+  - Questioned by HLP-57, HLP-58, TST-109 (2026-11-02).
+
+
+- [x] **HLP-56 · `open_graph`'s fit failed once: the synthetic wheel steps seemed to have no effect** · `mcp_server/designer_helpers/editor.py` (`_fit_view_to`) · plausible · found 2026-11-02
+  - **Defect.** One self-test run of four on the same code failed five `open_graph` checks; the other three passed
+    331/331. Cause not traced; nothing changed on this branch touches the fit. Seen: "frame fits in view" (zoom 383%),
+    "rect, zoom capped at 100%" (zoom 383%), "a wheel step after a fit continues from the fitted zoom" (STEP=1.0000),
+    "fits the whole graph even with nodes selected" (INSIDE=0/5), "a free comment far from the nodes is fitted too".
+  - **Scenario.** If it can happen in real use, `open_graph` reports a zoom above the 100 % cap and a view that doesn't
+    show the graph, so an agent's screenshot misses what it asked to see.
+  - **Fix.** Not known yet. First reproduce it: repeat the checks, and print the view's size, its visibility and whether
+    Designer's window was active on a failure.
+  - **Resolution: done for the false report; the cause not reproduced** (commit `4fa6981`).
+    - **Test:** `test_a_view_ignoring_the_wheel_isnt_reported_as_fitted` (`test_fit_view.py`): "fitted rect: zoom
+      383%" for a view ignoring the wheel. Live, the same path without any fault: Designer's zoom stops at 5 %, and
+      a 100000-wide rect said "fitted rect: zoom 5%" with only 15840 units in view. So any graph wider than about
+      16000 units in this view was reported as fitted.
+    - **Fix:** `_fit_view_to` says "could not fit ..." when the zoom ends above what the area needs, with the view's
+      size and whether Designer's window is active, so a later occurrence of the stuck wheel explains itself. It stays
+      a result, not an error: the graph is open either way (HLP-35). `open_graph`'s docstring says so.
+    - **Not reproduced:** why the wheel steps did nothing in that one run. 200 wheel steps and 40 fits in a fresh
+      Designer gave no stuck step, idle and with 20 busy processes on 10 cores; `sendEvent` is synchronous, so load
+      shouldn't matter. The rise from 383 % to 657 % in that run fits `focusGraphNode` changing the zoom in between,
+      with the wheel dead throughout (read from the order of the checks, not measured). The self-test's checks still
+      fail if it happens again, now with those details.
+  - Questioned by HLP-59 (2026-11-02).
+
+- [x] **HLP-59 · `open_graph` says "could not fit" with the whole area in view** · follows HLP-56, generation 2 · `mcp_server/designer_helpers/editor.py` (`_fit_view_to`), `mcp_server/server_tools/views.py` · confirmed · verified by hand · found 2026-11-02
+  - **Defect.** `if zoom() > target * 1.001` compares with the padded area and the 100 % cap, not with what is visible, while
+    the docstring says "when the view can't show the whole area". Probed with a fake view at the measured 5 % floor.
+  - **Scenario.** A rect 14400 to about 15800 wide in a 792-wide view at 5 %: "could not fit rect ...", `area_in_view` true (the
+    padding needs `1.1w + 40`). A stuck wheel at 383 % with one small node: likewise. An agent may go on to screenshot
+    sections it didn't need, or tell the user the graph doesn't fit. The printed `visible` box contradicts the message.
+  - **Fix.** Decide on `seen.contains(QRectF(x, y, w, h))`, the unpadded area, and report a zoom left above the cap apart.
+    Add `contains` to the fake `Rect`. This also catches a pan clamped by the scene rect, which would say "fitted" with the
+    area out of view (untested; not measured).
+  - **Resolution: done** (commit `4fa6981`).
+    - **Test:** `test_an_area_in_view_at_the_smallest_zoom_is_fitted_though_its_padding_isnt` and
+      `test_an_area_in_view_with_the_zoom_stuck_above_the_cap_says_so` (`test_fit_view.py`) said "could not fit". Live: a rect
+      95 % of the width in view at 5 % said "could not fit rect ... it would need 4.8%".
+    - **Fix:** `_fit_view_to` compares the visible rectangle with the area itself, unpadded, by its four sides (Qt's
+      `contains` refuses a rect with no size). An area in view with the zoom above the cap says "fitted ..., above 100 %
+      (the view ignored the zoom steps; ...)". Live: "fitted rect: zoom 5%".
+    - **Also covered:** both callers in `open_graph`. A pan clamped by the scene rect now also says "could not fit" (from the
+      same comparison; not measured).
+
+- [x] **TST-109 · AGENTS.md's library sentence reads as if scripts were protected too** · follows HLP-55, generation 2 · `AGENTS.md` (Environment facts, library graphs) · confirmed · found 2026-11-02
+  - **Defect.** "the tools ... refuse to save them, edit their files or change their graphs" sits under "In scripts:
+    `pkgMgr.loadUserPackage(path)`", but `execute_designer_code` and `run_designer_script` aren't checked (on purpose, HLP-55),
+    and why it matters is only in REVIEW.md and a docstring.
+  - **Scenario.** An agent's script loads a library graph or uses `getCurrentGraph()` and edits it, relying on that sentence: the
+    edit goes through and reaches other packages' instances in memory.
+  - **Fix.** Add: "Your own code isn't checked: Designer takes an edit to a library graph, and every package using it sees it
+    at once (seen by hand)."
+  - **Resolution: done** (commit `4fa6981`). AGENTS.md says it, in those words, with "a package" for "every
+    package" (one instance in another package was what was seen). Wording only.
+
+- [x] **SRV-53 · The refusal says read tools work with no graph, but `export_outputs` requires one** · follows HLP-58, generation 3 · `mcp_server/server_tools/output.py:37`, `mcp_server/designer_helpers/core.py` (`_library_refusal`) · confirmed · verified by hand · found 2026-11-02
+  - **Defect.** `def export_outputs(graph: str, output_dir: str, ...)` is the one read tool whose `graph` is required, while the
+    message and AGENTS.md say reading works with no graph given. HLP-55 counts it as a read.
+  - **Scenario.** `export_outputs('bevel', dir)` is refused and told that read tools work with no graph; the agent retries
+    without it and gets "graph: Field required" (probed). Only an undocumented `graph=''` works.
+  - **Fix.** `export_outputs(output_dir, graph=None, ...)`, like the other tools with a `graph` parameter; MCP passes arguments by
+    name. `open_graph` stays required: the message already says it can't reach the graph.
+  - **Resolution: done** (commit `4fa6981`).
+    - **Test:** `test_every_tools_graph_can_be_left_out_except_open_graphs` (`test_server.py`): `export_outputs` required it.
+      Live: `export_outputs` with no graph on a library graph in the editor failed with "graph: Field required"; now
+      "exported 1 file(s) ... Slope_Blur.png".
+    - **Cause:** the one read tool declared `graph` first and required, from before the other tools' default.
+    - **Fix:** `export_outputs(output_dir, graph=None, ...)`; the docstring gives the default. Live 344/344.
+    - **Also covered:** every tool with a `graph` parameter, by that test: only `open_graph` requires it. `export_outputs` is
+      called by name everywhere (the self-test, MCP); one positional call in a unit test changed.
+  - Questioned by SRV-54 (2026-11-02).
+
+
+- [x] **TST-110 · "Designer's whole library" is now known to leave out 30 materials** · follows HLP-57, generation 3 · `mcp_server/server_tools/discovery.py` (`search_nodes`), `AGENTS.md` (Which tool for what), `README.md` · confirmed · verified by hand · found 2026-11-02
+  - **Defect.** `_library_index` reads `os.listdir(pkg_dir)`, the top folder only, and `_library_path` splits on the first `/`, so the
+    30 packages HLP-57 found in `materials/pbr` can't be searched or added, while the docs say "whole". On `main` too; this
+    branch's new "and its subfolders" sits beside it.
+  - **Scenario.** A user asks for Designer's Bricks 001 material: `search_nodes` finds nothing (probed against the install), and
+    "whole" leads the agent to say Designer doesn't have it.
+  - **Fix (docs only: narrow, no new check).** Say the library's top folder, not the 30 materials in `materials/pbr`, which only
+    scripts can load. Making them searchable would be a ROADMAP line, not this fix.
+  - **Resolution: done** (commit `4fa6981`). Wording only, no new check: `search_nodes`' docstring, AGENTS.md
+    and README name the exception, and AGENTS.md says finding nothing there doesn't mean Designer lacks it. Making them
+    searchable is ROADMAP item 41, added at the user's request.
+
+- [x] **SRV-54 · `export_outputs` with no graph doesn't say which graph it wrote** · follows SRV-53, generation 4 · `mcp_server/designer_helpers/save_export.py` (`export_outputs`) · confirmed · found 2026-11-02
+  - **Defect.** Since SRV-53 a missing `graph` means the graph in focus, and the result said only "exported N file(s) to <dir>"; `main`
+    refused a missing graph. Logged as a note in the third round; the user asked for it to be fixed.
+  - **Scenario.** The user moved to another graph and the agent left `graph` out: that graph's maps overwrite the folder's files,
+    and nothing shows it.
+  - **Fix.** Name the graph in the result.
+  - **Resolution: done** (commit `4fa6981`).
+    - **Test:** the live check "exports a library graph in the editor" now requires the graph's name; it failed on the old message.
+    - **Fix:** "exported 1 file(s) of graph 'slope_blur' to <dir>:"; the docstring says the result names it.
+    - **Also covered:** the other tools that take the graph in focus and write files: `snapshot_graph` and `save_package` already
+      name the graph or the file. `apply_edits` doesn't name its graph (no file written): left as it is.
+
+- [x] **TST-112 · The guard's docstring says more than it reads** · follows TST-111, generation 4 · `tests/unit/test_selftest_safety.py:1-3`, TST-111's resolution · confirmed · verified by hand · found 2026-11-02
+  - **Defect.** "The live self-test leaves the user's Designer alone: a snippet that loads one of Designer's library packages runs only in a Designer the
+    self-test started", but the test sees only one string constant naming both `loadUserPackage` and `DefaultResourcesDir`: not a snippet joined by `+`, an
+    f-string or a path built elsewhere (probed: found 0), nor `describe_node` and `add` ops, which do load library packages in that Designer.
+  - **Scenario.** Someone writes `'...DefaultResourcesDir...' + NAME + '...loadUserPackage...'` and the test stays green, trusting the sentence. Nothing does this
+    today (`example.py` has the shape, for its own file), and the tool calls reuse what's loaded and are undone by `restore_library_packages`.
+  - **Fix (docs only: narrow, no new check).** Say what it reads, and what it doesn't see, in the docstring and in a note under TST-111.
+  - **Resolution: done** (commit `4fa6981`). Wording only, no new check: the docstring of `test_selftest_safety.py` now calls it a guard and says
+    what it reads and what it doesn't see. TST-111's resolution has a note saying the same.

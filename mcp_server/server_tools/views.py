@@ -91,7 +91,8 @@ def open_graph(
     bounding box) or to rect ([x, y, width, height] in graph units), with a little padding and
     at most 100 % zoom; it zooms in Designer's own wheel steps (1.2x), so the view may show up
     to one step more than the area. node_id centres the view on one node (Designer's own focus, zoomed in
-    close). Prints the zoom and the visible area in graph units."""
+    close). Prints the zoom and the visible area in graph units; "could not fit" instead of "fitted" when the
+    view can't show the whole area (Designer's zoom stops at 5 %)."""
     chosen = [
         name
         for name, value in (('node_id', node_id), ('node_ids', node_ids), ('frame', frame), ('rect', rect))

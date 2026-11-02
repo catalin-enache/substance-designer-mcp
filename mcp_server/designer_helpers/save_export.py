@@ -9,6 +9,7 @@ from .core import (
     SDSBSCompGraph,
     SDValueTexture,
     _is_library_package,
+    _library_refusal,
     cast,
     find_graph,
     os,
@@ -33,10 +34,9 @@ def _package_of(identifier: str | None) -> tuple[SDPackage, SDSBSCompGraph | Non
             g = find_graph(identifier)
             pkg = g.getPackage()
     if _is_library_package(pkg):
-        raise RuntimeError(
-            "%s is one of Designer's library packages; not saving it (saving it elsewhere "
-            'would re-point the loaded library itself); to keep a copy, open it in the editor, then '
-            'call snapshot_graph with no graph' % pkg.getFilePath()
+        raise _library_refusal(
+            "%s belongs to Designer's library; not saving it (saving it elsewhere would re-point the loaded "
+            'library)' % pkg.getFilePath()
         )
     return pkg, g
 
@@ -107,7 +107,7 @@ def export_outputs(
                 '; computed no image: %s' % ', '.join(no_image) if no_image else '',
             )
         )
-    print('exported %d file(s) to %s:' % (len(saved), out_dir))
+    print('exported %d file(s) of graph %r to %s:' % (len(saved), g.getIdentifier(), out_dir))
     print('\n'.join(saved))
     if no_image:
         print('computed no image, not exported: %s' % ', '.join(no_image))

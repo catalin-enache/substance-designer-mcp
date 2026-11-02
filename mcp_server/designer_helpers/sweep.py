@@ -8,8 +8,8 @@ from .core import (
     SDSBSCompGraph,
     SDTexture,
     SDValue,
+    _graph_to_edit,
     cast,
-    find_graph,
     fmt,
     os,
 )
@@ -32,7 +32,7 @@ def sweep_param(
     import ctypes
     import json
 
-    g = find_graph(identifier)
+    g = _graph_to_edit(identifier)
     target = _target(g, node_id)
     prop = target.getPropertyFromId(param, SDPropertyCategory.Input)
     if prop is None or prop.isConnectable():

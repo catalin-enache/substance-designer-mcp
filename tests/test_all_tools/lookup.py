@@ -44,7 +44,10 @@ async def run(ctx: Ctx) -> None:
     check(
         'describe_graph',
         'library graphs are not user graphs',
-        loaded is not None and any(p.endswith('bevel.sbs') for p in loaded) and r_.is_error and 'not found' in text(r_),
+        loaded is not None
+        and any(p.endswith('bevel.sbs') for p in loaded)
+        and r_.is_error
+        and 'a loaded Designer library graph is' in text(r_),
         text(r_).strip()[-100:] + ' | loaded: %s' % (loaded if loaded is not None else why),
     )
 

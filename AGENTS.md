@@ -28,8 +28,9 @@ Parameters are in each tool's description; this is when to reach for which.
 
 - **Start:** `designer_status`; `launch_designer` if Designer isn't running; `quit_designer`
   (see the rules).
-- **Find and understand nodes:** `search_nodes` (the atomic nodes and Designer's **whole**
-  library; returns the exact `definition`), then `describe_node` for connector ids, parameter
+- **Find and understand nodes:** `search_nodes` (the atomic nodes and Designer's library, except the
+  ready-made materials in `packages/materials/pbr`, ROADMAP item 41: finding nothing there doesn't mean
+  Designer lacks it; returns the exact `definition`), then `describe_node` for connector ids, parameter
   types, **enum values**, library slider ranges and descriptions. Never guess ids or enum
   numbers; pick values inside the slider range.
 - **Inspect a graph:** `describe_graph`, `list_graph_inputs`. Graphs are found by identifier;
@@ -102,10 +103,15 @@ Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `-c COD
 - No `pysbs` (the Automation Toolkit is enterprise-licensed). Everything goes through the
   in-app `sd` API via the bridge, plus `sbscooker`/`sbsrender`.
 - Code runs on Designer's main thread, so the UI freezes while a script runs. Keep scripts finite.
-- Library graphs are `.sbs` files in `app.getPath(SDApplicationPath.DefaultResourcesDir)/packages`.
+- Library graphs are `.sbs` files in `app.getPath(SDApplicationPath.DefaultResourcesDir)/packages` and its
+  subfolders.
   In scripts: `pkgMgr.loadUserPackage(path)` (check `getPackages()` first to reuse an open one),
   `pkg.findResourceFromUrl('<graph id>')`, `graph.newInstanceNode(resource)`. Loaded library
-  packages count as user packages; the tools skip them when looking up the user's graphs.
+  packages count as user packages; the tools skip them when looking a graph up by name, and refuse to save
+  them, edit their files or change their graphs, all with one message (`_library_refusal`). The graph open in
+  the editor can still be one: reading it and `snapshot_graph` work, with no graph given.
+  Your own code isn't checked: Designer takes an edit to a library graph, and a package using it sees it at
+  once (seen by hand).
 - Python tracebacks from plugins land in the Designer log (`read_designer_log`; "since the last
   start" means after the "Python SDK Version" line Designer logs once per start). Read it when
   the bridge misbehaves or a plugin change doesn't seem to load.

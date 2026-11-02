@@ -1,6 +1,6 @@
 """apply_edits: several edits in one call."""
 
-from .core import Any, APIException, SDSBSCompGraph, _position, find_graph
+from .core import Any, APIException, SDSBSCompGraph, _graph_to_edit, _position
 from .editor import move_nodes
 from .edits import add_node, connect, delete_nodes, disconnect, import_bitmap, set_params
 from .graph_inputs import expose_param
@@ -66,7 +66,7 @@ def apply_edits(identifier: str | SDSBSCompGraph | None, ops: list[dict[str, Any
     """Run a list of edit operations in order. 'ref' names a node added earlier in the batch;
     node fields accept a ref, a node id, or 'graph' (set only). Every node the batch names is
     checked before any op runs (_check_batch); after that, stops at the first failing op."""
-    g = find_graph(identifier)
+    g = _graph_to_edit(identifier)
     _check_batch(g, ops)
     gid = g  # the object, so every op edits this graph even if another has the same name
     refs: dict[str, str] = {}

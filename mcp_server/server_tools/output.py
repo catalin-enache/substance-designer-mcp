@@ -34,10 +34,12 @@ def save_package(graph_or_path: str | None = None, save_as: str | None = None) -
 
 
 @_tool()
-def export_outputs(graph: str, output_dir: str, outputs: list[str] | None = None, file_format: str = 'png') -> str:
+def export_outputs(
+    output_dir: str, graph: str | None = None, outputs: list[str] | None = None, file_format: str = 'png'
+) -> str:
     """Compute a graph inside Designer and save its output nodes' textures directly (no
     sbscooker/sbsrender), named after the output identifiers. Reflects the current, possibly
-    unsaved, state of the graph. outputs: subset of output identifiers (default: all); names that
+    unsaved, state of the graph (default: the graph open in the UI; the result names the graph). outputs: subset of output identifiers (default: all); names that
     match no output are listed, and so are outputs that computed no image. Two outputs with one
     identifier are refused (one file each)."""
     return _checked(

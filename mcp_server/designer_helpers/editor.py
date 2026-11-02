@@ -12,6 +12,7 @@ from .core import (
     SDUIMgr,
     Sequence,
     _current_graph,
+    _graph_to_edit,
     _position,
     _same_graph,
     cast,
@@ -190,6 +191,7 @@ def _fit_view_to(
     view found is whichever graph view is visible, so first make sure the editor's current
     graph is g (same identifier and package)."""
     from PySide6.QtCore import QRectF
+    from PySide6.QtWidgets import QApplication
 
     current = _current_graph()
     if not _same_graph(current, g):  # told apart by file first (REVIEW.md HLP-53)
@@ -230,9 +232,22 @@ def _fit_view_to(
     view.centerOn(area.center())  # panning leaves the zoom level alone
     _process_events()
     seen = view.mapToScene(viewport.rect()).boundingRect()
+    # by what shows, not the padded area: an area in view at the smallest zoom (5 %) is fitted (REVIEW.md HLP-59).
+    # Once, a whole self-test run's wheel steps did nothing, cause unknown: the view's state is for that (HLP-56)
+    state = "view %dx%d, Designer's window active: %s" % (
+        viewport.width(),
+        viewport.height(),
+        QApplication.activeWindow() is not None,
+    )
+    if not (seen.left() <= x and seen.top() <= y and seen.right() >= x + w and seen.bottom() >= y + h):
+        result = 'could not fit %s in the view (it would need %.1f%%; %s)' % (what, target * 100, state)
+    elif zoom() > FIT_MAX_ZOOM * 1.001:
+        result = 'fitted %s, above 100 %% (the view ignored the zoom steps; %s)' % (what, state)
+    else:
+        result = 'fitted %s' % what
     print(
-        'fitted %s: zoom %d%%, visible %d,%d to %d,%d'
-        % (what, round(zoom() * 100), seen.left(), seen.top(), seen.right(), seen.bottom())
+        '%s: zoom %d%%, visible %d,%d to %d,%d'
+        % (result, round(zoom() * 100), seen.left(), seen.top(), seen.right(), seen.bottom())
     )
 
 
@@ -306,7 +321,7 @@ def create_graph(name: str, save_path: str | None = None, size_log2: int = 11) -
 def move_nodes(identifier: str | SDSBSCompGraph | None, positions: dict[str, Sequence[float]]) -> None:
     from sd.api.sdbasetypes import float2
 
-    g = find_graph(identifier)
+    g = _graph_to_edit(identifier)
     # every node found and every position checked before any moves (REVIEW.md HLP-4, HLP-46)
     moves = [(nid, _node(g, nid), *_position(xy)) for nid, xy in positions.items()]
     for nid, node, x, y in moves:

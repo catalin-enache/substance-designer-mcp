@@ -199,7 +199,7 @@ def test_relative_paths_are_resolved_here_not_in_designer(monkeypatch: pytest.Mo
     patch_server(monkeypatch, '_bridge', bridge)
     monkeypatch.chdir(tmp_path)
     here = str(tmp_path)
-    server.export_outputs('Mat', 'renders')
+    server.export_outputs('renders', graph='Mat')
     server.save_package('Mat', 'out/mat.sbs')
     server.save_package('pkg.sbs')
     server.create_graph('Mat2', save_path='mat2.sbs')
@@ -324,3 +324,26 @@ def test_tools_returning_images_have_no_output_schema() -> None:
     result = tool.fn_metadata.convert_result(['text', image])
     assert isinstance(result, CallToolResult) and result.structured_content is None
     assert [b.type for b in result.content] == ['text', 'image']
+
+
+def test_every_tools_graph_can_be_left_out_except_open_graphs(monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md SRV-53: the library refusal says read tools work with no graph given (the graph in focus), and
+    # export_outputs asked for one. open_graph is the one exception: the refusal says it can't reach that graph
+    import inspect
+
+    from server_tools.core import server as mcp_server
+
+    tools = asyncio.run(mcp_server.list_tools())
+    signatures = {t.name: inspect.signature(getattr(server, t.name)).parameters for t in tools}
+    with_graph = {name: p['graph'] for name, p in signatures.items() if 'graph' in p}
+    assert len(with_graph) >= 20  # the check still sees them
+    assert {n for n, p in with_graph.items() if p.default is inspect.Parameter.empty} == {'open_graph'}
+    sent: list[str] = []
+
+    def bridge(code: str, path: str | None = None, timeout: float | None = None) -> str:
+        sent.append(code)
+        return 'ok'
+
+    patch_server(monkeypatch, '_bridge', bridge)
+    server.export_outputs('/tmp/renders')
+    assert "export_outputs(None, '/tmp/renders'," in sent[-1]

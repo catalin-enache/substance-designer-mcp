@@ -40,9 +40,29 @@ def _current_graph() -> SDGraph | None:
 
 
 def _is_library_package(pkg: SDPackage) -> bool:
-    """Library packages loaded for describe_node/add_node count as user packages too."""
-    lib = os.path.normcase(os.path.join(_APP.getPath(SDApplicationPath.DefaultResourcesDir), 'packages'))
-    return os.path.normcase(os.path.dirname(pkg.getFilePath() or '')) == lib
+    """Whether the package's file is one of Designer's own: anywhere under the library folder Designer
+    reports (30 of Designer 16's are in subfolders; REVIEW.md HLP-57), both paths resolved. The API has no
+    flag for it. Library packages loaded for describe_node/add_node count as user packages too."""
+    file = pkg.getFilePath()
+    if not file:
+        return False
+    lib = os.path.normcase(
+        os.path.realpath(os.path.join(_APP.getPath(SDApplicationPath.DefaultResourcesDir), 'packages'))
+    )
+    try:
+        return os.path.commonpath([lib, os.path.normcase(os.path.realpath(file))]) == lib
+    except ValueError:  # another drive on Windows
+        return False
+
+
+def _library_refusal(reason: str) -> RuntimeError:
+    """The one refusal for Designer's library packages, on every path, with what does work: by name,
+    open_graph and snapshot_graph refuse too, and an edit is refused anyway (ROADMAP item 27, REVIEW.md
+    HLP-58). In focus: with no graph given, the tools take the graph in focus, whichever it is."""
+    return RuntimeError(
+        "%s. With it in focus in Designer's editor (the user opens it; open_graph can't reach it), read tools "
+        'work with no graph given, and snapshot_graph with no graph keeps a copy' % reason
+    )
 
 
 def _same_graph(a: SDGraph | None, b: SDGraph | None) -> bool:
@@ -91,6 +111,16 @@ def find_graph(identifier: str | SDSBSCompGraph | None = None) -> SDSBSCompGraph
     if len(matches) == 1:
         return matches[0]
     if not matches:
+        if any(
+            r.getIdentifier() == identifier and isinstance(r, SDSBSCompGraph)
+            for p in _PM.getUserPackages()
+            if _is_library_package(p)
+            for r in p.getChildrenResources(True)
+        ):
+            raise _library_refusal(
+                "No open user graph is named %r; a loaded Designer library graph is, and tools don't find those "
+                'by name or edit them' % identifier
+            )
         raise RuntimeError('Graph %r not found in open user packages.' % identifier)
     for g in matches:
         if _same_graph(g, current):
@@ -99,6 +129,16 @@ def find_graph(identifier: str | SDSBSCompGraph | None = None) -> SDSBSCompGraph
         '%d open graphs are named %r (packages: %s); open the one you mean in Designer '
         'or close the others.' % (len(matches), identifier, ', '.join(_package_name(g.getPackage()) for g in matches))
     )
+
+
+def _graph_to_edit(identifier: str | SDSBSCompGraph | None = None) -> SDSBSCompGraph:
+    """find_graph for the helpers that change a graph: with no graph given, the editor's graph can be a
+    library one. Designer takes the edit, and every package using that graph sees it (measured; REVIEW.md
+    HLP-55). Helpers that only read, and snapshots, use find_graph."""
+    g = find_graph(identifier)
+    if _is_library_package(g.getPackage()):
+        raise _library_refusal("Graph %r belongs to Designer's library, and tools don't edit it" % g.getIdentifier())
+    return g
 
 
 def _position(value: Any, what: str = 'position') -> tuple[float, float]:

@@ -13,9 +13,9 @@ from .core import (
     SDTypeEnum,
     SDValue,
     Sequence,
+    _graph_to_edit,
     _position,
     cast,
-    find_graph,
     fmt,
     node_kind,
     os,
@@ -117,7 +117,7 @@ def _make_value(prop: SDProperty, value: Any) -> SDValue:
 def set_params(graph_id: str | SDSBSCompGraph | None, node_id: str | None, params: dict[str, Any]) -> None:
     from sd.api.sdproperty import SDPropertyInheritanceMethod
 
-    g = find_graph(graph_id)
+    g = _graph_to_edit(graph_id)
     target = _target(g, node_id)
     is_graph = node_id == 'graph'
     checked = []  # every value is checked before any is set
@@ -201,7 +201,7 @@ def add_node(
 ) -> str:
     if position is not None:
         position = _position(position)
-    g = find_graph(graph_id)
+    g = _graph_to_edit(graph_id)
     existing = list(g.getNodes())
     node = _resolve_definition(g, definition)
     position = _place(node, position, existing)
@@ -231,7 +231,7 @@ def connect(
     to_input: str,
     from_output: str | None = None,
 ) -> None:
-    g = find_graph(graph_id)
+    g = _graph_to_edit(graph_id)
     src, dst = _node(g, from_node), _node(g, to_node)  # nodes, never the graph (REVIEW.md HLP-41)
     outs = [p.getId() for p in src.getProperties(SDPropertyCategory.Output)]
     out_id = from_output or (outs[0] if outs else None)
@@ -245,7 +245,7 @@ def connect(
 
 
 def disconnect(graph_id: str | SDSBSCompGraph | None, node_id: str | None, input_id: str) -> None:
-    g = find_graph(graph_id)
+    g = _graph_to_edit(graph_id)
     node = _node(g, node_id)
     prop = node.getPropertyFromId(input_id, SDPropertyCategory.Input)
     if prop is None or not prop.isConnectable():
@@ -256,7 +256,7 @@ def disconnect(graph_id: str | SDSBSCompGraph | None, node_id: str | None, input
 
 
 def delete_nodes(graph_id: str | SDSBSCompGraph | None, node_ids: list[str]) -> None:
-    g = find_graph(graph_id)
+    g = _graph_to_edit(graph_id)
     nodes = [(nid, _node(g, nid)) for nid in node_ids]  # every id found before anything is deleted
     for nid, node in nodes:
         kind = node_kind(node)
@@ -285,7 +285,7 @@ def import_bitmap(
     path = os.path.abspath(os.path.expanduser(path))
     if not os.path.isfile(path):
         raise RuntimeError('no such file: %s' % path)
-    g = find_graph(graph_id)
+    g = _graph_to_edit(graph_id)
     pkg = g.getPackage()
     existing = list(g.getNodes())
     res = None

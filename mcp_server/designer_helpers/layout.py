@@ -6,10 +6,10 @@ from .core import (
     SDPropertyCategory,
     SDSBSCompGraph,
     Sequence,
+    _graph_to_edit,
     _other_end,
     _position,
     cast,
-    find_graph,
 )
 from .edits import _node
 
@@ -57,7 +57,7 @@ def arrange_graph(
     With node_ids, only those nodes are arranged, starting at their current top-left corner."""
     from sd.api.sdbasetypes import float2
 
-    g = find_graph(identifier)
+    g = _graph_to_edit(identifier)
     nodes = list(g.getNodes())
     if node_ids:
         present = {n.getIdentifier() for n in nodes}
@@ -130,7 +130,7 @@ def add_frame(
     from sd.api.sdbasetypes import ColorRGBA, float2
     from sd.api.sdgraphobjectframe import SDGraphObjectFrame
 
-    g = find_graph(identifier)
+    g = _graph_to_edit(identifier)
     nodes, (left, top, right, bottom) = _nodes_bbox(g, node_ids)
     left, right = left - margin, right + margin
     top, bottom = top - margin - 30.0, bottom + margin  # room for the title bar
@@ -157,7 +157,7 @@ def add_comment(
     from sd.api.sdbasetypes import float2
     from sd.api.sdgraphobjectcomment import SDGraphObjectComment
 
-    g = find_graph(identifier)
+    g = _graph_to_edit(identifier)
     xy = _position(position) if position and not node_id else None  # checked before the comment exists
     if node_id:
         comment = SDGraphObjectComment.sNewAsChild(_node(g, node_id))

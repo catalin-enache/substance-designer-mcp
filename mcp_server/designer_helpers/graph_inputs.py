@@ -12,6 +12,7 @@ from .core import (
     SDType,
     SDTypeEnum,
     SDValue,
+    _graph_to_edit,
     cast,
     find_graph,
     fmt,
@@ -68,7 +69,7 @@ def expose_param(
     from sd.api.sdtypeint import SDTypeInt
     from sd.api.sdvaluestring import SDValueString
 
-    g = find_graph(identifier)
+    g = _graph_to_edit(identifier)
     node = _node(g, node_id)
     prop = node.getPropertyFromId(param, SDPropertyCategory.Input)
     if prop is None or prop.isConnectable():
@@ -215,7 +216,7 @@ def remove_graph_input(identifier: str | SDSBSCompGraph | None, input_id: str) -
     """Delete a graph input; parameters bound to it (as expose_param does) keep its current
     value as a constant. Refuses while a larger function (an expression, a Pixel Processor) still
     reads it, since removing the input would break that function."""
-    g = find_graph(identifier)
+    g = _graph_to_edit(identifier)
     inp = g.getPropertyFromId(input_id, SDPropertyCategory.Input)
     if inp is None or input_id.startswith('$'):
         raise RuntimeError('graph has no exposed input %r' % input_id)
@@ -252,7 +253,7 @@ def set_graph_size(identifier: str | SDSBSCompGraph | None, size_log2: int, over
     from sd.api.sdproperty import SDPropertyInheritanceMethod
     from sd.api.sdvalueint2 import SDValueInt2
 
-    g = find_graph(identifier)
+    g = _graph_to_edit(identifier)
     prop = cast(SDProperty, g.getPropertyFromId('$outputsize', SDPropertyCategory.Input))  # every graph has it
     if overridable:
         g.setPropertyInheritanceMethod(prop, SDPropertyInheritanceMethod.RelativeToParent)

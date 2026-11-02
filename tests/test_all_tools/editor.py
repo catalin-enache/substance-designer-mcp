@@ -99,6 +99,25 @@ async def open_and_zoom(ctx: Ctx) -> None:
         step is not None and abs(float(step.group(1)) - 1.2) < 0.01,
         t.strip(),
     )
+    # an area too big for Designer's smallest zoom (5 %) isn't reported as fitted (REVIEW.md HLP-56)
+    t = text(await c('open_graph', {'graph': TEST_GRAPH, 'rect': [0, 0, 100000, 100000]}))
+    zoom, box = visible(t)
+    check(
+        'open_graph',
+        "says when an area doesn't fit",
+        'could not fit rect' in t and 'fitted' not in t and zoom == 5 and not contains(box, [(0, 0), (100000, 100000)]),
+        t,
+    )
+    # an area in view at that zoom is fitted, though its padding wouldn't be (HLP-59)
+    width = 0.95 * (box[2] - box[0]) if box else 0.0
+    t = text(await c('open_graph', {'graph': TEST_GRAPH, 'rect': [0, 0, width, 10]}))
+    zoom, box = visible(t)
+    check(
+        'open_graph',
+        'an area in view at the smallest zoom counts as fitted',
+        'fitted rect' in t and zoom == 5 and contains(box, [(0, 0), (width, 10)]),
+        t,
+    )
     r_ = await c('open_graph', {'graph': TEST_GRAPH, 'node_id': slope, 'frame': 'Shape'})
     check(
         'open_graph',
