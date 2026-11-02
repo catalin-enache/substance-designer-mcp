@@ -2,6 +2,7 @@
 and delete ops; execute_designer_code, describe_graph, preview_node)."""
 
 import os
+import time
 
 from .common import GRAPH_OF, SAVED_GRAPH, TEST_GRAPH, Ctx, added_id, check, is_image, skip, text
 
@@ -20,7 +21,7 @@ async def create(ctx: Ctx) -> None:
     r_ = await c('diff_graph', {'against': 'saved', **G})
     check('diff_graph', 'error: never saved', r_.is_error and 'never been saved' in text(r_), text(r_))
     r_ = await c('diff_graph', {'against': 'latest', 'graph': SAVED_GRAPH})
-    check('diff_graph', 'error: no snapshots yet', r_.is_error and 'no snapshots for' in text(r_), text(r_))
+    check('diff_graph', 'error: no snapshots yet', r_.is_error and 'no snapshots of' in text(r_), text(r_))
     t = text(
         await c(
             'apply_edits',
@@ -122,6 +123,46 @@ async def wire(ctx: Ctx) -> None:
     check('execute_designer_code', 'error traceback', 'ValueError: boom' in text(r_), '')
     t = text(await c('execute_designer_code', {'code': 'while True: pass', 'timeout_s': 2}))
     check('execute_designer_code', 'timeout', 'ScriptAborted: timed out' in t, '')
+    # an abort landing in a Python finalizer (every sd API object has a __del__ calling release())
+    # was dropped and the script ran on to the end: before the fix, 3 of 6 runs of this loop in
+    # Designer ignored a 1 s timeout (REVIEW.md PLG-25). Several runs, since where it lands varies
+    finalizer_loop = (
+        'import time\nclass Obj:\n    def __init__(self):\n        self.h = 1\n'
+        '    def release(self):\n        self.h = None\n'
+        '    def __del__(self):\n        if self.h:\n            self.release()\n'
+        'end = time.monotonic() + 5\nwhile time.monotonic() < end:\n    o = Obj()\n'
+        "print('RAN TO THE END')"
+    )
+    # and one whose __del__ raises an ordinary error: its "Exception ignored" report ran traced and the
+    # abort landed there, dropped for good (REVIEW.md PLG-26)
+    raising_loop = finalizer_loop.replace(
+        '        if self.h:\n            self.release()', "        raise ValueError('x')"
+    )
+    runs = []
+    for code in [finalizer_loop] * 6 + [raising_loop] * 4:
+        started = time.monotonic()
+        t = text(await c('execute_designer_code', {'code': code, 'timeout_s': 1}))
+        runs.append(('ScriptAborted: timed out' in t, 'RAN TO THE END' in t, round(time.monotonic() - started, 1)))
+    # PySide reports an exception raised in a slot through sys.excepthook, and emit() returns: an
+    # abort landing in a slot was dropped there (REVIEW.md PLG-29)
+    slot_loop = (
+        'import time\nfrom PySide6.QtCore import QObject, Signal\n'
+        'class Emitter(QObject):\n    fired = Signal()\n'
+        'def slot():\n    a = 1\n    b = 2\n    c = a + b\n    d = c * 2\n    return d - 1\n'
+        'e = Emitter()\ne.fired.connect(slot)\n'
+        'end = time.monotonic() + 5\nwhile time.monotonic() < end:\n    e.fired.emit()\n'
+        "print('RAN TO THE END')"
+    )
+    for _ in range(4):
+        started = time.monotonic()
+        t = text(await c('execute_designer_code', {'code': slot_loop, 'timeout_s': 1}))
+        runs.append(('ScriptAborted: timed out' in t, 'RAN TO THE END' in t, round(time.monotonic() - started, 1)))
+    check(
+        'execute_designer_code',
+        'a timeout stops loops with finalizers (raising ones too) and with Qt slots, every time',
+        all(aborted and not finished and took < 4 for aborted, finished, took in runs),
+        str(runs),
+    )
     # the abort fires once (Python unsets a trace function that raises), so cleanup code
     # such as UndoGroup committing its transaction runs to the end (REVIEW.md PLG-2)
     t = text(

@@ -13,6 +13,35 @@ async def run(ctx: Ctx) -> None:
     c, scratch, G, clouds, sbs = ctx.c, ctx.scratch, ctx.G, ctx.clouds, ctx.sbs
     t = text(await c('export_outputs', {'graph': TEST_GRAPH, 'output_dir': os.path.join(scratch, 'export')}))
     check('export_outputs', 'from Designer', 'height.png  512x512' in t, t)
+    # an output node with nothing connected: exported, or named as computing no image; never left
+    # out without a word (REVIEW.md HLP-48)
+    add_empty = GRAPH_OF % TEST_GRAPH + (
+        'from sd.api.sdvaluestring import SDValueString\n'
+        "n = g.newNode('sbs::compositing::output')\n"
+        "n.setAnnotationPropertyValueFromId('identifier', SDValueString.sNew('mcp_empty'))\n"
+        "print('EMPTY=' + n.getIdentifier())"
+    )
+    empty = re.search(r'EMPTY=(\d+)', text(await c('execute_designer_code', {'code': add_empty})))
+    try:
+        r_ = await c(
+            'export_outputs',
+            {
+                'graph': TEST_GRAPH,
+                'output_dir': os.path.join(scratch, 'export_empty'),
+                'outputs': ['height', 'mcp_empty'],
+            },
+        )
+        # exported: an unconnected output still computes an image, the fact HLP-48's "not reproduced"
+        # rests on; the node must exist, or the check would measure nothing (REVIEW.md TST-100)
+        check(
+            'export_outputs',
+            'an output with nothing connected still computes an image, and is exported',
+            empty is not None and 'mcp_empty.png' in text(r_),
+            text(r_).strip()[-200:],
+        )
+    finally:
+        if empty:
+            await c('apply_edits', {'ops': [{'op': 'delete', 'node': empty.group(1)}], **G})
     t = text(await c('sbsar_info', {'sbs_path': sbs}))
     check('sbsar_info', 'graph + output', 'pkg://%s' % TEST_GRAPH in t and 'OUTPUT height' in t, t.splitlines()[0])
     # the graph seed set with a set op is still a control of the cooked graph (REVIEW.md HLP-25)

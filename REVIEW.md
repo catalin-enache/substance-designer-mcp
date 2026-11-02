@@ -20,11 +20,11 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
 | Severity | Open | Resolved |
 |---|---|---|
 | High | 0 | 1 |
-| Medium-high | 0 | 1 |
-| Medium | 0 | 18 |
-| Low-medium | 0 | 46 |
-| Low | 0 | 153 |
-| **Total** | **0** | **219** |
+| Medium-high | 0 | 2 |
+| Medium | 0 | 20 |
+| Low-medium | 0 | 60 |
+| Low | 0 | 186 |
+| **Total** | **0** | **269** |
 
 ## Review log
 
@@ -570,6 +570,326 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
   resolutions, notes and status table; no text tells anyone to call a removed tool.
 - **Longest chain still growing:** none from the code; the skill findings are generation 1.
 
+### 2026-10-31: whole project at `a280e1f` (main)
+
+- **How:** five read-only reviewers, one per area (plugin, installer and CLI; server tools; helpers;
+  unit tests; live self-test and docs), each with its area's entries and every earlier log's "checked
+  and found fine" notes, asked to assess the resolutions in their area (those since 2a107b3 first).
+  Verified by hand: PLG-25 (the reviewer's probe run again: 2 of 5 runs ran to the end with `ok=True`),
+  SRV-33, HLP-46, HLP-47, TST-95, TST-98. Unit tests 272 passed; live self-test 306/306 at `825890e`.
+- **Resolutions assessed:** every PLG and INS resolution (PLG-6's won't-fix unchanged; INS-25 still
+  holds on /usr/bin/python3 3.9.6), SRV-17..32, HLP-41..45 and the older HLP ones touched since 2a107b3,
+  the unit-test resolutions TST-74..92, and the self-test and docs ones TST-84..92: all hold up.
+  Questioned: HLP-30 (HLP-46: the position case next to its params fix). PLG-2 holds as stated; PLG-25
+  is a separate consequence of the same one-shot tracer.
+- **Findings:** 11: 1 medium-high (PLG-25), 2 low-medium (SRV-33, SRV-34), 8 low (HLP-46, HLP-47,
+  HLP-48, SRV-35, TST-95, TST-96, TST-97, TST-98).
+- **Suggested order:** PLG-25 (a timeout or cancel silently lost, the run reported as a success; needs
+  install.py and a Designer restart), SRV-33, SRV-34, then the low ones; HLP-48 needs a measurement first.
+- **Simplifications:** none new. Notes: `test_quick_edits_have_time_for_a_big_batch` passes a stale
+  `node_id` field in its move ops (harmless: only the timeout is asserted); `_value_arg`'s bool branch has
+  no unit test; a comment cut off mid-sentence in `examples/build_dwarf_trimsheet.py` ("which is raised
+  on").
+- **Checked and found fine:** the token never printed, logged, returned or sent; subprocess calls use
+  argument lists; every user path resolved in the server; `set_link_display`'s order and failure
+  reporting; `_decode_pixels` and `_seam_report`; `compare_to_reference`'s alpha mask; `render_sbs` and
+  `sbsar_info`; `quit_designer`'s refusals and `launch_designer`'s clock; the plugin's locking, request
+  validation and late cancels; the uninstaller's deletions (symlinked folders refused); `.mcp.json`'s
+  fallbacks; `_check_batch` against the run; every helper catch is `(Exception, APIException)`; the
+  graph view never transformed, no `QScreen.grabWindow`, no Undo trigger, no reload; the clipboard
+  restored; temporary library packages unloaded; the coverage scans and the helper-joining checks with
+  positive controls; mypy strict and relaxed modes; the quit fallback's fake clock; the self-test's run
+  order, clean-up, Undo guard and the 16 pre-check cases; README's Security, Requirements,
+  Troubleshooting and Tools sections; the skills; ROADMAP citations and AGENTS.md's cross-references.
+- **Longest chain still growing:** HLP-30 → HLP-46, generation 2.
+
+### 2026-10-31: branch `review-4` against `main`, the diff only, at `2371c20`
+
+- **How:** four read-only reviewers on the diff hunks (plugin; server; helpers; tests, docs and the
+  REVIEW.md resolutions), with the 11 in-scope entries and the last log; the plugin and tests reviewers
+  probed modified copies of the plugin outside Designer. Verified by hand: PLG-26 (the probe again: 8 of
+  8 runs ignored a 0.2 s timeout, `ok=True`), INS-26 (the regex), HLP-49 (the code). Unit tests 281 passed;
+  live self-test 314/314 at `9dfb8e2`.
+- **Resolutions assessed:** all 11. Hold up: SRV-33, HLP-47, TST-95, TST-96, TST-97, TST-98. Questioned:
+  PLG-25 (PLG-26, PLG-27, PLG-28, TST-99), SRV-34 (INS-26, SRV-36, SRV-37), SRV-35 (HLP-49), HLP-48
+  (TST-100), HLP-46 (HLP-50, TST-101).
+- **Findings:** 11: 1 medium (PLG-26), 4 low-medium (PLG-27, INS-26, SRV-36, HLP-49), 6 low (PLG-28,
+  SRV-37, HLP-50, TST-99, TST-100, TST-101). HLP-49 found by three reviewers, SRV-36 by two.
+- **Suggested order:** PLG-26, PLG-27 and PLG-28 together (one rework of the tracer and hook; needs
+  install.py and a Designer restart), then HLP-49, INS-26, SRV-36 (measure first), HLP-50, the rest.
+- **Notes:** `tests/unit/test_link_display.py`'s `# its package's folder` comment is left from the first
+  SRV-34 version (snapshots sit flat again); `launch_designer`'s refusal inside its wait loop isn't tested
+  apart from the first call; `render.py`'s output node stays if setting its identifier fails (nothing
+  later depends on it).
+- **Checked and found fine:** the hook passes other threads' unraisables on and is restored on every
+  path; nothing traced leaks into later jobs; PLG-2's cleanup still runs once; `_send`'s consumers all
+  check `ok`; `_Refused` before `ToolError` in both of `launch_designer`'s places; path spelling for
+  `graph_in_file` and the notes; every reader of the snapshot folder ignores the notes or cleans them;
+  `_position` against tuples, ints, floats, wrong lengths; `_check_batch` against the run for positions;
+  `arrange_graph` with int and repeated ids; nothing parses `describe_graph`'s new line; `package_uid`;
+  the status table.
+- **Longest chain still growing:** HLP-30 → HLP-46 → HLP-50 / TST-101, generation 3.
+
+### 2026-10-31: branch `review-4` against `main`, the diff only, second round, at `659bcd6`
+
+- **How:** four read-only reviewers (plugin; server and uninstaller; helpers; tests, docs and REVIEW.md),
+  with the 11 resolutions of the first round. The plugin reviewer probed with Designer's own Python 3.13
+  and PySide6; the tests reviewer ran mutations of the plugin on a copy. Verified by hand: PLG-29 (the
+  slot probe with Designer's `python3.13`: 4 of 6 runs ignored a 0.2 s timeout), HLP-51 (`'%d' % nan`
+  raises), SRV-38 (the code path). Unit tests 289 passed; live self-test 317/317 at `ce095f4`.
+- **Resolutions assessed:** PLG-26, PLG-27, PLG-28, INS-26, SRV-36, HLP-49, SRV-37, HLP-50, TST-99, TST-100,
+  TST-101 and the first round's SRV-33..35, HLP-46..48. Hold: PLG-26, PLG-28, INS-26, HLP-49, SRV-37,
+  TST-100, TST-101, SRV-33, HLP-47, HLP-48. Questioned: PLG-25 (PLG-29), PLG-27 (PLG-30), HLP-50 (HLP-51),
+  SRV-36 (SRV-38, SRV-39, TST-102), TST-99 (TST-103).
+- **Findings:** 7: 3 low-medium (PLG-29, HLP-51, SRV-38), 4 low (PLG-30, SRV-39, TST-102, TST-103).
+  TST-102 found by two reviewers.
+- **Suggested order:** HLP-51 (a regression of this branch's own fix, one line), PLG-29 and PLG-30 (the
+  hook again; install.py and a restart), SRV-38 and SRV-39 together (the note rule), then the wording.
+- **Notes:** under PLG-26 (the raising-finalizer tests' warning reported under other tests); the probe in
+  `facts.py` creates its package before its `try` (a failure there leaves it loaded; unlikely); the module
+  test leaves its `sys.path` entries in pytest's process.
+- **Checked and found fine:** stale tracing in later jobs (a suspended generator from an aborted job
+  resumed 240k times: no false abort); sd's own `except:` blocks (init code only); `_OWN_FILE` from a .pyc;
+  other threads' unraisables; nested drops; every control request through `_control`; the UID rule for
+  pre-save snapshots, copies of saved files, `set_link_display`'s notes; path spelling on both sides;
+  uninstall's pattern; `_position`'s other inputs; the HLP-30 interplay with the added list; the
+  joined-helpers namespace; the live checks' clean-ups; the status table.
+- **Longest chain still growing:** HLP-30 → HLP-46 → HLP-50 → HLP-51, generation 4, a code defect each
+  time: each fix to the position check opened the next case. The plugin chain PLG-25 → PLG-27 → PLG-30 is
+  at generation 3.
+
+### 2026-10-31: branch `review-4` against `main`, the diff only, third round, at `cb2a6c0`
+
+- **How:** four read-only reviewers (plugin, probing with Designer's `python3.13` and PySide6; server and
+  snapshots; helpers; tests, docs and REVIEW.md, with mutations on a scratch copy), told the bar: real
+  defects only, narrowing for generation 3+ test and doc findings. Verified by hand: SRV-40 and SRV-41
+  (the code). Unit tests 292 passed; live self-test 319/319 at `00730cd`.
+- **Resolutions assessed:** HLP-51, PLG-29, PLG-30, SRV-38, SRV-39, TST-102, TST-103. Hold: HLP-51, PLG-29,
+  PLG-30 (the code), TST-102, TST-103. Questioned: SRV-38 (SRV-40), SRV-39 (SRV-41), TST-99 (TST-104).
+- **Findings:** 3: 1 low-medium (SRV-40), 2 low (SRV-41, TST-104). SRV-40 and SRV-41 each found by two
+  reviewers. The plugin and helpers reviewers found no defect.
+- **Suggested order:** SRV-40 and SRV-41 together (the note rule and the refusal), then TST-104 (a note).
+- **Simplifications:** the tracer's own-file check runs on every event; checking it only on `call` events
+  (the plugin's frames get no others) with the file name bound once measured 20% instead of 35% over
+  `main`'s tracer in a 2M-call loop. Optional.
+- **Notes:** under PLG-29 (the excepthook's untraced call untested), HLP-51 (only the pre-check has
+  non-finite rows), TST-102 (the probe's loaded copy not checked as separate).
+- **Checked and found fine:** `pending` can't outlive `exec` (the module frame's return event raises it);
+  nothing carries into the next job (a generator from an aborted job resumed 440k times, a signal of
+  it emitted: no false abort); the window between `exec` and the `finally`; swapping `sys.excepthook`
+  (other threads use `threading.excepthook`); other code's slots during `processEvents()`; no nested
+  `_run`; a script setting its own hooks (its choice, like catching `BaseException`); cleanup after an
+  abort; every remaining way a position could pass the check and fail later (none); the shapes `main`
+  accepted; `_control` / `_Refused`; `set_link_display`'s notes and reopen; `diff_graph`'s temp folder;
+  uninstall; the status table; AGENTS.md's timeout sentence and UID fact against the tests.
+- **Longest chain still growing:** SRV-34 → SRV-36 → SRV-38 → SRV-40, generation 4, a code defect each
+  time (the note rule's cases); the plugin and position chains found nothing this round.
+
+### 2026-10-31: branch `review-4` against `main`, the diff only, fourth round, at `5aa201b`
+
+- **How:** three read-only reviewers: the snapshot rule (the last round's change, the table's
+  completeness); a fresh look at all the branch's code, for real defects and interactions between the
+  fixes; tests, docs and REVIEW.md, with mutations on a scratch copy. Verified by hand: SRV-42 (the code
+  path). Unit tests 303 passed; live self-test 319/319 at `f0b2bd5`.
+- **Resolutions assessed:** SRV-40, SRV-41, TST-104. SRV-41 and TST-104 hold (mutations: the old count fails
+  the label assertion; the untraced previous hook has exactly 3 failing tests). SRV-40 holds for its stated
+  scenario, each `_NOTE_CASES` row decided in its own direction (five mutations), but is questioned by SRV-42.
+- **Findings:** 2: 1 low-medium (SRV-42), 1 low (HLP-52). The fresh-eyes reviewer found no defect across
+  the plugin, helpers and server beyond HLP-52; the tests and docs reviewer found nothing new.
+- **Suggested order:** SRV-42 needs a decision: fresh UIDs in snapshot copies (measure first) or accept the
+  limit; HLP-52 is one line.
+- **Notes:** under SRV-40 (the `bool(uid)` guard has no table row).
+- **Checked and found fine:** the plugin's hooks against the helpers' own `processEvents`, timer and
+  clipboard code; `_control` refusals (only `invalid token`, `bad request`, `unknown cmd`, none that waiting
+  would clear); describe_graph's new line (nothing parses it); the batch pre-check against every op;
+  `arrange_graph`; `export_outputs`' list; every reader of the snapshot folder; `set_link_display`'s notes
+  and reopen; the bridge token; path spelling (a symlinked `SD_SNAPSHOT_DIR` would defeat SRV-40's folder
+  test, unmeasured; SRV-42's fix makes it moot); the status table; AGENTS.md and README additions.
+- **Longest chain still growing:** SRV-34 → SRV-36 → SRV-38 → SRV-40 → SRV-42, generation 5: the note rule
+  decided from a package's file and UID can't tell a recovered copy saved elsewhere from the original, so
+  the next fix changes the inputs (a fresh UID per snapshot) rather than the rule.
+
+### 2026-11-01: branch `review-4` against `main`, the diff only, fifth round, at `4260eb4` plus the working tree
+
+- **How:** three read-only reviewers: the snapshot change resolving SRV-42 as Option 1b (against 1,314 real
+  Designer `.sbs` and `.algautosave` files, and a probe of a failing write); a fresh look at the rest of the
+  branch's code; tests, docs and REVIEW.md, with mutations on a scratch copy. Verified by hand: SRV-43 (the
+  code), and the tests reviewer's possible leak (measured: unloading a package also unloads the dependency
+  it loaded, so `facts.py`'s probe leaves nothing loaded; not filed). Unit tests 312 passed; live
+  self-test 309/309 with the working tree.
+- **Resolutions assessed:** SRV-42 (Option 1b) and HLP-52. Both hold: five mutations each fail a unit
+  test (no re-stamp, re-stamp every snapshot, no `<dependencies>` guard, no `utime`, re-stamping
+  `set_link_display`'s copy); the live checks guard each AGENTS.md sentence; HLP-52's check fails without
+  its line. SRV-42 is questioned by SRV-43, SRV-44, TST-105.
+- **Findings:** 3: 1 low-medium (SRV-43), 2 low (SRV-44, TST-105, wording: narrow).
+- **Suggested order:** SRV-43 (write to a temporary file and replace), then the two wording fixes.
+- **Notes:** `facts.py`'s `dep_zero` regex runs over a one-line file and could match a later dependency's
+  `"0"`; D has one dependency, and `DEP_FOUND` is the real guard. A failing `bitmap` op that leaves its node
+  doesn't name its id (as on `main`).
+- **Checked and found fine:** `_fresh_uid`'s pattern against every real file (own UID first, before
+  `<dependencies>`; no BOM or CRLF; escaped text can't hold `<fileUID`); "unsaved" as `PACKAGE=` empty; no
+  `_NOTE_CASES` outcome changes (a saved package's snapshot opened, in place or saved elsewhere, is told
+  apart by file); `set_link_display`'s snapshots are always of saved packages; ordering of `latest`;
+  HLP-52 against refs, int ids, a reused ref and a failed delete; the plugin's tracer and hooks; `_position`
+  and its callers; `_control` / `_Refused`; `uninstall.py`; the docstrings and AGENTS.md sentences.
+- **Longest chain still growing:** SRV-34 → SRV-36 → SRV-38 → SRV-40 → SRV-42 → SRV-43, generation 6, a
+  code defect again but outside the note rule (how the file is written), which itself held this round.
+
+### 2026-11-01: branch `review-4` against `main`, the diff only, sixth round, at `4260eb4` plus the working tree
+
+- **How:** two read-only reviewers: the SRV-43 fix and the wording fixes, with mutations on a scratch copy;
+  a fresh look at the whole diff from the agent's and user's side (do docstrings, refusals and results
+  match the code; did anything change silently from `main`). Verified by hand: HLP-53 (the code path).
+  Unit tests 316 passed; live self-test 309/309 with the working tree.
+- **Resolutions assessed:** SRV-43, SRV-44, TST-105: all hold (the clean-up made a no-op fails all four new
+  tests; removed from `set_link_display` only, or narrowed to the note in `snapshot_graph`, each fails one).
+- **Findings:** 2: 1 medium (HLP-53, on `main` too, brought into view by this branch's UID facts), 1 low
+  (SRV-45).
+- **Suggested order:** HLP-53 (measure two packages with one UID open together, then compare by file).
+- **Notes:** under SRV-43 (the note half of the clean-up is untested). Two snapshot calls in the same second
+  could share a path (concurrent tool calls only; as before). After a failed on-disk copy,
+  `set_link_display` keeps its live snapshot, a true record.
+- **Checked and found fine:** `_whole_or_none` can't remove a file it didn't write (the path is new);
+  `BaseException` there is only an interrupt; a bridge timeout leaves a later Designer copy without a
+  note (stated); every refusal the branch added is in its docstring or README; `list_snapshots`' new
+  `from` part breaks no parser; `snapshot_graph`'s `saved:` line unchanged; `apply_edits`' added list,
+  `describe_graph`'s `not found:`, `export_outputs`' no-image list; the plugin's tracer and hooks.
+- **Longest chain still growing:** SRV-34 → … → SRV-43, generation 6; it found nothing this round (SRV-43,
+  SRV-44, TST-105 hold). HLP-53 starts a new chain.
+
+### 2026-11-01: branch `review-4` against `main`, the diff only, seventh round, at `4260eb4` plus the working tree
+
+- **How:** two read-only reviewers: the HLP-53 and SRV-45 fixes and every caller (Save As mid-call, path
+  spellings, `set_link_display`'s reload), with mutations on a scratch copy; data safety end to end, a
+  user's session through the changed tools (snapshots, diffs, portals, batches, saving, quitting,
+  uninstalling). Verified by hand: SRV-46 (the code), HLP-54 (no test touches `_same_graph`). Unit tests
+  316 passed; live self-test 314/314 with the working tree.
+- **Resolutions assessed:** HLP-53 and SRV-45 hold for what their tests cover (each live check fails
+  without its fix; nothing parses the old "never saved" / "(unsaved)" text). HLP-53 is questioned by HLP-54
+  (its other rules untested); SRV-43 by SRV-46 (the same pattern on the user's own file).
+- **Findings:** 3: 1 low-medium (SRV-46), 2 low (HLP-54, SRV-47). SRV-46 and SRV-47 are on `main` too.
+- **Suggested order:** SRV-46 (the user's file; write to a temporary file and replace), then HLP-54 (a unit
+  test), then SRV-47 (measure Designer and a read-only file first).
+- **Notes:** under HLP-53 (`SAME_GRAPH_BACK` compares UIDs; the focus check's order). One file loaded twice
+  can't be told apart (as on `main`; the API has no identity comparison).
+- **Checked and found fine:** `_same_graph` reads both paths live (a Save As mid-call is fine); one file
+  under two spellings counts as two packages and is refused as ambiguous, never edited in the wrong one;
+  `set_link_display` decides `OPEN` before its unload and reopens by file; no other UID comparison in the
+  code; `_whole_or_none` after a plugin timeout (the complete copy removed, the tool fails); `_fresh_uid`
+  only for unsaved packages; `unload_package_file` refuses unsaved changes; the abort after a C++ save
+  ends in an error, never a false success; `apply_edits`' pre-check and added list; `uninstall.py`.
+- **Longest chain still growing:** SRV-34 → … → SRV-43 → SRV-46, generation 7, a code defect (the same
+  write pattern in one more place); HLP-53 → HLP-54, generation 2.
+
+### 2026-11-01: branch `review-4` against `main`, the diff only, eighth round, at `4260eb4` plus the working tree
+
+- **How:** two read-only reviewers: the SRV-46, SRV-47 and HLP-54 fixes, with mutations and probes on a scratch
+  copy (a symlinked .sbs, a read-only folder, coarse or copied timestamps, the uninstall loop); the docs added
+  since the seventh round against the code and tests. Verified by hand: SRV-48 (the code: a rename replaces a
+  link), SRV-50 (the code), TST-106's count (401 exported, 401 wrapped, no difference). Unit tests 328 passed;
+  live self-test 329/329 with the working tree.
+- **Resolutions assessed:** SRV-46, SRV-47, HLP-54 hold under mutation (back to the in-place write; no
+  `_changed_since` in the server or in `uninstall.py`; no `normpath`; the UID compared first). Questioned:
+  SRV-46 (SRV-48, SRV-49), SRV-47 (SRV-50).
+- **Findings:** 4: 1 low-medium (SRV-48, a regression of SRV-46's fix), 3 low (SRV-49, SRV-50, TST-106). SRV-50
+  found by both reviewers.
+- **Suggested order:** SRV-48 and SRV-49 together (`_replace_file`), then SRV-50, then TST-106 (narrow the text).
+- **Notes:** under HLP-54 (an empty UID). Not filed: a corrupted note that is valid JSON but not an object
+  makes the server's `_changed_since` / `_from_package` raise (`uninstall.py` checks); snapshots copied
+  without their times all count as changed (fails safe: kept, left out of `latest`); `_replace_file` keeps the
+  mode bits only (owner, ACLs, Finder tags are lost on replace); ROADMAP item 8 repeats two AGENTS.md facts and
+  still says "made safe (SRV-46)" as if to do; "restart Designer before real work" should defer to "ask before
+  `quit_designer`" outside this project.
+- **Checked and found fine:** the note is written after the last write to its snapshot in both writers;
+  nothing rewrites a snapshot later; the uninstall loop in either order; Windows' `PermissionError` on
+  replace becomes the "unchanged" `ToolError`; `test_same_graph.py` runs the real helper source; every
+  docstring touched (`snapshot_graph`, `designer_status`, `set_link_display`); the API facts in ROADMAP item 8
+  (`SDConnection`, no node-selection setter); the old "Dot nodes are just reroute points" line is gone.
+- **Longest chain still growing:** SRV-34 → … → SRV-43 → SRV-46 → SRV-48 / SRV-49, generation 8 (file writing);
+  SRV-47 → SRV-50, generation 2.
+
+### 2026-11-01: branch `review-4` against `main`, the diff only, ninth round, at `4260eb4` plus the working tree
+
+- **How:** two read-only reviewers: the SRV-48, SRV-49, SRV-50 and TST-106 fixes, with mutations and a probe of
+  `_replace_file` on link chains, relative links, a symlinked folder, dangling and looping links and a hard
+  link; and a convergence pass over the whole diff with a high bar (only wrong or misreported results, lost or
+  misattributed work, hangs, crashes, security, regressions). Unit tests 331 passed; live self-test 329/329.
+- **Resolutions assessed:** SRV-48, SRV-49, SRV-50, TST-106 hold (`real = path`, `mkstemp` before the `try`, the
+  old count, and no `_changed_since` each fail a test). SRV-48 is questioned by SRV-51.
+- **Findings:** 1 low (SRV-51). The convergence pass found nothing in the code of the diff.
+- **Notes (not entries, generation 3+):** `_replace_file`'s docstring says "on failure nothing is changed and the
+  error says so", but only a file error becomes that message (and "any exception removes it" has no test:
+  `except OSError` passes); SRV-50's test doesn't fail when `_from_package` is dropped from the saved-over count
+  (the other package's snapshot isn't saved over); "2 of this package saved over since it was taken" reads
+  wrongly in the plural; ROADMAP item 8 says "by `nm`" twice and leaves a parenthesis open; by design since
+  SRV-49, a writable .sbs in a folder the user can't write to is refused (`main` wrote it in place).
+- **Checked and found fine:** every symlink shape above (the target edited, the links kept, the dangling and
+  looping ones refused as "unchanged"); the unresolved path agrees everywhere else in `set_link_display` (the
+  copy, the note, the reload and the reopen all use Designer's own path); `except BaseException` re-raises
+  everything but file errors unchanged; the convergence pass's list: `_fresh_uid` before the note on coarse
+  filesystems, `_others`' arithmetic, `_whole_or_none`, `_same_graph` and its callers, `_package_name`,
+  `_control` / `_Refused`, `uninstall.py`'s loop and checks, `_position`, the batch pre-check.
+- **Longest chain still growing:** the file-writing chain, SRV-34 → … → SRV-46 → SRV-48 → SRV-51, generation 9,
+  each step a rarer file-system case; the rest of the branch converged (no finding from the high-bar pass).
+
+### 2026-11-02: branch `review-4` against `main`, the diff only, tenth round, at `4260eb4` plus the working tree
+
+- **How:** two read-only reviewers: the SRV-51 fix and the round's note clean-ups, with twelve mutations and
+  real failures on a scratch copy (`RLIMIT_FSIZE`, `chmod`, `chflags`, injected errors at every exit of
+  `_replace_file`); a convergence pass over the whole diff with a high bar, running the real server code in
+  sequence on a real file system with a fake bridge. Verified by hand: SRV-52 (the code: `os.remove(edited)` is
+  inside the outer `try`, whose handler says "unchanged"), TST-107's test (its fake `open` fails the temporary
+  file first). Unit tests 333 passed; the live self-test wasn't re-run (329/329 last round, no code change since).
+- **Resolutions assessed:** SRV-51 addresses its cause, for a hard link that survives Designer's save (not
+  measured; TST-107); disabling the branch fails both its tests. The three note clean-ups hold (the plural read
+  with 1, 2 and combined counts; ROADMAP item 8's parentheses and `nm`). SRV-51 is questioned by SRV-52 and
+  TST-107, SRV-46's test by TST-107.
+- **Findings:** 2 low: SRV-52 (a misreported result), TST-107 (wording: narrow). The convergence pass found
+  nothing in the code of the diff, for the second round running.
+- **Suggested order:** SRV-52 (test first), then TST-107 (no new check).
+- **Notes (not entries):** a read-only hard-linked .sbs is refused with "may be incomplete", though it stays
+  intact, and each retry keeps one more named temporary file; a retry after a half-written file stops at
+  `_copy_sbs` with a bare `ParseError` (the first error already said what to do). `os.replace` succeeds over a
+  read-only file where `main`'s write raised, which matters only if Designer's save gets past that file first
+  (not measured). A package snapshotted while unsaved, then saved to F and snapshotted, then saved as G: `latest`
+  picks the unsaved-stage snapshot by its UID, the oldest, while `list_snapshots` shows newer ones from F; the
+  docstring allows it and the result names the file compared. Notes that are valid JSON but not an object still
+  raise (round 8's note, no new evidence).
+- **Checked and found fine:** mutations of `_replace_file` that each fail a test (branch disabled, `tmp` not
+  cleared, no removal, rename for copy, no temporary name or snapshot in the message, no `copymode`, no `return`,
+  no `realpath`); a real partial write: both names at 4096 bytes, the kept file complete, and the message's remedy
+  restored both; permission bits 644, 640, 664, 600 on hard links; a symlink to a hard-linked file; the session
+  unsaved → saved → portals → wires → Save As → snapshot saved in place, with `latest`, labels, `list_snapshots`
+  and refusals agreeing at each step; the on-disk copy's nanosecond times through both `_copy_sbs` branches;
+  older notes without size and time; empty, truncated, binary, `{}` and wrongly typed notes in every reader
+  (wrong types fail safe: kept).
+- **Longest chain still growing:** the file-writing chain, SRV-34 → … → SRV-48 → SRV-51 → SRV-52, generation 10,
+  now a rare failure after the edit has landed; the rest of the branch has converged.
+
+### 2026-11-02: branch `review-4` against `main`, the diff only, eleventh round, at `4260eb4` plus the working tree
+
+- **How:** one read-only reviewer: the SRV-52 and TST-107 fixes, with mutations and real failures on a scratch copy;
+  the docs in the diff (AGENTS.md, README.md, ROADMAP.md item 8, tool docstrings) against the code, from the side of
+  someone following them; a scan for anything that shouldn't ship in a public repo. Verified by hand: SRV-52's test
+  fails without its fix (scratch copy); TST-108 (the two README sentences). Unit tests 334 passed; live self-test
+  329/329 with the fix (no live check has a hard link, so that shows no regression, not this path).
+- **Resolutions assessed:** SRV-52 and TST-107 hold (no `suppress`, the removal dropped, and `suppress` also around
+  the copy each fail a test; `st_nlink >= 1` and a non-atomic copy still pass, as TST-107 says). Every sentence of
+  `_replace_file`'s docstring held under real failures (the folder read-only after the copy, the temporary file
+  gone first, a denied rename, a non-file error). SRV-47 is questioned by TST-108.
+- **Findings:** 1 low (TST-108, wording: narrow). No code defect.
+- **Suggested order:** TST-108, then commit.
+- **Notes (not entries):** before committing, `tests/unit/test_same_graph.py` is untracked, so `git commit -a` would
+  leave out the test HLP-54's resolution names.
+- **Checked and found fine:** AGENTS.md's UID, `mHandle`, Portals, UI, timeout and uninstall sentences against the
+  code (the Designer facts themselves not re-measured); README's uninstall sentence and invalid-token row; ROADMAP
+  items 5 and 8; the docstrings of `snapshot_graph`, `list_snapshots`, `diff_graph`, `designer_status`,
+  `set_link_display`, `apply_edits`, `arrange_graph`, `describe_graph`, `export_outputs`; "copy it over" in
+  `_replace_file`'s error (a copy keeps the hard link, a move wouldn't); the diff, REVIEW.md and the untracked test
+  hold no personal paths, email, scratch paths, debugging code or stray files.
+- **Longest chain still growing:** none in the code: the file-writing chain found nothing this round (SRV-52 holds).
+  TST-108 is generation 2 of SRV-47's chain, a sentence on `main` that this branch's rule made wrong.
+
 ---
 
 ## High
@@ -606,6 +926,47 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
       a live "designer facts" check (a timed-out script still prints from its `finally`).
     - **Why not:** Python unsets a trace function that raises (`sys.settrace` docs), so the abort
       fires once and cleanup code runs to the end. Documented in `_make_tracer`; tests kept.
+
+- [x] **PLG-25 · A cancel or timeout is lost when the abort lands in a `__del__`, and the run is reported as successful** · `plugin/sd_claude_bridge_kve/sd_claude_bridge_kve/__init__.py` (`_make_tracer`, `_run`) · confirmed (outside Designer) · verified by hand · found 2026-10-31
+  - **Defect.** The tracer raises `ScriptAborted` once, in whatever frame runs at the 64th trace event,
+    and Python unsets it (what PLG-2's resolution relies on). If that frame is a finalizer, the exception
+    goes to `sys.unraisablehook` ("Exception ignored in ...") instead of the script; the tracer is gone,
+    so the script runs on with no timeout and can't be cancelled, and `_run` returns `ok: True`. Every sd
+    API object has a Python `__del__` that calls `release()` (`sd/api/sdapiobject.py`), so sd-heavy
+    scripts spend many trace events in finalizers.
+  - **Scenario.** A probe (the plugin loaded with a stub PySide6, `_run` with a 0.5 s timeout on a 4 s
+    loop creating and dropping an object whose `__del__` calls `release()`, as sd's do) ran to the end
+    with `ok=True` after 4.0 s in 2 of 5 runs, its output holding "Exception ignored ... ScriptAborted:
+    timed out". In Designer: `execute_designer_code(timeout_s=60)` on a stuck loop over nodes may never
+    time out (Designer stays frozen), `cancel_designer_job` answers "cancel requested" and the job goes
+    on, and a job that ends anyway is reported as successful. Possibly also a Python Qt slot run from
+    `processEvents()` (PySide discards exceptions from slots). The abort checks (unit and live) all use
+    pure-Python loops without finalizers.
+  - **Fix.** Don't raise while a `__del__` frame is on the stack (wait for the next tick); as a backstop,
+    a `sys.unraisablehook` during `_run` that re-arms the tracer when a `ScriptAborted` was swallowed; and
+    `_run` reports failure whenever the deadline passed or a cancel was set, even if nothing escaped. A
+    unit test like the probe (a finalizer-heavy loop aborts every time) and a live check with sd objects.
+  - **Resolution: done** (commit `9dfb8e2`).
+    - **Test:** unit, `test_an_abort_landing_in_a_finalizer_still_stops_the_script` (a `__del__` loop and a
+      weakref-callback loop, each with a timeout and with a cancel, 8 runs each): every case ran to the
+      end after 3 s with `ok=True`. Live, `graph_edit.py` "a timeout stops a loop with finalizers every
+      time" (6 runs): measured first on the old plugin in Designer, 3 of 6 runs ignored a 1 s timeout and
+      ran to the end (5-6 s). Two loops over real sd objects (`getUserPackages()`, `SDValueFloat.sNew`)
+      didn't reproduce it in 10 runs, so the live check uses a Python `__del__`.
+    - **Cause:** the tracer raised in whatever frame ran at a check; in a finalizer or a weakref callback
+      Python reports the exception as "Exception ignored" and drops it, and the tracer, unset by the
+      raise, never fired again. In the weakref loop every 64th event fell in the callback every time (8
+      events per pass), so even a re-armed tracer could only fire there.
+    - **Fix:** the tracer doesn't raise while a `__del__` is on the stack (`_in_finalizer`, the next check
+      fires); `_run` installs a `sys.unraisablehook` for the job: a dropped `ScriptAborted` re-arms the
+      tracer and puts the script's running frames on a `resume` list, so the next event in one of them
+      raises at once; if every abort was dropped and the script still finished, the run is reported as
+      aborted. AGENTS.md (Undo, timeouts) says so. install.py and a Designer restart done.
+    - **Also covered:** PLG-2's behaviour (cleanup runs to the end) unchanged, its tests pass; a Python Qt
+      slot run from `processEvents()` (PySide prints and discards its exceptions) is not covered by the
+      hook: not measured, not claimed.
+  - Questioned by PLG-26, PLG-27, PLG-28, TST-99 (2026-10-31).
+  - Questioned by PLG-29 (2026-10-31).
 
 ## Medium
 
@@ -976,6 +1337,74 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
       on Designer's own Python and the helpers can't take the future import (one joined script), so
       README's requirements now say Designer 16 is tested and an older one needs a bundled Python 3.10+,
       instead of "14.1 or newer should work". AGENTS.md says which files take the future import and why.
+
+- [x] **PLG-26 · A finalizer that raises an ordinary error still loses every timeout and cancel** · follows PLG-25, generation 2 · `plugin/sd_claude_bridge_kve/sd_claude_bridge_kve/__init__.py` (`_run`'s unraisable hook, the tracer) · confirmed (outside Designer) · verified by hand · found 2026-10-31
+  - **Defect.** The hook installed for the job runs traced: for an unraisable that isn't a ScriptAborted
+    (a `__del__` raising `ValueError`), it calls `previous_hook(info)`, which writes "Exception ignored"
+    to the redirected stderr (`_TailBuffer.write`, also traced). The 64th-event check fires there, where
+    no `__del__` is on the stack, so the abort is raised inside the hook; Python reports an exception
+    raised by an unraisable hook through the default hook, not ours, so nothing re-arms the tracer and
+    `dropped` stays empty.
+  - **Scenario.** A 1.5 s loop creating objects whose `__del__` raises, 0.2 s timeout: 8 of 8 runs ran to
+    the end and returned `ok=True` (run again by hand); with a cancel, 4 of 4; with one `__del__` in 50
+    raising, 2 of 8. The `main` plugin behaves the same: a gap in PLG-25's fix, not a regression. Likely
+    in practice: an sd object or a script object whose finalizer fails, inside a stuck loop.
+  - **Fix.** Never trace or raise in the plugin's own code (in the tracer, return at once for frames of
+    the plugin's file), and run `previous_hook` with tracing off, re-arming afterwards; a unit test with
+    a raising `__del__`.
+  - **Resolution: done** (commit `ce095f4`).
+    - **Test:** unit `test_an_abort_survives_finalizers_that_raise_or_run_long` (a raising `__del__`, with a
+      timeout and a cancel, 6 runs each): every run went the full 3 s with `ok=True`; and
+      `test_an_abort_survives_a_python_unraisable_hook` (the hook in place before the job is Python code).
+      Live, `graph_edit.py` "a timeout stops a loop with finalizers every time, raising ones too": on the old
+      plugin in Designer the raising runs ignored a 1 s timeout and ran to the end.
+    - **Cause:** the job's unraisable hook and what it called (the previous hook, the output buffer) ran
+      traced, so the abort could be raised there, and Python drops an exception raised in a hook.
+    - **Fix:** the tracer never traces the plugin's own code; the hook calls the previous one with
+      tracing off, and puts tracing back as it was (off once the abort reached the script, so cleanup
+      still runs to the end: `test_cleanup_after_an_abort_runs_to_the_end_despite_a_raising_finalizer`).
+      Each guard was removed once to see a test fail. install.py and a Designer restart done.
+    - **Also covered:** PLG-27 and PLG-28 (the same tracer, reworked together); TST-99.
+  - Note (2026-10-31): the raising-finalizer unit tests' objects can outlive their test in a reference cycle, so the "release failed" warning their `filterwarnings` mark is for is sometimes reported under another test (seen in every full run); a `gc.collect()` inside the marked tests would keep it there.
+  - Note (2026-10-31): a `gc.collect()` at the end of the raising-finalizer tests now keeps most of those warnings in their own test (10 down to 1 per full run; that one appeared before this round's changes too).
+  - Note (2026-10-31, TST-104): correcting the counts above and in TST-99 and PLG-30: tracing put back as it was has no test of its own direction (with the tracer put back on instead, all tests pass); the unraisable previous hook called untraced has 3 failing tests.
+
+- [x] **HLP-53 · `_same_graph` tells two open packages apart by UID only, so an opened snapshot of a saved package (or any copy of its file) is taken for the original** · `mcp_server/designer_helpers/core.py` (`_same_graph`; used by `find_graph`, `package_file_of`'s `OPEN=`, `open_graph`) · confirmed · verified by hand · found 2026-11-01
+  - **Defect.** `_same_graph` compares `a.getIdentifier() == b.getIdentifier()` and
+    `a.getPackage().getUID() == b.getPackage().getUID()`. Copies of a file share its UID (measured, AGENTS.md:
+    "Tell packages apart by file first"), and a saved package's snapshot keeps it (SRV-42, Option 1b). On
+    `main` too (every snapshot kept the UID there); the branch measured and documented the fact that breaks
+    it.
+  - **Scenario.** The user's saved `A.sbs` (graph `G`) is open; the agent snapshots it; the user opens the
+    snapshot to recover something, and it is the graph in the editor. `apply_edits(graph='G')` finds two
+    `G`s; `_same_graph(A's G, the snapshot's G)` is true for the first one listed, so the edits land in
+    `A.sbs`'s graph while the user looks at the snapshot. `package_file_of` reports `OPEN=1` for A, and
+    `open_graph` may fit the wrong view. Also with Designer's own `.autosave/` backups or a duplicated file.
+    Found by one reviewer (the agent's-view angle); the code path verified by hand, not yet run in Designer.
+  - **Fix.** Compare normalised file paths when both packages have a file; the UID only when neither has
+    one (one with a file and one without: different packages). A live check: a saved package and its
+    snapshot open together, the snapshot in the editor, `find_graph` returns the snapshot's graph.
+  - **Resolution: done** (commit `f4dc89d`).
+    - **Test:** `safeguards.py`, a saved package and a `saveCopyOfPackageAs` copy of it loaded together (the
+      same UID, measured in the check), the copy in the editor: "a copy of a file in the editor is found,
+      not the original with its UID" (`find_graph` returned the original), "the original is not open"
+      (`package_file_of` said `OPEN=1`), "the original given is focused" (`open_graph` raised an
+      `APIException`). All three failed before the fix.
+    - **Cause:** packages were told apart by UID, which every copy of a file shares.
+    - **Fix:** `_same_graph` (`core.py`): two packages with files are the same only with the same file
+      (normalised); one with a file and one without are different; only two never saved are compared by
+      UID.
+    - **Also covered:** every UID comparison in the code: `_same_graph`'s three callers (`find_graph`,
+      `package_file_of`, `open_graph`'s view lookup) and `_fit_view` (`editor.py`), which compared UIDs
+      itself and now calls `_same_graph`. The snapshot notes already decide by file first (SRV-36). Not
+      checked live: a saved and an unsaved package with one graph name (different by the code's first
+      rule) and two unsaved ones with the editor on one of them (the UID rule, as before).
+
+  - Note (2026-11-01): `tests/test_all_tools/common.py`'s `SAME_GRAPH_BACK` still compares UIDs (a test-only
+    check of the graph in the editor; nothing depends on it). `safeguards.py`'s "the original given is
+    focused" failed before the fix as measured, but would pass on the old code if the original's view came
+    first.
+  - Questioned by HLP-54 (2026-11-01).
 
 ## Low-medium
 
@@ -1565,6 +1994,7 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
       `apply_edits` add whose params fail, now expects no node and "not added".
     - **Fix:** `add_node` deletes the node when its params fail and says so (inside the call's undo group).
   - Questioned by HLP-37 (2026-10-30).
+  - Questioned by HLP-46 (2026-10-31).
 
 - [x] **TST-65 · The new "restart without asking" rule covers a stuck Designer, which the tools can't restart** · `AGENTS.md` (Working on this project), `.claude/skills/address-review/SKILL.md` · confirmed · verified by hand · found 2026-10-30
   - **Defect.** It names "a crashed or stuck Designer", but with a bridge that accepts and never answers
@@ -1780,6 +2210,337 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
       what the client sees (the prefix). AGENTS.md's reminder points to the note.
     - **Also covered:** every mcp import in the skill (`grep`): the guide's four `mcp.server.fastmcp`
       imports and `connections.py`'s client imports are left as 1.x code under the note, not rewritten.
+
+- [x] **SRV-33 · `designer_status`, `launch_designer` and `cancel_designer_job` read the plugin's reply without checking `ok`** · `mcp_server/server_tools/lifecycle.py`, `scripting.py` · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** They take `.get('output', '')` from `_send`'s reply and ignore `ok` / `error`
+    (`state = bridge.get('output', '')`; `return _send({'cmd': 'cancel'}, wait=10).get('output', '')`).
+  - **Scenario.** With the plugin refusing the request (`{'ok': False, 'error': 'invalid token'}`, the
+    mismatch README Troubleshooting describes): `designer_status` says a job is running ("package list
+    skipped while a job runs"), `launch_designer` says "Designer already running: " with nothing after
+    it, and `cancel_designer_job` returns an empty string, so the agent believes the cancel went through.
+  - **Fix.** One `_control(cmd, wait)` in `core.py` raising `ToolError(reply['error'])` when `ok` is
+    false, used by every control call; a unit test per tool with an `invalid token` reply.
+  - **Resolution: done** (commit `9dfb8e2`).
+    - **Test:** `test_a_refused_control_request_is_reported_as_an_error` (`test_lifecycle_env.py`) for
+      `designer_status`, `launch_designer`, `cancel_designer_job` and `quit_designer` with an `invalid
+      token` reply: three returned a normal-looking answer, `quit_designer` failed with another message.
+    - **Cause:** the control requests read `.get('output', '')` from `_send`'s reply without its `ok`.
+    - **Fix:** `_control(cmd, wait)` in `core.py` raises `_Refused` with the plugin's error when `ok` is
+      false; every control call uses it; `launch_designer` and `quit_designer` re-raise a refusal instead
+      of treating it as "not reachable" (no second Designer started, none waited for). Three older tests'
+      fake replies gained the `ok: True` the plugin always sends.
+    - **Also covered:** `_bridge` already checked `ok`; `client/sd_run.py` checks `reply['ok']`.
+
+
+- [x] **SRV-34 · Snapshots are keyed by graph identifier only, so two packages' graphs of one name share them** · `mcp_server/server_tools/snapshots.py` (the snapshot folder, `diff_graph`'s `latest` / label, `list_snapshots`), `layout.py` (`set_link_display`'s reopen) · confirmed (code path) · found 2026-10-31
+  - **Defect.** The folder is `SNAPSHOT_DIR/<identifier>`; every new graph is "New_Graph" (AGENTS.md), so
+    two packages' graphs share one folder. The server-side counterpart of HLP-6.
+  - **Scenario.** Snapshot package A's `New_Graph`, then work on package B's `New_Graph`:
+    `diff_graph(against='latest')` compares B with A's snapshot and reports a large bogus diff;
+    `list_snapshots('New_Graph')` mixes both, which matters when choosing one to recover from. Plausibly
+    also: `set_link_display` reopens by identifier, which can pick the other package's graph.
+  - **Fix.** Key snapshots by package too (the identifier plus a short hash of the package file path),
+    or filter on the `PACKAGE=` line `_copy_package` already returns; reopen through the package path. A
+    unit test with two packages and one identifier.
+  - **Resolution: done** (commit `9dfb8e2`).
+    - **Test:** `test_snapshots_of_two_packages_with_one_graph_name_stay_apart` (`test_snapshots.py`):
+      package B's `diff_graph(against='latest')` compared with package A's snapshot instead of refusing.
+      The test also covers a saved package, two unsaved ones, a package saved after its snapshot (same
+      UID) and a saved one whose UID changed (same file).
+    - **Cause:** snapshots were found by graph identifier alone.
+    - **Fix:** each snapshot gets a note beside it (`<snapshot>.sbs.json`: the package's file and its
+      `getUID()`); `diff_graph`'s `latest` and labels use only the current package's (same file or same
+      UID; a snapshot without a note counts for any); `list_snapshots` shows each one's package;
+      `set_link_display` notes its file-on-disk copy and reopens the graph through the package file
+      (`graph_in_file`), not by name. Measured before choosing the key: a package's `mHandle` differs for
+      every Python object wrapping it, `getUID()` doesn't. A first version keyed folders by file path,
+      which lost a package's snapshots once it was saved; the self-test caught it (diff_graph, 4 checks).
+    - **Also covered:** the self-test's clean-ups delete a snapshot's note with it (`layout.py`, and the
+      library-graph snapshot in `safeguards.py`, which lives in the user's snapshot folder); README's
+      `SD_SNAPSHOT_DIR` row.
+  - Questioned by INS-26, SRV-36, SRV-37 (2026-10-31).
+
+- [x] **PLG-27 · After a dropped abort, a loop in a module the script imports can still ignore the timeout** · follows PLG-25, generation 2 · `plugin/sd_claude_bridge_kve/sd_claude_bridge_kve/__init__.py` (`_run`'s unraisable hook) · confirmed (outside Designer) · found 2026-10-31
+  - **Defect.** The hook puts only frames whose globals are the script's own scope on the resume list
+    (`if frame.f_globals is scope`); a loop in an imported module's function has none of them running,
+    and the 64-event checks can keep landing in the callback.
+  - **Scenario.** `run_designer_script` importing a helper module that runs the weakref-callback loop:
+    8 of 16 runs (varying the statements before the call) ran the full 1.5 s past a 0.2 s timeout, then
+    reported as aborted by the backstop.
+  - **Fix.** Mark every frame from the hook's caller up to (not including) `_run`'s, whatever its
+    globals; or, after a re-arm, check on every event until the abort lands outside a finalizer.
+  - **Resolution: done** (commit `ce095f4`).
+    - **Test:** `test_an_abort_stops_a_loop_in_a_module_the_script_imports` (the weakref-callback loop in an
+      imported module, 0-7 statements before the call): the run with 2 took the full 3 s.
+    - **Cause:** after a dropped abort only frames with the script's own globals were resumed.
+    - **Fix:** every frame between the job's `exec` and the callback (except the plugin's own) is
+      resumed, whatever module it belongs to.
+  - Questioned by PLG-30 (2026-10-31).
+
+- [x] **INS-26 · `uninstall.py --remove-snapshots` leaves the snapshots' new package notes, so the folders stay** · follows SRV-34, generation 2 · `uninstall.py` (`SNAPSHOT_FILE`) · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** `SNAPSHOT_FILE = re.compile(r'^\d{8}-\d{6}(?:_\d+)?(?:-.*)?\.sbs$')` doesn't match
+    `<snapshot>.sbs.json`, so the notes stay and every graph folder is kept as "other files are in it".
+  - **Fix.** Also match `\.sbs\.json$` (or remove each matched snapshot's note); a unit test with a note.
+  - **Resolution: done** (commit `ce095f4`).
+    - **Test:** `test_remove_snapshots_removes_their_package_notes_and_folders` (`test_uninstall.py`): the
+      note stayed, and so did the folder.
+    - **Fix:** `SNAPSHOT_FILE` also matches `<snapshot>.sbs.json`; another `.json` in the folder is kept,
+      and keeps the folder, as before.
+    - **Also covered:** every reader of the snapshot folder: the server (`.sbs` only), the self-test's
+      clean-ups (remove a snapshot's note with it).
+
+- [x] **SRV-36 · The snapshot notes' UID rule rests on unmeasured `getUID()` behaviour** · follows SRV-34, generation 2 · `mcp_server/server_tools/snapshots.py` (`_from_package`) · plausible · found 2026-10-31
+  - **Defect.** A snapshot counts for the current package on the same file or the same UID. Every .sbs
+    stores a `<fileUID>`, copies of a file keep it, and if `getUID()` returns it, two packages loaded from
+    copies of one file (a Save As, then the original reopened; a duplicated file; a snapshot opened to
+    recover) share a UID and mix their snapshots again. The other way round, a snapshot taken before a
+    package's first save is found afterwards only if `getUID()` doesn't change on saving: also unmeasured
+    (the resolution measured it across Python wrappers only). Found by two reviewers.
+  - **Fix.** Measure `getUID()` against `<fileUID>` through a save, a Save As and a second load of a
+    copied file ("designer facts"); then use the UID only when the note or the package has no file, if
+    copies share it; a live check: snapshot an unsaved package, save it, `diff_graph('latest')` finds it.
+  - **Resolution: done** (commit `ce095f4`).
+    - **Test:** measured first ("designer facts", `facts.py`): a package's `getUID()` is its file's
+      `<fileUID>`, the same before and after saving and Save As, and shared by a copy of the file loaded
+      again; `mHandle` differs for two wrappers of one package held at once. Recorded in AGENTS.md (sd
+      API gotchas). Then `test_snapshots_of_two_packages_with_one_graph_name_stay_apart`'s new case: a
+      copy of package B's file (B's UID) found B's snapshots.
+    - **Cause:** the UID was trusted alone, and every copy of a file shares it.
+    - **Fix:** `_from_package`: the same file decides; the UID counts only when the note or the package
+      has no file (a snapshot taken before the first save, which the measurement shows keeps its UID).
+  - Questioned by SRV-38, SRV-39, TST-102 (2026-10-31).
+
+- [x] **HLP-49 · A failed batch still doesn't name nodes added without a `ref`** · follows SRV-35, generation 2 · `mcp_server/designer_helpers/batch.py` (the failure message) · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** `if refs: done += ' (refs: %s)' % refs`: only adds with a `ref` are in `refs` (and a ref
+    reused later keeps only the last node). Found by three reviewers.
+  - **Scenario.** `[add levels, add blend, add not_a_real_node]` fails with "ops 0-1 were applied" and no
+    id: a retry duplicates both nodes, SRV-35's own scenario.
+  - **Fix.** Track every id an add or bitmap op created (with its ref, if any) and list them all; extend
+    the live check with a ref-less add; the description says "lists the nodes already added".
+  - **Resolution: done** (commit `ce095f4`).
+    - **Test:** `batch.py`, "a failed batch names a node added without a ref": "ops 0-0 were applied" and no id.
+    - **Cause:** only refs were listed.
+    - **Fix:** the run keeps every node an add or bitmap op made, with its ref if any, and the failure
+      lists them ("(added: 123 (ref 'x'), 124)"); the description says so; SRV-35's check follows the format.
+  - Questioned by HLP-52 (2026-10-31).
+
+- [x] **PLG-29 · An abort landing in a Qt signal slot is lost, and the run reports success** · follows PLG-25, generation 2 · `plugin/sd_claude_bridge_kve/sd_claude_bridge_kve/__init__.py` (`_run`: only `sys.unraisablehook` re-arms) · confirmed (Designer's Python and PySide6) · verified by hand · found 2026-10-31
+  - **Defect.** PySide6 (6.8.6, Designer 16's) reports an exception raised in a Python slot through
+    `sys.excepthook`, not `sys.unraisablehook`, and `emit()` / `processEvents()` return normally; an abort
+    landing there is dropped and nothing re-arms the tracer.
+  - **Scenario.** A 2 s loop emitting a signal connected to a 5-line slot, 0.2 s timeout, run with
+    Designer's own `python3.13`: 4 of 6 runs went the full 2 s and returned `ok=True` (run again by hand).
+    In practice: a stuck loop that calls `processEvents()` or emits signals (Designer's own slots, the
+    helpers' `processEvents()` loops in `screenshots.py` and `editor.py`).
+  - **Fix.** During the job also install a `sys.excepthook` that re-arms for a `ScriptAborted` as the
+    unraisable hook does, and calls the previous one untraced otherwise; restored in the same `finally`.
+    A test where the unit fixture's stub can't reach: a fake C caller, or a live check.
+  - **Resolution: done** (commit `00730cd`).
+    - **Test:** unit `test_an_abort_landing_in_a_slot_reported_through_excepthook_still_stops_the_script`
+      (an `emit()` that, like PySide's, hands a slot's exception to `sys.excepthook`): every run went the full
+      3 s. Live, `graph_edit.py`'s check gained a real PySide signal and slot (4 runs): it failed on the old
+      plugin in Designer. The reviewer's probe with Designer's `python3.13` and PySide6: 4 of 6 lost before,
+      6 of 6 aborted at 0.2 s after.
+    - **Cause:** only `sys.unraisablehook` re-armed the tracer; PySide reports slot exceptions to
+      `sys.excepthook`.
+    - **Fix:** `_run` also installs a `sys.excepthook` for the job: a `ScriptAborted` re-arms, anything else
+      goes to the previous hook untraced; both hooks restored in the same `finally`. AGENTS.md's timeout
+      sentence names Qt slots.
+  - Note (2026-10-31): `excepthook`'s call of the previous hook untraced has no test (calling it traced fails none); nothing claims it has.
+
+- [x] **HLP-51 · Positions "nan" and "inf" pass the check, and the node is left behind again** · follows HLP-50, generation 4 · `mcp_server/designer_helpers/core.py` (`_position`), `edits.py` (`add_node`, `import_bitmap`), `editor.py` (`move_nodes`), `layout.py` (`add_comment`) · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** Since HLP-50, `_position` takes any string `float()` reads, `"nan"`, `"inf"`, `"1e400"`
+    included; the node is placed, then the `%d` print raises (`ValueError: cannot convert float NaN to
+    integer`). HLP-46's "checked before anything is created" breaks again. (A code defect: an entry at
+    any generation.)
+  - **Scenario.** `{"op": "add", "definition": "levels", "position": ["nan", 0]}`: the node stays, at a NaN
+    position, and isn't in the "(added: ...)" list (its op failed); a move goes to NaN first, then fails;
+    `add_comment` takes it silently.
+  - **Fix.** Refuse non-finite values in `_position`; rows `["nan", 0]` and `["inf", 0]` in the pre-check table.
+  - **Resolution: done** (commit `00730cd`).
+    - **Test:** two rows in `safeguards.py`'s pre-check table: `["nan", 0]` in an add op and `[0, "1e400"]` in a
+      move op. They passed in the red run because the helpers had been fixed first (they are re-sent with
+      every call); the failure was shown directly: `'%d' % float('nan')` raises `ValueError`, after the node
+      is placed.
+    - **Cause:** HLP-50's fix accepted every string `float()` reads.
+    - **Fix:** `_position` also requires both values finite and below 1e30 in size.
+    - **Also covered:** every caller of `_position` (`_check_batch`, `add_node`, `import_bitmap`,
+      `move_nodes`, `add_comment`) goes through the same check.
+  - Note (2026-10-31): only `apply_edits`' pre-check has non-finite rows; `add_comment` and the direct helper calls get none (their checks are read from the code).
+
+- [x] **SRV-38 · An unsaved package and a snapshot of it opened to recover share snapshots again** · follows SRV-36, generation 3 · `mcp_server/server_tools/snapshots.py` (`_from_package`) · confirmed (code path) · verified by hand · found 2026-10-31
+  - **Defect.** For a package with no file, the rule falls back to the UID alone, and a snapshot opened
+    in Designer (the recovery the docstring suggests) keeps the package's UID; so the unsaved original
+    and the recovered copy see each other's snapshots.
+  - **Scenario.** Unsaved package A (UID U) snapshot s1 `{'', U}`; s1 opened as package R (file s1, UID U),
+    snapshot s2 `{s1, U}`; `diff_graph('latest')` on A (no file) takes s2 and reports R's differences:
+    SRV-34's bogus diff. The other way, A's later snapshots count for R.
+  - **Fix.** A package with no file takes only notes with no file and its UID; a package with a file,
+    only notes of that file, or with no file and its UID.
+  - **Resolution: done** (commit `00730cd`).
+    - **Test:** `test_an_unsaved_package_and_a_recovered_copy_of_it_keep_their_snapshots_apart`: the unsaved
+      package diffed against the recovered copy's newer snapshot ("2 removed").
+    - **Cause:** for a package with no file, any note with its UID counted, noted file or not.
+    - **Fix:** `_from_package`: a note with a file counts only for that file; a note without one only for a
+      package with that UID (a package with a file still takes its pre-save snapshots). The docstring says
+      a recovered snapshot *may* keep the UID (not measured): the rule holds either way.
+  - Questioned by SRV-40 (2026-10-31).
+
+- [x] **SRV-40 · A snapshot opened to recover still takes the unsaved original's later snapshots** · follows SRV-38, generation 4 · `mcp_server/server_tools/snapshots.py` (`_from_package`) · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** A package with a file takes every note without a file and its UID, so a recovered snapshot
+    R (file s1, UID U) takes the snapshots the unsaved original A (UID U) keeps taking after the
+    recovery: the other direction of SRV-38's scenario, left open; the unit test's "R sees only its own"
+    passes only because R's snapshot is the newest. Found by two reviewers. (A code defect.)
+  - **Scenario.** A snapshots s1 `{'', U}`; s1 opened as R; A snapshots s3 `{'', U}`; `diff_graph('latest')`
+    on R diffs against A's s3 ("2 added": SRV-34's bogus diff).
+  - **Fix.** A package whose file is itself a snapshot (under `SNAPSHOT_DIR`) takes only notes of its own
+    file; a row where A snapshots after R.
+  - **Resolution: done** (commit `f0b2bd5`).
+    - **Test:** `test_an_unsaved_package_and_a_recovered_copy_of_it_keep_their_snapshots_apart` now has A
+      snapshot again after R's: R took A's newer snapshot. And `test_which_snapshots_are_a_packages_own`:
+      every case the rule tells apart, decided once in a table (`_NOTE_CASES`, 11 rows: same file, another
+      file with the UID, no file vs a noted file, unsaved same and other UID, pre-save snapshots after a
+      first save, a recovered snapshot and its own, no note); only the recovered-snapshot row failed.
+    - **Cause:** a note without a file counted for any package with its UID, a recovered snapshot included.
+    - **Fix:** `_from_package`: such a note doesn't count for a package whose file is in the snapshot folder;
+      the docstring states the whole rule and points to the table.
+    - **Also covered:** the table is the pattern, all its rows decided and tested, so the next case isn't
+      left for the next review. Limit, stated in the rule: a copy of a file whose package was first saved
+      after taking snapshots also has that UID and takes those pre-save snapshots (the same history).
+  - Questioned by SRV-42 (2026-10-31).
+  - Note (2026-10-31): `_from_package`'s `bool(uid)` guard has no row in `_NOTE_CASES` (removing it fails no test), so "every case" in its docstring holds for packages that have a UID, as every package does in practice.
+
+- [x] **SRV-42 · A recovered snapshot saved elsewhere takes the unsaved original's later snapshots again** · follows SRV-40, generation 5 · `mcp_server/server_tools/snapshots.py` (`_from_package`), `mcp_server/designer_helpers/files.py` (`save_package_copy`) · confirmed (code path) · verified by hand · found 2026-10-31
+  - **Defect.** SRV-40 tells a recovered copy by where its file is now (in the snapshot folder). Saved
+    elsewhere (a Save As, which keeps the UID: measured), or copied out before opening, it has a file
+    outside the folder and the original's UID, so it takes the unsaved original's notes (`{'', U}`) as
+    pre-save snapshots of its own. (A code defect.)
+  - **Why another row can't fix it.** `('', U)` against `('/b/R.sbs', U)` is the same input for "A first saved
+    to R.sbs" (its own) and "a copy of A saved to R.sbs" (not its own): the inputs must change.
+  - **Scenario.** A unsaved, snapshot s1; s1 opened as R and saved as `~/proj/R.sbs`; A snapshot s3;
+    `diff_graph('latest')` on R diffs against A's s3.
+  - **Fix.** Give every snapshot copy a fresh `<fileUID>` right after `saveCopyOfPackageAs` (the note keeps
+    the source's UID), so nothing opened from a snapshot shares the original's UID, and the
+    snapshot-folder test goes away; measure first that Designer loads such a file and `getUID()` reports
+    the new UID. Or accept the limit (needs the user's agreement).
+  - **Resolution: done** (commit `f4dc89d`).
+    - **Test:** measured first, in Designer, for an unsaved and a saved package: a `saveCopyOfPackageAs`
+      copy keeps the package's UID; the copy with its package-level `<fileUID>` rewritten loads with its
+      graph and nodes, and `getUID()` reports the new UID (both now in `facts.py`'s UID check, and in
+      AGENTS.md). Then `test_a_snapshot_gets_a_fresh_uid_and_a_recovered_copy_saved_elsewhere_stays_apart`:
+      the snapshot still carried the package's UID. A `_NOTE_CASES` row records the case of a recovered
+      copy saved elsewhere with its own UID (it passes without the fix too: the rule didn't change).
+      Live, `layout.py` "a snapshot loads with a UID of its own".
+    - **Cause:** the note rule could only see a package's file and UID, and a snapshot copy shared its
+      package's UID, so a recovered copy saved elsewhere and the original after its first save looked
+      the same.
+    - **Fix (Option 1b, the user's choice of three: re-stamp every snapshot, only unsaved packages', or
+      none and accept the limit):** `_fresh_uid`
+      gives a snapshot of an **unsaved** package a UID of its own right after it is written, as a byte
+      edit of the UID alone (same length, nothing reformatted), keeping the file's timestamps (SRV-1); the
+      note keeps the package's UID. A saved package's snapshots, and `set_link_display`'s copy of the file
+      on disk, are told apart by file and stay Designer's exact copies. The snapshot-folder test stays
+      for snapshots taken before this.
+    - **Tests for 1b:** `test_fresh_uid_changes_only_the_uid` (failed with the first version's ElementTree
+      rewrite: quotes and spacing changed), `test_fresh_uid_leaves_a_file_without_its_own_uid_alone`
+      (a non-XML file raised), `test_only_a_snapshot_of_an_unsaved_package_gets_a_uid_of_its_own` and
+      `test_link_display.py`'s on-disk copy keeping its UID (both failed: re-stamped). Live: `save.py` "a
+      saved package's snapshot keeps its UID"; `facts.py` "a re-stamped UID loads, and a package using its
+      graph still finds it": measured first by hand (a package using A's graph stores `A.sbs` with
+      `<fileUID v="0"/>`; A's file re-stamped by a snapshot restored over it, the user still computed A's
+      output, unmodified, no log warning).
+    - **Also covered:** every place a package file is copied for the user: snapshots and the on-disk copy;
+      `diff_graph`'s temporary live copy is never opened and is deleted (not affected).
+    - **Limit (Designer's, not fixable here; measured once by hand, 2026-11-01, too slow for the
+      self-test):** Designer's own auto-backups keep the UID too. A saved package's go to `.autosave/`
+      next to its .sbs (told apart by file: no mix-up). An **unsaved** package's go to
+      `$TMPDIR/<graph>.sbs.algautosave`, with its UID, and stay after the package is closed: opened to
+      recover and saved elsewhere, one takes the unsaved original's snapshots as in this finding.
+  - Questioned by SRV-43, SRV-44, TST-105 (2026-11-01).
+
+- [x] **SRV-43 · A snapshot re-stamp that fails partway leaves a truncated snapshot with no note, which then counts for every package** · follows SRV-42, generation 6 · `mcp_server/server_tools/snapshots.py` (`_fresh_uid`, `snapshot_graph`) · confirmed · verified by hand · found 2026-11-01
+  - **Defect.** `_fresh_uid` rewrites the snapshot in place (`with open(snapshot, 'wb') as f: f.write(...)`),
+    which empties the file before writing, and `snapshot_graph` calls it before `_note_package`. A failed
+    write (a full disk) raises out with the `.sbs` truncated and no `.json`; `_from_package` counts a
+    snapshot without a note for any package (`return True`). (A code defect: an entry at any generation.
+    The first version's `tree.write` had the same shape.)
+  - **Scenario.** An unsaved `New_Graph` is snapshotted while the disk fills: `snapshot_graph` fails, the
+    snapshot (the only copy of that state) is half written, and as the newest file it is every
+    `New_Graph`'s `latest`: `diff_graph('latest')` fails parsing it, for any package. Found by probe
+    (`ENOSPC` simulated); rare in practice.
+  - **Fix.** Write the new bytes to a temporary file in the same folder, set its times, then
+    `os.replace` it over the snapshot; and/or write the note first, or remove the snapshot when the
+    re-stamp fails. A unit test that makes the write fail and checks the snapshot is intact (or gone).
+  - **Resolution: done** (commit `f4dc89d`).
+    - **Test:** `test_a_snapshot_that_fails_after_its_copy_leaves_nothing_behind` (`test_snapshots.py`:
+      the re-stamp, the note of an unsaved and of a saved package's snapshot, each failing with `ENOSPC`)
+      and `test_set_link_displays_copy_of_the_saved_file_leaves_nothing_when_its_note_fails`
+      (`test_link_display.py`): each left a snapshot with no note behind.
+    - **Cause:** a snapshot was written in steps (the copy, the re-stamp, the note) with nothing undoing
+      the earlier ones when a later one failed, and a snapshot without a note counts for every package.
+    - **Fix:** `_whole_or_none` (`snapshots.py`) wraps the steps and, on any failure, removes the
+      snapshot and its note, then re-raises; `snapshot_graph` and `set_link_display`'s copy of the file
+      on disk both use it. `set_link_display` fails before saving, so nothing is changed.
+    - **Also covered:** every writer of the snapshot folder: those two (fixed). `diff_graph`'s live copy
+      is in its own temporary folder, removed in a `finally`. Left as is: a copy Designer finishes after
+      the bridge call timed out (120 s) appears later without a note, as before.
+  - Note (2026-11-01): the `.json` half of `_whole_or_none`'s clean-up is untested (removing only the
+    `.sbs` passes every test: the failing `open` raises before a note exists); an orphan note is ignored by
+    every reader, so nothing depends on it.
+  - Questioned by SRV-46 (2026-11-01).
+
+- [x] **SRV-46 · `set_link_display` rewrites the user's own .sbs in place, so a write that fails partway leaves it truncated** · follows SRV-43, generation 7 · `mcp_server/server_tools/layout.py` (`set_link_display`, `tree.write(path, ...)`) · confirmed · verified by hand · found 2026-11-01
+  - **Defect.** After saving, the tool edits the file with `tree.write(path, encoding='UTF-8',
+    xml_declaration=True)`, which empties `path` before writing. SRV-43 fixed this pattern for the
+    snapshot folder only ("every writer of the snapshot folder"); the user's file is the most valuable
+    writer. On `main` too. (A code defect: an entry at any generation.)
+  - **Scenario.** The disk fills during the write: `a.sbs` is truncated; the package in Designer was just
+    saved, so `isModified()` is false and neither `quit_designer` nor Designer's close prompt warns; the
+    tool raises a bare `OSError` that doesn't say the file is damaged or that the live snapshot holds the
+    state. Rare (a full disk), but the loss is the user's file.
+  - **Fix.** Write to a temporary file in the same folder (keeping the file's mode), then `os.replace`
+    it over `path`; on failure remove the temporary file and raise a `ToolError` naming the live
+    snapshot, as `_reload_package_file` does. A unit test: the write fails with `ENOSPC`, the original
+    bytes are unchanged.
+  - **Resolution: done** (commit `f4dc89d`).
+    - **Test:** `test_set_link_display_never_leaves_the_users_file_half_written` (`test_link_display.py`):
+      a full disk in the project folder (the file opened, emptied, the write failing with `ENOSPC`); a
+      bare `OSError` escaped with `p.sbs` emptied. `test_set_link_display_reports_success_when_the_reopen_fails`
+      now also checks the edited file keeps its permissions (it fails with the `copymode` line removed:
+      the temporary file is created owner-only) and that no temporary file is left.
+    - **Cause:** the edited XML was written over the user's file in place, and `open(..., 'w')` empties
+      the file before writing.
+    - **Fix:** `_replace_file` (`layout.py`) writes to a temporary file in the same folder, copies the
+      file's permissions and renames it over the file (`os.replace`, atomic on one file system); on
+      failure it removes the temporary file and raises a `ToolError` saying the file is unchanged, with
+      the snapshot taken before. Nothing is reloaded then.
+    - **Also covered:** every write the tools make: the snapshot folder (`_whole_or_none`, SRV-43);
+      `install.py`'s `SKILL.md` (its own file), `node_stats`' raw buffer (a temporary file) and the example
+      script's own generated `.sbs` (rebuilt by re-running it): not the user's work, left as is. Live:
+      the self-test's `set_link_display` checks pass with it (329/329 in a fresh Designer).
+  - Questioned by SRV-48, SRV-49 (2026-11-01).
+  - Questioned by TST-107 (2026-11-02).
+
+
+- [x] **SRV-48 · A symlinked .sbs loses its link: `set_link_display` replaces the link with the edited file, and the real file never gets the edit** · follows SRV-46, generation 8 · `mcp_server/server_tools/layout.py` (`_replace_file`) · confirmed · verified by hand · found 2026-11-01
+  - **Defect.** `tempfile.mkstemp(..., dir=os.path.dirname(path))` then `os.replace(tmp, path)`: a rename
+    replaces the directory entry, so a symlink at `path` becomes a plain file and its target keeps the old
+    content. `main`'s `tree.write(path)` followed the link. (A regression of this branch's fix.)
+  - **Scenario.** A .sbs linked from a git or Dropbox folder: after `set_link_display`, the reload opens the
+    new plain file and every later save goes there; the real file silently falls behind. Measured on a
+    scratch copy by the reviewer; whether Designer reports the link's path or the target's from
+    `getFilePath()` decides how often it bites.
+  - **Fix.** Resolve the path first (`os.path.realpath`), so the temporary file sits next to the target and
+    replaces it; a unit test with a symlinked .sbs.
+  - **Resolution: done** (commit `f4dc89d`).
+    - **Test:** `test_set_link_display_edits_the_file_a_symlinked_sbs_points_to` (`test_link_display.py`): the
+      link became a plain file and the target kept the old content.
+    - **Cause:** the rename replaced the path's directory entry, which for a symlink is the link.
+    - **Fix:** `_replace_file` resolves the path (`os.path.realpath`) and writes the temporary file next to the
+      target, which it replaces; the link stays, and the reload still uses the path Designer knows.
+    - **Also covered:** the other reads of that path follow links already (`ET.parse`, the on-disk copy).
+
+  - Questioned by SRV-51 (2026-11-01).
 
 ## Low
 
@@ -3630,3 +4391,497 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
     - **Fix:** AGENTS.md's reminder names the two defaults this project doesn't follow (comprehensive
       coverage, service prefixes): few tools, node edits as `apply_edits` ops, unprefixed names. The
       paragraph is also split from the next one, which a previous edit had run together. Docs only.
+
+- [x] **HLP-46 · An add or bitmap op with a malformed `position` leaves its node behind** · follows HLP-30, generation 2 · `mcp_server/designer_helpers/edits.py` (`add_node`, `import_bitmap`, `_place`) · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** `_place` reads `position[0]` / `position[1]` after the node exists; only a failure in
+    `params` removes the node again (HLP-30). For a bitmap op the resource (and a copied file) stays too.
+  - **Scenario.** `{"op": "add", "definition": "levels", "position": [100]}` fails with "list index out
+    of range ... (its node was added before the failure)"; a retry adds a second node. The description
+    says a bad add leaves no node, which holds only for params.
+  - **Fix.** Check `position` (two numbers) before creating anything, or in `_check_batch`; a live check
+    counting nodes before and after.
+  - **Resolution: done** (commit `9dfb8e2`).
+    - **Test:** three rows in `safeguards.py`'s pre-check table (a malformed position in an add, a bitmap
+      and a move op): the add failed with "list index out of range ... (its node was added before the
+      failure)", the move "could not convert string to float", both after op 0 had run.
+    - **Cause:** the position was read after the node existed (`_place`), and a move's only when its op ran.
+    - **Fix:** `_position()` (helpers' `core.py`) checks [x, y] as two numbers; `_check_batch` checks
+      every add, bitmap and move position before any op runs; `add_node`, `import_bitmap`, `move_nodes`
+      and `add_comment` check theirs before creating or moving anything. The description says so.
+    - **Also covered:** `add_comment`'s free comment had the same order (created, then positioned): fixed;
+      `arrange_graph`'s `spacing` fails before anything moves: not affected.
+  - Questioned by HLP-50, TST-101 (2026-10-31).
+  - Note (2026-10-31, TST-101): `add_comment`'s position check (Also covered above) has no check of its own.
+
+- [x] **HLP-47 · `arrange_graph(node_ids=...)` drops unknown ids silently** · `mcp_server/designer_helpers/layout.py` (`arrange_graph`) · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** `nodes = [n for n in nodes if n.getIdentifier() in wanted]`: an id that matches no node is
+    ignored; `add_frame` (through `_nodes_bbox`) and `apply_edits` refuse one.
+  - **Scenario.** `node_ids=['12', '13', '1x4']` arranges two nodes and says "arranged 2 node(s)", with
+    no word about `1x4`.
+  - **Fix.** Refuse unknown ids before moving anything, as `_nodes_bbox` does; a live check with one bad
+    id confirming nothing moved.
+  - **Resolution: done** (commit `9dfb8e2`).
+    - **Test:** `layout.py`, "an unknown id is refused, nothing moved": it arranged 2 nodes and said
+      nothing about `no_such_node`.
+    - **Cause:** the ids were used as a filter.
+    - **Fix:** `arrange_graph` refuses an id that names no node before moving anything, as `add_frame`
+      does.
+    - **Also covered:** every helper taking `node_ids`: `describe_graph` filtered the same way; it only
+      reads, so it now lists them ("not found: ...", check "an unknown id in node_ids is named") rather
+      than refusing; `open_graph` and `add_frame` (`_nodes_bbox`) and `delete_nodes` already refused.
+
+
+- [x] **HLP-48 · `export_outputs` skips a requested output that computes no texture, without saying so** · `mcp_server/designer_helpers/save_export.py` (`export_outputs`) · plausible · found 2026-10-31
+  - **Defect.** `if texture is None: continue`; the name exists, so it isn't reported as missing (the
+    HLP-34 "nothing said" gap from another cause).
+  - **Scenario.** `outputs=['baseColor', 'normal', 'height']` with nothing connected to `height`'s output
+    node: "exported 2 file(s)" and nothing more. Assumes an unconnected output computes to None (not
+    measured).
+  - **Fix.** Measure it; then list the outputs that computed nothing, or refuse when all did.
+  - **Resolution: not reproduced** (commit `9dfb8e2`).
+    - **Test:** `render.py`, "an output computing no image is named, not skipped silently": an output
+      node with nothing connected, exported with `height`: it passed before any change.
+    - **Why not:** an unconnected output node still computes an image, and is exported ("exported 2
+      file(s)"); the `texture is None` branch wasn't reached.
+    - **Fix (defensive):** the branch is real code, so outputs that computed no image are now listed
+      ("computed no image, not exported: ..."), also in the "no outputs exported" error.
+  - Questioned by TST-100 (2026-10-31).
+
+- [x] **SRV-35 · A failed `apply_edits` batch loses the ids of the nodes it already added** · `mcp_server/server_tools/core.py` (`_checked`), `designer_helpers/batch.py` · plausible · found 2026-10-31
+  - **Defect.** The helper prints `ref 'lv' = <id>` per add, but on a later failure `_checked` keeps only
+    the error's last line ("op 3 (connect) failed: ... ops 0-2 were applied"), which has no ids.
+  - **Scenario.** A batch adds two nodes, then fails on a wrong connector id; an agent resubmitting the
+    corrected batch leaves duplicate nodes unless it runs `describe_graph` first.
+  - **Fix.** Put the refs into the failure message ("ops 0-2 were applied (refs: {'lv': '123'})"); a live
+    check.
+  - **Resolution: done** (commit `9dfb8e2`).
+    - **Test:** `batch.py`, "a failed batch names the nodes it added": the error ended "ops 0-0 were
+      applied", without the added node's id.
+    - **Cause:** the refs were printed as the batch ran, but `_checked` keeps only the error's last line.
+    - **Fix:** the failure message adds "(refs: {...})" when refs were set; the description says so.
+  - Questioned by HLP-49 (2026-10-31).
+
+- [x] **TST-95 · `test_an_empty_token_file_does_not_open_the_bridge` can't fail** · `tests/unit/test_plugin.py` · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** It signs with a fixed nonce (`expected_auth('', 'anything')`), and `_call` adds no auth
+    of its own for an empty secret, so the request never matches the per-connection nonce whatever the
+    server's token is: a server that kept an empty token would still answer "invalid token" (the reviewer
+    checked: `_load_token` patched to return `''` still passes).
+  - **Fix.** Sign with the empty secret over the nonce the plugin sent; check the test fails with
+    `_load_token` returning `''`. (The `len(token) < 32` guard itself is covered by
+    `test_empty_or_short_token_is_replaced`.)
+  - **Resolution: done** (commit `9dfb8e2`).
+    - **Test:** with `_load_token` patched to return '' (the guard gone), the old request (a fixed nonce)
+      still got "invalid token", while one signed with the empty token over the real nonce was accepted.
+    - **Fix:** `_call` takes `sign_empty`, signing with an empty token over this connection's nonce; the
+      test uses it, so it fails if the bridge ever keeps an empty token.
+
+
+- [x] **TST-96 · `test_no_code_spells_out_the_name` passes without checking a file when `git ls-files` fails** · `tests/unit/test_constants.py` · confirmed · found 2026-10-31
+  - **Defect.** `subprocess.run(['git', 'ls-files'], ...).stdout.split()` with no return-code check: no
+    `.git` (a zip download of the repo) or no git gives an empty list, and the loop passes vacuously.
+  - **Fix.** Assert the command succeeded and listed files, or fall back to walking the tree.
+  - **Resolution: done** (commit `9dfb8e2`).
+    - **Test:** with `GIT_DIR=/nonexistent`, git listed no file and the test passed.
+    - **Fix:** `_repo_files()` falls back to walking the tree (minus the venv and caches) when git can't
+      list the files, and the test asserts it scanned more than 50 files; with and without git it scans
+      the same Python files.
+
+
+- [x] **TST-97 · The "library graphs are not user graphs" check doesn't confirm a library graph is loaded** · `tests/test_all_tools/lookup.py` · confirmed · found 2026-10-31
+  - **Defect.** `find_graph` raises the same "not found" whether `bevel.sbs` is loaded and skipped or not
+    loaded at all; the check relies on an earlier `describe_node` having loaded it.
+  - **Scenario.** If that earlier call stopped leaving it loaded, the check would pass even with the
+    library filter gone.
+  - **Fix.** In the same check, require `bevel.sbs` among the loaded packages (`libs(c)`), else fail or
+    skip as "precondition not met".
+  - **Resolution: done** (commit `9dfb8e2`).
+    - **Fix:** the check requires `bevel.sbs` among the loaded library packages (`libs(c)`) as well as the
+      refusal; it passes today (the precondition holds), and would fail rather than pass vacuously if it
+      stopped holding.
+
+
+- [x] **TST-98 · ROADMAP item 5 lists as future work what `uninstall.py` already does** · `ROADMAP.md` (item 5), `AGENTS.md` (registration note) · confirmed · verified by hand · found 2026-10-31
+  - **Defect.** Item 5's approach says "`uninstall.py` removes a user-scope registration too"; it already
+    does (`uninstall.py`'s docstring and its `('user', None)` branch; README, Uninstall). AGENTS.md's
+    summary ("removes the skill, the plugin, the token and every folder's local registration") leaves
+    user scope out.
+  - **Fix.** Item 5: uninstall already handles it; the item is the installer's question, its flag and the
+    docs. AGENTS.md: "and a user-scope one".
+  - **Resolution: done** (commit `9dfb8e2`).
+    - **Fix:** ROADMAP item 5 says `uninstall.py` already removes a user-scope registration; the work is
+      the installer's question, its flag and the docs. AGENTS.md's summary of `uninstall.py` names the
+      user-scope registration. Docs only.
+
+- [x] **PLG-28 · A long or stuck `__del__` can no longer be timed out or cancelled** · follows PLG-25, generation 2 · `plugin/sd_claude_bridge_kve/sd_claude_bridge_kve/__init__.py` (`_in_finalizer`) · confirmed (outside Designer) · found 2026-10-31
+  - **Defect.** The tracer never raises while a `__del__` is on the stack, so code running long inside
+    one isn't aborted; `main`'s plugin aborted it.
+  - **Scenario.** A `__del__` looping 3 s, 0.3 s timeout: 3.0 s and `ok=True`, no abort reported; an
+    endless one leaves Designer frozen and `cancel_designer_job` without effect.
+  - **Fix.** Cap the deferral (a few checks or a short grace time), then raise anyway and rely on the
+    hook; report a deferred abort as aborted at the end.
+  - **Resolution: done** (commit `ce095f4`).
+    - **Test:** the "a long finalizer" cases of `test_an_abort_survives_finalizers_that_raise_or_run_long`
+      (a 3 s `__del__`, 0.2 s timeout or cancel): 3 s, `ok=True`.
+    - **Cause:** the tracer waited while any `__del__` was on the stack (`_in_finalizer`).
+    - **Fix:** the wait is gone: an abort raised in a `__del__` ends it, is dropped there, and the hook
+      raises it again in the code around it. That also made the `dropped` backstop unneeded; both removed
+      (TST-99).
+
+- [x] **SRV-37 · `list_snapshots` can't tell unsaved packages apart** · follows SRV-34, generation 2 · `mcp_server/server_tools/snapshots.py` (`list_snapshots`, `diff_graph`'s errors) · confirmed · found 2026-10-31
+  - **Defect.** Every unsaved package's snapshot reads "from (an unsaved package)", though the note
+    holds its UID; and `diff_graph`'s "no snapshots for New_Graph" shows while `list_snapshots` lists
+    another package's, without saying "for this package".
+  - **Fix.** Show the UID for unsaved packages; say "for this package" in the `latest` and label errors.
+  - **Resolution: done** (commit `ce095f4`).
+    - **Test:** `test_snapshots_of_two_packages_with_one_graph_name_stay_apart`: two unsaved packages listed
+      the same way; the error didn't say "for this package".
+    - **Fix:** `list_snapshots` shows an unsaved package's UID; `diff_graph`'s `latest` and label errors say
+      "for this package" (the self-test's wording check follows).
+
+- [x] **HLP-50 · Positions given as numeric strings are now refused** · follows HLP-46, generation 3 · `mcp_server/designer_helpers/core.py` (`_position`) · confirmed · found 2026-10-31
+  - **Defect.** `isinstance(v, (int, float))`: `["100", "200"]`, which `main` accepted (`float(...)`), now
+    refuses the whole batch; the `set` op converts numeric strings, and HLP-11 accepted them for enums.
+  - **Fix.** Accept anything `float()` converts, except bools; keep "two items" and the order; a row for
+    `["100", "200"]`. (A defect in the tools' code: an entry at any generation.)
+  - **Resolution: done** (commit `ce095f4`).
+    - **Test:** `batch.py`, "add: a position as numeric strings" (`['100', '-200.5']`): refused.
+    - **Fix:** `_position` takes anything `float()` reads, two items, no bools; checked before anything is
+      made, as before (the malformed-position rows still refuse `[100]`, `'left'`, `[1, 'x']`).
+  - Questioned by HLP-51 (2026-10-31).
+
+- [x] **TST-99 · Two of PLG-25's three mechanisms have no test that fails without them** · follows PLG-25, generation 2 · `tests/unit/test_plugin.py` (`test_an_abort_landing_in_a_finalizer_still_stops_the_script`) · confirmed · found 2026-10-31
+  - **Defect.** Measured on modified copies of the plugin: without `_in_finalizer` (raising in a
+    `__del__` too) 0 of 32 runs fail, the hook alone covering it; without the `dropped` backstop, 0 of 32.
+  - **Fix.** A unit test per mechanism (the tracer called with a frame inside `__del__` at a check tick:
+    no raise; a script whose last event is the dropped abort: reported aborted), or remove what nothing
+    needs and narrow the resolution and `_make_tracer`'s docstring.
+  - **Resolution: done** (commit `ce095f4`).
+    - **Fix:** the two untested mechanisms (`_in_finalizer`, the `dropped` backstop) are gone with PLG-28's
+      fix; each guard of the reworked tracer was removed once and a test failed: the plugin's own frames
+      skipped (2 tests), the previous hook called untraced (the Python-hook test), tracing put back as it
+      was (the cleanup test).
+  - Questioned by TST-103 (2026-10-31).
+  - Questioned by TST-104 (2026-10-31).
+
+- [x] **TST-100 · HLP-48's check passes whether or not the output was exported** · follows HLP-48, generation 2 · `tests/test_all_tools/render.py` · confirmed · found 2026-10-31
+  - **Defect.** `'mcp_empty' in text(r_)` matches the exported file, the "computed no image" line and the
+    HLP-34 "no output named mcp_empty" line alike; if the snippet failed or the identifier didn't take,
+    the check passes having measured nothing, and the resolution's "an unconnected output still computes
+    an image" rests on it.
+  - **Fix.** Require the node to have been made and `'mcp_empty.png' in text(r_)` (the measured fact).
+  - **Resolution: done** (commit `ce095f4`).
+    - **Fix:** the check requires the output node to have been made and `mcp_empty.png` among the
+      exported files, which pins the fact HLP-48's "not reproduced" rests on; it passes.
+
+- [x] **TST-101 · HLP-46's resolution says `add_comment` was fixed; no check covers it** · follows HLP-46, generation 3 · `REVIEW.md` (HLP-46's Also covered) · confirmed · found 2026-10-31
+  - **Defect.** `add_comment(position=[100])` is reachable (the tool's `list[float]` lets it through);
+    no check exercises it.
+  - **Fix (generation 3: narrow the claim).** Say in the resolution that `add_comment`'s change is
+    untested, or drop the claim. No new check.
+  - **Resolution: done** (commit `ce095f4`).
+    - **Fix (narrowed, generation 3):** a note under HLP-46 says `add_comment`'s position check has no check
+      of its own. No new check.
+
+- [x] **PLG-30 · After a dropped abort, a loop driven by C code ignores the timeout, and the resume list grows without end** · follows PLG-27, generation 3 · `plugin/sd_claude_bridge_kve/sd_claude_bridge_kve/__init__.py` (the tracer's `resume`, the hook) · confirmed (outside Designer) · found 2026-10-31
+  - **Defect.** Only frames on the stack when the abort was dropped are resumed; in a loop driven from C
+    (`deque(map(Obj, it), maxlen=0)`, `sum(map(...))`) the only such frame is the module frame, blocked in
+    the C call, so the abort waits for it to return; and each drop appends that frame again, so `frame in
+    resume` grows quadratically (40k passes: 4.5 s instead of 0.06 s; 300k: 124 s). (A code defect.)
+  - **Fix.** After a re-arm, raise at the next traced event in any frame (a finalizer drops it again and
+    re-arms; one outside gets it); keep `resume` free of duplicates.
+  - **Resolution: done** (commit `00730cd`).
+    - **Test:** unit `test_an_abort_stops_a_loop_driven_by_c_code` (`deque(map(Obj, range(2e5)))`, 8 events per
+      pass, 0.2 s timeout). Measured on the old plugin with a probe of the same loop: 150k passes took 3.6 s,
+      300k 124 s, aborting only when the C call returned; after the fix both 0.2 s.
+    - **Cause:** after a re-arm only frames already running (a list, appended to on every drop) could raise,
+      and in a C-driven loop the only one is blocked in the C call.
+    - **Fix:** the list is gone: a re-arm sets `pending`, and the next traced event raises, wherever it is (a
+      finalizer drops it again and re-arms, until it lands outside one). Setting `f_trace` on the running
+      frames turned out unneeded: without it no test failed, and a probe of the in-script and
+      imported-module loops on Python 3.12 and Designer's 3.13 stopped all 16 runs at 0.2 s; removed.
+    - **Also covered:** each remaining guard was removed once: the tracer's own-file skip (3 tests fail), the
+      pending raise (9), the excepthook re-arm (1), the unraisable previous hook untraced (1), tracing put back
+      as it was (1).
+
+- [x] **SRV-39 · After a Save As, a package's own earlier snapshots aren't "this package's"** · follows SRV-36, generation 3 · `mcp_server/server_tools/snapshots.py` (`_from_package`, `diff_graph`'s refusals) · confirmed (code path) · found 2026-10-31
+  - **Defect.** The note's file P never equals the new path P2, though the UID is measured unchanged by
+    Save As: `latest` and labels refuse with "take one with snapshot_graph", which points the agent the
+    wrong way; on `main` both found them.
+  - **Fix.** Accept the same UID when the noted file isn't open as another package; at least, the refusal
+    says snapshots of this graph from other packages exist (diff them by path), and the docstring states it.
+  - **Resolution: done** (commit `00730cd`).
+    - **Test:** the same test's Save As case: the refusal said only "take one with snapshot_graph".
+    - **Fix:** the `latest` and label refusals say how many snapshots of the graph came from other packages
+      ("e.g. before a Save As: list_snapshots shows them; diff against one by its path"); `diff_graph`'s
+      description says a Save As starts a new package for this. Matching a Save As by UID would need to know
+      which packages are open (a copy shares the UID): not done.
+  - Questioned by SRV-41 (2026-10-31).
+
+- [x] **TST-102 · AGENTS.md's UID fact says more than its check measures** · follows SRV-36, generation 3 · `AGENTS.md` (sd API gotchas), `snapshots.py` (`_from_package`'s docstring), `tests/test_all_tools/facts.py` · confirmed · found 2026-10-31
+  - **Defect.** "shared by every copy of the file (a loaded copy, a snapshot)": the probe takes no
+    snapshot (`saveCopyOfPackageAs`) and doesn't check the loaded copy is a separate package. Found by
+    two reviewers.
+  - **Fix (generation 3: narrow).** "shared by a copy of the file loaded again"; the docstring the same.
+  - **Resolution: done** (commit `00730cd`).
+    - **Fix (narrowed):** AGENTS.md: "shared by a copy of the file loaded again" (what the probe measures), no
+      snapshot named; `_from_package`'s docstring likewise, and a recovered snapshot "may keep" the UID.
+  - Note (2026-10-31): the UID probe still doesn't check that `loadUserPackage(C)` gave a separate package, and its label still says "copies"; nothing depends on it (the file decides first).
+
+- [x] **TST-103 · PLG-26's and TST-99's resolutions say every guard has a test; one has none** · follows TST-99, generation 3 · `REVIEW.md` (PLG-26, TST-99), the plugin's hook (`if frame.f_code.co_filename != _OWN_FILE:` in its frame walk) · confirmed · found 2026-10-31
+  - **Defect.** Removing the hook's own-file skip fails no test: the tracer already returns at once for the
+    plugin's frames, so the skip is redundant.
+  - **Fix (generation 3: narrow).** Say so in a note, or drop the redundant skip. No new check.
+  - **Resolution: done** (commit `00730cd`).
+    - **Fix:** the redundant skip is gone with the whole frame walk (PLG-30's fix); the guards left each have
+      a test that fails without them (PLG-30's Also covered).
+
+- [x] **SRV-41 · The label refusal counts the package's own snapshots as "from other packages"** · follows SRV-39, generation 4 · `mcp_server/server_tools/snapshots.py` (`_others`) · confirmed · found 2026-10-31
+  - **Defect.** `n = len(_snapshots(graph_id))` counts all of the graph's snapshots; right for `latest` (this
+    package has none then), wrong for an unknown label, where the package may have its own. Found by two
+    reviewers.
+  - **Scenario.** A package with 2 snapshots of its own: `diff_graph(against='nolabel')` says "(2 from other
+    packages, e.g. before a Save As ...)", sending the agent after a Save As that never happened.
+  - **Fix.** Count the others only (all minus this package's); a case with a label refusal and own snapshots.
+  - **Resolution: done** (commit `f0b2bd5`).
+    - **Test:** the same test's label refusal with one snapshot of its own and others': the count included
+      its own.
+    - **Fix:** `_others` takes the package and counts all the graph's snapshots minus its own.
+
+- [x] **TST-104 · The resolutions say the cleanup test guards "tracing put back as it was"; it doesn't** · follows TST-99, generation 4 · `REVIEW.md` (PLG-26, TST-99, PLG-30), `tests/unit/test_plugin.py` (`test_cleanup_after_an_abort_runs_to_the_end_despite_a_raising_finalizer`) · confirmed · found 2026-10-31
+  - **Defect.** With `untraced` putting the tracer back on instead of what was there, all 53 plugin tests
+    pass, the cleanup test included (its cleanup loop's only Python frames are the raising `__del__`s);
+    removing the restore entirely fails 3 tests, not the cleanup one. PLG-30's count for the unraisable
+    hook's untraced call is 3, not 1.
+  - **Fix (generation 4: narrow).** A note under PLG-26 correcting the counts: "tracing put back as it was"
+    has no test of its own direction; the untraced previous hooks have 3. No new check.
+  - **Resolution: done** (commit `f0b2bd5`).
+    - **Fix (narrowed, generation 4):** a note under PLG-26 corrects the counts: "tracing put back as it was"
+      has no test of its own direction (the cleanup test passes with the tracer put back on); calling the
+      unraisable previous hook untraced has 3 failing tests, not 1. No new check.
+
+- [x] **HLP-52 · A failed batch lists a node a later op of the batch deleted as "added"** · follows HLP-49, generation 3 · `mcp_server/designer_helpers/batch.py` (`made`) · confirmed · found 2026-10-31
+  - **Defect.** `made` only grows; a `delete` op never takes its node out. (A misreported result: an entry.)
+  - **Scenario.** `[add levels ref a, delete a, set <node> bad value]` fails with "ops 0-1 were applied
+    (added: 123 (ref 'a'))", but 123 is gone. Harmless in effect: a retry naming 123 is refused by the
+    pre-check, nothing changed.
+  - **Fix.** Drop a deleted node from `made` (or mark it "deleted later").
+  - **Resolution: done** (commit `f4dc89d`).
+    - **Test:** `batch.py`, "a failed batch leaves out a node it already deleted": it listed it as added.
+    - **Fix:** a `delete` op takes its node out of the list of added nodes.
+
+- [x] **SRV-44 · `_fresh_uid`'s comment gives a reason that no longer applies, and its docstring has a garbled phrase** · follows SRV-42, generation 6 · `mcp_server/server_tools/snapshots.py` (`_fresh_uid`) · confirmed · found 2026-11-01
+  - **Defect.** `# the timestamps stay: a copy of an older saved file must never sort as the latest (SRV-1)`:
+    under Option 1b `_fresh_uid` only runs on a snapshot `saveCopyOfPackageAs` has just written, never on
+    a copy of an older file (`set_link_display`'s copy isn't re-stamped any more). The docstring's "a file
+    without its own UID where measured is left alone" means "where expected".
+  - **Fix (generation 3+, docs only: narrow).** Say only that the re-stamp keeps the file's date (its
+    order among snapshots doesn't change), and fix the phrase.
+  - **Resolution: done** (commit `f4dc89d`). The comment says only that the date stays (the
+    snapshot's place among the others); "where measured" became "where expected". Wording only, no test.
+
+
+- [x] **TST-105 · SRV-42's test comment and REVIEW.md resolution say more than Option 1b and the tests show** · follows SRV-42, generation 6 · `tests/unit/test_snapshots.py` (`test_a_snapshot_gets_a_fresh_uid_and_a_recovered_copy_saved_elsewhere_stays_apart`), `REVIEW.md` (SRV-42, "Test:") · confirmed · found 2026-11-01
+  - **Defect.** The test's comment says "Each snapshot now gets a fresh <fileUID>", but only unsaved
+    packages' do (in the test itself, R's snapshot keeps its UID). The resolution's "Test:" bullet lists
+    the new `_NOTE_CASES` row as failing evidence, but `_from_package` didn't change: the row passes on
+    `HEAD` too (a different UID was never "own").
+  - **Fix (generation 3+, tests and docs only: narrow).** "A snapshot of an unsaved package now gets a
+    fresh <fileUID>"; and say the row records the case rather than failing first.
+  - **Resolution: done** (commit `f4dc89d`). The test comment says "A snapshot of an unsaved
+    package now gets a fresh <fileUID>"; SRV-42's "Test:" bullet says the `_NOTE_CASES` row records the
+    case and passes without the fix too. Wording only, no test.
+
+- [x] **SRV-45 · `list_snapshots` names an unsaved package by a UID no other tool shows** · `mcp_server/server_tools/snapshots.py` (`list_snapshots`) · confirmed · found 2026-11-01
+  - **Defect.** `'(an unsaved package, UID %s)' % note.get('uid')`; the UID is printed only internally
+    (`PACKAGE_UID=`); `designer_status` and `describe_graph` don't show it.
+  - **Scenario.** Two unsaved packages, each with a `New_Graph` (SRV-34's case): `list_snapshots` shows two
+    UIDs, and the agent can't tell which open package each is, so it can't pick a snapshot path for
+    `diff_graph`. `'latest'` still picks the right one.
+  - **Fix.** Show the UID of unsaved packages in `designer_status`'s package list (or mark, in
+    `list_snapshots`, which snapshots belong to the graph in the editor).
+  - **Resolution: done** (commit `f4dc89d`).
+    - **Test:** `lookup.py`, with two unsaved packages named alike: "the refusal names each unsaved package
+      by its UID" (it said "never saved, never saved") and "designer_status: unsaved packages listed by
+      their UID" (it said "(unsaved)"; the first version of this check passed on an empty set and was
+      made to require both UIDs).
+    - **Fix:** `designer_status` and `find_graph`'s ambiguity refusal (`_package_name`, `core.py`) name an
+      unsaved package "(an unsaved package, UID ...)", as `list_snapshots` does.
+    - **Also covered:** every place a tool names a package: those two (fixed) and `list_snapshots`
+      (already). `quit_designer`'s refusal lists unsaved packages for the user to save, where a UID
+      doesn't help (left as is).
+
+- [x] **HLP-54 · `_same_graph`'s rules for a saved and an unsaved package, and for two unsaved ones, have no test** · follows HLP-53, generation 2 · `mcp_server/designer_helpers/core.py` (`_same_graph`) · confirmed · verified by hand · found 2026-11-01
+  - **Defect.** Nothing in `tests/unit` touches `_same_graph`, and the live check covers two saved copies
+    of one file only. `if fa and fb:` in place of `if fa or fb:` (the old behaviour for a saved and an
+    unsaved package with one UID) fails no test.
+  - **Scenario.** An unsaved package U and a snapshot of U taken before SRV-42 (it keeps U's UID) open
+    together, the snapshot in the editor: with that mutation `find_graph` returns U's graph again.
+  - **Fix.** A unit test with fake graphs and packages (as `test_quit_fallback.py` fakes Qt): one file
+    under two spellings, two files, a file and none with one UID, two unsaved with equal and different
+    UIDs.
+  - **Resolution: done** (commit `f4dc89d`).
+    - **Test:** `tests/unit/test_same_graph.py`, the helpers run with `sd` and PySide6 faked (as
+      `test_quit_fallback.py` does): one package, one file under two spellings, a copy of the file, saved and
+      never saved with one UID (both ways round), two never saved with one UID and with two, two graphs of
+      one package, no graph. The code was right, so all passed; with the finding's mutation (`if fa and fb:`)
+      the two "saved and never saved" cases fail.
+    - **Fix:** none needed in the code; the rules are now tested.
+
+  - Note (2026-11-01): no case has two never-saved packages both with an empty UID; dropping
+    `bool(pa.getUID())` passes every test (every package has a UID in practice).
+
+- [x] **SRV-47 · A snapshot opened to recover and saved in place becomes its package's `latest`, with the edited content** · `mcp_server/server_tools/snapshots.py` (`_snapshots`, `_from_package`) · plausible · found 2026-11-01
+  - **Defect.** A snapshot's note keeps naming its package whatever happens to the file later, and
+    `latest` is the newest by modification time. On `main` too.
+  - **Scenario.** The agent snapshots `a.sbs` (s1), later s3 before a risky edit. The user opens s1 to
+    recover a node and presses Ctrl+S (saved in place, in the snapshot folder): s1 is now the newest and
+    still noted for `a.sbs`, so `diff_graph('latest')` on A diffs against the user's edited s1, and
+    `list_snapshots` shows it as A's. `uninstall.py --remove-snapshots` later deletes it, with whatever
+    the user saved into it.
+  - **Fix.** Measure first whether Designer refuses or prompts when saving over a read-only file; then
+    make snapshots read-only once written (a recovery goes through Save As), or record size and time in
+    the note and skip a snapshot changed since.
+  - **Resolution: done** (commit `f4dc89d`).
+    - **Test:** `test_a_snapshot_saved_in_place_since_is_not_its_packages_latest` (`test_snapshots.py`): the
+      snapshot saved over after a later one counted as the package's own and newest; and
+      `test_remove_snapshots_keeps_one_saved_over_since` (`test_uninstall.py`): both snapshots were deleted.
+    - **Cause:** a note named the snapshot's package forever, with nothing to tell that the file had been
+      saved over since.
+    - **Fix:** without measuring Designer (the read-only idea would need it: a modal "read-only" prompt
+      could block the bridge): `_note_package` also records the snapshot's size and modification time as
+      written; `_changed_since` compares them. A changed snapshot is left out of a package's snapshots
+      (`latest`, labels), still listed by `list_snapshots` and marked "changed since it was taken"; diffing
+      against it by path still works. `uninstall.py --remove-snapshots` keeps it, with its note, and names
+      it. A note from before this has no size and time: not changed, as before.
+    - **Also covered:** every writer of notes: `snapshot_graph` (after the re-stamp, which keeps the time) and
+      `set_link_display`'s copy of the file on disk (after the copy, which keeps the original's time).
+      Live: the self-test's `diff_graph('latest')` checks pass (329/329), so a snapshot is complete when its
+      note records it. README's uninstall section and `list_snapshots`' docstring say so.
+  - Questioned by SRV-50 (2026-11-01).
+  - Questioned by TST-108 (2026-11-02).
+
+
+- [x] **SRV-49 · `_replace_file` creates its temporary file outside the `try`, so a folder it can't write to gives a bare `OSError`** · follows SRV-46, generation 8 · `mcp_server/server_tools/layout.py` (`_replace_file`) · confirmed · found 2026-11-01
+  - **Defect.** `fd, tmp = tempfile.mkstemp(...)` runs before `try:`; its error isn't turned into the
+    `ToolError` that says the file is unchanged. (A misreported result: an entry.)
+  - **Scenario.** A .sbs the user can write in a folder they can't: a bare `PermissionError` for
+    `.p.sbs.XXXX.tmp` (measured by the reviewer), not "unchanged, the snapshot is ...". `main` wrote in place
+    and succeeded there.
+  - **Fix.** Create the temporary file inside the `try` (`tmp = None` first); a unit test. Optionally clean up
+    on any exception, not only `OSError`.
+  - **Resolution: done** (commit `f4dc89d`).
+    - **Test:** `test_set_link_display_in_a_folder_it_cant_write_reports_the_file_unchanged`: a bare
+      `PermissionError` for the temporary file.
+    - **Fix:** the temporary file is created inside the `try`; any exception removes it, and a file error
+      becomes the `ToolError` saying the file is unchanged (others are raised as they are). The docstring says
+      only the permission bits are kept (not the owner, ACLs or Finder tags). Live: 329/329.
+
+
+- [x] **SRV-50 · A refusal counts this package's own snapshots saved over since as "from other packages"** · follows SRV-47, generation 2 · `mcp_server/server_tools/snapshots.py` (`_others`) · confirmed · verified by hand · found 2026-11-01
+  - **Defect.** `n = len(_snapshots(graph_id)) - len(_snapshots(graph_id, package))`: since SRV-47 the package's
+    own list leaves out its changed snapshots, so they are counted as other packages'. Found by both reviewers.
+  - **Scenario.** A's only snapshot was saved in place: `diff_graph('latest')` refuses with "(1 from other
+    packages, e.g. before a Save As ...)", which is false (measured by a reviewer).
+  - **Fix.** Count this package's changed snapshots apart ("1 of this package's was saved over since it was
+    taken; diff against it by its path"); a unit test.
+  - **Resolution: done** (commit `f4dc89d`).
+    - **Test:** `test_a_refusal_counts_this_packages_snapshots_saved_over_apart` (`test_snapshots.py`): "1 from
+      other packages" for the package's own snapshot saved over.
+    - **Fix:** `_others` counts this package's snapshots saved over since apart ("1 of this package saved over
+      since it was taken"), next to other packages' when there are both.
+
+
+- [x] **TST-106 · New docs and test labels say more than the tests or measurements show** · `README.md` (uninstall), `mcp_server/server_tools/snapshots.py` (`list_snapshots`), `tests/test_all_tools/facts.py` (the Dot check), `AGENTS.md` (Portals; Designer UI), `ROADMAP.md` (item 8) · confirmed · found 2026-11-01
+  - **Defect.** (1) README and `list_snapshots` say a snapshot saved in place is kept / marked, but only
+    snapshots whose notes record size and time (taken from now on) can be told: older ones are deleted and
+    never marked. (2) The facts check says portal IDs "live in the file only", but Designer holds them in
+    memory (the Name field writes them live); they just aren't exposed to the API. (3) AGENTS.md credits
+    "designer facts" for "a plain connection" too (only the "no ID property" part is checked), and the
+    `setSelected(True)` sentence isn't marked as seen by hand. (4) ROADMAP item 8 says 365 exported `SD*`
+    functions; there are 401, the same set Python wraps (recounted by hand: `nm`, `comm`, no difference).
+  - **Fix (docs only: narrow).** Say "a snapshot taken since this version"; "not exposed to the API"; move
+    "designer facts" to the property clause and mark the rest "seen by hand"; 401 (or no number).
+  - **Resolution: done** (commit `f4dc89d`). Narrowed: README and `list_snapshots` say the check
+    covers snapshots taken by this version (older ones can't be told apart); the facts check says portal IDs
+    aren't exposed to the API; AGENTS.md keeps "designer facts" for the property clause, marks the plain
+    connection and `setSelected` as seen by hand, and defers the restart advice to "ask first" on the user's
+    Designer; ROADMAP item 8 says 401 functions and that the file edit was made safe. Wording only.
+
+- [x] **SRV-51 · A hard-linked .sbs: `set_link_display`'s rename leaves the file's other names with the saved content** · follows SRV-48, generation 9 · `mcp_server/server_tools/layout.py` (`_replace_file`) · confirmed · found 2026-11-01
+  - **Defect.** `os.replace(tmp, real)` gives the path a new file; another hard-linked name of the old file
+    keeps it (`realpath` doesn't follow hard links). `main`'s in-place write updated every name. (A regression
+    of SRV-46's fix, measured by the reviewer's probe: `a.sbs` new, `b.sbs` old.)
+  - **Scenario.** A .sbs with a second hard-linked name (a `cp -al` backup tree, a deduplicating tool): after
+    `set_link_display` the other name still has the portals as they were. Rare.
+  - **Fix.** When `os.stat(real).st_nlink > 1`, say so (or write in place as `main` did, accepting the
+    half-written risk there); at least a docstring line. A unit test with a hard link.
+  - **Resolution: done** (commit `f4dc89d`).
+    - **Test:** `test_set_link_display_edits_every_name_of_a_hard_linked_sbs` (`test_link_display.py`): the other
+      name kept the saved file; and `test_a_hard_linked_sbs_that_cant_be_written_keeps_the_edit_and_says_where`
+      (the write into the file failing): no error, nothing kept. Both fail with the new branch disabled.
+    - **Cause:** a rename gives a path a new file; a hard link's other names keep the old one.
+    - **Fix:** `_replace_file`: when the file has other hard-linked names (`st_nlink > 1`), the complete
+      temporary file is copied into it in place (every name gets the edit) and then removed; if that copy
+      fails, the temporary file is kept and the `ToolError` names it and the snapshot (the file may be
+      incomplete then). Other files are still replaced by a rename. Live: 329/329.
+    - **Also covered:** the round's notes: `_replace_file`'s docstring now says only a file error gives the
+      "unchanged" message; the plural reads "2 of this package's own, saved over since taken"; ROADMAP item 8's
+      doubled "by `nm`" and open parenthesis. SRV-50's test still passes with `_from_package` dropped from the
+      saved-over count: left as a note (a stronger check at generation 3 is against the chain rule).
+  - Questioned by SRV-52, TST-107 (2026-11-02).
+
+- [x] **SRV-52 · A hard-linked .sbs: a failed clean-up after the edit landed says the file is unchanged** · follows SRV-51, generation 10 · `mcp_server/server_tools/layout.py:188` (`_replace_file`) · confirmed · verified by hand · found 2026-11-02
+  - **Defect.** After `shutil.copyfile(edited, real)` succeeds, `os.remove(edited)` is still inside the outer `try`,
+    with `tmp` already `None`: its `OSError` reaches the handler that says "%s is unchanged, as saved just before".
+  - **Scenario.** A hard-linked .sbs whose folder turns read-only during the copy, or whose temporary file another
+    process removes first. Rare. Every name holds the edit, but the tool says it's unchanged, skips the reload (so
+    Designer shows the old graph over the edited file) and leaves an unnamed temporary file. Probed, with a real
+    `chmod 555`: "`p.sbs` is unchanged", `p.sbs` edited, nothing reloaded.
+  - **Fix.** `with contextlib.suppress(OSError): os.remove(edited)`: the edit landed, so the reload goes ahead, and
+    a stray temporary file does no harm. A unit test with the removal failing.
+  - **Resolution: done** (commit `f4dc89d`).
+    - **Test:** `test_a_hard_linked_sbs_whose_temporary_file_cant_be_removed_still_counts_as_edited`
+      (`test_link_display.py`): failed with "could not write the edited package ... is unchanged" while the file
+      held the edit; fails the same way with the fix taken out.
+    - **Cause:** the removal was inside the `try` whose handler speaks for a file not yet written, though by then
+      the edit was in.
+    - **Fix:** `_replace_file` ignores a failed removal there: the result is the normal success and the reload
+      runs. The temporary file stays, unnamed (hidden, `.p.sbs.*.tmp`). Live: 329/329.
+    - **Also covered:** other work after a completed write inside a handler that reports failure: `os.replace` is
+      the last step of its branch; `_fresh_uid`'s `os.utime` and `_copy_sbs`' `copystat` are in snapshot code,
+      where `_whole_or_none` removes the copy and the failure is true.
+
+- [x] **TST-107 · `_replace_file`'s docstring and SRV-46's test say more than they show** · follows SRV-51, generation 10 · `mcp_server/server_tools/layout.py:164-171`, `tests/unit/test_link_display.py:151-156` · confirmed · verified by hand · found 2026-11-02
+  - **Defect.** (1) "never half written" and "not its owner, ACLs or Finder tags" read as true of every file, but
+    hold only for the rename: a hard-linked file can be left half written (measured: both names at 4096 of 80065
+    bytes) and keeps its metadata (an xattr, measured). (2) "so every name gets the edit" assumes Designer's save
+    keeps the hard link, which nothing measures (the unit tests fake the save, and no live check has a hard link);
+    if the save breaks it, `st_nlink` is 1 and the rename runs. (3)
+    `test_set_link_display_never_leaves_the_users_file_half_written` fails the write of the temporary file, so it
+    reaches neither the rename nor the in-place branch: `st_nlink >= 1` and a non-atomic copy for `os.replace` both
+    pass every test.
+  - **Fix (docs and test name only: narrow, no new check).** Say the rename case is the one never half written and
+    losing that metadata; "a file that still has other hard-linked names after the save"; name the test and its
+    comment for what it measures, a failed write of the temporary file leaving the saved file.
+  - **Resolution: done** (commit `f4dc89d`). Narrowed, no new check, as the chain rule says. `_replace_file`'s
+    docstring ties "never half written" and the lost metadata to the rename, says a hard-linked file may be left
+    half written, and speaks of names remaining "after Designer's save". The test named in SRV-46's resolution is
+    now `test_a_failed_write_of_the_temporary_file_leaves_the_users_file_as_saved`, its comment saying the rename
+    isn't reached. Still unguarded, as the entry says: `st_nlink >= 1` and a non-atomic copy for `os.replace` pass
+    every test.
+
+- [x] **TST-108 · README calls the snapshot folder "safe to delete", though a snapshot saved over may hold the user's work** · follows SRV-47, generation 2 · `README.md:254` · confirmed · verified by hand · found 2026-11-02
+  - **Defect.** The `SD_SNAPSHOT_DIR` row says "(one folder per graph, each snapshot noting its package; safe to
+    delete)", while README's uninstall section, `uninstall.py` and `list_snapshots` treat a snapshot opened and saved
+    in place as possibly holding the user's work (SRV-47). The words are on `main` too; this branch's rule made them
+    wrong.
+  - **Scenario.** A user recovers from a snapshot by opening it, keeps working and saves in place. Later they tidy up,
+    read "safe to delete" and delete the folder, losing that work, which `uninstall.py --remove-snapshots` would have
+    kept and listed.
+  - **Fix (docs only: narrow).** "safe to delete, except a snapshot you opened and saved in place: `list_snapshots`
+    marks those".
+  - **Resolution: done** (commit `f4dc89d`). Wording only, so no failing test: `README.md`'s row says "safe to
+    delete, except a snapshot you opened and saved in place, which may hold your work: `list_snapshots` marks those
+    taken by this version" (older ones can't be told apart, as its uninstall section says). What the sentence relies
+    on already has a test: `list_snapshots`' mark and `uninstall.py` keeping them (SRV-47's tests).
+    - **Also covered:** "safe to delete" appears nowhere else in README.md, AGENTS.md, ROADMAP.md or the tools.

@@ -261,6 +261,23 @@ def test_remove_snapshots_deletes_only_the_snapshots(
     assert not snap.exists() and mine.exists()
 
 
+def test_remove_snapshots_removes_their_package_notes_and_folders(
+    env: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # REVIEW.md INS-26: each snapshot has a note of its package beside it (SRV-34); left behind, the
+    # notes kept every graph's folder, and the snapshot folder itself
+    graph = env.snapshots / 'graph'
+    (graph / '20261031-120000-before_portals.sbs').write_text('snapshot')
+    (graph / '20261031-120000-before_portals.sbs.json').write_text('{"package": "", "uid": "x"}')
+    (graph / 'mine.json').write_text('not a note')  # another .json: kept, so is the folder
+    other = env.snapshots / 'other'
+    other.mkdir()
+    (other / '20261031-120001.sbs').write_text('snapshot')
+    (other / '20261031-120001.sbs.json').write_text('{}')
+    run(env, monkeypatch, '--yes', '--remove-snapshots')
+    assert sorted(p.name for p in graph.iterdir()) == ['mine.json'] and not other.exists()
+
+
 def test_a_kept_snapshot_folder_is_reported_as_kept(
     env: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -297,3 +314,25 @@ def test_reports_a_leftover_copy_that_isnt_ours(
     run(env, monkeypatch, '--yes')
     out = capsys.readouterr().out
     assert partial.exists() and str(partial) in out and 'left as it is' in out
+
+
+def test_remove_snapshots_keeps_one_saved_over_since(
+    env: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # REVIEW.md SRV-47: a snapshot opened to recover and saved in place holds the user's work; its note
+    # records the size and time it was written, and one that no longer matches is kept, and said so
+    import json
+    import os
+
+    graph = env.snapshots / 'graph'
+    untouched, saved_over = graph / '20261101-100000.sbs', graph / '20261101-110000.sbs'
+    for path in (untouched, saved_over):
+        path.write_text('snapshot')
+        st = os.stat(path)
+        (graph / (path.name + '.json')).write_text(
+            json.dumps({'package': '/a/A.sbs', 'uid': 'x', 'size': st.st_size, 'mtime_ns': st.st_mtime_ns})
+        )
+    saved_over.write_text('the user saved work into the snapshot')
+    run(env, monkeypatch, '--yes', '--remove-snapshots')
+    assert sorted(p.name for p in graph.iterdir()) == [saved_over.name, saved_over.name + '.json']
+    assert str(saved_over) in capsys.readouterr().out

@@ -12,6 +12,7 @@ from .core import (
     SDUIMgr,
     Sequence,
     _current_graph,
+    _position,
     _same_graph,
     cast,
     find_graph,
@@ -191,11 +192,7 @@ def _fit_view_to(
     from PySide6.QtCore import QRectF
 
     current = _current_graph()
-    if (
-        current is None
-        or current.getIdentifier() != g.getIdentifier()
-        or current.getPackage().getUID() != g.getPackage().getUID()
-    ):
+    if not _same_graph(current, g):  # told apart by file first (REVIEW.md HLP-53)
         raise RuntimeError(
             'the graph in the editor is %s, not %s; not fitting the wrong view'
             % (current.getIdentifier() if current is not None else 'none', g.getIdentifier())
@@ -310,7 +307,8 @@ def move_nodes(identifier: str | SDSBSCompGraph | None, positions: dict[str, Seq
     from sd.api.sdbasetypes import float2
 
     g = find_graph(identifier)
-    moves = [(nid, _node(g, nid), x, y) for nid, (x, y) in positions.items()]  # all found first
+    # every node found and every position checked before any moves (REVIEW.md HLP-4, HLP-46)
+    moves = [(nid, _node(g, nid), *_position(xy)) for nid, xy in positions.items()]
     for nid, node, x, y in moves:
         node.setPosition(float2(float(x), float(y)))
         print('moved %s to (%d, %d)' % (nid, x, y))

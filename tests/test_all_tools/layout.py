@@ -4,7 +4,7 @@ add_frame, add_comment."""
 import os
 import re
 
-from .common import TEST_GRAPH, Ctx, added_id, check, positions, text
+from .common import GRAPH_OF, TEST_GRAPH, Ctx, added_id, check, positions, text
 
 
 async def run(ctx: Ctx) -> None:
@@ -13,6 +13,27 @@ async def run(ctx: Ctx) -> None:
     t = text(await c('snapshot_graph', {'label': 'before tweak', **G}))
     check('snapshot_graph', 'saved', 'snapshot of %s saved' % TEST_GRAPH in t, t)
     snap_path = t.split('saved: ', 1)[1].strip()
+    # the package is still unsaved here, so its snapshot has a UID of its own: opened in Designer, it isn't
+    # its package (REVIEW.md SRV-42; a saved package's keeps the UID: save.py). Loaded and unloaded in
+    # one call, so no second graph of this name is ever open between calls
+    t = text(
+        await c(
+            'execute_designer_code',
+            {
+                'code': GRAPH_OF % TEST_GRAPH
+                + (
+                    'pm = sd.getContext().getSDApplication().getPackageMgr()\n'
+                    'snap = pm.loadUserPackage(%r)\ntry:\n'
+                    '    print("SNAPSHOT_UID_DIFFERS=%%s" %% (snap.getUID() != g.getPackage().getUID()))\n'
+                    'finally:\n    pm.unloadUserPackage(snap)\n'
+                )
+                % snap_path
+            },
+        )
+    )
+    check(
+        'snapshot_graph', 'a snapshot loads with a UID of its own', 'SNAPSHOT_UID_DIFFERS=True' in t, t.strip()[-150:]
+    )
     t = text(await c('list_snapshots', G))
     check('list_snapshots', 'lists it', snap_path in t, '')
     t = text(await c('list_snapshots'))
@@ -41,8 +62,28 @@ async def run(ctx: Ctx) -> None:
         t.splitlines()[-1],
     )
     os.remove(snap_path)
+    if os.path.isfile(snap_path + '.json'):  # its note of the package (REVIEW.md SRV-34)
+        os.remove(snap_path + '.json')
     if not os.listdir(os.path.dirname(snap_path)):
         os.rmdir(os.path.dirname(snap_path))
+    # an id that names no node is refused, nothing moved (REVIEW.md HLP-47)
+    before = text(await c('describe_graph', G))
+    r_ = await c('arrange_graph', {'node_ids': [clouds, slope, 'no_such_node'], **G})
+    after = text(await c('describe_graph', G))
+    check(
+        'arrange_graph',
+        'an unknown id is refused, nothing moved',
+        r_.is_error and "node 'no_such_node' not found" in text(r_) and before == after,
+        text(r_).strip()[-120:],
+    )
+    # describe_graph says which ids it didn't find, instead of dropping them (REVIEW.md HLP-47)
+    t = text(await c('describe_graph', {'node_ids': [clouds, 'no_such_node'], **G}))
+    check(
+        'describe_graph',
+        'an unknown id in node_ids is named',
+        'not found: no_such_node' in t and '%s instance:' % clouds in t,
+        t.strip()[-150:],
+    )
     t = text(await c('arrange_graph', G))
     check('arrange_graph', 'columns by data flow', 'arranged' in t and 'column' in t, t)
     t = text(await c('describe_graph', G))

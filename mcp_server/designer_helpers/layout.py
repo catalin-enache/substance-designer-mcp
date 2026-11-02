@@ -1,6 +1,16 @@
 """Readable graphs: arrange_graph, add_frame, add_comment."""
 
-from .core import SDDefinition, SDNode, SDPropertyCategory, SDSBSCompGraph, Sequence, _other_end, cast, find_graph
+from .core import (
+    SDDefinition,
+    SDNode,
+    SDPropertyCategory,
+    SDSBSCompGraph,
+    Sequence,
+    _other_end,
+    _position,
+    cast,
+    find_graph,
+)
 from .edits import _node
 
 _NODE_SIZE = 96.0  # graph-view size of a node; positions are node centres
@@ -50,6 +60,10 @@ def arrange_graph(
     g = find_graph(identifier)
     nodes = list(g.getNodes())
     if node_ids:
+        present = {n.getIdentifier() for n in nodes}
+        for i in node_ids:  # all found before anything moves, as add_frame does (REVIEW.md HLP-47)
+            if str(i) not in present:
+                raise RuntimeError('node %r not found in graph %s' % (i, g.getIdentifier()))
         wanted = {str(i) for i in node_ids}
         nodes = [n for n in nodes if n.getIdentifier() in wanted]
     if not nodes:
@@ -144,12 +158,13 @@ def add_comment(
     from sd.api.sdgraphobjectcomment import SDGraphObjectComment
 
     g = find_graph(identifier)
+    xy = _position(position) if position and not node_id else None  # checked before the comment exists
     if node_id:
         comment = SDGraphObjectComment.sNewAsChild(_node(g, node_id))
     else:
         comment = SDGraphObjectComment.sNew(g)
-        if position:
-            comment.setPosition(float2(float(position[0]), float(position[1])))
+        if xy:
+            comment.setPosition(float2(*xy))
     comment.setDescription(text)
     print('comment added' + (' on node %s' % node_id if node_id else ''))
 

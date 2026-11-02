@@ -1,11 +1,15 @@
 """Snapshots and diffs: snapshot_graph, list_snapshots, diff_graph, and the .sbs model they read."""
 
+import contextlib
+import json
 import os
 import re
 import shutil
 import tempfile
 import time
+import uuid
 import xml.etree.ElementTree as ET
+from collections.abc import Iterator
 from typing import TypedDict, cast
 
 from mcp.server.mcpserver.exceptions import ToolError
@@ -21,7 +25,7 @@ def _safe_name(text: str) -> str:
 
 def _copy_package(graph: str | None, path: str) -> dict[str, str]:
     text = _bridge(_helpers_call('save_package_copy(%r, %r)' % (graph, path)), timeout=120)
-    found = dict(re.findall(r'^(COPY|PACKAGE|GRAPH)=(.*)$', text, re.M))
+    found = dict(re.findall(r'^(COPY|PACKAGE|PACKAGE_UID|GRAPH)=(.*)$', text, re.M))
     if 'COPY' not in found or not os.path.exists(path):
         raise ToolError(text.strip().splitlines()[-1] if text.strip() else 'could not copy package')
     return found
@@ -33,14 +37,114 @@ def snapshot_graph(graph: str | None = None, label: str | None = None) -> str:
     change the open package, its file or its saved state. Compare later with diff_graph; the
     snapshot .sbs can also be opened in Designer to recover anything. Bitmaps aren't copied: the
     snapshot points to the files the package uses (its .resources folder, linked images). Snapshots live in
-    ~/.sd_mcp/snapshots/<graph>/ (override with SD_SNAPSHOT_DIR)."""
+    ~/.sd_mcp/snapshots/<graph>/ (override with SD_SNAPSHOT_DIR), each with a note of the package it
+    came from, so two packages' graphs of one name don't share them. A snapshot of an unsaved package
+    also gets a UID of its own, so opened to recover it is a package of its own wherever it is saved;
+    a saved package's snapshot is Designer's exact copy."""
     # Designer writes resource paths (bitmaps) relative to the copy, so it is saved where it
     # stays: moved afterwards, those paths would point nowhere
     gid = _checked(_bridge(_helpers_call('print("GRAPH=" + find_graph(%r).getIdentifier())' % graph), timeout=60))
     gid = cast(re.Match[str], re.search(r'^GRAPH=(.*)$', gid, re.M)).group(1)  # printed, or _checked raised
     path = _new_snapshot_path(gid, label)
-    info = _copy_package(graph, path)
+    with _whole_or_none(path):
+        info = _copy_package(graph, path)
+        if not info.get('PACKAGE'):  # unsaved: the notes tell it apart by UID only
+            _fresh_uid(path)
+        _note_package(path, info.get('PACKAGE'), info.get('PACKAGE_UID'))
     return 'snapshot of %s saved: %s' % (info['GRAPH'], path)
+
+
+@contextlib.contextmanager
+def _whole_or_none(snapshot: str) -> Iterator[None]:
+    """Around writing a snapshot and its note: if any step fails (a full disk), remove what was written,
+    so no snapshot is left half written or without its note, which would count for every package
+    (REVIEW.md SRV-43)."""
+    try:
+        yield
+    except BaseException:
+        for leftover in (snapshot, snapshot + '.json'):
+            with contextlib.suppress(OSError):
+                os.remove(leftover)
+        raise
+
+
+# a package's own <fileUID>: a real {uuid} (each dependency's is "0"), before <dependencies>
+_OWN_UID = re.compile(rb'<fileUID v="(\{[0-9a-fA-F-]{36}\})"\s*/>')
+
+
+def _fresh_uid(snapshot: str) -> None:
+    """Give a snapshot .sbs of an unsaved package a UID of its own (REVIEW.md SRV-42). Designer's copy
+    keeps the package's (measured), and the notes tell unsaved packages apart by UID only, so such a
+    snapshot opened to recover and saved anywhere looked like its unsaved original saved for the first
+    time. A saved package's snapshots are told apart by file and stay exact copies. Only the UID's bytes
+    change (same length; nothing else reformatted); a file without its own UID where expected is left
+    alone. Designer loads it with the new UID, and a package using the original's graphs refers to it by
+    file name, not UID (both measured); the note keeps the package's UID."""
+    with open(snapshot, 'rb') as f:
+        data = f.read()
+    m = _OWN_UID.search(data)
+    deps = data.find(b'<dependencies')
+    if m is None or (deps != -1 and m.start() > deps):
+        return
+    stat = os.stat(snapshot)
+    with open(snapshot, 'wb') as f:
+        f.write(data[: m.start(1)] + ('{%s}' % uuid.uuid4()).encode() + data[m.end(1) :])
+    # the file's date stays: re-stamping doesn't change its place among the snapshots
+    os.utime(snapshot, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+
+
+def _note_package(snapshot: str, file_path: str | None, uid: str | None = None) -> None:
+    """Next to a snapshot, the package it came from: its file (when saved) and its UID (what tells
+    two unsaved packages apart). Graphs are found by identifier, and every new graph is
+    "New_Graph" (REVIEW.md SRV-34)."""
+    st = os.stat(snapshot)  # as written: a snapshot saved over since no longer matches (REVIEW.md SRV-47)
+    with open(snapshot + '.json', 'w', encoding='utf-8') as f:
+        json.dump(
+            {
+                'package': os.path.abspath(file_path) if file_path else '',
+                'uid': uid or '',
+                'size': st.st_size,
+                'mtime_ns': st.st_mtime_ns,
+            },
+            f,
+        )
+
+
+def _changed_since(snapshot: str) -> bool:
+    """Whether a snapshot's file changed after it was written (opened in Designer and saved in place):
+    then it holds the user's edits, not the state it recorded (REVIEW.md SRV-47). A note without the size
+    and time (taken before they were kept) can't tell: not changed."""
+    try:
+        with open(snapshot + '.json', encoding='utf-8') as f:
+            note = json.load(f)
+        st = os.stat(snapshot)
+    except (OSError, ValueError):
+        return False
+    if 'size' not in note or 'mtime_ns' not in note:
+        return False
+    return bool(note['size'] != st.st_size or note['mtime_ns'] != st.st_mtime_ns)
+
+
+def _from_package(snapshot: str, file_path: str | None, uid: str | None) -> bool:
+    """Whether a snapshot came from this package, from its note (the file and UID the package had then):
+    a note naming a file counts only for that file; a note without one (an unsaved package) counts for
+    a package with its UID, saved since or not. A snapshot of an unsaved package opened to recover has a
+    UID of its own (_fresh_uid, SRV-42), wherever it is saved later; one taken before that kept the package's, so a
+    package whose file is in the snapshot folder is still excluded (SRV-38, SRV-40). The UID is the file's <fileUID>, kept by saving and shared by
+    a copy of the file loaded again (measured; SRV-36). No note (taken before notes were kept): any
+    package. Every case: tests/unit/test_snapshots.py, _NOTE_CASES."""
+    try:
+        with open(snapshot + '.json', encoding='utf-8') as f:
+            note = json.load(f)
+    except (OSError, ValueError):
+        return True
+    noted = note.get('package') or ''
+    if noted:
+        return bool(file_path) and noted == os.path.abspath(cast(str, file_path))
+    recovered = bool(file_path) and os.path.abspath(cast(str, file_path)).startswith(
+        os.path.join(os.path.abspath(SNAPSHOT_DIR), '')
+    )
+    return bool(uid) and note.get('uid') == uid and not recovered
 
 
 _SNAPSHOT_NAME = re.compile(r'^\d{8}-\d{6}(?:_\d+)?(?:-(.*))?\.sbs$')
@@ -59,26 +163,56 @@ def _new_snapshot_path(graph_id: str, label: str | None = None) -> str:
     return path
 
 
-def _snapshots(graph_id: str) -> list[str]:
+def _others(graph_id: str, package: tuple[str | None, str | None]) -> str:
+    """For a refusal: whether this graph has snapshots from other packages (another file, a Save As
+    since, a copy), which diff_graph takes by path (REVIEW.md SRV-39)."""
+    every = _snapshots(graph_id)
+    saved_over = [p for p in every if _from_package(p, *package) and _changed_since(p)]  # its own (SRV-50)
+    others = len(every) - len(_snapshots(graph_id, package)) - len(saved_over)  # not its own (SRV-41)
+    parts = (['%d from other packages, e.g. before a Save As' % others] if others else []) + (
+        ["%d of this package's own, saved over since taken" % len(saved_over)] if saved_over else []
+    )
+    return ' (%s: list_snapshots shows them; diff against one by its path)' % '; '.join(parts) if parts else ''
+
+
+def _snapshots(graph_id: str, package: tuple[str | None, str | None] | None = None) -> list[str]:
+    """A graph's snapshots, oldest first; with package (file path, UID), that package's only, leaving
+    out one saved over since it was taken (REVIEW.md SRV-47: it is no longer a snapshot of it)."""
     folder = os.path.join(SNAPSHOT_DIR, _safe_name(graph_id))
     if not os.path.isdir(folder):
         return []
     # oldest first by when the content was written: names alone misorder two snapshots taken in
     # the same second (set_link_display's live graph and its copy2 of the older saved file)
     paths = [os.path.join(folder, f) for f in os.listdir(folder) if f.endswith('.sbs')]
+    if package is not None:
+        paths = [p for p in paths if _from_package(p, *package) and not _changed_since(p)]
     return sorted(paths, key=lambda p: (os.stat(p).st_mtime_ns, p))
 
 
 @_tool()
 def list_snapshots(graph: str | None = None) -> str:
     """List saved snapshots, newest last (by when their content was written; set_link_display's
-    copy of the saved file counts from when that file was saved). graph: graph identifier
-    (default: all graphs)."""
+    copy of the saved file counts from when that file was saved), each with the package it came
+    from. A snapshot opened in Designer and saved in place since is marked as changed (one whose note records
+    its size and time: taken by this version); diff_graph's
+    'latest' and labels skip it (diff against it by its path). graph: graph identifier (default: all graphs)."""
     graphs = [_safe_name(graph)] if graph else (sorted(os.listdir(SNAPSHOT_DIR)) if os.path.isdir(SNAPSHOT_DIR) else [])
     lines: list[str] = []
     for gid in graphs:
         for path in _snapshots(gid):
-            lines.append('%s  %s' % (gid, path))
+            try:
+                with open(path + '.json', encoding='utf-8') as f:
+                    note = json.load(f)
+                # unsaved packages told apart by their UID (REVIEW.md SRV-37)
+                package = note.get('package') or '(an unsaved package, UID %s)' % (note.get('uid') or '?')
+            except (OSError, ValueError):
+                package = '(package not noted)'
+            changed = (
+                "  (changed since it was taken: opened and saved in place; not used for 'latest' or labels)"
+                if _changed_since(path)
+                else ''
+            )
+            lines.append('%s  %s  from %s%s' % (gid, path, package, changed))
     return '\n'.join(lines) if lines else 'No snapshots%s.' % (' for ' + graph if graph else '')
 
 
@@ -249,31 +383,37 @@ def _diff_models(old: _GraphModel, new: _GraphModel, show_positions: bool) -> tu
 def diff_graph(graph: str | None = None, against: str = 'saved', show_positions: bool = False) -> str:
     """Show what changed in a graph: nodes added/removed, parameter changes, links
     added/removed, exposed inputs and size. against: 'saved' (the package's file on disk),
-    'latest' (newest snapshot), a snapshot label, or a .sbs path. The live graph is read
+    'latest' (this package's newest snapshot), a snapshot label (this package's), or a .sbs path (any
+    snapshot: after a Save As, the earlier file's snapshots count as another package's). The live graph is read
     without modifying it. Positions are only counted unless show_positions=True."""
     tmp_dir = tempfile.mkdtemp(prefix='sd_diff_')
     try:
         info = _copy_package(graph, os.path.join(tmp_dir, 'live.sbs'))
         gid = info['GRAPH']
+        package = (info.get('PACKAGE'), info.get('PACKAGE_UID'))  # this package's snapshots only
         if against == 'saved':
             ref = info.get('PACKAGE')
             if not ref or not os.path.exists(ref):
                 raise ToolError('the package has never been saved; diff against a snapshot instead')
         elif against == 'latest':
-            snaps = _snapshots(gid)
+            snaps = _snapshots(gid, package)
             if not snaps:
-                raise ToolError('no snapshots for %s; take one with snapshot_graph' % gid)
+                raise ToolError(
+                    'no snapshots of %s for this package; take one with snapshot_graph%s' % (gid, _others(gid, package))
+                )
             ref = snaps[-1]
         elif against.endswith('.sbs'):
             ref = os.path.abspath(os.path.expanduser(against))
         else:
             matches = [
                 p
-                for p in _snapshots(gid)
+                for p in _snapshots(gid, package)
                 if (_SNAPSHOT_NAME.match(os.path.basename(p)) or [None, None])[1] == _safe_name(against)
             ]
             if not matches:
-                raise ToolError('no snapshot matching %r; see list_snapshots' % against)
+                raise ToolError(
+                    'no snapshot matching %r for this package; see list_snapshots%s' % (against, _others(gid, package))
+                )
             ref = matches[-1]
         if not os.path.isfile(ref):
             raise ToolError('no such file: %s' % ref)  # REVIEW.md SRV-30

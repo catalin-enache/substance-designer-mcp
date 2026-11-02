@@ -75,7 +75,7 @@ def test_launch_waits_for_a_running_designer_instead_of_starting_another(
     assert not started, 'started a second Designer'
     assert 'already running' in str(error.value) and 'did not answer within 30s' in str(error.value)
     # once it answers: reported as already running, and its Home screen is left alone
-    answers: Iterator[Exception | Reply] = iter([server.ToolError('not yet'), {'output': 'idle'}])
+    answers: Iterator[Exception | Reply] = iter([server.ToolError('not yet'), {'ok': True, 'output': 'idle'}])
 
     def bridge_comes_up(request: dict[str, Any], wait: float) -> Reply:
         a = next(answers)
@@ -110,6 +110,39 @@ def test_quit_times_out(monkeypatch: pytest.MonkeyPatch, no_sleep: None) -> None
     monkeypatch.setattr(time, 'time', lambda: next(clock))
     with pytest.raises(server.ToolError, match='still running after 5s'):
         server.quit_designer(wait_s=5)
+
+
+def _refused(request: dict[str, Any], wait: float) -> Reply:
+    # what the plugin answers a client whose token it rejects (README Troubleshooting: a plugin and
+    # server from different versions)
+    return {'ok': False, 'output': '', 'error': 'invalid token'}
+
+
+@pytest.mark.parametrize(
+    'call',
+    [
+        lambda: server.designer_status(),
+        lambda: server.launch_designer(wait_s=30),
+        lambda: server.cancel_designer_job(),
+        lambda: server.quit_designer(),
+    ],
+    ids=['designer_status', 'launch_designer', 'cancel_designer_job', 'quit_designer'],
+)
+def test_a_refused_control_request_is_reported_as_an_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, call: Callable[[], str]
+) -> None:
+    # REVIEW.md SRV-33: the reply's output was read without checking ok, so a refusal read as an
+    # answer (a running job, "already running: ", an empty cancel); launch_designer must not start
+    # or wait for another Designer either
+    started: list[Any] = []
+    patch_server(monkeypatch, '_send', _refused)
+    patch_server(monkeypatch, '_designer_running', lambda: True)
+    patch_server(monkeypatch, '_bridge', lambda code, path=None, timeout=None: 'closing Designer')
+    monkeypatch.setenv('SD_DESIGNER_APP', str(tmp_path))
+    monkeypatch.setattr(subprocess, 'Popen', lambda cmd: started.append(cmd))
+    with pytest.raises(server.ToolError, match='invalid token'):
+        call()
+    assert not started
 
 
 def _import_server_with(env: dict[str, str]) -> list[str]:
@@ -232,7 +265,7 @@ def test_launch_starts_designer_when_the_running_one_exits_during_the_wait(
     def bridge(request: dict[str, Any], wait: float) -> Reply:
         if not started:
             raise server.ToolError('Designer is not reachable.')
-        return {'output': 'idle'}
+        return {'ok': True, 'output': 'idle'}
 
     patch_server(monkeypatch, '_send', bridge)
     patch_server(monkeypatch, '_bridge', lambda code, path=None, timeout=None: '')
@@ -264,7 +297,7 @@ def test_a_restarted_designer_gets_the_whole_wait(
     def bridge(request: dict[str, Any], wait: float) -> Reply:
         if not started or now[0] < started[0] + 60:  # the new one needs 60 s to come up
             raise server.ToolError('Designer is not reachable.')
-        return {'output': 'idle'}
+        return {'ok': True, 'output': 'idle'}
 
     patch_server(monkeypatch, '_send', bridge)
     patch_server(monkeypatch, '_bridge', lambda code, path=None, timeout=None: '')

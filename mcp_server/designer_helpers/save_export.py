@@ -85,11 +85,13 @@ def export_outputs(
         )
     g.compute()
     saved = []
+    no_image = []  # never seen: an unconnected output still computes one (REVIEW.md HLP-48)
     for ident, node in outputs:
         for prop in node.getProperties(SDPropertyCategory.Output):
             value = cast(SDValueTexture | None, node.getPropertyValue(prop))
             texture = value.get() if value is not None else None
             if texture is None:
+                no_image.append(ident)
                 continue
             path = os.path.join(out_dir, '%s.%s' % (ident, ext))
             texture.save(path)
@@ -98,11 +100,17 @@ def export_outputs(
     if not saved:
         # a typo-only request: say which outputs there are (REVIEW.md HLP-36)
         raise RuntimeError(
-            'no outputs exported (names %r; the outputs: %s)'
-            % (names, ', '.join(sorted(i for i, _ in every)) or 'none')
+            'no outputs exported (names %r; the outputs: %s%s)'
+            % (
+                names,
+                ', '.join(sorted(i for i, _ in every)) or 'none',
+                '; computed no image: %s' % ', '.join(no_image) if no_image else '',
+            )
         )
     print('exported %d file(s) to %s:' % (len(saved), out_dir))
     print('\n'.join(saved))
+    if no_image:
+        print('computed no image, not exported: %s' % ', '.join(no_image))
     missing = [n for n in (names or []) if n not in idents]
     if missing:  # a typo in outputs= would otherwise go unnoticed (REVIEW.md HLP-34)
         print('no output named %s (the outputs: %s)' % (', '.join(missing), ', '.join(sorted(i for i, _ in every))))

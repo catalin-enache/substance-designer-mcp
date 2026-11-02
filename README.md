@@ -251,7 +251,7 @@ a quick fix (⌥⏎), or apply them all with `ruff check --fix .`.
 | `SD_DESIGNER_BIN_DIR` | macOS: `/Applications/Adobe Substance 3D Designer/Adobe Substance 3D Designer.app/Contents/MacOS`; Windows: `C:\Program Files\Adobe\Adobe Substance 3D Designer` | finding `sbscooker` / `sbsrender` |
 | `SD_DESIGNER_APP` | macOS: `/Applications/Adobe Substance 3D Designer/Adobe Substance 3D Designer.app`; Windows: `C:\Program Files\Adobe\Adobe Substance 3D Designer\Adobe Substance 3D Designer.exe` | `launch_designer` |
 | `SD_DESIGNER_LOG` | newest `log.txt` in Designer's settings folder (see Troubleshooting) | `read_designer_log` |
-| `SD_SNAPSHOT_DIR` | `~/.sd_mcp/snapshots` | where `snapshot_graph` keeps snapshots (one folder per graph; safe to delete) |
+| `SD_SNAPSHOT_DIR` | `~/.sd_mcp/snapshots` | where `snapshot_graph` keeps snapshots (one folder per graph, each snapshot noting its package; safe to delete, except a snapshot you opened and saved in place, which may hold your work: `list_snapshots` marks those taken by this version) |
 | `SD_BRIDGE_PORT` | `9877` | plugin, MCP server and CLI client (set the same value for all three; the plugin reads it from Designer's environment, so start Designer from a shell where it is set, or set it system-wide) |
 
 Set them in your shell before starting `claude`, add an `"env": {...}` block to your own copy of
@@ -306,7 +306,9 @@ every folder where you ran `claude mcp add --scope local`, plus a user-scope reg
 (`--scope user`) if there is one (found in Claude Code's
 `~/.claude.json`, removed with `claude mcp remove` in each folder). A plugin, skill or
 registration with the same name that isn't this project's is reported and left alone. Your graph
-snapshots (`~/.sd_mcp/snapshots`) stay unless you pass `--remove-snapshots`. Pass
+snapshots (`~/.sd_mcp/snapshots`) stay unless you pass `--remove-snapshots`; even then, a
+snapshot taken by this version that you opened in Designer and saved in place stays (it may hold your
+work), and is listed; older snapshots can't be told apart and are deleted. Pass
 `--plugins-dir` if you installed with it. Then restart Designer and delete this folder.
 
 ## Troubleshooting

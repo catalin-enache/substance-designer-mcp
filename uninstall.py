@@ -96,7 +96,8 @@ def remove_registration(scope: str, folder: str | None, claude: str) -> str | No
 
 
 # <folder>/<graph>/<YYYYmmdd-HHMMSS>[_n][-label].sbs, as mcp_server/server_tools/snapshots.py names them
-SNAPSHOT_FILE = re.compile(r'^\d{8}-\d{6}(?:_\d+)?(?:-.*)?\.sbs$')
+# a snapshot, and the note of its package beside it (REVIEW.md SRV-34, INS-26)
+SNAPSHOT_FILE = re.compile(r'^\d{8}-\d{6}(?:_\d+)?(?:-.*)?\.sbs(?:\.json)?$')
 
 
 class Kept(str):
@@ -106,19 +107,46 @@ class Kept(str):
 def remove_snapshots(folder: str) -> Kept | None:
     """Only the snapshot files the server wrote, then the folders they leave empty: the folder may
     be a shared one (SD_SNAPSHOT_DIR). Says so when the folder stays."""
+    saved_over = []
     for graph in os.listdir(folder):
         sub = os.path.join(folder, graph)
         if not os.path.isdir(sub):
             continue
         for name in os.listdir(sub):
-            if SNAPSHOT_FILE.match(name):
-                os.remove(os.path.join(sub, name))
+            path = os.path.join(sub, name)
+            snapshot = path[: -len('.json')] if name.endswith('.json') else path
+            if not SNAPSHOT_FILE.match(name):
+                continue
+            if changed_since(snapshot):  # saved over since: it holds the user's work (REVIEW.md SRV-47)
+                if path == snapshot:
+                    saved_over.append(snapshot)
+                continue
+            os.remove(path)
         if not os.listdir(sub):
             os.rmdir(sub)
+    if saved_over:
+        return Kept(
+            'the snapshots were deleted, except %d saved over since they were taken (they may hold your '
+            'work): %s' % (len(saved_over), ', '.join(sorted(saved_over)))
+        )
     if os.listdir(folder):
         return Kept('the snapshots were deleted; folder kept, other files are in it')
     os.rmdir(folder)
     return None
+
+
+def changed_since(snapshot: str) -> bool:
+    """Whether a snapshot's file no longer matches the size and time its note recorded when it was
+    written (the server's _changed_since): opened in Designer and saved in place."""
+    try:
+        with open(snapshot + '.json', encoding='utf-8') as f:
+            note = json.load(f)
+        st = os.stat(snapshot)
+    except (OSError, ValueError):
+        return False
+    if not isinstance(note, dict) or 'size' not in note or 'mtime_ns' not in note:
+        return False
+    return bool(note['size'] != st.st_size or note['mtime_ns'] != st.st_mtime_ns)
 
 
 # an uninstall step: returns None when done, or an error text (Kept: done, but something stays)

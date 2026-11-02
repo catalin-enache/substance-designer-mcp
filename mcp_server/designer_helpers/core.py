@@ -3,6 +3,7 @@ other parts use these)."""
 
 # `X as X`: the other parts import these from here (mypy counts only explicit re-exports); the parts
 # share one namespace, so each name is imported once, here
+import math
 import os as os
 from collections.abc import Callable as Callable, Sequence as Sequence
 from typing import Any as Any, cast as cast
@@ -46,13 +47,22 @@ def _is_library_package(pkg: SDPackage) -> bool:
 
 def _same_graph(a: SDGraph | None, b: SDGraph | None) -> bool:
     """True when a and b are the same graph: the same identifier in the same package (two open
-    packages can each have a graph with one name)."""
-    return (
-        a is not None
-        and b is not None
-        and a.getIdentifier() == b.getIdentifier()
-        and a.getPackage().getUID() == b.getPackage().getUID()
-    )
+    packages can each have a graph with one name). Packages are told apart by file: copies of one
+    file (a snapshot of a saved package opened to recover, a duplicate) share its UID (measured;
+    REVIEW.md HLP-53). Only two packages that were never saved are told apart by UID."""
+    if a is None or b is None or a.getIdentifier() != b.getIdentifier():
+        return False
+    pa, pb = a.getPackage(), b.getPackage()
+    fa, fb = pa.getFilePath() or '', pb.getFilePath() or ''
+    if fa or fb:
+        return bool(fa and fb) and os.path.normcase(os.path.normpath(fa)) == os.path.normcase(os.path.normpath(fb))
+    return bool(pa.getUID()) and pa.getUID() == pb.getUID()
+
+
+def _package_name(pkg: SDPackage) -> str:
+    """A package as the agent can match it: its file, or for one never saved its UID, as list_snapshots
+    and designer_status name it (REVIEW.md SRV-45)."""
+    return pkg.getFilePath() or '(an unsaved package, UID %s)' % pkg.getUID()
 
 
 def find_graph(identifier: str | SDSBSCompGraph | None = None) -> SDSBSCompGraph:
@@ -87,9 +97,22 @@ def find_graph(identifier: str | SDSBSCompGraph | None = None) -> SDSBSCompGraph
             return g
     raise RuntimeError(
         '%d open graphs are named %r (packages: %s); open the one you mean in Designer '
-        'or close the others.'
-        % (len(matches), identifier, ', '.join(g.getPackage().getFilePath() or 'never saved' for g in matches))
+        'or close the others.' % (len(matches), identifier, ', '.join(_package_name(g.getPackage()) for g in matches))
     )
+
+
+def _position(value: Any, what: str = 'position') -> tuple[float, float]:
+    """[x, y] as two numbers, checked before anything is created or moved: read after, a bad one
+    left the new node (or comment) behind (REVIEW.md HLP-46)."""
+    if isinstance(value, (list, tuple)) and len(value) == 2 and not any(isinstance(v, bool) for v in value):
+        try:  # numbers, or numeric strings as float() reads them (REVIEW.md HLP-50)
+            xy = float(value[0]), float(value[1])
+        except (TypeError, ValueError):
+            pass
+        else:  # not 'nan', 'inf', '1e400': Designer would take them, the print after wouldn't (HLP-51)
+            if all(math.isfinite(v) and abs(v) < 1e30 for v in xy):
+                return xy
+    raise RuntimeError('%s must be [x, y], two numbers, not %r' % (what, value))
 
 
 def fmt(value: SDValue | None) -> Any:

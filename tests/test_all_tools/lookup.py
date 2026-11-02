@@ -1,6 +1,8 @@
 """Graph lookup (same-named graphs, library graphs) and a node with several outputs (bevel)."""
 
-from .common import DUP_GRAPH, Ctx, added_id, check, image_size, is_image, text
+import re
+
+from .common import DUP_GRAPH, Ctx, added_id, check, image_size, is_image, libs, text
 
 
 async def run(ctx: Ctx) -> None:
@@ -24,8 +26,27 @@ async def run(ctx: Ctx) -> None:
         r_.is_error and '2 open graphs are named' in text(r_),
         text(r_),
     )
-    r_ = await c('describe_graph', {'graph': 'bevel'})  # bevel.sbs is loaded by now (describe_node)
-    check('describe_graph', 'library graphs are not user graphs', r_.is_error and 'not found' in text(r_), text(r_))
+    # an unsaved package is named by its UID, as list_snapshots names it, so the agent can match the
+    # two (REVIEW.md SRV-45): in the refusal, and in designer_status
+    uid_form = r'\(an unsaved package, UID \{[0-9a-fA-F-]{36}\}\)'
+    named = set(re.findall(uid_form, text(r_)))
+    check('describe_graph', 'the refusal names each unsaved package by its UID', len(named) == 2, text(r_))
+    t = text(await c('designer_status'))
+    check(
+        'designer_status',
+        'unsaved packages listed by their UID',
+        len(named) == 2 and named <= set(re.findall(uid_form, t)),
+        ' | '.join(l for l in t.splitlines() if 'unsaved' in l),
+    )
+    # bevel.sbs is loaded by now (describe_node): the check means something only then (REVIEW.md TST-97)
+    loaded, why = await libs(c)
+    r_ = await c('describe_graph', {'graph': 'bevel'})
+    check(
+        'describe_graph',
+        'library graphs are not user graphs',
+        loaded is not None and any(p.endswith('bevel.sbs') for p in loaded) and r_.is_error and 'not found' in text(r_),
+        text(r_).strip()[-100:] + ' | loaded: %s' % (loaded if loaded is not None else why),
+    )
 
     # --- a node with several outputs (bevel: height, normal)
     bev = added_id(

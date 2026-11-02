@@ -90,8 +90,10 @@ Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `-c COD
   own undo group) and call `QApplication.processEvents()` before reading results.
 - Timeouts and cancel use a trace hook in the plugin: the abort happens the next time Python
   runs, so one long C++ call (a huge `graph.compute()`) completes first. A script that catches
-  `BaseException` swallows the abort, so don't do that. A job still queued after 15 minutes is
-  dropped, never run late.
+  `BaseException` swallows the abort, so don't do that. An abort landing where Python only reports an
+  exception (a finalizer such as every sd API object's `__del__`, a weakref callback, a Qt slot) is
+  raised again at the next traced event: in the script, a module it imports or a loop driven from C,
+  also when the finalizer raises an error of its own or runs long. A job still queued after 15 minutes is dropped, never run late.
 - **Never hot-reload the sd_claude_bridge_kve plugin** (`importlib.reload` inside Designer): the running
   server keeps references to the old module and the bridge breaks until Designer restarts.
 
@@ -192,9 +194,20 @@ Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `-c COD
   saved state (what snapshots use); `savePackageAs` changes both. `SDPackage.isModified()`
   tells whether a package has unsaved changes. To close earlier builds of a generated graph,
   unload every user package containing its identifier.
+- `SDPackage.getUID()` is the file's `<fileUID>`: the same before and after saving or Save As, and
+  shared by a copy of the file loaded again and by a `saveCopyOfPackageAs` copy. A .sbs whose
+  package-level `<fileUID>` (the first, before `<dependencies>`) is rewritten loads with the new UID,
+  which is how snapshots of unsaved packages get their own. A package using another's graph stores
+  the dependency by file name, its `<fileUID>` `"0"`, so a package whose UID changes (a snapshot
+  restored over it) still serves it. Tell packages apart by file first.
+  `mHandle` differs for every Python object wrapping the same package, so it identifies nothing.
 - **Portals** are a per-connection display flag, `<displayType v="1"/>` inside a node's own
   `<connections>/<connection>` in the .sbs (function graphs on parameters have their own
-  connections; leave those alone). Dot nodes (`passthrough`) are just optional reroute points.
+  connections; leave those alone). Designer's own portals in the UI are Dot nodes (`passthrough`):
+  a transmitter given an ID (`<userId v="p1"/>` on its `compNode`) and a receiver that picks it in
+  its Input Portal field, stored as an ordinary connection from the transmitter with that same flag
+  (seen once by hand, Designer 16.0.7; to the API that connection is a plain one). A Dot node has no
+  ID property ("designer facts"); `set_link_display` sets the flag on any connection, without Dots.
   The API can't read or set the flag, so `set_link_display` uses the **file-level edit
   pattern**: snapshot the live graph and copy the saved file, decide on the copy (no change → no
   save), save, edit the .sbs XML, then unload, load and reopen as **three separate bridge calls
@@ -216,7 +229,15 @@ save, edit and reload it in a single call (the example script does, for its port
   went from a 22 % fit to very close). Zoom with synthetic `QWheelEvent`s on the viewport
   instead, 1.2x per notch in Designer 16, and pan with `centerOn` (panning is safe);
   `open_graph(frame=...)` does this, and the self-test checks that a wheel step after a fit
-  is exactly 1.2x.
+  is exactly 1.2x. **Don't send it synthetic key events or right-clicks**: seen twice (right-click
+  menus, then a sent Ctrl+C, which copied nothing: sent key events bypass Qt's shortcuts), the view
+  went empty, its graph's nodes intact, and only unloading the package brought it back. A single
+  synthetic left click on a node selected it and switched the Parameters panel to it (seen twice);
+  `setSelected(True)` on the node's scene item selects it too (the API reports it) but left the
+  panel as it was (seen by hand). The API itself can't select nodes in the view (`focusGraphNode` only centres one).
+  After such experiments, restart Designer before real work (the user's Designer: ask first, as for
+  `quit_designer`): once, with the Parameters panel still
+  showing a Dot of a package unloaded since, the next edit in another graph crashed Designer.
 - Current graph: `getQtForPythonUIMgr().getCurrentGraph()`; editor control via
   **`app.getUIMgr()`**: `openResourceInEditor(graph)`, `focusGraphNode(graphViewID, node)` (ids
   via `getGraphViewIDCount/At`, `getGraphFromGraphViewID`), `getGraphNodeBBox`,
@@ -457,8 +478,8 @@ new ideas there.
   ROADMAP item 5 will make global registration the installer's choice):
   this repo's committed `.mcp.json`, or `claude mcp add --scope local` in another folder. The
   installer never registers; it writes a user skill (`skill_text` in `install.py`) that tells
-  sessions elsewhere how to register, and `uninstall.py` removes the skill, the plugin, the token
-  and every folder's local registration (only entries that run this repo's `server.py`). `.mcp.json` must not contain `${`: Claude Code expands those itself
+  sessions elsewhere how to register, and `uninstall.py` removes the skill, the plugin, the token,
+  every folder's local registration and a user-scope one (only entries that run this repo's `server.py`). `.mcp.json` must not contain `${`: Claude Code expands those itself
   (it once rewrote a shell default away), so its `sh -c` command uses plain `$VARS`
   (`tests/unit/test_mcp_json.py`).
 - **The bridge protocol** (plugin docstring): the plugin sends a nonce, the client answers with

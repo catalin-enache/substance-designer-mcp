@@ -1,7 +1,7 @@
 """Package files: snapshot copies, and saving, unloading and reloading for edits the API can't
 make."""
 
-from .core import _APP, _PM, SDSBSCompGraph, _is_library_package, _same_graph, find_graph, os
+from .core import _APP, _PM, Any, SDSBSCompGraph, _is_library_package, _same_graph, find_graph, os
 
 
 def save_package_copy(identifier: str | SDSBSCompGraph | None, path: str) -> None:
@@ -13,7 +13,27 @@ def save_package_copy(identifier: str | SDSBSCompGraph | None, path: str) -> Non
     _PM.saveCopyOfPackageAs(pkg, path)
     print('COPY=' + path)
     print('PACKAGE=' + (pkg.getFilePath() or ''))
+    print('PACKAGE_UID=' + package_uid(pkg))
     print('GRAPH=' + g.getIdentifier())
+
+
+def package_uid(pkg: Any) -> str:
+    """The package's UID: what tells two unsaved packages apart (no file path) when their graphs
+    share a name, as every new graph is "New_Graph" (REVIEW.md SRV-34). Not mHandle, which differs
+    for every Python object wrapping the same package (measured)."""
+    return str(pkg.getUID() or '')
+
+
+def graph_in_file(path: str, identifier: str) -> SDSBSCompGraph:
+    """The graph with this identifier in the open package saved at `path`: unlike find_graph's
+    identifier alone, never another package's graph of the same name (REVIEW.md SRV-34)."""
+    want = os.path.normpath(path)
+    for pkg in _PM.getUserPackages():
+        if os.path.normpath(pkg.getFilePath() or '') == want:
+            for res in pkg.getChildrenResources(True):
+                if isinstance(res, SDSBSCompGraph) and res.getIdentifier() == identifier:
+                    return res
+    raise RuntimeError('graph %r not found in the package %s' % (identifier, path))
 
 
 def package_file_of(identifier: str | SDSBSCompGraph | None, save: bool = False) -> None:

@@ -133,6 +133,35 @@ async def run(ctx: Ctx) -> None:
             ],
             "ref 'graph' is reserved",
         ),
+        # a position that isn't two numbers: the add created its node before reading it, and left it
+        # (REVIEW.md HLP-46); a move failed partway
+        (
+            'a malformed position in an add op',
+            lambda p: [{**first, 'node': p}, {'op': 'add', 'definition': 'blur', 'position': [100]}],
+            'position',
+        ),
+        (
+            'a malformed position in a bitmap op',
+            lambda p: [{**first, 'node': p}, {'op': 'bitmap', 'path': '/no/such.png', 'position': 'left'}],
+            'position',
+        ),
+        # numbers float() reads but no position can be: the node was placed, then its print failed
+        # (REVIEW.md HLP-51)
+        (
+            'a position that is not a finite number',
+            lambda p: [{**first, 'node': p}, {'op': 'add', 'definition': 'blur', 'position': ['nan', 0]}],
+            'position',
+        ),
+        (
+            'an infinite position in a move op',
+            lambda p: [{**first, 'node': p}, {'op': 'move', 'node': p, 'position': [0, '1e400']}],
+            'position',
+        ),
+        (
+            'a malformed position in a move op',
+            lambda p: [{**first, 'node': p}, {'op': 'move', 'node': p, 'position': [1, 'x']}],
+            'position',
+        ),
         # only 'graph' names the graph; an empty node isn't one (REVIEW.md HLP-45)
         (
             'an empty node in a set op',
@@ -364,8 +393,9 @@ async def run(ctx: Ctx) -> None:
         # have snapshots of a graph with the same name (REVIEW.md TST-26)
         if not r_.is_error and 'saved: ' in text(r_):
             lib_snap = text(r_).split('saved: ', 1)[1].strip().splitlines()[0]
-            if os.path.isfile(lib_snap):
-                os.remove(lib_snap)
+            for leftover in (lib_snap, lib_snap + '.json'):  # the snapshot and its package note
+                if os.path.isfile(leftover):
+                    os.remove(leftover)
             if os.path.isdir(os.path.dirname(lib_snap)) and not os.listdir(os.path.dirname(lib_snap)):
                 os.rmdir(os.path.dirname(lib_snap))
         await c('open_graph', G)
@@ -415,4 +445,54 @@ async def run(ctx: Ctx) -> None:
     check('open_graph', 'two graphs with one name: the given one is focused', 'FOCUS_B=True' in t, found)
     check(
         'set_link_display', 'two graphs with one name: only the one in the editor counts as open', 'OPEN=0' in t, found
+    )
+    # the same with a copy of one file (a snapshot of a saved package opened to recover): both share
+    # its UID, so they must be told apart by file (REVIEW.md HLP-53)
+    orig, copy = os.path.join(scratch, 'same_uid_orig.sbs'), os.path.join(scratch, 'same_uid_copy.sbs')
+    t = text(
+        await c(
+            'execute_designer_code',
+            {
+                'code': helpers
+                + (
+                    '\nfrom sd.api.sbs.sdsbscompgraph import SDSBSCompGraph\n'
+                    'pkg = _PM.newUserPackage()\ng = SDSBSCompGraph.sNew(pkg)\n'
+                    "g.setIdentifier('mcp_selftest_same_uid')\nn = g.newNode('sbs::compositing::blur')\n"
+                    '_PM.savePackageAs(pkg, %r)\n_PM.saveCopyOfPackageAs(pkg, %r)\n'
+                    'cp = _PM.loadUserPackage(%r)\ncg = cp.findResourceFromUrl("mcp_selftest_same_uid")\n'
+                    "print('SAME_UID=%%s' %% (cp.getUID() == pkg.getUID()))\n"
+                    '_APP.getUIMgr().openResourceInEditor(cg)\n_process_events()\n'
+                    "print('FOUND_COPY=%%s' %% (find_graph('mcp_selftest_same_uid').getPackage().getFilePath() == %r))\n"
+                    'package_file_of(g)\n'  # the copy is in the editor, the original isn't
+                    'open_graph(g, node_id=n.getIdentifier())\n'
+                    "print('FOCUS_ORIG=%%s' %% (_current_graph().getPackage().getFilePath() == %r))\n"
+                )
+                % (orig, copy, copy, copy, orig)
+            },
+        )
+    )
+    time.sleep(0.5)  # unloaded in a separate call, as above
+    await c(
+        'execute_designer_code',
+        {
+            'code': (
+                'import sd\npm = sd.getContext().getSDApplication().getPackageMgr()\n'
+                'for p in list(pm.getUserPackages()):\n'
+                "    if (p.getFilePath() or '') in (%r, %r):\n        pm.unloadUserPackage(p)\n"
+            )
+            % (orig, copy)
+        },
+    )
+    found = ' | '.join(
+        l for l in t.splitlines() if l.startswith(('SAME_UID=', 'FOUND_COPY=', 'OPEN=', 'FOCUS_', 'sd.'))
+    )
+    check(
+        'apply_edits',
+        'a copy of a file in the editor is found, not the original with its UID',
+        'SAME_UID=True' in t and 'FOUND_COPY=True' in t,
+        found,
+    )
+    check('set_link_display', 'a copy of the file in the editor: the original is not open', 'OPEN=0' in t, found)
+    check(
+        'open_graph', 'a copy of the file in the editor: the original given is focused', 'FOCUS_ORIG=True' in t, found
     )

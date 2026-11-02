@@ -50,11 +50,12 @@ def apply_edits(ops: list[dict[str, Any]], graph: str | None = None) -> str:
     {"op": "expose", "node": "lv", "param": "...", "input_id"?: "...", "label"?: "...", "default"?: ...,
      "min"?: 0, "max"?: 1, "step"?: 0.1, "group"?: "..."}
     Refs let later ops use nodes added earlier in the batch ("ref" is optional, a string other than "graph";
-    the result prints each new node's id). Every node an op names is checked before any op runs: an unknown id,
-    a ref not added by an earlier op, a node an earlier delete op removes, or "graph" anywhere but a
-    set op refuses the whole batch, nothing changed. Other mistakes (a wrong connector or parameter
-    id, a bad value) show only when their op runs: ops run in order and stop at the first failing one
-    (earlier ops stay applied; Ctrl+Z on the graph reverts the whole batch).
+    the result prints each new node's id). Every node an op names, and every position, is checked before
+    any op runs: an unknown id, a ref not added by an earlier op, a node an earlier delete op removes,
+    "graph" anywhere but a set op, or a position that isn't [x, y] refuses the whole batch, nothing
+    changed. Other mistakes (a wrong connector or parameter id, a bad value) show only when their op
+    runs: ops run in order and stop at the first failing one (earlier ops stay applied, and the error
+    lists the nodes already added, with their refs; Ctrl+Z on the graph reverts the whole batch).
     add: definition is atomic ('levels', 'blend') or library ('tile_generator', 'hbao.sbs/hbao');
       position defaults to the right of the existing nodes; params as in set, and a bad one
       refuses the whole add, so no node is left.

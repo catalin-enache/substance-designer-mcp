@@ -4,6 +4,7 @@ import base64
 import os
 import re
 import tempfile
+from typing import cast
 
 from .common import FACTS, GRAPH_OF, TEST_GRAPH, Ctx, added_id, check, is_image, pixel_values, skip, text
 
@@ -329,3 +330,111 @@ async def run(ctx: Ctx) -> None:
         'OpenGL G=%.3f, DirectX G=%.3f' % (gl[1], dx[1]),
     )
     await c('apply_edits', {'ops': [{'op': 'delete', 'node': grad}, {'op': 'delete', 'node': nrm}], **G})
+    # a Dot node (passthrough) has no ID property: Designer's UI portals store it as <userId> in the
+    # file and in Designer's memory, not exposed to the API, so the API can't make one (AGENTS.md, Portals). Any id-like property here would be new
+    t = text(
+        await c(
+            'execute_designer_code',
+            {
+                'code': (
+                    'import sd\nfrom sd.api.sbs.sdsbscompgraph import SDSBSCompGraph\n'
+                    'from sd.api.sdproperty import SDPropertyCategory as C\n'
+                    'pm = sd.getContext().getSDApplication().getPackageMgr()\npkg = pm.newUserPackage()\ntry:\n'
+                    '    g = SDSBSCompGraph.sNew(pkg)\n    g.setIdentifier("mcp_selftest_dot")\n'
+                    '    n = g.newNode("sbs::compositing::passthrough")\n'
+                    '    ids = sorted(p.getId() for cat in (C.Annotation, C.Input, C.Output) for p in n.getProperties(cat))\n'
+                    '    print("DOT_PROPS=" + ",".join(ids))\n'
+                    'finally:\n    pm.unloadUserPackage(pkg)\n'
+                )
+            },
+        )
+    )
+    props = re.search(r'DOT_PROPS=(.*)', t)
+    check(
+        F,
+        'a Dot node has no ID property (portal IDs are not exposed to the API)',
+        props is not None
+        and props.group(1).split(',')
+        == sorted(
+            [
+                '$format',
+                '$outputsize',
+                '$pixelratio',
+                '$pixelsize',
+                '$randomseed',
+                '$tiling',
+                'input',
+                'unique_filter_output',
+            ]
+        ),
+        t.strip()[-200:],
+    )
+    # a package's UID is its file's <fileUID>: unchanged by saving and Save As, shared by a copy of
+    # the file loaded again; mHandle differs for every Python object wrapping one package. What
+    # snapshots' package notes rely on (REVIEW.md SRV-34, SRV-36)
+    uid_dir = os.path.join(scratch, 'uid_probe')
+    probe = (
+        'import os, re, shutil\nfrom sd.api.sbs.sdsbscompgraph import SDSBSCompGraph\n'
+        'pm = sd.getContext().getSDApplication().getPackageMgr()\nd = %r\nos.makedirs(d, exist_ok=True)\n'
+        'pkg = pm.newUserPackage()\ng = SDSBSCompGraph.sNew(pkg)\ng.setIdentifier("mcp_selftest_uid")\n'
+        'loaded = []\ntry:\n'
+        '    u0 = pkg.getUID()\n    pm.savePackageAs(pkg, os.path.join(d, "A.sbs"))\n    u1 = pkg.getUID()\n'
+        '    pm.savePackageAs(pkg, os.path.join(d, "B.sbs"))\n    u2 = pkg.getUID()\n'
+        '    f = re.search(r\'<fileUID v="([^"]+)"\', open(os.path.join(d, "B.sbs")).read()).group(1)\n'
+        '    shutil.copy(os.path.join(d, "B.sbs"), os.path.join(d, "C.sbs"))\n'
+        '    loaded.append(pm.loadUserPackage(os.path.join(d, "C.sbs")))\n    u3 = loaded[-1].getUID()\n'
+        '    print("SAME_UID=%%s" %% (u0 == u1 == u2 == f == u3))\n'
+        # a snapshot copy keeps it too (SRV-42); and a package using this one's graph, for the check below
+        '    pm.saveCopyOfPackageAs(pkg, os.path.join(d, "S.sbs"))\n'
+        '    s_uid = re.search(r\'<fileUID v="([^"]+)"\', open(os.path.join(d, "S.sbs")).read()).group(1)\n'
+        '    print("COPY_KEEPS_UID=%%s" %% (s_uid == u0))\n'
+        '    user = pm.newUserPackage()\n    loaded.append(user)\n    ug = SDSBSCompGraph.sNew(user)\n'
+        '    ug.setIdentifier("mcp_selftest_uid_user")\n    ug.newInstanceNode(g)\n'
+        '    pm.savePackageAs(user, os.path.join(d, "D.sbs"))\n'
+        # both wrappers alive at once: a freed one's address can be reused by the next
+        '    w1, w2 = g.getPackage(), g.getPackage()\n'
+        '    print("HANDLES_DIFFER=%%s" %% (w1.mHandle != w2.mHandle))\n'
+        'finally:\n    for p in [pkg] + loaded:\n        pm.unloadUserPackage(p)\n'
+    ) % uid_dir
+    t = text(await c('execute_designer_code', {'code': 'import sd\n' + probe}))
+    check(
+        F,
+        "a package's UID survives saving, a loaded copy and a snapshot copy share it; mHandle isn't stable",
+        'SAME_UID=True' in t and 'HANDLES_DIFFER=True' in t and 'COPY_KEEPS_UID=True' in t,
+        t.strip()[-150:],
+    )
+    # _fresh_uid's byte edit (snapshots of unsaved packages, REVIEW.md SRV-42) loads with the new UID; and
+    # re-stamping a package's own file (a snapshot restored over it) leaves a package using its graph
+    # working: the dependency is stored by file name, with <fileUID> "0"
+    from server_tools.snapshots import _fresh_uid
+
+    def own_uid(path: str) -> str:
+        with open(path, encoding='utf-8') as f:
+            return cast(re.Match[str], re.search(r'<fileUID v="([^"]+)"', f.read())).group(1)
+
+    s_sbs, b_sbs, d_sbs = (os.path.join(uid_dir, n) for n in ('S.sbs', 'B.sbs', 'D.sbs'))
+    if not all(os.path.isfile(p) for p in (s_sbs, b_sbs, d_sbs)):
+        check(F, 'a re-stamped UID loads, and a package using its graph still finds it', False, t.strip()[-150:])
+        return
+    b_uid = own_uid(b_sbs)
+    _fresh_uid(s_sbs)
+    _fresh_uid(b_sbs)
+    with open(d_sbs, encoding='utf-8') as f:
+        dep_zero = bool(re.search(r'<dependency><filename v="B\.sbs"/>.*?<fileUID v="0"/>', f.read()))
+    probe = (
+        'import sd\npm = sd.getContext().getSDApplication().getPackageMgr()\nloaded = []\ntry:\n'
+        '    loaded.append(pm.loadUserPackage(%r))\n    print("SNAP_LOADS_NEW=%%s" %% (loaded[-1].getUID() == %r))\n'
+        '    loaded.append(pm.loadUserPackage(%r))\n'
+        '    ug = loaded[-1].findResourceFromUrl("mcp_selftest_uid_user")\n'
+        '    ref = [n.getReferencedResource() for n in ug.getNodes()][0]\n'
+        '    pkg = ref.getPackage() if ref else None\n'
+        '    print("DEP_FOUND=%%s" %% (pkg is not None and pkg.getFilePath() == %r and pkg.getUID() == %r))\n'
+        'finally:\n    for p in loaded:\n        pm.unloadUserPackage(p)\n'
+    ) % (s_sbs, own_uid(s_sbs), d_sbs, b_sbs, own_uid(b_sbs))
+    t = text(await c('execute_designer_code', {'code': probe}))
+    check(
+        F,
+        'a re-stamped UID loads, and a package using its graph still finds it (stored by file name)',
+        own_uid(b_sbs) != b_uid and dep_zero and 'SNAP_LOADS_NEW=True' in t and 'DEP_FOUND=True' in t,
+        'dependency fileUID "0": %s; %s' % (dep_zero, t.strip()[-150:]),
+    )

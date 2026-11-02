@@ -2,14 +2,14 @@
 
 import os
 
-from .core import _bridge, _send, _tool, _with_undo
+from .core import _bridge, _control, _tool, _with_undo
 
 
 @_tool()
 def cancel_designer_job() -> str:
     """Abort the script currently running in Designer (and drop queued ones). Takes effect the
     next time Python code runs, so one long C++ call (e.g. graph.compute()) finishes first."""
-    return _send({'cmd': 'cancel'}, wait=10).get('output', '')
+    return _control('cancel', wait=10)
 
 
 @_tool()

@@ -9,16 +9,15 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from project_constants import PLUGIN  # on sys.path: the package's __init__ imports .core, which puts it there
 
-from .core import _bridge, _checked, _designer_running, _helpers_call, _send, _server_versions, _tool
+from .core import _bridge, _checked, _control, _designer_running, _helpers_call, _Refused, _server_versions, _tool
 
 
 @_tool()
 def designer_status() -> str:
-    """Report Designer's version, the bridge state (idle/running) and the open user packages,
-    plus this server's Python and library versions. While a job runs or waits, only the bridge
+    """Report Designer's version, the bridge state (idle/running) and the open user packages (an
+    unsaved one by its UID, as list_snapshots names it), plus this server's Python and library versions. While a job runs or waits, only the bridge
     state is reported: the package list would have to wait for the job."""
-    bridge = _send({'cmd': 'status'}, wait=10)
-    state = bridge.get('output', '')
+    state = _control('status', wait=10)
     if 'idle, 0 queued' not in state:  # the listing is a job too; it would queue (REVIEW.md SRV-22)
         return state + '\n' + _server_versions() + '\n(Designer version and package list skipped while a job runs)'
     return (
@@ -31,7 +30,8 @@ def designer_status() -> str:
             'app = sd.getContext().getSDApplication()\n'
             "print('Designer', app.getVersion())\n"
             'for p in app.getPackageMgr().getUserPackages():\n'
-            "    print('package:', p.getFilePath() or '(unsaved)')\n"
+            # unsaved: named by UID, as list_snapshots names them (REVIEW.md SRV-45)
+            "    print('package:', p.getFilePath() or '(an unsaved package, UID %s)' % p.getUID())\n"
             '    for r in p.getChildrenResources(True):\n'
             "        print('   ', type(r).__name__, r.getIdentifier())\n"
         )
@@ -53,7 +53,9 @@ def launch_designer(wait_s: int = 180) -> str:
     can then take up to about twice wait_s.
     Override the app location with SD_DESIGNER_APP."""
     try:
-        return 'Designer already running: ' + _send({'cmd': 'status'}, wait=5).get('output', '')
+        return 'Designer already running: ' + _control('status', wait=5)
+    except _Refused:
+        raise  # it runs and answers: starting or waiting for another wouldn't help
     except ToolError:
         pass
     # A Designer process without an answering bridge (still starting, a dialog, the plugin didn't
@@ -78,7 +80,9 @@ def launch_designer(wait_s: int = 180) -> str:
     while time.time() - started < wait_s:
         time.sleep(2)
         try:
-            status = _send({'cmd': 'status'}, wait=5).get('output', '')
+            status = _control('status', wait=5)
+        except _Refused:
+            raise
         except ToolError:
             if running and not _designer_running():
                 running, restarted = False, True
@@ -109,7 +113,9 @@ def quit_designer(discard_unsaved: bool = False, wait_s: int = 60) -> str:
     changes and lists them; save them first, or pass discard_unsaved=True to drop all of them
     (only when the user said so, or when every package listed is the self-test's own)."""
     try:
-        _send({'cmd': 'status'}, wait=5)
+        _control('status', wait=5)
+    except _Refused:
+        raise
     except ToolError as e:
         if not _designer_running():
             return 'Designer is not running.'

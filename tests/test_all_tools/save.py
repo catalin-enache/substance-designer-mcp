@@ -20,7 +20,7 @@ async def run(ctx: Ctx) -> None:
     check('save_package', 'by file path', 'saved %s' % sbs in t, t)
     state = GRAPH_OF % TEST_GRAPH + "p=g.getPackage()\nprint('STATE=%s %s' % (p.getFilePath(), p.isModified()))"
     before = text(await c('execute_designer_code', {'code': state}))
-    await c('snapshot_graph', {'label': 'state check', **G})
+    snap_path = text(await c('snapshot_graph', {'label': 'state check', **G})).split('saved: ', 1)[1].strip()
     after = text(await c('execute_designer_code', {'code': state}))
     check(
         'snapshot_graph',
@@ -28,6 +28,24 @@ async def run(ctx: Ctx) -> None:
         'STATE=%s False' % sbs in before and before == after,
         before + after,
     )
+    # a saved package's snapshot is Designer's exact copy, UID included: the notes tell it apart by file
+    # (REVIEW.md SRV-42, Option 1b; the unsaved case: layout.py). Loaded and unloaded in one call
+    t = text(
+        await c(
+            'execute_designer_code',
+            {
+                'code': GRAPH_OF % TEST_GRAPH
+                + (
+                    'pm = sd.getContext().getSDApplication().getPackageMgr()\n'
+                    'snap = pm.loadUserPackage(%r)\ntry:\n'
+                    '    print("SNAPSHOT_UID_SAME=%%s" %% (snap.getUID() == g.getPackage().getUID()))\n'
+                    'finally:\n    pm.unloadUserPackage(snap)\n'
+                )
+                % snap_path
+            },
+        )
+    )
+    check('snapshot_graph', "a saved package's snapshot keeps its UID", 'SNAPSHOT_UID_SAME=True' in t, t.strip()[-150:])
     xs = positions(text(await c('describe_graph', G)))
     await c(
         'apply_edits', {'ops': [{'op': 'move', 'node': clouds, 'position': [xs[clouds][0] + 50, xs[clouds][1]]}], **G}

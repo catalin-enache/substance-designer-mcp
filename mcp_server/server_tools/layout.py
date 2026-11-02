@@ -1,9 +1,11 @@
 """Readable graphs: arrange_graph, add_frame, add_comment, set_link_display (a file-level edit:
 snapshot, save, edit the .sbs, reload)."""
 
+import contextlib
 import os
 import re
 import shutil
+import tempfile
 import time
 import xml.etree.ElementTree as ET
 from typing import cast
@@ -11,8 +13,7 @@ from typing import cast
 from mcp.server.mcpserver.exceptions import ToolError
 
 from .core import _bridge, _checked, _edit, _helpers_call, _tool
-from .snapshots import _new_snapshot_path, _v, _xml_graph, snapshot_graph
-from .views import open_graph
+from .snapshots import _new_snapshot_path, _note_package, _v, _whole_or_none, _xml_graph, snapshot_graph
 
 
 @_tool()
@@ -21,7 +22,8 @@ def arrange_graph(
 ) -> str:
     """Tidy a graph: left-to-right columns by data flow, ordered to reduce crossing links,
     outputs in the last column. Only positions change (connections are never touched).
-    node_ids: arrange just these nodes, from their current top-left. spacing: [dx, dy]
+    node_ids: arrange just these nodes, from their current top-left (an id that names no node is
+    refused, nothing moved). spacing: [dx, dy]
     (default [200, 150]). One undo step."""
     return _edit(
         'arrange_graph(%r, %r, %r)' % (graph, node_ids, tuple(spacing or (200.0, 150.0))), 'Claude: arrange graph'
@@ -88,7 +90,10 @@ def set_link_display(
     snap = snapshot_graph(gid, 'before ' + mode + 's')
     live = snap.split('saved: ', 1)[1].strip()
     if os.path.exists(path):
-        _copy_sbs(path, _new_snapshot_path(gid, 'before %ss (file on disk)' % mode))
+        on_disk = _new_snapshot_path(gid, 'before %ss (file on disk)' % mode)
+        with _whole_or_none(on_disk):  # nothing half written or without its note (SRV-43)
+            _copy_sbs(path, on_disk)  # a saved file: keeps its UID, the notes tell it apart by file (SRV-42)
+            _note_package(on_disk, path)
     chosen, selected, total = _select_links(
         _xml_graph(ET.parse(live).getroot(), gid, live), mode, from_nodes, fanout_at_least, longer_than, links
     )
@@ -111,12 +116,13 @@ def set_link_display(
             if dt is None:
                 dt = ET.SubElement(c, 'displayType')
             dt.set('v', value)
-    tree.write(path, encoding='UTF-8', xml_declaration=True)
+    _replace_file(tree, path, live)
     _reload_package_file(path, live)
     reopen = ''
     if info.get('OPEN') == '1':
         try:
-            open_graph(gid)
+            # through the file: by name alone another package's tab of this name could open (SRV-34)
+            _checked(_bridge(_helpers_call('open_graph(graph_in_file(%r, %r))' % (path, gid)), timeout=60))
         except ToolError as e:
             reopen = ' WARNING: could not reopen %s: %s.' % (gid, e)
 
@@ -152,6 +158,49 @@ def _copy_sbs(src: str, dst: str) -> None:
 
 
 RELOAD_SETTLE_S = 0.5
+
+
+def _replace_file(tree: 'ET.ElementTree[ET.Element]', path: str, snapshot: str) -> None:
+    """Write the edited .sbs next to the user's file, then put it in place. A symlinked file is resolved
+    first, so the file it points to is the one replaced and the link stays (REVIEW.md SRV-48). A file with one
+    name is replaced by a rename, in one step, so it is either the one just saved or the edited one, never half
+    written (a full disk; SRV-46); its permission bits are kept, not its owner, ACLs or Finder tags. A file that
+    still has other hard-linked names after Designer's save is written into in place instead, from the complete
+    temporary file, so those names get the edit too and it stays the same file (SRV-51); if that write fails it
+    may be left half written, the temporary file is kept and the error names it. Once that write is done, a
+    temporary file that can't be removed just stays (SRV-52). On any other file error, creating the temporary
+    file included (SRV-49), the file isn't changed and the error says so, with the snapshot taken before."""
+    real = os.path.realpath(path)
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(prefix='.' + os.path.basename(real) + '.', suffix='.tmp', dir=os.path.dirname(real))
+        os.close(fd)
+        tree.write(tmp, encoding='UTF-8', xml_declaration=True)
+        if os.stat(real).st_nlink > 1:
+            edited, tmp = tmp, None  # from here on a failure keeps it: the file may be half written
+            try:
+                shutil.copyfile(edited, real)
+            except OSError as e:
+                raise ToolError(
+                    'could not write the edited package into %s (%s): it has other hard-linked names, so it is '
+                    'written in place and may be incomplete now. The edited package is %s (copy it over %s), and '
+                    'the snapshot taken before is %s' % (path, e, edited, path, snapshot)
+                ) from e
+            with contextlib.suppress(OSError):  # the edit is in: the reload must still run (SRV-52)
+                os.remove(edited)
+            return
+        shutil.copymode(real, tmp)
+        os.replace(tmp, real)
+    except BaseException as e:
+        if tmp is not None:
+            with contextlib.suppress(OSError):
+                os.remove(tmp)
+        if not isinstance(e, OSError):
+            raise
+        raise ToolError(
+            'could not write the edited package (%s); %s is unchanged, as saved just before, and the '
+            'snapshot taken before is %s' % (e, path, snapshot)
+        ) from e
 
 
 def _reload_package_file(path: str, snapshot: str | None = None) -> None:

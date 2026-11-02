@@ -62,6 +62,69 @@ async def run(ctx: Ctx) -> None:
         },
     )
     check('apply_edits', 'stops at failing op', r_.is_error and 'op 1 (connect) failed' in text(r_), text(r_))
+    # the error names the node the batch had already added, so a retry needn't duplicate it (REVIEW.md SRV-35)
+    left = [
+        l.split()[0] for l in text(await c('describe_graph', G)).splitlines() if ' levels @' in l and l.split()[0] != lv
+    ]
+    check(
+        'apply_edits',
+        'a failed batch names the nodes it added',
+        len(left) == 1 and "%s (ref 'x')" % left[0] in text(r_),
+        text(r_).strip()[-200:] + ' | ' + str(left),
+    )
+    # a node the batch added and then deleted isn't listed as added when a later op fails (REVIEW.md HLP-52)
+    r_ = await c(
+        'apply_edits',
+        {
+            'ops': [
+                {'op': 'add', 'definition': 'blur', 'ref': 'gone'},
+                {'op': 'delete', 'node': 'gone'},
+                {'op': 'set', 'node': lv, 'params': {'nope': 1}},
+            ],
+            **G,
+        },
+    )
+    check(
+        'apply_edits',
+        'a failed batch leaves out a node it already deleted',
+        r_.is_error and 'ops 0-1 were applied' in text(r_) and 'added:' not in text(r_),
+        text(r_).strip()[-200:],
+    )
+    # positions as numeric strings work, as main's float() conversion allowed (REVIEW.md HLP-50)
+    t = text(
+        await c(
+            'apply_edits',
+            {'ops': [{'op': 'add', 'definition': 'blur', 'ref': 's', 'position': ['100', '-200.5']}], **G},
+        )
+    )
+    string_pos = re.search(r"'s': '(\d+)'", t)
+    try:
+        check('apply_edits', 'add: a position as numeric strings', 'added' in t and '@(100,-200)' in t, t.strip()[:120])
+    finally:
+        if string_pos:
+            await c('apply_edits', {'ops': [{'op': 'delete', 'node': string_pos.group(1)}], **G})
+    # a node added without a ref is named too (REVIEW.md HLP-49)
+    had = {
+        l.split()[0] for l in text(await c('describe_graph', G)).splitlines() if l.split() and l.split()[0].isdigit()
+    }
+    r_ = await c(
+        'apply_edits',
+        {'ops': [{'op': 'add', 'definition': 'blur'}, {'op': 'set', 'node': lv, 'params': {'nope': 1}}], **G},
+    )
+    new = [
+        l.split()[0]
+        for l in text(await c('describe_graph', G)).splitlines()
+        if l.split() and l.split()[0].isdigit() and l.split()[0] not in had
+    ]
+    try:
+        check(
+            'apply_edits',
+            'a failed batch names a node added without a ref',
+            r_.is_error and len(new) == 1 and new[0] in text(r_).strip().splitlines()[-1],
+            text(r_).strip()[-200:] + ' | ' + str(new),
+        )
+    finally:
+        await c('apply_edits', {'ops': [{'op': 'delete', 'node': n} for n in new], **G})
     # the "its node was added" note only when a node really was (REVIEW.md HLP-5)
     r_ = await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'not_a_real_node', 'params': {'a': 1}}], **G})
     check(

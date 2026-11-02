@@ -52,6 +52,10 @@ def describe_graph(
         pass
     if node_ids:
         wanted = {str(i) for i in node_ids}
+        found = {n.getIdentifier() for n in nodes}
+        unknown = [str(i) for i in node_ids if str(i) not in found]
+        if unknown:  # said, not dropped silently (REVIEW.md HLP-47)
+            print('not found: %s' % ', '.join(unknown))
         nodes = [n for n in nodes if n.getIdentifier() in wanted]
     for n in nodes[:limit]:
         pos = n.getPosition()

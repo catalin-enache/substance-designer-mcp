@@ -33,7 +33,7 @@ import threading
 import time
 import traceback
 from collections.abc import Callable
-from types import FrameType
+from types import FrameType, TracebackType
 from typing import Any, TypedDict
 
 from PySide6 import QtCore
@@ -101,13 +101,24 @@ def expected_auth(token: str, nonce: str) -> str:
     return hmac.new(token.encode('utf-8'), nonce.encode('utf-8'), hashlib.sha256).hexdigest()
 
 
-def _make_tracer(deadline: float | None, cancel: threading.Event) -> _TraceFunc:
+def _make_tracer(deadline: float | None, cancel: threading.Event, pending: list[bool]) -> _TraceFunc:
     """Raises ScriptAborted in the running script. Python unsets a trace function that raises
     (sys.settrace docs), so the abort fires once and the script's finally blocks and context
-    exits, such as UndoGroup committing its transaction, run to the end."""
+    exits, such as UndoGroup committing its transaction, run to the end. Where Python only reports
+    an exception (a __del__, a weakref callback, a Qt slot), the abort is dropped: _run's hooks set
+    `pending`, and the very next traced event raises it, wherever it is: dropped again in another
+    finalizer, it is re-armed again, until it lands outside one (checking only every 64th event
+    could land in the callback every time, in a loop of a fixed number of events; REVIEW.md PLG-25,
+    PLG-30). The plugin's own code (those hooks, the output buffer) is never traced, so the abort
+    can't land there (PLG-26)."""
     ticks = [0]
 
-    def tracer(frame: FrameType, event: str, arg: Any) -> _TraceFunc:
+    def tracer(frame: FrameType, event: str, arg: Any) -> _TraceFunc | None:
+        if frame.f_code.co_filename == _OWN_FILE:
+            return None
+        if pending[0]:
+            pending[0] = False
+            raise ScriptAborted('cancelled by client' if cancel.is_set() else 'timed out')
         ticks[0] += 1
         # Checking every event is cheap enough, but skip most to keep overhead low
         if ticks[0] % 64 == 0:
@@ -118,6 +129,9 @@ def _make_tracer(deadline: float | None, cancel: threading.Event) -> _TraceFunc:
         return tracer
 
     return tracer
+
+
+_OWN_FILE = _make_tracer.__code__.co_filename
 
 
 class _TailBuffer(io.TextIOBase):
@@ -158,14 +172,53 @@ def _run(code: str, path: str | None, timeout: float | None, cancel: threading.E
     deadline = time.monotonic() + timeout if timeout else None
     started = time.monotonic()
     previous = sys.gettrace()
+    previous_hook = sys.unraisablehook
+    previous_excepthook = sys.excepthook
+
+    def rearm() -> None:
+        # the abort was dropped and the tracer unset: tracing back on, and the next traced event
+        # raises it, in the script, a module it imported or a loop driven from C (REVIEW.md PLG-27,
+        # PLG-30; measured on Python 3.12 and Designer's 3.13: the frames already running get their
+        # events again without anything set on them)
+        pending[0] = True
+        sys.settrace(tracer)
+
+    def untraced(hook: Callable[..., Any], *args: Any) -> None:
+        # Python drops an exception raised in a hook, unreported to this one, so the abort must not
+        # land in the previous hooks (REVIEW.md PLG-26); tracing goes back as it was: off once the
+        # abort reached the script, so its cleanup runs to the end
+        was = sys.gettrace()
+        sys.settrace(None)
+        try:
+            hook(*args)
+        finally:
+            sys.settrace(was)
+
+    def unraisable(info: Any) -> None:  # a __del__, a weakref callback
+        if isinstance(info.exc_value, ScriptAborted):
+            rearm()
+        else:
+            untraced(previous_hook, info)
+
+    def excepthook(kind: type[BaseException], value: BaseException, tb: TracebackType | None) -> None:
+        # PySide6 reports an exception raised in a Python slot here, and emit() returns (REVIEW.md PLG-29)
+        if isinstance(value, ScriptAborted):
+            rearm()
+        else:
+            untraced(previous_excepthook, kind, value, tb)
+
+    pending = [False]
+    tracer = _make_tracer(deadline, cancel, pending)
     try:
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             compiled = compile(code, path or '<%s>' % NAME, 'exec')
-            sys.settrace(_make_tracer(deadline, cancel))
+            sys.unraisablehook, sys.excepthook = unraisable, excepthook
+            sys.settrace(tracer)
             try:
                 exec(compiled, scope)
             finally:
                 sys.settrace(previous)
+                sys.unraisablehook, sys.excepthook = previous_hook, previous_excepthook
     except ScriptAborted as e:
         result['ok'] = False
         result['error'] = 'ScriptAborted: %s after %.1fs\n%s' % (

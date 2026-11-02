@@ -13,6 +13,7 @@ from .core import (
     SDTypeEnum,
     SDValue,
     Sequence,
+    _position,
     cast,
     find_graph,
     fmt,
@@ -198,6 +199,8 @@ def add_node(
     position: Sequence[float] | None = None,
     params: dict[str, Any] | None = None,
 ) -> str:
+    if position is not None:
+        position = _position(position)
     g = find_graph(graph_id)
     existing = list(g.getNodes())
     node = _resolve_definition(g, definition)
@@ -274,6 +277,8 @@ def import_bitmap(
     from sd.api.sdresource import EmbedMethod
     from sd.api.sdresourcebitmap import SDResourceBitmap
 
+    if position is not None:
+        position = _position(position)
     methods = {'link': EmbedMethod.Linked, 'copy': EmbedMethod.CopiedAndLinked}
     if embed not in methods:
         raise RuntimeError('embed must be one of %s' % ', '.join(methods))

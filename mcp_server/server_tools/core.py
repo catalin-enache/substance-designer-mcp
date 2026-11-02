@@ -193,6 +193,19 @@ def _send(request: dict[str, Any], wait: float) -> Reply:
         raise ToolError('Designer closed the connection without a reply (it may be starting or quitting).') from e
 
 
+class _Refused(ToolError):
+    """The plugin answered but refused the request (its reply's ok is false), e.g. 'invalid token'."""
+
+
+def _control(cmd: str, wait: float) -> str:
+    """A control request ('status', 'cancel') and its output; a refusal raises _Refused with the
+    plugin's error instead of reading as an answer (REVIEW.md SRV-33)."""
+    reply = _send({'cmd': cmd}, wait=wait)
+    if not reply.get('ok'):
+        raise _Refused('Designer refused the %r request: %s' % (cmd, reply.get('error') or 'no reason given'))
+    return reply.get('output', '')
+
+
 def _bridge(code: str, path: str | None = None, timeout: float | None = None) -> str:
     # timeout: seconds before the plugin aborts the script (None = no limit)
     request: dict[str, Any] = {'code': code, 'path': path}

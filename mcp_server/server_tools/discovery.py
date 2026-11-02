@@ -16,8 +16,9 @@ def describe_graph(
     incoming connections (`input<-sourceNodeId.output`). `graph` is the graph identifier
     (default: the graph open in Designer's UI). `include_params` adds every parameter that
     differs from its default, and each one driven by a graph input or a function
-    (`param <- graph input 'x'`, `param <- a function`). Use `node_ids` to focus on a few nodes; `limit` caps how many
-    nodes are listed (the rest are counted)."""
+    (`param <- graph input 'x'`, `param <- a function`). Use `node_ids` to focus on a few nodes (ids that
+    name no node are listed as not found); `limit` caps how many nodes are listed (the rest are
+    counted)."""
     return _checked(
         _bridge(_helpers_call('describe_graph(%r, %r, %r, %d)' % (graph, node_ids, include_params, limit)), timeout=60)
     )

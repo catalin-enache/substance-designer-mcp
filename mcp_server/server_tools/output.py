@@ -38,7 +38,8 @@ def export_outputs(graph: str, output_dir: str, outputs: list[str] | None = None
     """Compute a graph inside Designer and save its output nodes' textures directly (no
     sbscooker/sbsrender), named after the output identifiers. Reflects the current, possibly
     unsaved, state of the graph. outputs: subset of output identifiers (default: all); names that
-    match no output are listed. Two outputs with one identifier are refused (one file each)."""
+    match no output are listed, and so are outputs that computed no image. Two outputs with one
+    identifier are refused (one file each)."""
     return _checked(
         _bridge(
             _helpers_call('export_outputs(%r, %r, %r, %r)' % (graph, _local_path(output_dir), outputs, file_format)),

@@ -1,6 +1,7 @@
 """The bridge plugin's server, run outside Designer: Qt's timer is replaced by a thread that
 drains the job queue, everything else (sockets, authentication, queue, timeouts) is real."""
 
+import gc
 import hashlib
 import hmac
 import importlib.util
@@ -72,9 +73,14 @@ def bridge(plugin: types.ModuleType) -> Iterator[Bridge]:
 
 
 def _call(
-    plugin: types.ModuleType, request: dict[str, Any] | None, token: str | None = None, raw: bytes | None = None
+    plugin: types.ModuleType,
+    request: dict[str, Any] | None,
+    token: str | None = None,
+    raw: bytes | None = None,
+    sign_empty: bool = False,
 ) -> Any:
-    """One request; token=None uses the real token, raw sends these bytes instead of JSON."""
+    """One request; token=None uses the real token, raw sends these bytes instead of JSON;
+    sign_empty signs with an empty token over the nonce sent (a client guessing one)."""
     with socket.create_connection(('127.0.0.1', plugin.PORT), timeout=10) as s:
         hello = b''
         while not hello.endswith(b'\n'):
@@ -82,7 +88,7 @@ def _call(
         nonce = json.loads(hello)['nonce']
         if raw is None:
             secret = token if token is not None else Path(plugin.TOKEN_FILE).read_text().strip()
-            if secret:
+            if secret or sign_empty:
                 request = {
                     **cast(dict[str, Any], request),  # raw=None: the caller passed a request
                     'auth': hmac.new(secret.encode(), nonce.encode(), hashlib.sha256).hexdigest(),
@@ -146,10 +152,9 @@ def test_an_empty_token_file_does_not_open_the_bridge(plugin: types.ModuleType) 
     open(plugin.TOKEN_FILE, 'w').close()
     srv = plugin._Server()
     try:
-        assert (
-            _call(plugin, {'cmd': 'status', 'auth': plugin.expected_auth('', 'anything')}, token='')['error']
-            == 'invalid token'
-        )
+        # signed with the empty token over this connection's own nonce: what would match if the
+        # bridge kept an empty token (a fixed nonce never matches, whatever the token: REVIEW.md TST-95)
+        assert _call(plugin, {'cmd': 'status'}, token='', sign_empty=True)['error'] == 'invalid token'
     finally:
         srv.stop()
 
@@ -311,6 +316,209 @@ def test_an_abort_lets_cleanup_code_finish(plugin: types.ModuleType) -> None:
     result = plugin._run(code, None, None, cancel)
     assert not result['ok'] and 'ScriptAborted: cancelled by client' in result['error']
     assert 'cleanup finished 199990000' in result['output']
+
+
+# REVIEW.md PLG-25: the abort is raised in whatever frame runs at a check; raised in a finalizer
+# (every sd API object has a Python __del__ calling release()) or a weakref callback, Python
+# reports it as "Exception ignored" and drops it, and the tracer is gone: the script ran on to
+# the end with ok=True. Several runs, since where the abort lands varies from run to run.
+_FINALIZER_LOOP = """
+import time, weakref
+class Obj:
+    def __init__(self):
+        self.h = 1
+    def release(self):
+        self.h = None
+    def __del__(self):
+        if self.h:
+            self.release()
+end = time.monotonic() + 3
+while time.monotonic() < end:
+    o = Obj()
+print('ran to the end')
+"""
+_CALLBACK_LOOP = """
+import time, weakref
+class Obj:
+    pass
+def gone(ref):
+    x = 1
+    y = x + 1
+end = time.monotonic() + 3
+while time.monotonic() < end:
+    o = Obj()
+    r = weakref.ref(o, gone)
+    del o
+print('ran to the end')
+"""
+
+
+@pytest.mark.parametrize('code', [_FINALIZER_LOOP, _CALLBACK_LOOP], ids=['__del__', 'weakref callback'])
+@pytest.mark.parametrize('how', ['timeout', 'cancel'])
+def test_an_abort_landing_in_a_finalizer_still_stops_the_script(plugin: types.ModuleType, code: str, how: str) -> None:
+    for _ in range(8):
+        cancel = threading.Event()
+        if how == 'cancel':
+            threading.Timer(0.2, cancel.set).start()
+        started = time.monotonic()
+        result = plugin._run(code, None, 0.2 if how == 'timeout' else None, cancel)
+        took = time.monotonic() - started
+        assert not result['ok'] and 'ScriptAborted' in result['error'], (result['output'][-300:], took)
+        assert 'ran to the end' not in result['output'] and took < 2, (result['output'][-300:], took)
+
+
+_RAISING_FINALIZER_LOOP = """
+import time
+class Obj:
+    def __del__(self):
+        raise ValueError('release failed')
+end = time.monotonic() + 3
+while time.monotonic() < end:
+    o = Obj()
+print('ran to the end')
+"""
+_LONG_FINALIZER = """
+import time
+class Obj:
+    def __del__(self):
+        end = time.monotonic() + 3
+        while time.monotonic() < end:
+            pass
+o = Obj()
+del o
+print('ran to the end')
+"""
+
+
+@pytest.mark.filterwarnings('ignore::pytest.PytestUnraisableExceptionWarning')  # the finalizers raise on purpose
+@pytest.mark.parametrize(
+    'code',
+    [_RAISING_FINALIZER_LOOP, _LONG_FINALIZER],
+    ids=['a finalizer raising an ordinary error', 'a long finalizer'],
+)
+@pytest.mark.parametrize('how', ['timeout', 'cancel'])
+def test_an_abort_survives_finalizers_that_raise_or_run_long(plugin: types.ModuleType, code: str, how: str) -> None:
+    # REVIEW.md PLG-26: the "Exception ignored" report of a raising __del__ ran traced inside the
+    # unraisable hook, the abort landed there and was dropped for good; PLG-28: no abort was raised
+    # while a __del__ ran, so a long or stuck one couldn't be stopped
+    for _ in range(6):
+        cancel = threading.Event()
+        if how == 'cancel':
+            threading.Timer(0.2, cancel.set).start()
+        started = time.monotonic()
+        result = plugin._run(code, None, 0.2 if how == 'timeout' else None, cancel)
+        took = time.monotonic() - started
+        assert not result['ok'] and 'ScriptAborted' in result['error'], (result['error'][-200:], took)
+        assert 'ran to the end' not in result['output'] and took < 2, (result['output'][-200:], took)
+    gc.collect()  # the scripts' objects, kept by reference cycles: their warnings stay in this test
+
+
+@pytest.mark.filterwarnings('ignore::pytest.PytestUnraisableExceptionWarning')  # the finalizers raise on purpose
+def test_an_abort_survives_a_python_unraisable_hook(plugin: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    # PLG-26: the hook in place before the job (Designer's, or pytest's) may be Python code: the
+    # plugin calls it for every other "Exception ignored", untraced, or the abort could land in it
+    reported: list[str] = []
+
+    def python_hook(info: Any) -> None:
+        for _ in range(50):  # some Python work for the tracer to land in
+            reported.append(str(info.exc_value))
+
+    monkeypatch.setattr(sys, 'unraisablehook', python_hook)
+    for _ in range(6):
+        started = time.monotonic()
+        result = plugin._run(_RAISING_FINALIZER_LOOP, None, 0.2, threading.Event())
+        took = time.monotonic() - started
+        assert not result['ok'] and 'ScriptAborted' in result['error'], (result['error'][-200:], took)
+        assert took < 2, took
+    assert reported  # the other errors still reached it
+    gc.collect()  # the scripts' objects, kept by reference cycles: their warnings stay in this test
+
+
+def test_an_abort_landing_in_a_slot_reported_through_excepthook_still_stops_the_script(
+    plugin: types.ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # REVIEW.md PLG-29: PySide6 hands an exception raised in a Python slot to sys.excepthook and
+    # emit() returns normally (measured with Designer's own Python and PySide6); an abort landing in
+    # a slot was dropped there. emit() below does what PySide's does, in Python
+    import builtins
+
+    def emit(slot: Any) -> None:
+        try:
+            slot()
+        except BaseException:
+            sys.excepthook(*sys.exc_info())
+
+    monkeypatch.setattr(builtins, 'EMIT_', emit, raising=False)
+    monkeypatch.setattr(sys, 'excepthook', lambda *a: None)
+    code = (
+        'import time\ndef slot():\n    a = 1\n    b = 2\n    c = a + b\n    return c\n'
+        'end = time.monotonic() + 3\nwhile time.monotonic() < end:\n    EMIT_(slot)\n'
+        "print('ran to the end')\n"
+    )
+    for _ in range(8):
+        started = time.monotonic()
+        result = plugin._run(code, None, 0.2, threading.Event())
+        took = time.monotonic() - started
+        assert not result['ok'] and 'ScriptAborted' in result['error'], (result['error'][-200:], took)
+        assert took < 2, took
+
+
+def test_an_abort_stops_a_loop_driven_by_c_code(plugin: types.ModuleType) -> None:
+    # REVIEW.md PLG-30: after a dropped abort only frames already running were resumed; in a loop
+    # driven from C (map, deque) the only one, the module frame, waits for the C call to return; and
+    # each drop appended that frame again (quadratic). Every __init__ and __del__ is a new frame
+    code = (
+        'import collections\nclass Obj:\n    def __init__(self, i):\n        self.i = i\n'
+        '    def __del__(self):\n        x = self.__dict__.get("i", 0)\n        y = x + 1\n        z = y + 1\n'
+        'collections.deque(map(Obj, range(2 * 10 ** 5)), maxlen=0)\n'  # before the fix: about 60 s
+        "print('ran to the end')\n"
+    )
+    for _ in range(3):
+        started = time.monotonic()
+        result = plugin._run(code, None, 0.2, threading.Event())
+        took = time.monotonic() - started
+        assert not result['ok'] and 'ScriptAborted' in result['error'], (result['error'][-200:], took)
+        assert took < 2, took
+
+
+@pytest.mark.filterwarnings('ignore::pytest.PytestUnraisableExceptionWarning')  # the finalizers raise on purpose
+def test_cleanup_after_an_abort_runs_to_the_end_despite_a_raising_finalizer(plugin: types.ModuleType) -> None:
+    # PLG-2 with PLG-26's hook: an "Exception ignored" report during the cleanup must not switch
+    # tracing back on, or the abort would fire again inside the cleanup
+    cancel = threading.Event()
+    cancel.set()
+    code = (
+        'class Obj:\n    def __del__(self):\n        raise ValueError("release failed")\n'
+        'try:\n    while True:\n        pass\nfinally:\n    total = 0\n'
+        '    for i in range(20000):\n        o = Obj()\n        total += i\n'
+        "    print('cleanup finished', total)\n"
+    )
+    result = plugin._run(code, None, None, cancel)
+    assert not result['ok'] and 'ScriptAborted: cancelled by client' in result['error']
+    assert 'cleanup finished 199990000' in result['output']
+    gc.collect()  # the scripts' objects, kept by reference cycles: their warnings stay in this test
+
+
+def test_an_abort_stops_a_loop_in_a_module_the_script_imports(plugin: types.ModuleType, tmp_path: Path) -> None:
+    # REVIEW.md PLG-27: after a dropped abort only the script's own frames were resumed; a loop in an
+    # imported module's function, with the weakref-callback loop's fixed number of events per pass,
+    # could keep every check in the callback
+    (tmp_path / 'helper_loop.py').write_text(
+        'import time, weakref\n'
+        'class Obj:\n    pass\n'
+        'def gone(ref):\n    x = 1\n    y = x + 1\n'
+        'def loop():\n    end = time.monotonic() + 3\n    while time.monotonic() < end:\n'
+        '        o = Obj()\n        r = weakref.ref(o, gone)\n        del o\n'
+    )
+    for extra in range(8):  # a different number of events before the call each time
+        code = 'import sys\nsys.path.insert(0, %r)\n' % str(tmp_path) + 'x = 1\n' * extra
+        code += 'import helper_loop\nhelper_loop.loop()\nprint("ran to the end")\n'
+        started = time.monotonic()
+        result = plugin._run(code, None, 0.2, threading.Event())
+        took = time.monotonic() - started
+        sys.modules.pop('helper_loop', None)
+        assert not result['ok'] and 'ScriptAborted' in result['error'], (result['error'][-200:], took)
+        assert 'ran to the end' not in result['output'] and took < 2, (extra, took)
 
 
 def test_a_trickling_client_is_dropped_by_a_total_deadline(bridge: Bridge) -> None:

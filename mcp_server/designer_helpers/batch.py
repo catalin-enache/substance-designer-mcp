@@ -1,6 +1,6 @@
 """apply_edits: several edits in one call."""
 
-from .core import Any, APIException, SDSBSCompGraph, find_graph
+from .core import Any, APIException, SDSBSCompGraph, _position, find_graph
 from .editor import move_nodes
 from .edits import add_node, connect, delete_nodes, disconnect, import_bitmap, set_params
 from .graph_inputs import expose_param
@@ -48,6 +48,11 @@ def _check_batch(g: SDSBSCompGraph, ops: list[dict[str, Any]]) -> None:
                 )
             if kind == 'delete':
                 deleted[key] = i
+        if kind == 'move' or (kind in ('add', 'bitmap') and op.get('position') is not None):
+            try:
+                _position(op.get('position'))
+            except RuntimeError as e:
+                raise RuntimeError('op %d (%s): %s; nothing was applied' % (i, kind, e)) from e
         ref = op.get('ref')
         if kind in ('add', 'bitmap') and ref not in (None, ''):
             if not isinstance(ref, str):
@@ -65,6 +70,7 @@ def apply_edits(identifier: str | SDSBSCompGraph | None, ops: list[dict[str, Any
     _check_batch(g, ops)
     gid = g  # the object, so every op edits this graph even if another has the same name
     refs: dict[str, str] = {}
+    made: list[str] = []  # every node an add or bitmap op made, with its ref if any (REVIEW.md HLP-49)
 
     def node(value: Any) -> Any:
         return refs.get(value, value)
@@ -75,11 +81,13 @@ def apply_edits(identifier: str | SDSBSCompGraph | None, ops: list[dict[str, Any
         try:
             if kind == 'add':
                 new_id = add_node(gid, op['definition'], op.get('position'), op.get('params'))
+                made.append(new_id + (' (ref %r)' % op['ref'] if op.get('ref') else ''))
                 if op.get('ref'):
                     refs[op['ref']] = new_id
                     print('  ref %r = %s' % (op['ref'], new_id))
             elif kind == 'bitmap':
                 new_id = import_bitmap(gid, op['path'], op.get('embed', 'link'), op.get('position'), op.get('name'))
+                made.append(new_id + (' (ref %r)' % op['ref'] if op.get('ref') else ''))
                 if op.get('ref'):
                     refs[op['ref']] = new_id
                     print('  ref %r = %s' % (op['ref'], new_id))
@@ -92,7 +100,9 @@ def apply_edits(identifier: str | SDSBSCompGraph | None, ops: list[dict[str, Any
             elif kind == 'move':
                 move_nodes(gid, {node(op['node']): op['position']})
             elif kind == 'delete':
-                delete_nodes(gid, [node(op['node'])])
+                gone = str(node(op['node']))
+                delete_nodes(gid, [gone])
+                made[:] = [m for m in made if m.split()[0] != gone]  # no longer added (REVIEW.md HLP-52)
             elif kind == 'expose':
                 expose_param(
                     gid,
@@ -110,6 +120,8 @@ def apply_edits(identifier: str | SDSBSCompGraph | None, ops: list[dict[str, Any
                 raise RuntimeError('unknown op %r (add, bitmap, set, connect, disconnect, move, delete, expose)' % kind)
         except (Exception, APIException) as e:
             done = 'ops 0-%d were applied' % (i - 1) if i else 'no earlier op was applied'
+            if made:  # the nodes already added, so a retry needn't add them again (SRV-35, HLP-49)
+                done += ' (added: %s)' % ', '.join(made)
             # an add can fail after creating its node (in setting its params): say so only then
             added = kind in ('add', 'bitmap') and g.getNodes().getSize() > nodes_before
             raise RuntimeError(
