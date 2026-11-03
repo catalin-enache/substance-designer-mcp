@@ -13,14 +13,16 @@ from .core import (
     SDTypeEnum,
     SDValue,
     Sequence,
+    _default_output,
     _graph_to_edit,
+    _output_note,
     _position,
     cast,
     fmt,
     node_kind,
     os,
 )
-from .describe import _library_path, _load_library
+from .describe import _library_graph
 from .graph_inputs import _driving_graph, _plain_binding
 
 
@@ -172,12 +174,7 @@ def _resolve_definition(g: SDSBSCompGraph, definition: str) -> SDNode:
     if atomic_id in atomic_definition_ids(g):
         node: SDNode = g.newNode(atomic_id)
         return node
-    path, graph_id = _library_path(definition)
-    if not os.path.exists(path):
-        raise RuntimeError('%r is neither an atomic node nor a library package (%s)' % (definition, path))
-    res = _load_library(path).findResourceFromUrl(graph_id)
-    if res is None:
-        raise RuntimeError('graph %r not found in %s' % (graph_id, path))
+    res = _library_graph(definition)
     return cast(SDNode, g.newInstanceNode(res))  # the resource was found just above
 
 
@@ -234,14 +231,17 @@ def connect(
     g = _graph_to_edit(graph_id)
     src, dst = _node(g, from_node), _node(g, to_node)  # nodes, never the graph (REVIEW.md HLP-41)
     outs = [p.getId() for p in src.getProperties(SDPropertyCategory.Output)]
-    out_id = from_output or (outs[0] if outs else None)
+    out_id, how = from_output, None
+    if not from_output and outs:
+        out_id, how = _default_output(src, outs)
     if out_id not in outs:
         raise RuntimeError('output %r not on node %s; outputs: %s' % (out_id, from_node, outs))
     ins = [p.getId() for p in dst.getProperties(SDPropertyCategory.Input) if p.isConnectable()]
     if to_input not in ins:
         raise RuntimeError('input %r not on node %s; connectors: %s' % (to_input, to_node, ins))
     src.newPropertyConnectionFromId(out_id, dst, to_input)
-    print('connected %s.%s -> %s.%s' % (from_node, out_id, to_node, to_input))
+    note = ' (%s)' % _output_note(how) if how and len(outs) > 1 else ''
+    print('connected %s.%s -> %s.%s%s' % (from_node, out_id, to_node, to_input, note))
 
 
 def disconnect(graph_id: str | SDSBSCompGraph | None, node_id: str | None, input_id: str) -> None:

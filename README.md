@@ -82,7 +82,7 @@ saved file (details: [AGENTS.md](AGENTS.md), Portals).
 | Area | Tools |
 |---|---|
 | Connection | `get_guide` (the full agent guide; Claude reads it before its first Designer tool call and confirms), `designer_status`, `launch_designer` (starts Designer and waits for it), `quit_designer` (closes it; refuses while there are unsaved changes), `cancel_designer_job`, `read_designer_log` |
-| Finding nodes | `search_nodes` (built-in nodes and Designer's library, except the materials in its `materials/pbr` folder), `describe_node` (parameters, types, ranges, descriptions, dropdown values) |
+| Finding nodes | `search_nodes` (built-in nodes and Designer's library of compositing graphs, its ready-made materials included, the ones it hides on request), `describe_node` (parameters, types, ranges, descriptions, dropdown values) |
 | Inspecting | `describe_graph`, `list_graph_inputs`, `preview_node` (image of any node), `node_stats` (exact pixel numbers), `check_tiling` (does it tile seamlessly?), `compare_to_reference` (how far a node's tones are from a reference image, in numbers) |
 | Tuning | `sweep_param` (try several values of a parameter side by side; the original value is restored) |
 | Safety | `snapshot_graph`, `list_snapshots`, `diff_graph` (what changed vs the saved file or a snapshot) |

@@ -67,6 +67,14 @@ async def run(ctx: Ctx) -> None:
     )
     t2 = text(await c('describe_graph', {'node_ids': [lvn], **G}))
     check('apply_edits', "connect: 'output' picks the output", 'input1<-%s.normal' % bev in t2, t2)
+    # no tags: the first output, and it says so (REVIEW.md HLP-65, HLP-66)
+    r_ = await c('preview_node', {'node_id': bev, 'max_size': 64, **G})
+    check(
+        'preview_node',
+        'an untagged node: the first output, stated',
+        "'height', the first of 2" in text(r_),
+        text(r_)[:150],
+    )
     r_ = await c('preview_node', {'node_id': bev, 'output': 'normal', 'max_size': 128, **G})
     check(
         'preview_node',

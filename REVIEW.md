@@ -7,6 +7,7 @@ bug, not reproduced, won't fix), always with a resolution line. Format and rules
 `.claude/skills/project-code-review/` (SKILL.md, TEMPLATE.md).
 
 **Confidence.**
+
 - *Confirmed*: the defect is visible in the code as quoted.
 - *Plausible*: the code path exists, but whether it bites depends on Designer, the OS or timing.
 - *Verified by hand*: checked against the code after the review, not only by the reviewer.
@@ -22,9 +23,9 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
 | High | 0 | 1 |
 | Medium-high | 0 | 2 |
 | Medium | 0 | 20 |
-| Low-medium | 0 | 63 |
-| Low | 0 | 194 |
-| **Total** | **0** | **280** |
+| Low-medium | 0 | 70 |
+| Low | 0 | 207 |
+| **Total** | **0** | **300** |
 
 ## Review log
 
@@ -66,7 +67,6 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
   - **Docs:** tool count (43) and README Tools table match the code; every tool named in AGENTS.md
     exists; no ROADMAP item already done; environment variables and defaults match.
 
-
 ### 2026-10-29: venv and Python version, from a user question, at `ec6ad79`
 
 - **How:** the user asked how a deleted venv is restored, whether an agent in a fresh clone would
@@ -76,6 +76,7 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
 - **Findings:** 4 low (INS-11, SRV-13, TST-11, TST-12); INS-5, already open, covers the missing
   venv's silent failure.
 - **Suggested order:** together with INS-5, before the other low findings.
+
 ### 2026-10-29: branch `review-fixes` against `main`, at `5f69229`
 
 - **How:** five read-only reviewers, one per area (plugin and protocol; `server.py`; the helpers;
@@ -100,6 +101,7 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
   uninstaller's snapshot regex matches the server's names; the requirements' lower bounds install
   on Python 3.10 (pillow 12, numpy 2.2: untested, as README says); README's tool count (43) and
   Tools table; no secrets or personal paths in tracked files.
+
 ### 2026-10-30: branch `review-fixes` against `main`, the diff only, at `9152176`
 
 - **How:** five read-only reviewers, one per area, each given only its part of
@@ -121,6 +123,7 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
   SRV-15 can't start two Designers; `.mcp.json`'s quoting and `-x` on a `.exe` under Git Bash;
   `Kept` before the error branch; the example's `BaseException` clean-up re-raises the abort; the
   HLP-13 check's leftover values don't change later measurements.
+
 ### 2026-10-30: branch `review-fixes` against `main`, the diff only, at `4da1095`
 
 - **How:** five read-only reviewers, one per area, each given only its part of
@@ -140,6 +143,7 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
   `start()` runs once in `launch_designer`; `closing` cleared in a `finally`; a window that ignores
   Close still gets the fallback at 5 s; `give_up` measured from the `quit_designer` call; the
   example's two injection points exist once each; patched classes restored in `finally`.
+
 ### 2026-10-30: branch `review-fixes` against `main`, the diff only, at `cd809ab`
 
 - **How:** four read-only reviewers (server, helpers, installer, tests and docs; the plugin hadn't
@@ -158,6 +162,7 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
   fallback's 35 s timer chain is harmless (it only ticks while the event loop runs, and acts only
   on a visible window); AGENTS.md's quit text matches the code; the installer's rollback re-raises
   the original error, and each leftover is listed once.
+
 ### 2026-10-30: branch `review-fixes` against `main`, the diff only, at `07c12c0`
 
 - **How:** one read-only reviewer: only `tests/test_all_tools.py` had changed since the last
@@ -171,6 +176,7 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
   Designer and its `normal_quit` counterpart in the relaunched one, so no slot carries over; both
   marker paths are in the run's own temporary folder; the snapshot path is parsed from
   `snapshot_graph`'s "saved: <path>" result, whatever reminder precedes it.
+
 ### 2026-10-30: whole project at `de7cad6` (main, after the review-fixes squash)
 
 - **How:** five read-only reviewers, one per area (plugin and protocol; `server.py`; the helpers;
@@ -189,6 +195,7 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
   order; `_other_end`; no `fitInView`/`scale`, no Undo outside the self-test's own graph; patched
   classes restored; the uninstaller's lambdas bind their values; the two skills agree with
   AGENTS.md and each other; no secrets or personal paths tracked.
+
 ### 2026-10-30: branch `review-2` against `main`, the diff only, at `e7f3760`
 
 - **How:** three read-only reviewers (plugin, CLI and server; helpers and example; tests and docs),
@@ -455,7 +462,6 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
   after the loop; the resolutions' wording matches the code.
 - **Longest chain still growing:** TST-76 → TST-78, generation 2.
 
-
 ### 2026-10-31: full typing (mypy strict over every Python file), working tree on `review-3` after `5014f61`
 
 - **How:** not a review: while annotating every file, mypy strict pointed at places where a value can be
@@ -464,7 +470,6 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
 - **Findings:** 1 low-medium (HLP-41, the same defect class as HLP-31).
 - **Checked and found fine:** the other narrowings mypy asked for (regex matches and `.sbs` elements the
   code relies on, Optional sd getters) only fail where the code already reported a failure.
-
 
 ### 2026-10-31: branch `review-3` against `main`, the full diff (30 commits), at `6846f6e`
 
@@ -1008,6 +1013,58 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
 - **Checked and found fine:** the status table against the checkboxes, section by section; every test named by this branch's entries exists; every entry has a resolution; no old
   wording of the refusal or "whole library" left; only the expected folders in the diff; no personal paths or debugging in it; nothing left in the snapshot folder after the live run.
 - **Longest chain still growing:** none.
+
+### 2026-11-02: branch `library-subfolders` against `main`, the diff only, at `a582ed9` plus the working tree
+
+- **How:** one read-only reviewer, no Designer: `_library_path` against `main`'s on every shape (and `ntpath` for Windows); the real `_library_index` on the real install, each printed definition fed back; a material cooked by hand with `sbscooker`; the callers, docs and live checks. Verified by hand: SRV-55 (the 4 hidden materials), SRV-56 (the `Resources` group in `fabric_002.sbs`), TST-113's `from_output` (`batch.py` reads `output`). Unit tests 394 passed; live self-test 350/350.
+- **Resolutions assessed:** TST-110's note, "whole holds again", is questioned by SRV-55.
+- **Findings:** 6: 1 low-medium (SRV-55), 5 low (SRV-56, SRV-57, HLP-60, HLP-61, TST-113). The refusal held for every path outside the folder; nothing that worked on `main` resolves differently.
+- **Suggested order:** SRV-55 (the harm item 41 names), SRV-57 (a regression), SRV-56 (measure it first), HLP-60, HLP-61, TST-113.
+- **Notes (not entries):** the 143 grouped graphs at the top level have the same shape as SRV-56 (8 visible, `constant_values.sbs/constant_float`...), from before this branch. `apply_edits` ignores an op field it doesn't know, silently (TST-113's `from_output`), also from before; a material's 9 outputs, `diffuse` first, make that costlier. The guard's `realpath` has no test (replacing it with the plain path passes). `[PBR Materials/Paper ]` has a trailing space from Designer's file.
+- **Checked and found fine:** every outside-the-folder shape refused (`..` anywhere, absolute, links out; a link staying inside allowed; Windows forms via `ntpath`); `./hbao` and `materials/../hbao` now resolve, inside the folder; a null byte or a surrogate gives a clean refusal; both callers refuse before creating anything; `_check_batch`, `describe_graph` and `diff_graph` don't read a definition; the index takes 1.7 s for 549 files; no change in the top 30 for `levels`, `blur`, `normal`, `noise`, `grunge`, `height`, `blend`, `filter`, `edge`, `color`, `material`; only `materials` and `pbr` shift, as they should; `_copy_sbs` leaves `sbs://` alone; the cooker needs only the saved `.sbs` (480 `sbs://` dependencies, every target exists), and a missing one fails clearly; the clean-up in a Designer already running; `test_selftest_safety.py`.
+- **Longest chain still growing:** HLP-57 → TST-110 → SRV-55, generation 4, a defect in the tool's result.
+
+### 2026-11-02: branch `library-subfolders` against `main`, the diff only, second round, at
+`a582ed9` plus the working tree
+
+- **How:** one read-only reviewer on a scratch copy, no Designer: every op dict in the repo against `_OP_FIELDS`, with mutations of the table; `_graphs_in` against `root.iter('graph')` on the real install; the kinds of resource in the library's files; the docs and REVIEW.md. Verified by hand: HLP-64's line, TST-114 (`functions_hash.sbs` holds `hash11`, a `<function>`), TST-115's sentence. Unit tests 425 passed; live self-test 358/358.
+- **Resolutions assessed:** HLP-62, SRV-58 and HLP-63's code hold. Questioned: HLP-63 (HLP-64: other resource kinds), SRV-55 (TST-114: "whole"), HLP-62 (TST-115: its sentence). SRV-55's resolution is out of date since SRV-58: a note under it.
+- **Findings:** 3 low (HLP-64, TST-114, TST-115), plus, found by hand between the rounds and missing from the first round's entry: HLP-62 (low-medium), SRV-58 and HLP-63 (low), all resolved.
+- **Suggested order:** HLP-64 (measure first), then TST-114 and TST-115 (narrow).
+- **Notes (not entries):** `test_the_self_test_passes_no_field_an_op_doesnt_take` reads literal op dicts, as its helper's docstring says: not `dict(op=...)`, `**` spreads or a variable kind, none used today. The new live batch check doesn't remove nodes if a regression adds them, like the check above it; no later check counts that graph's nodes absolutely.
+- **Checked and found fine:** nothing legitimate is refused (every op dict in the docstring, tests and example; AGENTS, README, ROADMAP and skills hold none); ops gain no keys on the way; a non-dict op, a non-string key and `None` values; an unknown kind reported before its fields, `nod` as an unknown field; "nothing was applied" true on every refusal; the table's drift guards under seven mutations; about 30 shapes of `_library_path`; `describe_node`'s temporary package unloaded on each refusal; `_graphs_in` finds exactly what `root.iter('graph')` did (549 files, no difference, no nested graph) and `url` matches the file for all 1025 entries, each definition round-tripping; `search_nodes`' empty line, `include_hidden` and `limit`; the status table.
+- **Longest chain still growing:** HLP-55 → HLP-57 → TST-110 → SRV-55 → TST-114, generation 5, wording.
+
+### 2026-11-02: branch `library-subfolders` against `main`, the diff only, third round, at
+`a582ed9` plus the working tree
+
+- **How:** one read-only reviewer, no Designer, a new angle since the tool code hadn't changed: an agent using `bricks_001` from search to render. It ran `sbscooker` and `sbsrender` from the app on hand-built files. Verified by hand: HLP-65 (`outs[0]`, `preview_node`'s image-only result; the order `diffuse` first was printed by Designer in this branch's first probe), SRV-59 (the `connRefOutput` line). Unit tests 425 passed; live self-test 358/358 at the last code change.
+- **Resolutions assessed:** none questioned; none changed since the second round.
+- **Findings:** 2: 1 low-medium (HLP-65), 1 low (SRV-59). Neither is a regression from `main`; the materials make them matter.
+- **Suggested order:** HLP-65, then SRV-59, with TST-114 and TST-115 still open.
+- **Notes (not entries):** all 30 materials default `normal_format` to DirectX, and rendering `bricks_001` with 1 flips green exactly, so an agent targeting Blender has to set it. 22 of the 30 share one `<fileUID>`, and two more pairs share theirs: `_load_library` compares by path, the cooker handled two in one graph; two instances in one graph inside Designer, saved and reloaded, not measured. `_nodes_bbox` assumes 96x96, and a node with 6-9 pins may be taller (cosmetic; as for `material_blend` on `main`). A grouped instance is `instance:Resources/stains` in a diff and `instance:stains` in `describe_graph`.
+- **Checked and found fine:** `search_nodes` puts `bricks_001` first for `brick`, `bricks`, `brick wall`, `brick material`; `describe_node`'s length (about 3.4k characters; item 12 covers the long ones); inputs and outputs of one name aren't confused (a material has no connectors; those inputs are bools); `set` and `expose` by reading the code; `arrange_graph`, `add_frame`, `describe_graph` key on ids; `render_sbs` and `sbsar_info` through the real code on two materials: default size from `defaultParentSize`, `size_log2` followed, `_copy_sbs` into a deeper folder still cooks; the index's first run on a worker thread, 1.76 s, 199 MB peak, later searches about 1 ms.
+- **Longest chain still growing:** none new; HLP-65 and SRV-59 follow nothing.
+
+### 2026-11-02: branch `library-subfolders` against `main`, the user's questions after the third round, at
+`a582ed9` plus the working tree
+
+- **How:** no reviewer: the user asked about two sentences of the HLP-65 report (the default output; `preview_node`'s return value), and whether the problem reaches custom packages. Measured by hand in Designer and on the install. Unit tests and live self-test: see HLP-66.
+- **Resolutions assessed:** HLP-65's "the default stays the first output" is questioned by HLP-66: "a rule for one kind of node" had no count behind it; 49 of the library's 120 visible multi-output graphs have a base colour output, 46 of them with a `diffuse` variant first. `preview_node`'s changed return has no direct Python caller in the repo but its own unit test.
+- **Findings:** 2 low-medium: HLP-66 (resolved), SRV-60 (open; seen by the user during a self-test run).
+- **Notes (not entries):** measured, closing the third round's questions: two materials sharing a `<fileUID>` in one graph, saved and reloaded, keep their own references and pixels; `getGraphNodeBBox` gives 96x96 for a material node. A self-test run failed "an empty clipboard has mimeData ...; clipboard kept" once ("the clipboard did not come back"), in a run with a bug of another check, and passed in every run since; not explained (the user's own copying would do it). The second pytest warning seen twice didn't come back in six runs.
+- **Longest chain still growing:** HLP-65 → HLP-66, generation 2.
+
+### 2026-11-02: branch `library-subfolders` against `main`, the diff only, fourth round, at
+`a582ed9` plus the working tree
+
+- **How:** one read-only reviewer on a scratch copy, no Designer: HLP-66 and SRV-60, the two changes no reviewer had seen, with faked sd objects and the install's files. Verified by hand: HLP-67 (`names[0]` over `getChildrenResources(False)`; `find_graph` choosing the graph in the editor), SRV-61 (the two `'restored'` tests), TST-116 (the gate and the `get` with a default). Unit tests 455 passed; live self-test 375/375 at the last code change.
+- **Resolutions assessed:** HLP-66's rule holds under every node kind tried, and the job's abort isn't swallowed (`ScriptAborted` derives from `BaseException`). SRV-60's check is on every save path and before anything is written. Questioned: SRV-60 (HLP-67, HLP-68, TST-116), HLP-66 (SRV-61, TST-116).
+- **Findings:** 4: 2 low-medium (HLP-67, HLP-68), 2 low (SRV-61, TST-116). HLP-68 needs Designer.
+- **Suggested order:** HLP-68 (measure: a wrong refusal blocks the safety net), HLP-67, SRV-61, TST-116.
+- **Notes (not entries):** a user's graph with two outputs tagged base colour takes the first tagged with a matching name; none in the library. An .sbsar instance not measured; any failure falls back to the first output. Counting hidden graphs, 57 are tagged base colour, including `Creases_Filter`'s `Diffuse`.
+- **Checked and found fine:** the `except` hides only a fallback to the first, which the note states truly; atomic, bitmap, svg and output nodes; one tag read per sweep value against a compute; `^no output given: ` can't match a user's name; a wrong `output` raises before any note; `preview_node` has no other caller; `connect`'s default changes only the intended `metal_003` in the self-test; `diff_graph` doesn't regress, as it starts with the same save on `main`; the refusal comes before `makedirs`, and `set_link_display` refuses before any snapshot; a single line reaches the agent whole; `render.py`'s custom block saves nothing; `test_selftest_safety.py`; the library counts reproduced.
+- **Longest chain still growing:** HLP-65 → HLP-66 → SRV-61, generation 3, a narrow defect in the tool's code.
 
 ---
 
@@ -2687,7 +2744,6 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
   - Questioned by TST-111 (2026-11-02).
 
 
-
 - [x] **HLP-58 · The one library refusal misleads in three situations** · follows HLP-55, generation 2 · `mcp_server/designer_helpers/core.py` (`_library_refusal`, `find_graph`) · confirmed · verified by hand · found 2026-11-02
   - **Defect.** (1) By name, the message gives the name as the only obstacle, because `find_graph` doesn't know the caller
     wants to edit: "tools don't find its graphs by name". (2) "open in Designer's editor" really means in focus:
@@ -2741,6 +2797,86 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
   - Note (2026-11-02): the guard named above sees one string naming both `loadUserPackage` and `DefaultResourcesDir`, not a snippet joined by `+`, an f-string, a path
     built elsewhere or tool calls (TST-112).
 
+
+- [x] **SRV-55 · "Whole library" still hides 4 materials, and the empty result doesn't say so** · follows TST-110, generation 4 · `mcp_server/server_tools/discovery.py` (`search_nodes`), `AGENTS.md`, `README.md` · confirmed · verified by hand · found 2026-11-02
+  - **Defect.** 4 of the 30 ready-made materials are `hideInLibrary` (`classic_brown_concrete`, `concrete_005`, `concrete_pavement`, `tiles_003`), and overall 506 of 1025 entries are hidden, while neither the empty result nor the docstring mentions `include_hidden`, and the docs now say "whole".
+  - **Scenario.** The harm ROADMAP item 41 names: `search_nodes('concrete pavement')` says "No node types match", though Designer ships it (probed), so the agent rebuilds it or says Designer lacks it. The sentence warning about that was removed from AGENTS.md in this branch.
+  - **Fix.** When hidden graphs match, say so: "N hidden graphs match too: include_hidden=True", at least on an empty result. Describe the parameter in the docstring, and say "except hidden ones" in the docs.
+  - **Resolution: done** (commit `1b06225`).
+    - **Test:** `test_a_hidden_material_stays_hidden_but_the_result_says_so` and `test_hidden_matches_are_counted_next_to_visible_ones_too` (`test_library_subfolders.py`). Live: `search_nodes('concrete pavement')` said only "No node types match".
+    - **Fix:** the result says "1 hidden graph(s) match too: include_hidden=True", on an empty result and as a last line next to others. The docstring describes the parameter; AGENTS.md and README say the hidden ones come on request. `test_hidden_entries` and `test_limit` updated for the new line, no weaker.
+  - Note (2026-11-02): SRV-58 kept the line for an empty result only, so "as a last line next to others" no longer holds, and `test_hidden_matches_are_counted_next_to_visible_ones_too` became `test_the_hidden_count_only_comes_with_an_empty_result`.
+  - Questioned by TST-114 (2026-11-02).
+
+
+- [x] **HLP-62 · `apply_edits` reports success for an op whose fields it doesn't know** · `mcp_server/designer_helpers/batch.py` (`_check_batch`, `apply_edits`) · confirmed · verified by hand · found 2026-11-02
+  - **Defect.** An op's unknown fields are ignored, silently. On `main` too; logged as a note in this branch's first review, measured since.
+  - **Scenario.** Measured in Designer: `{'op': 'add', 'definition': 'levels', 'postion': [999, 999], 'parmas': {'x': 1}}` says "applied 1 op(s)", with the node at (800, 0) and no parameter set; `{'op': 'connect', ..., 'from_output': 'nonsense'}` says "connected ... unique_filter_output". The agent believes the edit was made as asked. With a material's 9 outputs, `diffuse` first, a mistyped `output` wires the wrong map: this project's own self-test did it (TST-113).
+  - **Fix.** `_check_batch` refuses an op with a field its kind doesn't take, before anything runs, naming the field and the fields it does take; it already refuses other mistakes that way. A table of the fields per op, kept with the ones `test_server.py` checks. A unit test and a live check.
+  - **Resolution: done** (commit `1b06225`).
+    - **Test:** `test_a_field_the_op_doesnt_take_refuses_the_batch` (`test_batch_fields.py`), one row per op kind: none was refused. Live: a batch with `postion` added both nodes and said applied; now refused with nothing added.
+    - **Cause:** the ops read the fields they know with `op['x']` / `op.get('x')`, and nothing looked at the others.
+    - **Fix:** `_OP_FIELDS` in `batch.py`, and `_check_batch` refuses another field before any op runs, naming the field and what the op takes. The docstring says so. Live 358/358.
+    - **Also covered:** `test_the_op_fields_are_the_ones_each_op_reads` keeps the table equal to what each op reads; `test_every_documented_field_passes` runs each op with all its fields; `test_the_self_test_passes_no_field_an_op_doesnt_take` reads the self-test's literal ops (only its deliberate `postion`). Missing required fields still show when the op runs, as the docstring says.
+  - Questioned by TST-115 (2026-11-02).
+
+
+- [x] **HLP-65 · With no `output`, tools use a material's `diffuse` map, black on metals, and two of them don't say so** · `mcp_server/designer_helpers/edits.py` (`connect`), `mcp_server/designer_helpers/describe.py` (`_with_node_texture`), `mcp_server/server_tools/views.py` (`preview_node`), `mcp_server/server_tools/measure.py` (`sweep_param`) · confirmed · verified by hand · found 2026-11-02
+  - **Defect.** `out_id = from_output or (outs[0] if outs else None)` and `use(texture, outs[0])`: the first output is the spec/gloss workflow's `diffuse`, whose toggle is off by default on all 30 materials. `preview_node` returns only an image, and `sweep_param`'s text neither names the output nor documents `output`. As on `main`; item 41 puts these materials in agents' hands.
+  - **Scenario.** Rendered with `sbsrender`, mean of RGB, `diffuse` against `basecolor`: `metal_003` 0.000 / 0.637, `metal_006` 0.017 / 0.380, `metal_plate_004` 0.156 / 0.436; the other 25 are equal, so there it goes unnoticed. (1) `preview_node` on `metal_003` shows solid black with no text: the agent concludes the material is broken. (2) `connect` with no `output` wires black into a base colour; it does print `connected m.diffuse -> ...`. (3) `sweep_param(m, 'normal_intensity', [...])` on `bricks_001` gives identical tiles (1/65535 at most) while the `normal` map moves by 34/255: the agent concludes the parameter does nothing.
+  - **Fix.** Measure in Designer first. Name the output in `preview_node`'s and `sweep_param`'s results and document `output` in `sweep_param`'s docstring; when `connect` falls back to the first of several outputs, say so; a line in AGENTS.md's library facts (a material's outputs start with `diffuse`; `normal_format` defaults to DirectX). Consider `basecolor` as the default for nodes having it.
+  - **Resolution: done** (commit `1b06225`).
+    - **Test:** `test_default_output.py` (`connect`, `preview_node`). Live on `metal_003`: `connect` and `preview_node` and `sweep_param` with no `output` didn't say which; the sweep's text read `R 0.000..0.000`, so black, as the reviewer's renders said. Designer's order, `diffuse` first, printed by `apply_edits`.
+    - **Fix:** `_first_output_note`, in `connect`'s line and printed by `_with_node_texture`: "no output given: 'diffuse', the first of 9 (...); pass output to pick another", only when the node has several and none was named. `preview_node` now returns it after the image; `sweep_param` adds it to its text and documents `output`. AGENTS.md's library facts say it, with `normal_format`. The default stays the first output: `basecolor` as a default would be a rule for one kind of node.
+    - **Also covered:** `node_stats`, `check_tiling` and `compare_to_reference` already name the output in their results. Live checks in `render.py`: a metal's `diffuse` black and `basecolor` not (`node_stats`), `normal_format` DirectX by default. Live 365/365.
+  - Questioned by HLP-66 (2026-11-02).
+
+
+- [x] **HLP-66 · With no `output`, a tool took a material's first map, though the graph says which is the base colour** · follows HLP-65, generation 2 · `mcp_server/designer_helpers/core.py` (`_default_output`), `edits.py` (`connect`), `describe.py` (`_with_node_texture`), `mcp_server/server_tools/measure.py`, `compare.py`, `views.py` · confirmed · verified by hand · found 2026-11-02
+  - **Defect.** HLP-65 kept the first output and added a note, calling `basecolor` "a special rule for one kind of node". Counted since: 49 of 120 visible multi-output library graphs have one, 23 of them outside the materials. And `node_stats`, `check_tiling` and `compare_to_reference` named the output but carried no note: `check_tiling` called a black map "tiles seamlessly".
+  - **Scenario.** `preview_node` on `metal_003` is black; `node_stats` gives zeros, which seems to confirm a broken material; a base colour input gets wired black.
+  - **Fix.** Asked for by the user: the output tagged base colour, else the first, and the note on all six tools. By the `usages` tag, not the name: custom packages name it as they like, and a name proves nothing.
+  - **Resolution: done** (commit `1b06225`).
+    - **Measured first (by hand, Designer 16):** the tag reads through `getReferencedResource().getOutputNodes()`, about 1.5 ms, from an instance of `metal_003` and of a custom package's `albedo` (not its first output); `bevel` and `rgba_split` have no tags. 86 of the 120 graphs have tags, and in the library all 49 tagged base colour are named `basecolor` or `baseColor`.
+    - **Test:** `test_default_output.py`, the rule and its neighbours (a name without the tag, a tag on an output the node lacks, an atomic node, a bitmap resource, a missing annotation). Live: `metal_003` gave `.diffuse`, mean 0.0000 and "ratio 0.00"; now `.basecolor`, with the note. `bevel`: "'height', the first of 2".
+    - **Fix:** `_default_output` decides, for `connect` and `_with_node_texture`, so for all six tools; `_node_pixels` keeps the note for `node_stats`, `check_tiling` and `compare_to_reference`. Docstrings and AGENTS.md's library facts say so.
+    - **Changed behaviour:** on those 46 graphs a call with no `output` gets another map than before, and the note says which. Live 369/369.
+  - Questioned by SRV-61, TST-116 (2026-11-02).
+
+
+- [x] **SRV-60 · Saving a graph that uses an unsaved package opens a Save As dialog on the user's screen** · `mcp_server/designer_helpers/save_export.py`, `files.py` (`save_package_copy`), and whatever calls them · confirmed · found 2026-11-02
+  - **Defect.** Seen by the user: during a self-test run, two Save As prompts appeared after a new check put an instance of an unsaved package into a graph that was then saved. Cancelling gave `diff_graph` an `APIException: SDApiError.Undefined`. So `savePackage` and `saveCopyOfPackageAs` probably ask where to save the dependency. Not measured apart from that run, to avoid prompting the user again. As on `main`.
+  - **Scenario.** An agent instances a graph of another unsaved package, then calls `save_package`, `snapshot_graph` or `diff_graph`. Designer shows a modal dialog, and the code runs on its main thread, so the bridge waits on a person; with nobody there, the tool hangs until its timeout. AGENTS.md warns about modal file dialogs blocking the bridge for "Save Render...".
+  - **Fix.** Measure it, with the user's agreement (a dialog appears). Then refuse before saving when a dependency's package has no file, naming it. The self-test's check was moved so it saves nothing.
+  - Note (2026-11-02), measured with the user's agreement (Designer 16, scratch packages): `savePackage`, `saveCopyOfPackageAs` and `savePackageAs` of a package instancing a graph of a never-saved package each open a `QFileDialog` titled "Save Dependency 'dep_unsaved'?". Rejected, each raises `APIException: SDApiError.Undefined`: no file written, the dependency still unsaved, the host still modified. With a saved dependency, no dialog. The call doesn't return while the dialog is up (the first took 117 s here, until the user pressed Cancel: a timer calling `reject()` every 400 ms didn't close it; the user cancelled two of the three dialogs, so at most one closed by the timer, not known which), and it is one C++ call on Designer's main thread, so per AGENTS.md neither a timeout nor a cancel can stop it.
+  - **Resolution: done** (commit `1b06225`).
+    - **Measured first (by hand, Designer 16):** an unsaved dependency's `getFilePath()` is empty, read with no dialog; a library or saved one gives its path. A saved dependency with unsaved changes opens no dialog, nor does one itself using an unsaved package, so only direct, never-saved dependencies count. A timer calling `reject()` every 400 ms didn't close the first dialog, so nothing can be done once it is up.
+    - **Test:** `test_unsaved_dependency.py`: every save path, and what must still save. Live: the helper's refusal first, and the real tools only once it works, so a regression fails with no dialog on the user's screen (on the unfixed code: a failed check, no dialog).
+    - **Fix:** `_refuse_unsaved_dependencies` in `core.py`, before `savePackage`, `savePackageAs` and `saveCopyOfPackageAs`: in `save_package`, `save_package_copy` (`snapshot_graph`, `diff_graph`) and `package_file_of` (`set_link_display`). The message names the graph and what to do; doing it works (live). Docstrings and AGENTS.md say so. Live 375/375.
+    - **Also covered:** `create_graph` saves a new package, with no dependencies. `execute_designer_code` isn't checked, on purpose; AGENTS.md says how a script can. A refused `snapshot_graph` leaves an empty folder for that graph, as other failures there do.
+  - Questioned by HLP-67, HLP-68, TST-116 (2026-11-02).
+  - Note (2026-11-02): "so a regression fails with no dialog" holds for a broken helper only; a save path without its call would still open one (TST-116). Run the unit tests first.
+
+
+- [x] **HLP-67 · The unsaved-dependency refusal can't always be followed, and can name the wrong thing** · follows SRV-60, generation 2 · `mcp_server/designer_helpers/core.py` (`_refuse_unsaved_dependencies`) · confirmed · verified by hand · found 2026-11-02
+  - **Defect.** (1) "Save that package first (save_package with save_as)" needs a graph name that reaches it, and every new graph is "New_Graph": with the host and the dependency both so named, `find_graph` takes the one in the editor, the host, and the same refusal comes back; with neither in the editor it says the name is ambiguous. `save_package` takes a graph id or a file, and this package has no file. Probed with fakes. (2) `names[0]` over `getChildrenResources(False)` isn't filtered to graphs or to the one in use: "uses 'Resources'", or the wrong graph of two.
+  - **Scenario.** An agent builds two new graphs, instances one in the other, and saves: "<host> uses 'New_Graph'", which reads as the host using itself, and following the advice loops. No work is lost; the agent can't get out with the tools.
+  - **Fix.** Name the dependency by its package (`_package_name`, with its UID) and list its graphs. When a name doesn't reach it, say so: open that package's graph in the editor, rename it, or ask the user. Check `open_graph` reaches it.
+  - **Resolution: done** (commit `1b06225`).
+    - **Test:** `test_unsaved_dependency.py`: one name with the host in the editor, one name with nothing in the editor, a graph a name reaches, a folder first and two graphs. Each failed on the old message.
+    - **Fix:** each dependency is named by its graphs (all of them, inside groups, graphs only) and its UID, and told what works: `save_package('<graph>', save_as=...)` when that name finds it (`_found_by_name`); otherwise with it in focus, by the user, `save_package` with no graph. Live 379/379.
+    - **Not checked live:** the second route's save, which depends on a graph in focus: `find_graph(None)` and `_package_of` read from the code.
+  - Note (2026-11-03): now checked live, at the user's request: two graphs of one name, the dependency put in focus by code standing in for the user, `save_package` with no graph and `save_as` saves it, and the host then saves. Live 384/384. Tried by hand too, the same day: the user double-clicked the dependency's `New_Graph` in the Explorer, it was the graph in focus, `save_package(save_as=...)` saved it with no graph named, and the host then saved by its file, both unmodified, the host storing `THE_DEP.sbs`, no dialog.
+
+- [x] **HLP-68 · The refusal may block every tool save where Designer would open no dialog** · follows SRV-60, generation 2 · `mcp_server/designer_helpers/core.py` (`_refuse_unsaved_dependencies`) · plausible · found 2026-11-02
+  - **Defect.** Any dependency with an empty path is refused, but only one still loaded and in use was measured. Not measured: the unsaved package closed while the host keeps its instance (path empty, `getPackage()` perhaps `None`, which `test_the_refusal_names_a_dependency_it_cant_reach` pins on fakes); the instance deleted or undone, if `getDependencies()` still lists it; a never-saved package instancing its own graph (a saved one omits `?himself`, per Adobe's reference, but in memory?).
+  - **Scenario.** In any of those, if the entry remains and no dialog would open, `save_package`, `snapshot_graph`, `diff_graph` and `set_link_display` all refuse, with advice that can't be done: a regression from `main`, on the safety net. In the third, the package could never be saved by the tools, `save_as` included.
+  - **Fix.** Measure the three, warning the user first if a save is needed; refuse only where a dialog appears, and word what's left truly. A live check for the package instancing its own graph.
+  - **Resolution: not a bug for the refusal; done for its advice** (commit `1b06225`).
+    - **Measured (by hand, Designer 16):** the instance deleted: the dependency isn't listed. A never-saved package instancing its own graph: not listed. Its package closed with the node kept: listed, empty path, its package no longer a user package but still loaded, and a real `saveCopyOfPackageAs` opened the dialog, so refusing is right (the job's 300 s limit landed only at 564 s, when the user cancelled). That node deleted: no longer listed.
+    - **Fix:** the closed case can't be saved by a tool, so it says so: delete the nodes using it, or the user saves it from Designer's dialog. Live checks, in a Designer the self-test started, since a closed package stays loaded: each of the four states.
+    - **Also:** `getPackage()` returning `None` wasn't seen; it's handled as closed.
+  - Note (2026-11-03), measured at the user's request: `getPackage()` is `None` for a dependency whose file is gone, with its path set: not refused, and `saveCopyOfPackageAs`, `savePackage` and `savePackageAs` all go through with no dialog (a live check for the first part, a unit test). A dependency hand-edited to an empty file name isn't listed at all. So no path with no package still wasn't seen; that branch stays, as closed, on fakes only.
 
 ## Low
 
@@ -5200,6 +5336,9 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
   - **Resolution: done** (commit `4fa6981`). Wording only, no new check: `search_nodes`' docstring, AGENTS.md
     and README name the exception, and AGENTS.md says finding nothing there doesn't mean Designer lacks it. Making them
     searchable is ROADMAP item 41, added at the user's request.
+  - Note (2026-11-02): ROADMAP item 41 made them searchable, and the exception is gone from the docs; "whole" holds again.
+  - Questioned by SRV-55 (2026-11-02).
+
 
 - [x] **SRV-54 · `export_outputs` with no graph doesn't say which graph it wrote** · follows SRV-53, generation 4 · `mcp_server/designer_helpers/save_export.py` (`export_outputs`) · confirmed · found 2026-11-02
   - **Defect.** Since SRV-53 a missing `graph` means the graph in focus, and the result said only "exported N file(s) to <dir>"; `main`
@@ -5222,3 +5361,101 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
   - **Fix (docs only: narrow, no new check).** Say what it reads, and what it doesn't see, in the docstring and in a note under TST-111.
   - **Resolution: done** (commit `4fa6981`). Wording only, no new check: the docstring of `test_selftest_safety.py` now calls it a guard and says
     what it reads and what it doesn't see. TST-111's resolution has a note saying the same.
+
+- [x] **SRV-56 · A definition drops the graph's group, so 3 of the 35 probably don't resolve** · `mcp_server/server_tools/discovery.py` (`_library_index`, `search_nodes`) · plausible · verified by hand · found 2026-11-02
+  - **Defect.** `root.iter('graph')` stores the leaf id only. `fabric_002.sbs/stains`, `fabric_002.sbs/Creases_Filter` and `fabric_025.sbs/Creases_Filter` sit in a `Resources` group, and `findResourceFromUrl` documents a URL as `A/B/MyResource`. Cooking a hand-built instance: `pkg:///stains` fails with "Can't find subgraph", `pkg:///Resources/stains` works. That is the cooker, not `findResourceFromUrl`; not measured in Designer. The unit test blesses the short form on a flat fixture.
+  - **Scenario.** With `include_hidden`, an agent passes `materials/pbr/fabric_002.sbs/stains` to `describe_node` and is told the graph isn't found. All 3 are hidden helpers, hence Low.
+  - **Fix.** Measure `describe_node` on it first. If refused, build the path from the enclosing `<group>` identifiers; `.../fabric_002.sbs/Resources/stains` already parses.
+  - **Resolution: done, and wider than the entry** (commit `1b06225`).
+    - **Measured (by hand, Designer 16):** `findResourceFromUrl('stains')` None, `'Resources/stains'` the graph; `'constant_float'` None, `'float/constant_float'` the graph. So all 146 grouped graphs had a definition that failed, 8 of them visible and on `main` too, not only the 3 here; 51 are more than one group deep.
+    - **Test:** `test_a_graph_in_a_group_is_named_with_its_group`, one group and two deep. Live: "names a grouped graph with its group" printed `constant_values.sbs/constant_float`; `describe_node` on the whole path works, top level and subfolder.
+    - **Fix:** `_graphs_in` walks the groups, and the index keeps each graph's `url`, which the definition prints. The real install still gives 1025 entries.
+
+- [x] **SRV-57 · A missing or unreadable library folder now reads as no matches, cached for the server's life** · regression · `mcp_server/server_tools/discovery.py` (`_library_index`) · confirmed · found 2026-11-02
+  - **Defect.** `os.listdir` raised on `main`; `os.walk` swallows the error, so `search_nodes` reports atomics only and `_LIBRARY_CACHE` keeps that. An unreadable subfolder silently loses its packages too (probed).
+  - **Scenario.** An unusual install or permissions: "No node types match", which reads as Designer lacking the node, until the server restarts. No realistic trigger on a normal install was found.
+  - **Fix.** `os.walk(pkg_dir, onerror=...)` that raises, so it fails as on `main`, and nothing is cached.
+  - **Resolution: done** (commit `1b06225`).
+    - **Test:** `test_a_missing_library_folder_is_an_error_and_not_remembered` (the next search works once the folder is there) and `test_an_unreadable_library_subfolder_is_an_error`: both gave "no matches".
+    - **Fix:** `os.walk(pkg_dir, onerror=_raise)`. One unreadable subfolder stops the search, as an unreadable file already did.
+
+- [x] **HLP-60 · The extension-less `<file>/<graph>` form works only at the top level, against `_library_path`'s docstring** · `mcp_server/designer_helpers/describe.py` (`_library_path`) · confirmed · found 2026-11-02
+  - **Defect.** "the file with or without its .sbs, in Designer's packages folder or a subfolder": `materials/pbr/fabric_002/stains` becomes `materials.sbs`, graph `pbr/fabric_002/stains` (probed).
+  - **Scenario.** An agent copying the `slope_blur/slope_blur_grayscale_2` pattern gets a refusal naming a `materials.sbs` that never existed. Confusing, not a wrong node.
+  - **Fix.** Try the prefix before the last `/` as a subfolder file, or say in the docstring that a subfolder's graph needs `.sbs/`.
+  - **Resolution: done** (commit `1b06225`).
+    - **Test:** rows of `test_definition_names_a_package_and_a_graph`: a subfolder's file without `.sbs`, with a graph or a group, and a name that exists nowhere.
+    - **Fix:** `_library_path` takes the longest part of the name that is a package, at any depth. With none, the refusal names what was looked for (`materials/pbr/nope.sbs`), no longer a `materials.sbs`.
+
+- [x] **HLP-61 · The graph part isn't covered by "anything outside it is refused"** · `mcp_server/designer_helpers/describe.py` (`_library_path`) · plausible · found 2026-11-02
+  - **Defect.** `hbao.sbs/../../../etc/passwd` passes the guard with graph id `../../../etc/passwd`, which goes to `findResourceFromUrl`, whose docstring mentions other packages and "on filesystem". Whether that ever leaves the package needs Designer. As on `main`; `execute_designer_code` gives an agent everything anyway, so this guards against mistakes, not attackers.
+  - **Scenario.** A wrong path in `definition` resolves to something outside the library instead of being refused, if Designer allows it.
+  - **Fix.** Measure it. Refuse `..` segments and `://` in the graph id, or narrow the docstring.
+  - **Resolution: not a bug** (commit `1b06225`).
+    - **Test:** measured from `hbao.sbs`: `../hbao`, `../../..///etc/passwd`, `../bevel`, `sbs://bevel.sbs`, `sbs://bevel.sbs/bevel`, `pkg:///bevel?dependency=1`, `../materials/pbr/bricks_001`, and an absolute path to a real `.sbs` with and without `file://`: all found nothing. `pkg:///hbao` found the package's own graph.
+    - **Why not:** `findResourceFromUrl` looks inside the package it is called on. A live check, "a definition's graph stays in its package", keeps it so, and the docstring says it. A folder named as the graph (`fabric_002.sbs/Resources`) is found as an `SDResourceFolder`; not checked what `newInstanceNode` does with it.
+
+- [x] **TST-113 · Three of the new live checks don't test what they read as testing** · `tests/test_all_tools/discovery.py`, `tests/test_all_tools/render.py` · confirmed · verified by hand · found 2026-11-02
+  - **Defect.** (1) "a definition stays in the library folder" uses `../../../../Info`, which has no `.sbs` and resolves inside the folder: it passes on `main` too. (2) The `connect` op passes `from_output`, which isn't a field (`batch.py` reads `output`), so it's ignored and `diffuse` is wired, not `basecolor`. (3) "computes" means a file was saved, not that it shows bricks.
+  - **Scenario.** (1) Removing the guard leaves the live check green (the unit test still fails). (2) A reader believes `basecolor` was rendered.
+  - **Fix.** (1) A real `.sbs` outside the folder, asserting `outside`. (2) Use `output`. (3) Narrow the comment, or read a pixel statistic from the render.
+  - **Resolution: done** (commit `1b06225`). (1) A real `.sbs` in the scratch folder, by its absolute path, asserting "(outside": `main` says only "neither". (2) `output`, and the check requires `connected ... basecolor`. (3) The render's standard deviation over the colour channels must be above 1 (measured 39). Live 356/356.
+
+- [x] **SRV-58 · The hidden-graphs line appears on almost every search** · follows SRV-55, generation 5 · `mcp_server/server_tools/discovery.py` (`search_nodes`) · confirmed · verified by hand · found 2026-11-02
+  - **Defect.** 506 of the 1025 graphs are hidden, so on the real install "... N hidden graph(s) match too: include_hidden=True" came with 24 of 25 common queries (`levels` 4, `noise` 50, `color` 43). A line on nearly every result says little, and it costs tokens each time.
+  - **Scenario.** An agent stops reading it, or passes `include_hidden` for no reason and gets helpers. It matters when nothing else matched, which is the harm SRV-55 is about.
+  - **Fix.** Keep it for an empty result only; `include_hidden` stays described in the docstring. Update the two tests that expect it next to results, and `test_limit` back to its three lines.
+  - **Resolution: done** (commit `1b06225`).
+    - **Test:** `test_the_hidden_count_only_comes_with_an_empty_result` (`test_library_subfolders.py`); `test_limit` back to its three lines, as on `main`.
+    - **Fix:** `search_nodes` says it only when nothing else matches; the docstring and AGENTS.md say so.
+
+- [x] **HLP-63 · A definition naming a group gives a cryptic error** · `mcp_server/designer_helpers/describe.py` (`describe_node`), `mcp_server/designer_helpers/edits.py` (`_resolve_definition`) · confirmed · verified by hand · found 2026-11-02
+  - **Defect.** `findResourceFromUrl` also finds a group, as an `SDResourceFolder`, and `newInstanceNode` then raises `APIException: SDApiError.NotSupported`. Measured for `materials/pbr/fabric_002.sbs/Resources`, `constant_values.sbs/float` and `constant_values/float`, in `describe_node` and `add`: no crash, no node left, no temporary package left.
+  - **Scenario.** Now that definitions show groups, an agent shortens `constant_values.sbs/float/constant_float` to the group and is told only "NotSupported".
+  - **Fix.** Both callers refuse what isn't a graph: "%r is a group, not a graph". One helper for the lookup they share, and a unit test.
+  - **Resolution: done** (commit `1b06225`).
+    - **Test:** `test_a_definition_naming_a_group_says_so`, for both callers. Live: `describe_node('constant_values.sbs/float')` said `APIException: SDApiError.NotSupported`.
+    - **Fix:** `_library_graph` in `describe.py`, the lookup both callers shared as copies, refuses an `SDResourceFolder`: "names a group of its package, not a graph".
+  - Questioned by HLP-64 (2026-11-02).
+
+- [x] **HLP-64 · A definition naming a function or another resource isn't told apart from a graph** · follows HLP-63, generation 2 · `mcp_server/designer_helpers/describe.py` (`_library_graph`) · plausible · verified by hand · found 2026-11-02
+  - **Defect.** `isinstance(res, SDResourceFolder)` is the only kind checked, and the library's files hold 954 functions, 26 bitmap resources, 1 font and 1 svg beside 1025 graphs. Not measured what each does in `findResourceFromUrl` and `newInstanceNode`. As on `main`, and `search_nodes` prints none of them, so an agent has to type the id.
+  - **Scenario.** `describe_node('functions_hash.sbs/hash11')`: probably the same cryptic `APIException` HLP-63 fixed for groups. A bitmap resource may become a Bitmap node, and print "library node".
+  - **Fix.** Measure these four kinds, as AGENTS.md asks. Refuse what isn't a graph, naming what it is; if they already give a clean error, narrow the docstring.
+  - **Resolution: won't fix**, with the user's agreement (2026-11-02).
+    - **Measured (by hand, Designer 16, a scratch graph):** `functions_hash.sbs/hash11` (`SDSBSFunctionGraph`): `InvalidArgument`, no node. `spline_tools.sbs/resources/courier_new` (`SDResourceFont`): `NotSupported`, no node. `pattern_tile_random_2.sbs/Resources/bluenoise_256` (`SDResourceBitmap`) and `templates.sbs/Templates/Sample_VectorGraphics/DoorFrame` (`SDResourceSVG`): work, a Bitmap and an SVG node. The graph computed afterwards, no crash, no library package modified.
+    - **Why not:** the entry's fix would remove what works for two kinds. What's left is a cryptic error on an id `search_nodes` never prints, with nothing changed.
+
+- [x] **TST-114 · "Whole library" leaves out Designer's 954 function graphs** · follows SRV-55, generation 5 · `AGENTS.md`, `README.md`, `mcp_server/server_tools/discovery.py` (`search_nodes`) · confirmed · verified by hand · found 2026-11-02
+  - **Defect.** `_graphs_in` lists `<graph>` only, so `search_nodes('hash11', include_hidden=True)` says "No node types match" though `functions_hash.sbs` ships it (probed against the install). On `main` too, but this branch removed the sentence warning that finding nothing doesn't mean Designer lacks it.
+  - **Scenario.** An agent writing a function graph by script searches for a hash or SDF function and rebuilds it. Low: function graphs have no tool path yet (ROADMAP item 9).
+  - **Fix (docs only: narrow, no new check).** "the whole library of compositing graphs (not its function graphs)".
+  - **Resolution: done** (commit `1b06225`). Wording only: the `search_nodes` docstring, AGENTS.md and README say compositing graphs, not its function graphs.
+
+- [x] **TST-115 · "Every field ... is checked before any op runs" overstates the pre-check** · follows HLP-62, generation 2 · `mcp_server/server_tools/edits.py` (`apply_edits`' docstring) · confirmed · verified by hand · found 2026-11-02
+  - **Defect.** Names are checked, not presence: `[{'op': 'add'}]` and a `connect` without `input` pass `_check_batch` and fail when their op runs, with earlier ops applied. Unchanged from `main`; only the sentence is new.
+  - **Scenario.** An agent reads "every field is checked, nothing changed" and assumes a dropped `input` can't leave half a batch applied. The error does say what was applied.
+  - **Fix (docs only: narrow, no new check).** "Every field's name"; a missing field listed under "Other mistakes".
+  - **Resolution: done** (commit `1b06225`). Wording only: the docstring of `apply_edits` says so.
+
+- [x] **SRV-59 · `diff_graph` shows a node's output as a number** · `mcp_server/server_tools/snapshots.py` (`_graph_model`) · confirmed · verified by hand · found 2026-11-02
+  - **Defect.** `src = _v(c, 'connRef') + ('.' + cast(str, out.get('v')) if out is not None else '')`: `connRefOutput` is a uid. The name is in the same file, in the source node's `outputBridgings/outputBridging`. As on `main`; nine outputs make it matter.
+  - **Scenario.** An agent rewires `diffuse` to `basecolor` and reports the diff as AGENTS.md asks: `link inputNodeOutput <- 11.1102 added`, `<- 11.1101 removed` (probed on a hand-built file). Not wrong, only unreadable.
+  - **Fix.** In `_graph_model`, map each `outputBridging` uid to its identifier and print that, falling back to the uid. Check on a file saved by Designer.
+  - **Resolution: done** (commit `1b06225`).
+    - **Test:** `test_a_diff_names_the_output_of_a_link` (`test_sbs.py`). Live, on a file saved by Designer: rewiring a material's output in `diff_graph` showed the uids; now `.metallic added`, `.diffuse removed`.
+    - **Fix:** `_graph_model` maps each `outputBridging` uid to its identifier. An output with no name, an atomic node's, stays its uid, and `test_diff_sees_a_link_moving_to_another_output` still holds.
+
+- [x] **SRV-61 · An output name containing "restored" turns the sweep's warning into a crash** · follows HLP-66, generation 3 · `mcp_server/server_tools/measure.py` (`sweep_param`) · confirmed · verified by hand · found 2026-11-02
+  - **Defect.** `re.search(r'restored .*', text)` guarded by `'restored' in text`: the note now puts output names in `text`, so the test can be true with no such line.
+  - **Scenario.** A custom output `restored_mask` and a failing restore, the one case the warning exists for: the agent gets `AttributeError` instead of "original NOT restored!". Line `'restored' not in text` has the same gap. Very narrow.
+  - **Fix.** `re.search(r'^restored .*', text, re.M)`, and test the match, in both places. A unit test.
+  - **Resolution: done** (commit `1b06225`).
+    - **Test:** `test_a_failed_restore_is_reported_with_an_output_named_like_restored`: an `AttributeError` on the old code.
+    - **Fix:** one match of a whole line, tested in both places.
+
+- [x] **TST-116 · Two claims say more than the code** · follows SRV-60, generation 2 · `tests/test_all_tools/safeguards.py`, REVIEW.md (SRV-60, HLP-66) · confirmed · verified by hand · found 2026-11-02
+  - **Defect.** (1) "a regression fails with no dialog on the user's screen" holds for a broken helper only: the gate tests the helper, so with its call removed from `save_package_copy` the real `snapshot_graph` runs and the dialog appears (the unit test catches that if pytest runs first). A regression's snapshot would also stay in `mcp_selftest_host`, and the folder's path uses `get` with a default where the other two places use `or`. (2) "Docstrings ... say so": `node_stats`, `check_tiling`, `compare_to_reference`, `diff_graph` and `set_link_display` don't.
+  - **Scenario.** Someone trusts the comment and runs the self-test in their own Designer with a save path unguarded.
+  - **Fix.** Narrow the comment and the resolution (run pytest first); a clause in those five docstrings; `or` in the path.
+  - **Resolution: done** (commit `1b06225`). (1) The comment says the gate guards a broken helper only, and to run the unit tests first; SRV-60's resolution has this note. (2) The five docstrings now say it. `or` in the folder's path. Wording, apart from that; no new check.

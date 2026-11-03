@@ -10,6 +10,7 @@ from .core import (
     SDValueTexture,
     _is_library_package,
     _library_refusal,
+    _refuse_unsaved_dependencies,
     cast,
     find_graph,
     os,
@@ -44,6 +45,7 @@ def _package_of(identifier: str | None) -> tuple[SDPackage, SDSBSCompGraph | Non
 def save_package(identifier: str | None = None, path: str | None = None) -> None:
     """identifier: a graph identifier or a package file path (default: graph open in the UI)."""
     pkg, _ = _package_of(identifier)
+    _refuse_unsaved_dependencies(pkg)
     if path:
         path = os.path.abspath(os.path.expanduser(path))
         os.makedirs(os.path.dirname(path), exist_ok=True)

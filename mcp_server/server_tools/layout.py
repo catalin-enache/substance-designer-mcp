@@ -75,7 +75,8 @@ def set_link_display(
     package, edits the .sbs and reloads it (the package's undo history is reset; the graph is
     reopened). If no selected link would change, nothing is saved or reloaded. If the package is
     edited again before the reload, the reload is refused and those edits are kept. The package
-    must have been saved to a file once."""
+    must have been saved to a file once, and is refused while it uses a graph of a never-saved package,
+    as in save_package."""
     if mode not in _DISPLAY:
         raise ToolError("mode must be 'portal' or 'wire'")
     if not (from_nodes or fanout_at_least or longer_than or links):

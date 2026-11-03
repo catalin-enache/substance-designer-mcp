@@ -347,3 +347,27 @@ def test_every_tools_graph_can_be_left_out_except_open_graphs(monkeypatch: pytes
     patch_server(monkeypatch, '_bridge', bridge)
     server.export_outputs('/tmp/renders')
     assert "export_outputs(None, '/tmp/renders'," in sent[-1]
+
+
+def _op_fields() -> dict[str, tuple[str, ...]]:
+    """_OP_FIELDS, read from the helpers' source."""
+    import ast
+
+    block = re.search(r'_OP_FIELDS[^=]*= (\{.*?\n\})', designer_helpers.source(), re.S)
+    assert block is not None, 'no _OP_FIELDS table in batch.py'
+    return cast(dict[str, tuple[str, ...]], ast.literal_eval(block.group(1)))
+
+
+def test_the_op_fields_are_the_ones_each_op_reads() -> None:
+    # REVIEW.md HLP-62: the table the pre-check refuses by can't drift from what the ops use
+    assert {k: set(v) for k, v in _op_fields().items()} == _dispatched_ops()
+
+
+def test_the_self_test_passes_no_field_an_op_doesnt_take() -> None:
+    # how from_output went unnoticed (TST-113)
+    allowed = _op_fields()
+    # kinds outside the table are the self-test's own unknown-op checks
+    passed = {k: v for k, v in _selftest_op_fields().items() if k in allowed}
+    wrong = {k: sorted(v - set(allowed[k])) for k, v in passed.items() if v - set(allowed[k])}
+    # the one on purpose: batch.py's check that such a field is refused
+    assert wrong == {'add': ['postion']}, 'op fields no op takes, in tests/test_all_tools/: %s' % wrong

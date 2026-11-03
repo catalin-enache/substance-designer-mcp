@@ -7,6 +7,7 @@ import hmac
 import json
 import os
 import platform
+import re
 import shutil
 import socket
 import subprocess
@@ -124,6 +125,12 @@ def _tool() -> Callable[[Callable[P, R]], Callable[P, R]]:
         return register(wrapper)
 
     return decorate
+
+
+def _output_note_in(text: str) -> str | None:
+    """The helpers' line saying which of several outputs was taken, when none was named (REVIEW.md HLP-65)."""
+    found = re.search(r'^no output given: .*$', text, re.M)
+    return found.group(0) if found else None
 
 
 def _with_undo(code: str, label: str) -> str:

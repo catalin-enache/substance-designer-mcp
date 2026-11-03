@@ -3,6 +3,7 @@
 import os
 import re
 import xml.etree.ElementTree as ET
+from collections.abc import Iterator
 from typing import TypedDict, cast
 
 from .core import _bridge, _checked, _helpers_call, _tool
@@ -28,7 +29,8 @@ def describe_graph(
 def describe_node(definition: str) -> str:
     """Show a node type's connectors and parameters (ids, types, labels, defaults, enum values).
     `definition`: atomic name ('levels', 'blend', 'sbs::compositing::normal') or library package
-    '<file>[/<graph id>]' as found in Designer's packages folder ('tile_generator', 'hbao.sbs/hbao')."""
+    '<file>[/<graph id>]' as found in Designer's packages folder or a subfolder ('tile_generator',
+    'hbao.sbs/hbao', 'materials/pbr/bricks_001')."""
     return _checked(_bridge(_helpers_call('describe_node(%r)' % definition), timeout=60))
 
 
@@ -39,6 +41,7 @@ class _LibraryEntry(TypedDict):
     category: str
     description: str
     hidden: bool
+    url: str  # the graph with its groups: what findResourceFromUrl needs (measured; REVIEW.md SRV-56)
 
 
 class _LibraryIndex(TypedDict, total=False):
@@ -50,6 +53,22 @@ class _LibraryIndex(TypedDict, total=False):
 _LIBRARY_CACHE: _LibraryIndex = {}
 
 
+def _graphs_in(element: ET.Element, groups: tuple[str, ...] = ()) -> Iterator[tuple[str, ET.Element]]:
+    """(the graph's path through its groups, the graph) for every graph under element."""
+    for child in element:
+        ident = child.find('identifier')
+        name = cast(str, ident.get('v')) if ident is not None else None
+        if child.tag == 'graph':
+            if name is not None:
+                yield '/'.join((*groups, name)), child
+        else:
+            yield from _graphs_in(child, (*groups, name) if child.tag == 'group' and name else groups)
+
+
+def _raise(error: OSError) -> None:
+    raise error
+
+
 def _library_index() -> _LibraryIndex:
     """Scan Designer's library packages once: graph id, label, category, description."""
     if 'entries' in _LIBRARY_CACHE:
@@ -59,17 +78,19 @@ def _library_index() -> _LibraryIndex:
     atomic = [l.split('=', 1)[1] for l in lines if l.startswith('ATOMIC=')]
     pkg_dir = os.path.join(resources, 'packages')
     entries: list[_LibraryEntry] = []
-    for file_name in sorted(os.listdir(pkg_dir)):
-        if not file_name.endswith('.sbs'):
-            continue
+    # with its subfolders: 30 of Designer 16's packages are ready-made materials in materials/pbr
+    files = sorted(
+        os.path.relpath(os.path.join(folder, name), pkg_dir).replace(os.sep, '/')
+        for folder, _, names in os.walk(pkg_dir, onerror=_raise)  # os.walk would swallow it (REVIEW.md SRV-57)
+        for name in names
+        if name.endswith('.sbs')
+    )
+    for file_name in files:
         try:
             root = ET.parse(os.path.join(pkg_dir, file_name)).getroot()
         except ET.ParseError:
             continue
-        for g in root.iter('graph'):
-            ident = g.find('identifier')
-            if ident is None:
-                continue
+        for url, g in _graphs_in(root):
             attrs = g.find('attributes')
 
             def attr(tag: str) -> str:
@@ -79,7 +100,8 @@ def _library_index() -> _LibraryIndex:
             entries.append(
                 {
                     'file': file_name,
-                    'graph': cast(str, ident.get('v')),
+                    'graph': url.rsplit('/', 1)[-1],
+                    'url': url,
                     'label': attr('label'),
                     'category': attr('category'),
                     'description': attr('description'),
@@ -93,8 +115,10 @@ def _library_index() -> _LibraryIndex:
 @_tool()
 def search_nodes(query: str, limit: int = 30, include_hidden: bool = False) -> str:
     """Find node types by name, label, category or description, across atomic nodes and
-    Designer's node library (not just loaded packages), except the ready-made materials in its
-    materials/pbr subfolder (a script can load those). Results show the `definition`
+    Designer's whole library of compositing graphs (not just loaded packages; not its function graphs),
+    its ready-made materials included.
+    include_hidden: also the graphs Designer hides from its library (helpers, some materials); when
+    nothing else matches, the result says how many of those do. Results show the `definition`
     to pass to describe_node and to apply_edits' add op. Words in the query must all match."""
     index = _library_index()
     words = [w.lower() for w in query.split()]
@@ -115,13 +139,15 @@ def search_nodes(query: str, limit: int = 30, include_hidden: bool = False) -> s
         short = a.replace('sbs::compositing::', '')
         if matches(short + ' ' + a):
             out.append((rank(short), 'atomic   %-28s definition=%r' % (short, short)))
+    hidden = 0
     for e in index['entries']:
-        if e['hidden'] and not include_hidden:
-            continue
         haystack = ' '.join((e['file'], e['graph'], e['label'], e['category'], e['description']))
+        if e['hidden'] and not include_hidden:
+            hidden += matches(haystack)
+            continue
         if matches(haystack):
             base = e['file'][:-4]
-            definition = base if e['graph'] == base else '%s/%s' % (e['file'], e['graph'])
+            definition = base if e['url'] == base.rsplit('/', 1)[-1] else '%s/%s' % (e['file'], e['url'])
             desc = re.sub(r'<[^>]+>', ' ', e['description'] or '').replace('\n', ' ')
             desc = re.sub(r'\s+', ' ', desc).strip()
             name = e['label'] or e['graph']
@@ -133,7 +159,10 @@ def search_nodes(query: str, limit: int = 30, include_hidden: bool = False) -> s
                 )
             )
     if not out:
-        return 'No node types match %r.' % query
+        # not "no match" for what Designer ships, only hides from its library (REVIEW.md SRV-55). Only here: half
+        # its graphs are hidden, so next to results this came on 24 of 25 queries (SRV-58)
+        also = ' %d hidden graph(s) match too: include_hidden=True' % hidden if hidden else ''
+        return 'No node types match %r.%s' % (query, also)
     lines = [line for _, line in sorted(out, key=lambda item: item[0])]
     more = '' if len(lines) <= limit else '\n... %d more (refine the query or raise limit)' % (len(lines) - limit)
     return '\n'.join(lines[:limit]) + more

@@ -6,7 +6,7 @@ import os
 import re
 import shutil
 import tempfile
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -14,7 +14,7 @@ from mcp.server.mcpserver import Image
 from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image as PILImage
 
-from .core import _bridge, _helpers_call, _tool, _with_undo
+from .core import _bridge, _helpers_call, _output_note_in, _tool, _with_undo
 
 # decoded pixels: (H, W, C) floats
 Pixels = npt.NDArray[np.float64]
@@ -99,6 +99,7 @@ def _node_pixels(node_id: str, graph: str | None, output: str | None, tool: str)
         if not found or not os.path.exists(raw_path):
             raise ToolError(text.strip().splitlines()[-1] if text.strip() else 'no pixel data')
         meta: dict[str, Any] = json.loads(found.group(1))
+        meta['note'] = _output_note_in(text)
         with open(raw_path, 'rb') as f:
             data, layout = _decode_pixels(f.read(), meta)
     finally:
@@ -116,11 +117,14 @@ def node_stats(
 ) -> str:
     """Exact pixel statistics of any node's output (computed in Designer, read from the raw
     buffer, so 16-bit/float precision is kept). Per channel: min, max, mean, std.
+    output: which of the node's outputs (default: the one tagged base colour, else the first; the result says which).
     region: [x0, y0, x1, y1] in pixels to restrict the stats. points: [[x, y], ...] pixel
     values to sample. Values are 0..1 for integer formats. Use it to verify results numerically."""
     data, layout, meta = _node_pixels(node_id, graph, output, 'node_stats')
     h, w, _ = data.shape
     lines = ['%s: %dx%d %s' % (meta['node'], w, h, meta['format'])]
+    if meta['note']:
+        lines.append(meta['note'])
     area = data
     if region:
         area = _crop(data, region, 'region')
@@ -198,7 +202,7 @@ def sweep_param(
     strip plus per-value channel ranges, then restores the original value. node_id='graph' with
     param=<input id> sweeps an exposed graph input (then view_node is required). view_node: the
     node to look at (default: the swept node), e.g. the final output while sweeping an early
-    node. Values are converted as in apply_edits' set op, but a $ parameter is made Absolute for the sweep
+    node. output: which of its outputs (default: the one tagged base colour, else the first; the result says which). Values are converted as in apply_edits' set op, but a $ parameter is made Absolute for the sweep
     even where a set op refuses it or leaves it inherited (an overridable graph's $outputsize, the
     graph's $randomseed), so its values are absolute ones. The parameter ends where it started,
     inheritance included, but the sweep is an undo step and marks the package as modified."""
@@ -221,17 +225,20 @@ def sweep_param(
         if not metas:
             raise ToolError(text.strip().splitlines()[-1] if text.strip() else 'sweep produced nothing')
         tiles: list[PILImage.Image] = []
-        # the helper prints 'restored <node>.<param> to ...' once the value is back
+        # the helper prints 'restored <node>.<param> to ...' once the value is back; a line of its own: an output's
+        # name in the note can hold the word too (REVIEW.md SRV-61)
+        restored = re.search(r'^restored .*$', text, re.M)
         lines = [
             '%s.%s sweep (%s):'
             % (
                 node_id,
                 param,
-                cast(re.Match[str], re.search(r'restored .*', text)).group(0)
-                if 'restored' in text
-                else 'original NOT restored!',
+                restored.group(0) if restored else 'original NOT restored!',
             )
         ]
+        note = _output_note_in(text)
+        if note:
+            lines.append(note)
         for meta in metas:
             with open(os.path.join(tmp_dir, '%d.raw' % meta['index']), 'rb') as f:
                 data, layout = _decode_pixels(f.read(), meta)
@@ -247,7 +254,7 @@ def sweep_param(
             lines.append(
                 'Sweep stopped after %d of %d value(s): %s' % (len(metas), len(values), error[-1] if error else 'error')
             )
-        if 'restored' not in text:
+        if not restored:
             lines.append('WARNING: the original value may not have been restored:\n' + text[-1500:])
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -278,12 +285,15 @@ def _seam_report(data: Pixels, axis_name: str, seam_axis: int) -> str:
 def check_tiling(node_id: str, graph: str | None = None, output: str | None = None, axis: str = 'both') -> str:
     """Measure whether a node's output tiles: compares the jump across the wrap-around seam
     (left/right edges for 'horizontal', top/bottom for 'vertical') with the typical jump between
-    neighbouring pixels. Ratio ~1 = seamless; above ~3 a seam is likely visible. axis:
+    neighbouring pixels. Ratio ~1 = seamless; above ~3 a seam is likely visible. output: which of the
+    node's outputs (default: the one tagged base colour, else the first; the result says which). axis:
     'horizontal', 'vertical' or 'both' (trim sheets usually only need horizontal)."""
     if axis not in ('horizontal', 'vertical', 'both'):
         raise ToolError("axis must be 'horizontal', 'vertical' or 'both'")
     data, _, meta = _node_pixels(node_id, graph, output, 'check_tiling')
     lines = ['%s: %dx%d %s' % (meta['node'], meta['width'], meta['height'], meta['format'])]
+    if meta['note']:
+        lines.append(meta['note'])
     if axis in ('horizontal', 'both'):
         lines.append(_seam_report(data, 'horizontal', 1))
     if axis in ('vertical', 'both'):

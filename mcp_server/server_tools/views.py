@@ -9,15 +9,17 @@ from mcp.server.mcpserver import Image
 from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image as PILImage
 
-from .core import _bridge, _checked, _helpers_call, _tool, _with_undo
+from .core import _bridge, _checked, _helpers_call, _output_note_in, _tool, _with_undo
 from .output import _load_8bit
 
 
 @_tool()
-def preview_node(node_id: str, graph: str | None = None, output: str | None = None, max_size: int = 512) -> Image:
+def preview_node(
+    node_id: str, graph: str | None = None, output: str | None = None, max_size: int = 512
+) -> list[str | Image]:
     """Compute the graph in Designer and return the image produced by one node (any node, not
     just outputs). Get node ids from describe_graph. `output` picks a connector on multi-output
-    nodes (default: first). `graph` defaults to the graph open in Designer's UI."""
+    nodes (default: the one tagged base colour, else the first; the result says which). `graph` defaults to the graph open in Designer's UI."""
     tmp_dir = tempfile.mkdtemp(prefix='sd_preview_')
     out_path = os.path.join(tmp_dir, 'node.png')
     try:
@@ -37,7 +39,8 @@ def preview_node(node_id: str, graph: str | None = None, output: str | None = No
         im.thumbnail((max_size, max_size))
         buf = io.BytesIO()
         im.save(buf, format='PNG')
-        return Image(data=buf.getvalue(), format='png')
+        note = _output_note_in(text)
+        return [Image(data=buf.getvalue(), format='png'), *([note] if note else [])]
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 

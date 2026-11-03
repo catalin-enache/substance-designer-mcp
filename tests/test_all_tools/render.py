@@ -6,7 +6,7 @@ import subprocess
 import sys
 from typing import Any
 
-from .common import BUNDLE, GRAPH_OF, TEST_GRAPH, Ctx, _mean_png, check, is_image, text
+from .common import BUNDLE, GRAPH_OF, TEST_GRAPH, Ctx, _mean_png, check, helpers_source, is_image, text
 
 
 async def run(ctx: Ctx) -> None:
@@ -330,6 +330,186 @@ async def run(ctx: Ctx) -> None:
         'render_sbs', {'sbs_path': sbsar, 'output_dir': os.path.join(scratch, 'nope'), 'graph': 'no_such_graph'}
     )
     check('render_sbs', 'error on unknown graph', r_.is_error and 'no_such_graph' in text(r_), text(r_)[:150])
+    # a ready-made material from a subfolder of the library, in a graph of its own (ROADMAP item 41): added by its
+    # path, computed in Designer, saved, and cooked, since the saved file refers to it as sbs://materials/pbr/...
+    mat = {'graph': TEST_GRAPH + '_material'}
+    mat_sbs = os.path.join(scratch, 'uses_material.sbs')
+    await c('create_graph', {'name': mat['graph'], 'save_path': mat_sbs, 'size_log2': 8})
+    t = text(
+        await c(
+            'apply_edits',
+            {
+                'ops': [
+                    {'op': 'add', 'definition': 'materials/pbr/bricks_001', 'ref': 'm'},
+                    {'op': 'add', 'definition': 'output', 'ref': 'o', 'position': [300, 0]},
+                    {'op': 'connect', 'from': 'm', 'output': 'basecolor', 'to': 'o', 'input': 'inputNodeOutput'},
+                ],
+                **mat,
+            },
+        )
+    )
+    check(
+        'apply_edits',
+        'add: a material in a subfolder, its basecolor wired',
+        'instance:bricks_001' in t
+        and 'applied 3 op' in t
+        and 'basecolor' in t.split('applied 3 op')[0].splitlines()[-1],
+        t,
+    )
+    t = text(await c('export_outputs', {'output_dir': os.path.join(scratch, 'material'), **mat}))
+    check('export_outputs', 'a material in a subfolder computes', 'exported 1 file(s)' in t, t)
+    await c('save_package', {'graph_or_path': mat_sbs})
+    with open(mat_sbs, encoding='utf-8') as mat_file:
+        saved = mat_file.read()
+    t = text(await c('render_sbs', {'sbs_path': mat_sbs, 'output_dir': os.path.join(scratch, 'material_render')}))
+    check(
+        'render_sbs',
+        'a material in a subfolder cooks and renders',
+        'sbs://materials/pbr/bricks_001.sbs' in saved and '.png' in t and 'ERROR' not in t,
+        t[-300:],
+    )
+    # and it shows something: a real material isn't one flat colour
+    rendered_material = np.array(Image.open(os.path.join(scratch, 'material_render', 'output.png'))).astype(float)
+    check(
+        'render_sbs',
+        'a material in a subfolder renders an image with detail',
+        rendered_material[..., :3].std() > 1,
+        str(rendered_material[..., :3].std()),
+    )
+    # a material's first output is `diffuse`, off by default and black on a metal, so a tool picking the first says so
+    # (REVIEW.md HLP-65). AGENTS.md's library facts rely on these
+    t = text(
+        await c(
+            'apply_edits',
+            {
+                'ops': [
+                    {'op': 'add', 'definition': 'materials/pbr/metal_003', 'ref': 'metal'},
+                    {'op': 'add', 'definition': 'output', 'ref': 'o2', 'position': [300, 300]},
+                    {'op': 'connect', 'from': 'metal', 'to': 'o2', 'input': 'inputNodeOutput'},
+                ],
+                **mat,
+            },
+        )
+    )
+    metal = re.search(r"ref 'metal' = (\d+)", t)
+    output2 = re.search(r"ref 'o2' = (\d+)", t)
+    check(
+        'apply_edits',
+        'connect takes the output tagged base colour, and says so',
+        '.basecolor' in t and 'tagged base colour, of 9' in t,
+        t[-300:],
+    )
+    metal_id = metal.group(1) if metal else ''
+    r_ = await c('preview_node', {'node_id': metal_id, 'max_size': 64, **mat})
+    check(
+        'preview_node',
+        'says which output it took',
+        is_image(r_) and "'basecolor', tagged base colour, of 9" in text(r_),
+        text(r_)[:200],
+    )
+    r_ = await c('preview_node', {'node_id': metal_id, 'output': 'basecolor', 'max_size': 64, **mat})
+    check(
+        'preview_node',
+        'says nothing when told the output',
+        is_image(r_) and 'no output given' not in text(r_),
+        text(r_)[:200],
+    )
+    diffuse = text(await c('node_stats', {'node_id': metal_id, 'output': 'diffuse', **mat}))
+    basecolor = text(await c('node_stats', {'node_id': metal_id, 'output': 'basecolor', **mat}))
+    metal_means = [re.findall(r'mean[ =:]*([0-9.]+)', stats) for stats in (diffuse, basecolor)]
+    check(
+        'designer facts',
+        "a metal's diffuse map is black, its basecolor isn't",
+        bool(metal_means[0])
+        and bool(metal_means[1])
+        and max(map(float, metal_means[0][:3])) < 0.01
+        and max(map(float, metal_means[1][:3])) > 0.3,
+        diffuse[:150] + ' | ' + basecolor[:150],
+    )
+    t = text(await c('describe_node', {'definition': 'materials/pbr/metal_003'}))
+    check(
+        'designer facts',
+        "a material's normal_format defaults to DirectX",
+        re.search(r'normal_format\b.*\n.*0;|DirectX=0', t) is not None and 'OpenGL=1' in t,
+        '\n'.join(l for l in t.splitlines() if 'irectX' in l or 'normal_format' in l)[:300],
+    )
+    # a sweep names the output it looks at (the normal map moves, the diffuse doesn't)
+    r_ = await c(
+        'sweep_param', {'node_id': metal_id, 'param': 'normal_intensity', 'values': [1], 'tile_size': 64, **mat}
+    )
+    check('sweep_param', 'says which output it took', 'tagged base colour, of 9' in text(r_), text(r_)[:250])
+    # the tools that measure carry the same note, and measure the tagged map: not a black one (HLP-66)
+    t = text(await c('node_stats', {'node_id': metal_id, **mat}))
+    check(
+        'node_stats',
+        'with no output, the tagged map, and says so',
+        'tagged base colour' in t and '.basecolor' in t,
+        t[:200],
+    )
+    t = text(await c('check_tiling', {'node_id': metal_id, 'axis': 'horizontal', **mat}))
+    check(
+        'check_tiling',
+        'with no output, the tagged map, and says so',
+        'tagged base colour' in t and '.basecolor' in t,
+        t[:200],
+    )
+    # diff_graph names a rewired output (REVIEW.md SRV-59)
+    await c('save_package', {'graph_or_path': mat_sbs})
+    await c(
+        'apply_edits',
+        {
+            'ops': [
+                {
+                    'op': 'connect',
+                    'from': metal_id,
+                    'output': 'metallic',
+                    'to': output2.group(1) if output2 else '',
+                    'input': 'inputNodeOutput',
+                }
+            ],
+            **mat,
+        },
+    )
+    t = text(await c('diff_graph', mat))
+    check('diff_graph', 'names a rewired output', '.metallic added' in t and '.basecolor removed' in t, t)
+    # a custom package: its own name for the map, tagged by the user (not Designer's name, not its first output).
+    # Two unsaved packages of their own, unloaded here and never saved: saving a graph that uses an unsaved package
+    # makes Designer ask where to save it, in a dialog on the user's screen (REVIEW.md SRV-60)
+    t = text(
+        await c(
+            'execute_designer_code',
+            {
+                'code': helpers_source()
+                + (
+                    '\nfrom sd.api.sdvaluearray import SDValueArray\nfrom sd.api.sdvaluestring import SDValueString\n'
+                    'from sd.api.sdvalueusage import SDValueUsage\nfrom sd.api.sdusage import SDUsage\n'
+                    'from sd.api.sdtypeusage import SDTypeUsage\n'
+                    "custom = SDSBSCompGraph.sNew(_PM.newUserPackage())\ncustom.setIdentifier('mcp_selftest_custom')\n"
+                    "for ident, tag in (('mask', None), ('albedo', 'baseColor')):\n"
+                    "    o = custom.newNode('sbs::compositing::output')\n"
+                    "    o.setAnnotationPropertyValueFromId('identifier', SDValueString.sNew(ident))\n"
+                    '    if tag:\n'
+                    '        tags = SDValueArray.sNew(SDTypeUsage.sNew(), 0)\n'
+                    "        tags.pushBack(SDValueUsage.sNew(SDUsage.sNew(tag, 'RGBA', 'sRGB')))\n"
+                    "        o.setAnnotationPropertyValueFromId('usages', tags)\n"
+                    "host = SDSBSCompGraph.sNew(_PM.newUserPackage())\nhost.setIdentifier('mcp_selftest_custom_host')\n"
+                    'n = host.newInstanceNode(custom)\n'
+                    'outs = [p.getId() for p in n.getProperties(SDPropertyCategory.Output)]\n'
+                    'try:\n'
+                    "    print('CUSTOM=' + _output_note(_default_output(n, outs)[1]))\n"
+                    'finally:\n'
+                    '    for g in (host, custom):\n'
+                    '        _PM.unloadUserPackage(g.getPackage())\n'
+                )
+            },
+        )
+    )
+    check(
+        'designer facts',
+        "a custom package's tagged output is taken",
+        "CUSTOM=no output given: 'albedo', tagged base colour, of 2" in t,
+        t[-250:],
+    )
     r_ = await c('preview_maps', {'map_dir': os.path.join(scratch, 'export')})
     check('preview_maps', 'all maps in a folder', is_image(r_), '' if is_image(r_) else text(r_))
     r_ = await c('preview_maps', {'map_dir': render_dir, 'names': ['height'], 'tile_size': 256})

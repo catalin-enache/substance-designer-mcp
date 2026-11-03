@@ -28,9 +28,11 @@ Parameters are in each tool's description; this is when to reach for which.
 
 - **Start:** `designer_status`; `launch_designer` if Designer isn't running; `quit_designer`
   (see the rules).
-- **Find and understand nodes:** `search_nodes` (the atomic nodes and Designer's library, except the
-  ready-made materials in `packages/materials/pbr`, ROADMAP item 41: finding nothing there doesn't mean
-  Designer lacks it; returns the exact `definition`), then `describe_node` for connector ids, parameter
+- **Find and understand nodes:** `search_nodes` (the atomic nodes and Designer's **whole** library of
+  compositing graphs, not its function graphs: its ready-made materials included, such as
+  `materials/pbr/bricks_001`, and those Designer hides on
+  `include_hidden`, an empty result saying how many match; returns the exact `definition`),
+  then `describe_node` for connector ids, parameter
   types, **enum values**, library slider ranges and descriptions. Never guess ids or enum
   numbers; pick values inside the slider range.
 - **Inspect a graph:** `describe_graph`, `list_graph_inputs`. Graphs are found by identifier;
@@ -196,6 +198,12 @@ Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `-c COD
   `sNewAsChild(node)` with `setDescription`; list them with `graph.getGraphObjects()`.
 - Slider ranges exist only for **library** node parameters, as annotations (`min`, `max`,
   `step`, `clamp`) on the referenced graph's input property. Atomic nodes have none.
+- **Saving a package that uses a graph of a never-saved package opens a modal "Save Dependency" file dialog**
+  (`savePackage`, `savePackageAs`, `saveCopyOfPackageAs`, measured): the call waits for a person, a timer calling
+  `reject()` didn't close it, and cancelling raises `SDApiError.Undefined`. The tools refuse first; in a script, check
+  `pkg.getDependencies()` for an empty `getFilePath()`. A saved dependency with unsaved changes opens none. A never-saved
+  package closed while in use stays such a dependency until the nodes using it are deleted; a package's own graphs aren't listed.
+  A dependency whose file is gone has a path and `getPackage()` `None`, and saves with no dialog.
 - `pkgMgr.saveCopyOfPackageAs(pkg, path)` writes a copy without changing the package's path or
   saved state (what snapshots use); `savePackageAs` changes both. `SDPackage.isModified()`
   tells whether a package has unsaved changes. To close earlier builds of a generated graph,
@@ -292,6 +300,9 @@ save, edit and reload it in a single call (the example script does, for its port
   `Free_Rotation` (degrees), `Luminance_Variation-Contrast` (float2: random luminance per tile,
   contrast). The same seed/layout twice gives a matching per-tile random mask.
 - `bevel`: `distance` (~0.02–0.08 for small chamfers), `smoothing`; outs `height`, `normal`.
+- Ready-made materials (`materials/pbr/...`): their outputs start with `diffuse`, which is black on a metal (`metal_003`).
+  With no `output`, tools take the one tagged base colour, else the first, and say which; pass `output` for another
+  (`normal`, `roughness`, `metallic`, `height`...). `normal_format` defaults to DirectX (0); OpenGL is 1.
 - `hbao`: in `input`, out `output`. `curvature_smooth`: in `input` (normal), out `height`.
 - `noise_anisotropic_noise`: default streaks run horizontally (`X_Amount`, `Y_Amount`).
 - Atomic `warp` intensity is strong: ~0.05–0.1 gives a gentle wave; 1.5 destroys the pattern.

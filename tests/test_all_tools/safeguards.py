@@ -503,6 +503,184 @@ async def run(ctx: Ctx) -> None:
             if os.path.isdir(os.path.dirname(lib_snap)) and not os.listdir(os.path.dirname(lib_snap)):
                 os.rmdir(os.path.dirname(lib_snap))
         await c('open_graph', G)
+    # a package using a never-saved one: Designer would open a modal dialog and wait for a person, so the tools refuse
+    # first (REVIEW.md SRV-60). The tools are called only once the helper refuses, which guards a broken helper; a save
+    # path without its call would still open the dialog here, so run the unit tests first (test_unsaved_dependency.py;
+    # TST-116). Two packages of the self-test's own, unloaded by CLEAN
+    host_sbs, dep_sbs = os.path.join(scratch, 'uses_unsaved.sbs'), os.path.join(scratch, 'was_unsaved.sbs')
+    t = text(
+        await c(
+            'execute_designer_code',
+            {
+                'code': helpers
+                + (
+                    "\ndep = SDSBSCompGraph.sNew(_PM.newUserPackage())\ndep.setIdentifier('mcp_selftest_dep')\n"
+                    "host = SDSBSCompGraph.sNew(_PM.newUserPackage())\nhost.setIdentifier('mcp_selftest_host')\n"
+                    '_PM.savePackageAs(host.getPackage(), %r)\nhost.newInstanceNode(dep)\n'
+                    'try:\n'
+                    '    _refuse_unsaved_dependencies(host.getPackage())\n'
+                    "    print('NOT_REFUSED')\n"
+                    'except RuntimeError as e:\n'
+                    "    print('REFUSES=' + str(e))\n"
+                )
+                % host_sbs
+            },
+        )
+    )
+    refuses = 'REFUSES=' in t
+    check('save_package', 'finds a dependency never saved', refuses and "'mcp_selftest_dep'" in t, t.strip()[-200:])
+    if refuses:
+        host = {'graph': 'mcp_selftest_host'}
+        calls: list[tuple[str, dict[str, Any]]] = [
+            ('save_package', {'graph_or_path': 'mcp_selftest_host'}),
+            ('snapshot_graph', {**host, 'label': 'unsaved dependency'}),
+            ('diff_graph', {**host, 'against': 'saved'}),
+            ('set_link_display', {**host, 'from_nodes': ['1']}),
+        ]
+        for tool, args in calls:
+            r_ = await c(tool, args)
+            check(tool, 'refuses a dependency never saved', r_.is_error and 'never saved' in text(r_), text(r_)[-250:])
+        folder = os.path.join(
+            os.environ.get('SD_SNAPSHOT_DIR') or os.path.expanduser('~/.sd_mcp/snapshots'), 'mcp_selftest_host'
+        )
+        if os.path.isdir(folder) and not os.listdir(folder):
+            os.rmdir(folder)
+        # and what the refusal says to do works
+        await c('save_package', {'graph_or_path': 'mcp_selftest_dep', 'save_as': dep_sbs})
+        r_ = await c('save_package', {'graph_or_path': 'mcp_selftest_host'})
+        check(
+            'save_package',
+            'saves once the dependency has a file',
+            not r_.is_error and 'saved' in text(r_),
+            text(r_)[-200:],
+        )
+    # what can be measured with no save, and only in a Designer the self-test started, since a closed package stays
+    # loaded behind the scenes (REVIEW.md HLP-67, HLP-68): each state's refusal, or none
+    if not was_running:
+        t = text(
+            await c(
+                'execute_designer_code',
+                {
+                    'code': helpers
+                    + (
+                        '\ndef refused(pkg):\n'
+                        '    try:\n'
+                        '        _refuse_unsaved_dependencies(pkg)\n'
+                        "        return 'SAVES'\n"
+                        '    except RuntimeError as e:\n'
+                        '        return str(e)\n'
+                        'def graph(name, pkg=None):\n'
+                        '    p = pkg or _PM.newUserPackage()\n'
+                        '    g = SDSBSCompGraph.sNew(p)\n'
+                        '    g.setIdentifier(name)\n'
+                        '    return p, g\n'
+                        "own, a = graph('mcp_selftest_own_a')\n"
+                        "b = graph('mcp_selftest_own_b', own)[1]\n"
+                        "a.newInstanceNode(b)\nprint('OWN=' + refused(own))\n"
+                        "dep, dg = graph('mcp_selftest_closed')\nhost, hg = graph('mcp_selftest_closed_host')\n"
+                        "n = hg.newInstanceNode(dg)\nprint('OPEN=' + refused(host))\n"
+                        "_PM.unloadUserPackage(dep)\nprint('CLOSED=' + refused(host))\n"
+                        "hg.deleteNode(n)\nprint('DELETED=' + refused(host))\n"
+                        'for p in (own, host):\n    _PM.unloadUserPackage(p)\n'
+                    )
+                },
+            )
+        )
+        check('save_package', 'a package instancing its own graph has no such dependency', 'OWN=SAVES' in t, t[-300:])
+        check(
+            'save_package',
+            'an open dependency is told by name',
+            "save_package('mcp_selftest_closed', save_as=...)" in t,
+            t[-400:],
+        )
+        closed = re.search(r'CLOSED=(.*)', t)
+        check(
+            'save_package',
+            'a closed dependency is told to delete the nodes',
+            closed is not None and 'delete the nodes' in closed.group(1) and 'save_package(' not in closed.group(1),
+            closed.group(1) if closed else t[-300:],
+        )
+        check('save_package', 'deleting the node removes the dependency', 'DELETED=SAVES' in t, t[-200:])
+        # a dependency whose file is gone has a path and no package: not refused, and it saves with no dialog (measured)
+        gone_dep, gone_host = os.path.join(scratch, 'gone_dep.sbs'), os.path.join(scratch, 'gone_host.sbs')
+        t = text(
+            await c(
+                'execute_designer_code',
+                {
+                    'code': helpers
+                    + (
+                        "\ndep = SDSBSCompGraph.sNew(_PM.newUserPackage())\ndep.setIdentifier('mcp_selftest_gone')\n"
+                        '_PM.savePackageAs(dep.getPackage(), %r)\n'
+                        "host = SDSBSCompGraph.sNew(_PM.newUserPackage())\nhost.setIdentifier('mcp_selftest_gone_host')\n"
+                        'host.newInstanceNode(dep)\n_PM.savePackageAs(host.getPackage(), %r)\n'
+                        'for g in (host, dep):\n    _PM.unloadUserPackage(g.getPackage())\n'
+                        'os.remove(%r)\n'
+                        'pkg = _PM.loadUserPackage(%r)\n'
+                        "print('DEPS=%%s' %% [(os.path.basename(d.getFilePath()), d.getPackage()) for d in pkg.getDependencies()])\n"
+                        '_refuse_unsaved_dependencies(pkg)\n'
+                        "print('NOT_REFUSED')\n"
+                        '_PM.unloadUserPackage(pkg)\n'
+                    )
+                    % (gone_dep, gone_host, gone_dep, gone_host)
+                },
+            )
+        )
+        check(
+            'save_package',
+            'a dependency with its file gone has no package and is not refused',
+            "DEPS=[('gone_dep.sbs', None)]" in t and 'NOT_REFUSED' in t,
+            t[-250:],
+        )
+        # the refusal's second route, for a dependency no name reaches (REVIEW.md HLP-67): two graphs of one name, the
+        # dependency put in focus by code standing in for the user, then save_package with no graph, as the message
+        # says. Only once the refusal gives that route, so the host's save can't open a dialog
+        same_sbs, host2_sbs = os.path.join(scratch, 'same_name_dep.sbs'), os.path.join(scratch, 'same_name_host.sbs')
+        t = text(
+            await c(
+                'execute_designer_code',
+                {
+                    'code': helpers
+                    + (
+                        "\nname = 'mcp_selftest_same_name'\n"
+                        'dep = SDSBSCompGraph.sNew(_PM.newUserPackage())\ndep.setIdentifier(name)\n'
+                        'host = SDSBSCompGraph.sNew(_PM.newUserPackage())\nhost.setIdentifier(name)\n'
+                        '_PM.savePackageAs(host.getPackage(), %r)\nhost.newInstanceNode(dep)\n'
+                        '_APP.getUIMgr().openResourceInEditor(host)\n_process_events()\n'
+                        'try:\n'
+                        '    _refuse_unsaved_dependencies(host.getPackage())\n'
+                        'except RuntimeError as e:\n'
+                        "    print('ROUTE=' + str(e))\n"
+                        "print('UID=' + dep.getPackage().getUID())\n"
+                        '_APP.getUIMgr().openResourceInEditor(dep)\n_process_events()\n'
+                        "print('FOCUS=' + str(_same_graph(_current_graph(), dep)))\n"
+                    )
+                    % host2_sbs
+                },
+            )
+        )
+        route = (
+            "in focus in Designer's editor" in t
+            and 'with no graph' in t
+            and 'save_package(' not in t.split('ROUTE=')[-1].split('UID=')[0]
+        )
+        check('save_package', 'one name for both: the refusal gives the in-focus route', route, t[-400:])
+        check('save_package', 'that route: code can put the dependency in focus', 'FOCUS=True' in t, t[-100:])
+        if route and 'FOCUS=True' in t:
+            r_ = await c('save_package', {'save_as': same_sbs})
+            check(
+                'save_package',
+                'that route: no graph, save_as saves the dependency',
+                not r_.is_error and os.path.isfile(same_sbs),
+                text(r_)[-200:],
+            )
+            r_ = await c('save_package', {'graph_or_path': host2_sbs})
+            check(
+                'save_package',
+                'that route: then the host saves',
+                not r_.is_error and 'saved' in text(r_),
+                text(r_)[-200:],
+            )
+            await c('open_graph', G)
     # two open graphs with one name, in different packages: each helper must act on the graph
     # it was given, not on any graph with that name (REVIEW.md HLP-6)
     dup_a, dup_b = os.path.join(scratch, 'dup_a.sbs'), os.path.join(scratch, 'dup_b.sbs')

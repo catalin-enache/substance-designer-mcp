@@ -12,12 +12,15 @@ from .core import (
     SDPackage,
     SDProperty,
     SDPropertyCategory,
+    SDResourceFolder,
     SDSBSCompGraph,
     SDTexture,
     SDType,
     SDTypeEnum,
     SDValueTexture,
+    _default_output,
     _other_end,
+    _output_note,
     cast,
     find_graph,
     fmt,
@@ -91,11 +94,35 @@ def describe_graph(
 
 
 def _library_path(name: str) -> tuple[str, str]:
+    """(package file, graph) of a library definition: '<file>[/<graph>]', in Designer's packages folder or a
+    subfolder, the file with or without its .sbs, the graph with its groups ('hbao', 'hbao.sbs/hbao',
+    'materials/pbr/bricks_001', 'constant_values/float/constant_float'). A definition comes from an agent, so
+    a file outside that folder is refused; the graph is looked up inside the package, which can't leave it
+    (measured: '../bevel', 'sbs://bevel.sbs', an absolute path all find nothing; REVIEW.md HLP-61)."""
     pkg_dir = os.path.join(_APP.getPath(SDApplicationPath.DefaultResourcesDir), 'packages')
-    file_name, _, graph_id = name.partition('/')
-    if not file_name.endswith('.sbs'):
+    graph_id = ''
+    if '.sbs/' in name:
+        file_name, graph_id = name.split('.sbs/', 1)
         file_name += '.sbs'
-    return os.path.join(pkg_dir, file_name), graph_id or os.path.splitext(file_name)[0]
+    elif name.endswith('.sbs'):
+        file_name = name
+    else:  # the longest part naming a package (REVIEW.md HLP-60); none: what was looked for, for the refusal
+        file_name = name + '.sbs'
+        parts = name.split('/')
+        for i in range(len(parts), 0, -1):
+            candidate = '/'.join(parts[:i]) + '.sbs'
+            if os.path.exists(os.path.join(pkg_dir, candidate)):
+                file_name, graph_id = candidate, '/'.join(parts[i:])
+                break
+    path = os.path.normpath(os.path.join(pkg_dir, file_name))
+    root = os.path.realpath(pkg_dir)
+    try:
+        inside = os.path.commonpath([root, os.path.realpath(path)]) == root
+    except ValueError:  # another drive on Windows
+        inside = False
+    if not inside:
+        raise RuntimeError('%r is neither an atomic node nor a library package (outside %s)' % (name, pkg_dir))
+    return path, graph_id or os.path.splitext(os.path.basename(file_name))[0]
 
 
 def _load_library(path: str) -> SDPackage:
@@ -103,6 +130,20 @@ def _load_library(path: str) -> SDPackage:
         if os.path.normpath(p.getFilePath() or '') == os.path.normpath(path):
             return p
     return _PM.loadUserPackage(path)
+
+
+def _library_graph(definition: str) -> Any:
+    """The library graph a definition names, for newInstanceNode. findResourceFromUrl finds a group too, and
+    newInstanceNode then says only NotSupported (measured; REVIEW.md HLP-63)."""
+    path, graph_id = _library_path(definition)
+    if not os.path.exists(path):
+        raise RuntimeError('%r is neither an atomic node nor a library package (%s)' % (definition, path))
+    res = _load_library(path).findResourceFromUrl(graph_id)
+    if res is None:
+        raise RuntimeError('graph %r not found in %s' % (graph_id, path))
+    if isinstance(res, SDResourceFolder):
+        raise RuntimeError('%r names a group of its package, not a graph' % definition)
+    return res
 
 
 def _slider_range(node: SDNode, prop_id: str) -> str:
@@ -144,20 +185,16 @@ def _short_description(prop: SDProperty) -> str:
 
 def describe_node(definition: str) -> None:
     """definition: atomic name ('levels' or 'sbs::compositing::levels') or library
-    '<package file>[/<graph id>]' (e.g. 'tile_generator', 'hbao.sbs/hbao')."""
+    '<package file>[/<graph id>]' (e.g. 'tile_generator', 'hbao.sbs/hbao', 'materials/pbr/bricks_001')."""
     tmp = _PM.newUserPackage()
     try:
         g = SDSBSCompGraph.sNew(tmp)
         atomic_id = definition if definition.startswith('sbs::') else 'sbs::compositing::' + definition
         node = g.newNode(atomic_id) if atomic_id in atomic_definition_ids(g) else None
         if node is None:
-            path, graph_id = _library_path(definition)
-            if not os.path.exists(path):
-                raise RuntimeError('%r is neither an atomic node nor a library package (%s)' % (definition, path))
-            res = _load_library(path).findResourceFromUrl(graph_id)
-            if res is None:
-                raise RuntimeError('graph %r not found in %s' % (graph_id, path))
+            res = _library_graph(definition)
             node = cast(SDNode, g.newInstanceNode(res))  # the resource was found just above
+            path, graph_id = _library_path(definition)
             print('library node %s (%s)' % (graph_id, os.path.basename(path)))
         else:
             print('atomic node %s' % atomic_id)
@@ -202,6 +239,10 @@ def _with_node_texture(
             'output %r not found; outputs: %s'
             % (output, [p.getId() for p in node.getProperties(SDPropertyCategory.Output)])
         )
+    if not output and len(outs) > 1:
+        chosen, how = _default_output(node, [p.getId() for p in outs])
+        print(_output_note(how))
+        outs = [p for p in outs if p.getId() == chosen]
     g.compute()
     value = cast(SDValueTexture | None, node.getPropertyValue(outs[0]))
     texture = value.get() if value is not None else None

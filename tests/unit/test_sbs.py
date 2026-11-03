@@ -1,7 +1,7 @@
 import copy
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -180,3 +180,29 @@ def test_links_of_a_graph_without_nodes() -> None:
 
     g = ET.fromstring('<graph><identifier v="g"/></graph>')
     assert server._select_links(g, 'portal', fanout_at_least=1) == ([], 0, 0)
+
+
+def test_a_diff_names_the_output_of_a_link(tmp_path: Path) -> None:
+    # REVIEW.md SRV-59: connRefOutput is a uid, so a rewired map read "<- 11.1102 added"; the name is in the source
+    # node's outputBridging
+    def model(output_uid: str) -> Any:
+        path = tmp_path / (output_uid + '.sbs')
+        path.write_text(
+            '<package><content><graph><identifier v="g"/><compNodes>'
+            '<compNode><uid v="11"/><compImplementation><compInstance><path v="pkg:///m"/><outputBridgings>'
+            '<outputBridging><uid v="1101"/><identifier v="diffuse"/></outputBridging>'
+            '<outputBridging><uid v="1102"/><identifier v="basecolor"/></outputBridging>'
+            '</outputBridgings></compInstance></compImplementation></compNode>'
+            '<compNode><uid v="21"/><connections><connection><identifier v="inputNodeOutput"/><connRef v="11"/>'
+            '<connRefOutput v="%s"/></connection></connections>'
+            '<compImplementation><compOutputBridge/></compImplementation></compNode>'
+            '</compNodes></graph></content></package>' % output_uid
+        )
+        return server._graph_model(str(path), 'g')
+
+    _, lines = server._diff_models(model('1101'), model('1102'), False)
+    assert any('<- 11.basecolor added' in line for line in lines), lines
+    assert any('<- 11.diffuse removed' in line for line in lines), lines
+    # an output with no name stays its uid: an atomic node's
+    _, lines = server._diff_models(model('1101'), model('777'), False)
+    assert any('<- 11.777 added' in line for line in lines), lines

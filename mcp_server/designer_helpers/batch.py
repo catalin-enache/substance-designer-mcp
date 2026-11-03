@@ -17,10 +17,22 @@ _NODE_FIELDS: dict[str, tuple[str, ...]] = {
     'expose': ('node',),
 }
 _GRAPH_OK = {'set'}  # the graph's own parameters, as _target allows
+# every field each op kind takes; another refuses the batch: a typo was ignored and the op reported as applied
+# (REVIEW.md HLP-62). test_server.py compares this with what the ops below read
+_OP_FIELDS: dict[str, tuple[str, ...]] = {
+    'add': ('definition', 'ref', 'position', 'params'),
+    'bitmap': ('path', 'ref', 'embed', 'position', 'name'),
+    'set': ('node', 'params'),
+    'connect': ('from', 'to', 'input', 'output'),
+    'disconnect': ('node', 'input'),
+    'move': ('node', 'position'),
+    'delete': ('node',),
+    'expose': ('node', 'param', 'input_id', 'label', 'default', 'min', 'max', 'step', 'group'),
+}
 
 
 def _check_batch(g: SDSBSCompGraph, ops: list[dict[str, Any]]) -> None:
-    """Refuse the batch before any op runs when an op's kind is unknown, a ref isn't text, or a node
+    """Refuse the batch before any op runs when an op's kind or a field is unknown, a ref isn't text, or a node
     it names is neither a ref defined by an earlier add/bitmap op, 'graph' (set only), nor a node of
     g; a node an earlier delete op removes counts as gone."""
     refs: dict[str, str] = {}  # ref -> what it stands for while checking ('ref:<name>', unique)
@@ -29,6 +41,12 @@ def _check_batch(g: SDSBSCompGraph, ops: list[dict[str, Any]]) -> None:
         kind = op.get('op') if isinstance(op, dict) else None
         if not isinstance(kind, str) or kind not in _NODE_FIELDS:
             raise RuntimeError('op %d: unknown op %r (%s); nothing was applied' % (i, kind, ', '.join(_NODE_FIELDS)))
+        for field in op:
+            if field != 'op' and field not in _OP_FIELDS[kind]:
+                raise RuntimeError(
+                    'op %d (%s): unknown field %r (this op takes: %s); nothing was applied'
+                    % (i, kind, field, ', '.join(_OP_FIELDS[kind]))
+                )
         for field in _NODE_FIELDS[kind]:
             value = op.get(field)
             if kind in _GRAPH_OK and value == 'graph':

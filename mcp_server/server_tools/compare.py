@@ -194,7 +194,7 @@ def compare_to_reference(
     aligned: bool = False,
     tile_size: int = 256,
 ) -> list[str | Image]:
-    """Compare a node's output with a reference image file, with numbers. Always compares value
+    """Compare a node's output with a reference image file, with numbers. output: which of the node's outputs (default: the one tagged base colour, else the first; the result says which). Always compares value
     distributions (works for a photo that isn't pixel-aligned with the material): per channel
     mean, std, percentiles, the mean shift, the contrast ratio and the earth mover's distance
     (EMD: how far values must move on average, 0..1), plus a linear map (x*gain + bias) that
@@ -222,6 +222,8 @@ def compare_to_reference(
             ref.shape[0],
         ),
     )
+    if meta['note']:
+        lines.insert(1, meta['note'])
     tiles: list[PILImage.Image] = []
     for im, label in ((_to_display(data, layout), 'node'), (_to_display(ref, ref_layout), 'reference')):
         im.thumbnail((tile_size, tile_size))

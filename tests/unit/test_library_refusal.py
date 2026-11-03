@@ -149,6 +149,7 @@ def test_no_edit_reaches_a_library_graph_in_the_editor(helpers: Any, name: str, 
 def test_every_helper_either_edits_through_the_check_or_only_reads(helpers: Any) -> None:
     # a new helper using find_graph has to be put in one group or the other
     reads = {
+        '_found_by_name',
         '_graph_to_edit',
         '_package_of',
         'describe_graph',

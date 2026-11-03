@@ -176,3 +176,23 @@ async def run(ctx: Ctx) -> None:
             **G,
         },
     )
+    # a field the op doesn't take refuses the whole batch: a typo reported success, the node somewhere else and its
+    # parameters unset (REVIEW.md HLP-62)
+    before = text(await c('execute_designer_code', {'code': COUNT_NODES}))
+    r_ = await c(
+        'apply_edits',
+        {
+            'ops': [
+                {'op': 'add', 'definition': 'levels'},
+                {'op': 'add', 'definition': 'levels', 'postion': [999, 999]},
+            ],
+            **G,
+        },
+    )
+    after = text(await c('execute_designer_code', {'code': COUNT_NODES}))
+    check(
+        'apply_edits',
+        'refuses a field the op does not take, nothing added',
+        r_.is_error and "unknown field 'postion'" in text(r_) and 'position' in text(r_) and after == before,
+        text(r_)[-200:],
+    )

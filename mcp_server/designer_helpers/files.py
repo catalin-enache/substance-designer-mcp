@@ -1,7 +1,18 @@
 """Package files: snapshot copies, and saving, unloading and reloading for edits the API can't
 make."""
 
-from .core import _APP, _PM, Any, SDSBSCompGraph, _is_library_package, _library_refusal, _same_graph, find_graph, os
+from .core import (
+    _APP,
+    _PM,
+    Any,
+    SDSBSCompGraph,
+    _is_library_package,
+    _library_refusal,
+    _refuse_unsaved_dependencies,
+    _same_graph,
+    find_graph,
+    os,
+)
 
 
 def save_package_copy(identifier: str | SDSBSCompGraph | None, path: str) -> None:
@@ -9,6 +20,7 @@ def save_package_copy(identifier: str | SDSBSCompGraph | None, path: str) -> Non
     path or saved state (saveCopyOfPackageAs)."""
     g = find_graph(identifier)
     pkg = g.getPackage()
+    _refuse_unsaved_dependencies(pkg)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     _PM.saveCopyOfPackageAs(pkg, path)
     print('COPY=' + path)
@@ -47,6 +59,7 @@ def package_file_of(identifier: str | SDSBSCompGraph | None, save: bool = False)
     path = pkg.getFilePath()
     if not path:
         raise RuntimeError('the package has never been saved; save it first (the save_package tool, save_as=...)')
+    _refuse_unsaved_dependencies(pkg)
     if save:
         _PM.savePackage(pkg)
     current = _APP.getQtForPythonUIMgr().getCurrentGraph()  # type: ignore[no-untyped-call]  # sd: no annotations

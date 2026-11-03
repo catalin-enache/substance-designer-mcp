@@ -27,7 +27,8 @@ _Value = float | int | bool | list[float]
 def save_package(graph_or_path: str | None = None, save_as: str | None = None) -> str:
     """Save an open package from Designer. graph_or_path: a graph identifier or the package's
     file path (default: graph open in the UI). save_as: new absolute .sbs path (required for
-    packages that were never saved)."""
+    packages that were never saved). A package using a graph of a never-saved package is refused until
+    that one is saved: Designer would open a dialog and wait for a person."""
     if graph_or_path and graph_or_path.lower().endswith('.sbs'):
         graph_or_path = _local_path(graph_or_path)
     return _checked(_bridge(_helpers_call('save_package(%r, %r)' % (graph_or_path, _local_path(save_as))), timeout=120))

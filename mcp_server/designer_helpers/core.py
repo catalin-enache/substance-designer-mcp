@@ -20,6 +20,7 @@ from sd.api.sdnode import SDNode as SDNode
 from sd.api.sdpackage import SDPackage as SDPackage
 from sd.api.sdpackagemgr import SDPackageMgr
 from sd.api.sdproperty import SDProperty as SDProperty, SDPropertyCategory as SDPropertyCategory
+from sd.api.sdresourcefolder import SDResourceFolder as SDResourceFolder
 from sd.api.sdtexture import SDTexture as SDTexture
 from sd.api.sdtype import SDType as SDType
 from sd.api.sdtypeenum import SDTypeEnum as SDTypeEnum
@@ -139,6 +140,80 @@ def _graph_to_edit(identifier: str | SDSBSCompGraph | None = None) -> SDSBSCompG
     if _is_library_package(g.getPackage()):
         raise _library_refusal("Graph %r belongs to Designer's library, and tools don't edit it" % g.getIdentifier())
     return g
+
+
+def _refuse_unsaved_dependencies(pkg: SDPackage) -> None:
+    """Before any save of pkg. A package using a graph of a never-saved one makes savePackage, savePackageAs and
+    saveCopyOfPackageAs open a modal "Save Dependency" file dialog on Designer's main thread: the call waits for a
+    person, and a timer calling reject() didn't close it (measured; REVIEW.md SRV-60). A saved dependency, even one with
+    unsaved changes or itself using an unsaved package, opens none (measured), so only direct, never-saved ones count."""
+    advice: list[str] = []
+    open_packages = {p.getUID() for p in _PM.getUserPackages()}
+    for dependency in pkg.getDependencies():
+        if dependency.getFilePath():
+            continue
+        used = dependency.getPackage()
+        graphs = (
+            [r for r in used.getChildrenResources(True) if isinstance(r, SDSBSCompGraph)] if used is not None else []
+        )
+        what = ', '.join(repr(g.getIdentifier()) for g in graphs) or 'a graph'
+        if used is not None:
+            what += ' (UID %s)' % used.getUID()
+        reached = next((g for g in graphs if _found_by_name(g)), None)
+        if used is None or used.getUID() not in open_packages:
+            # closed while in use: it stays a dependency, the dialog opens, and deleting the node ends it (measured).
+            # No package with no path wasn't seen: a file gone has a path, and saves with no dialog (measured)
+            advice.append(
+                "%s is in a package closed since, so no tool can save it: delete the nodes using it, or the user saves it from Designer's dialog."
+                % what
+            )
+        elif reached is not None:
+            advice.append('%s: save it first, save_package(%r, save_as=...).' % (what, reached.getIdentifier()))
+        else:  # every new graph is "New_Graph": the name finds another graph, or is ambiguous (REVIEW.md HLP-67)
+            advice.append(
+                "%s: save it first; its name finds another graph, so with it in focus in Designer's editor (the user opens it), save_package with no graph and save_as=...."
+                % what
+            )
+    if advice:
+        raise RuntimeError(
+            '%s uses a graph of a package never saved; Designer would open a dialog asking where to save it and wait for a person, so nothing was saved. %s'
+            % (_package_name(pkg), ' '.join(advice))
+        )
+
+
+def _found_by_name(g: SDSBSCompGraph) -> bool:
+    """Whether g's name, given to a tool, finds g and not another graph of that name."""
+    try:
+        return _same_graph(find_graph(g.getIdentifier()), g)
+    except RuntimeError:
+        return False
+
+
+def _default_output(node: SDNode, outputs: list[str]) -> tuple[str, str]:
+    """(the output to use when none is named, how to say which). The one tagged base colour, else the first: a
+    material's first is `diffuse`, black on a metal, so the first can read as a broken node (REVIEW.md HLP-65, HLP-66).
+    By its usage tag, not its name: a custom package can call it anything, and a name proves nothing. The tag is on the
+    output nodes of the graph an instance refers to (measured); an atomic node has none."""
+    listed = ', '.join(outputs)
+    try:
+        for out in node.getReferencedResource().getOutputNodes():  # type: ignore[union-attr]  # caught below
+            ident = out.getAnnotationPropertyValueFromId('identifier')
+            tags = out.getAnnotationPropertyValueFromId('usages')
+            if ident is None or tags is None:
+                continue
+            array = tags.get()  # an SDValueArray of SDValueUsage
+            names = [array.getItem(i).get().getName().lower() for i in range(array.getSize())]
+            name = ident.get()  # an SDValueString
+            if 'basecolor' in names and name in outputs:
+                return name, "'%s', tagged base colour, of %d (%s)" % (name, len(outputs), listed)
+    except (Exception, APIException):
+        pass  # not a graph's instance (an atomic node, a bitmap resource), or no such annotation
+    return outputs[0], "'%s', the first of %d (%s)" % (outputs[0], len(outputs), listed)
+
+
+def _output_note(how: str) -> str:
+    """What a tool says when it picked one of several outputs: server_tools.core reads it back from this text."""
+    return 'no output given: %s; pass output to pick another' % how
 
 
 def _position(value: Any, what: str = 'position') -> tuple[float, float]:

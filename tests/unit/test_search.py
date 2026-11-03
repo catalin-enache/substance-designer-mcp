@@ -15,6 +15,7 @@ def _entry(
         'category': category,
         'description': description,
         'hidden': hidden,
+        'url': graph,
     }
 
 
@@ -67,7 +68,10 @@ def test_all_words_must_match() -> None:
 
 
 def test_hidden_entries() -> None:
-    assert server.search_nodes('secret') == "No node types match 'secret'."
+    assert (
+        server.search_nodes('secret')
+        == "No node types match 'secret'. 1 hidden graph(s) match too: include_hidden=True"
+    )
     shown = server.search_nodes('secret', include_hidden=True)
     assert "definition='secret.sbs/secret_levels'" in shown and 'Secret levels' in shown
 

@@ -40,7 +40,8 @@ def snapshot_graph(graph: str | None = None, label: str | None = None) -> str:
     ~/.sd_mcp/snapshots/<graph>/ (override with SD_SNAPSHOT_DIR), each with a note of the package it
     came from, so two packages' graphs of one name don't share them. A snapshot of an unsaved package
     also gets a UID of its own, so opened to recover it is a package of its own wherever it is saved;
-    a saved package's snapshot is Designer's exact copy."""
+    a saved package's snapshot is Designer's exact copy. A package using a graph of a never-saved package
+    is refused, as in save_package."""
     # Designer writes resource paths (bitmaps) relative to the copy, so it is saved where it
     # stays: moved afterwards, those paths would point nowhere
     gid = _checked(_bridge(_helpers_call('print("GRAPH=" + find_graph(%r).getIdentifier())' % graph), timeout=60))
@@ -270,6 +271,7 @@ def _graph_model(sbs_path: str, graph_id: str) -> _GraphModel:
         el = pv[0]
         return 'function' if el.tag == 'dynamicValue' else (el.get('v') or '')
 
+    output_names = {_v(b, 'uid'): _v(b, 'identifier') for b in g.iter('outputBridging')}
     nodes: dict[str, _NodeModel] = {}
     for n in _found(g, 'compNodes') if g.find('compNodes') is not None else []:
         uid = _v(n, 'uid')
@@ -293,8 +295,10 @@ def _graph_model(sbs_path: str, graph_id: str) -> _GraphModel:
         conns = n.find('connections')
         for c in conns if conns is not None else []:
             out = c.find('connRefOutput')
-            # which output of the source matters: bevel.height and bevel.normal are different links
-            src = _v(c, 'connRef') + ('.' + cast(str, out.get('v')) if out is not None else '')
+            # which output of the source matters: bevel.height and bevel.normal are different links. By name where
+            # the file has one, a library node's; an atomic node's has only its uid (REVIEW.md SRV-59)
+            output = cast(str, out.get('v')) if out is not None else None
+            src = _v(c, 'connRef') + ('.' + output_names.get(output, output) if output is not None else '')
             key = (_v(c, 'identifier'), src)
             links.add(key)
             dt = c.find('displayType')
@@ -385,7 +389,8 @@ def diff_graph(graph: str | None = None, against: str = 'saved', show_positions:
     added/removed, exposed inputs and size. against: 'saved' (the package's file on disk),
     'latest' (this package's newest snapshot), a snapshot label (this package's), or a .sbs path (any
     snapshot: after a Save As, the earlier file's snapshots count as another package's). The live graph is read
-    without modifying it. Positions are only counted unless show_positions=True."""
+    without modifying it, so a package using a graph of a never-saved package is refused, as in save_package.
+    Positions are only counted unless show_positions=True."""
     tmp_dir = tempfile.mkdtemp(prefix='sd_diff_')
     try:
         info = _copy_package(graph, os.path.join(tmp_dir, 'live.sbs'))
