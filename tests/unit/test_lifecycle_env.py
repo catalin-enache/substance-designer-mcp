@@ -8,6 +8,7 @@ import sys
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from textwrap import dedent
 from typing import Any, NoReturn
 
 import pytest
@@ -227,13 +228,16 @@ def test_scripts_and_tool_output_are_read_as_utf8_whatever_the_locale(tmp_path: 
     script = tmp_path / 's.py'
     script.write_text("print('→ é ✓')\n", encoding='utf-8')
     probe = (
-        'import sys; sys.path.insert(0, %r); sys.path.insert(0, %r)\n'
-        'import server, server_tools.scripting\n'
-        'server_tools.scripting._bridge = lambda code, path=None, timeout=None: code\n'  # where the tool looks it up
-        'sent = server.run_designer_script(%r)\n'
-        "print('SCRIPT_OK' if \"print('→ é ✓')\" in sent else 'SCRIPT_BAD')\n"
-        "r = server._run_tool([sys.executable, '-c', \"import sys; sys.stdout.buffer.write('→ ✓'.encode())\"], 30)\n"
-        "print('TOOL_OK' if r.stdout == '→ ✓' else 'TOOL_BAD %%r' %% r.stdout)\n"
+        dedent("""\
+            import sys; sys.path.insert(0, %r); sys.path.insert(0, %r)
+            import server, server_tools.scripting
+            # where the tool looks it up
+            server_tools.scripting._bridge = lambda code, path=None, timeout=None: code
+            sent = server.run_designer_script(%r)
+            print('SCRIPT_OK' if "print('→ é ✓')" in sent else 'SCRIPT_BAD')
+            r = server._run_tool([sys.executable, '-c', "import sys; sys.stdout.buffer.write('→ ✓'.encode())"], 30)
+            print('TOOL_OK' if r.stdout == '→ ✓' else 'TOOL_BAD %%r' %% r.stdout)
+        """)
     ) % (os.path.join(ROOT, 'mcp_server'), ROOT, str(script))
     env = dict(os.environ, LC_ALL='en_US.ISO8859-1', PYTHONIOENCODING='utf-8')
     env.pop('PYTHONUTF8', None)

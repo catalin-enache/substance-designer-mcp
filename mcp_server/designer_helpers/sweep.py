@@ -15,7 +15,7 @@ from .core import (
 )
 from .describe import _with_node_texture
 from .edits import _make_value, _node, _target
-from .graph_inputs import _driving_graph
+from .graph_inputs import _driving_graph, _refuse_no_input, _refuse_no_output
 
 
 def sweep_param(
@@ -37,7 +37,10 @@ def sweep_param(
     prop = target.getPropertyFromId(param, SDPropertyCategory.Input)
     if prop is None or prop.isConnectable():
         raise RuntimeError('%r is not a parameter of %s; see describe_node / list_graph_inputs' % (param, node_id))
-    if node_id != 'graph' and _driving_graph(cast(SDNode, target), prop) is not None:
+    driven = _driving_graph(cast(SDNode, target), prop) if node_id != 'graph' else None
+    if driven is not None:
+        _refuse_no_output(driven, node_id, param)
+        _refuse_no_input(g, driven, node_id, param)
         raise RuntimeError(
             '%s.%s is driven by a graph input or function; sweep the graph input '
             'instead (node_id="graph", param=<input id>, see list_graph_inputs)' % (node_id, param)

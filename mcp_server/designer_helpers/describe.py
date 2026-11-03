@@ -28,7 +28,7 @@ from .core import (
     os,
 )
 from .edits import _node, atomic_definition_ids
-from .graph_inputs import _driving_graph, _plain_binding
+from .graph_inputs import _driver_text, _driving_graph, _fx_map_functions, _has_output
 from .layout import graph_objects_summary
 
 
@@ -74,14 +74,27 @@ def describe_graph(
             line += '  in: ' + ', '.join(links)
         print(line)
         if include_params:
+            for inner_id, prop, fg in _fx_map_functions(n):
+                if _has_output(fg):
+                    print('    FX-Map %s %s <- %s' % (inner_id, prop.getId(), _driver_text(g, fg)))
+                else:
+                    print(
+                        '    FX-Map %s %s: a function with no output node, which drives nothing'
+                        % (inner_id, prop.getId())
+                    )
             for prop in n.getProperties(SDPropertyCategory.Input):
                 if prop.isConnectable():
                     continue
                 driven = _driving_graph(n, prop)
+                if driven is not None and not _has_output(driven):
+                    print(
+                        '    %s = %r (its function has no output node and drives nothing)'
+                        % (prop.getId(), fmt(n.getPropertyValue(prop)))
+                    )
+                    continue
                 if driven is not None:
                     # the stored constant is hidden and unused while a function drives the value
-                    source = _plain_binding(driven)
-                    print('    %s <- %s' % (prop.getId(), 'graph input %r' % source if source else 'a function'))
+                    print('    %s <- %s' % (prop.getId(), _driver_text(g, driven)))
                     continue
                 cur = fmt(n.getPropertyValue(prop))
                 default = fmt(prop.getDefaultValue())

@@ -3,6 +3,7 @@ add_frame, add_comment."""
 
 import os
 import re
+from textwrap import dedent
 
 from .common import GRAPH_OF, TEST_GRAPH, Ctx, added_id, check, positions, text
 
@@ -21,12 +22,13 @@ async def run(ctx: Ctx) -> None:
             'execute_designer_code',
             {
                 'code': GRAPH_OF % TEST_GRAPH
-                + (
-                    'pm = sd.getContext().getSDApplication().getPackageMgr()\n'
-                    'snap = pm.loadUserPackage(%r)\ntry:\n'
-                    '    print("SNAPSHOT_UID_DIFFERS=%%s" %% (snap.getUID() != g.getPackage().getUID()))\n'
-                    'finally:\n    pm.unloadUserPackage(snap)\n'
-                )
+                + dedent("""\
+                    pm = sd.getContext().getSDApplication().getPackageMgr()
+                    snap = pm.loadUserPackage(%r)
+                    try:
+                        print('SNAPSHOT_UID_DIFFERS=%%s' %% (snap.getUID() != g.getPackage().getUID()))
+                    finally:
+                        pm.unloadUserPackage(snap)""")
                 % snap_path
             },
         )
@@ -62,6 +64,32 @@ async def run(ctx: Ctx) -> None:
         t.splitlines()[-1],
     )
     os.remove(snap_path)
+    # a change inside a function shows, the loss of its output node by name (REVIEW.md SRV-63)
+    fn_node = added_id(text(await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'levels'}], **G})))
+    try:
+        await c(
+            'apply_edits',
+            {'ops': [{'op': 'expose', 'node': fn_node, 'param': 'levelinlow', 'input_id': 'diff_in'}], **G},
+        )
+        await c('snapshot_graph', {'label': 'function kept', **G})
+        same = text(await c('diff_graph', {'against': 'function kept', **G}))
+        check('diff_graph', 'a function nothing changed compares equal', 'levelinlow' not in same, same)
+        await c(
+            'execute_designer_code',
+            {
+                'code': GRAPH_OF % TEST_GRAPH
+                + dedent("""\
+                    from sd.api.sdproperty import SDPropertyCategory
+                    fg = g.getNodeFromId(%r).getPropertyGraph(g.getNodeFromId(%r).getPropertyFromId('levelinlow', SDPropertyCategory.Input))
+                    fg.setOutputNode(fg.getNodes()[0], False)""")
+                % (fn_node, fn_node)
+            },
+        )
+        t = text(await c('diff_graph', {'against': 'function kept', **G}))
+        check('diff_graph', 'a function losing its output node shows', 'levelinlow' in t and 'no output' in t, t)
+    finally:
+        await c('apply_edits', {'ops': [{'op': 'delete', 'node': fn_node}], **G})
+        await c('remove_graph_input', {'input_id': 'diff_in', **G})
     if os.path.isfile(snap_path + '.json'):  # its note of the package (REVIEW.md SRV-34)
         os.remove(snap_path + '.json')
     if not os.listdir(os.path.dirname(snap_path)):
@@ -104,14 +132,10 @@ async def run(ctx: Ctx) -> None:
         await c(
             'execute_designer_code',
             {
-                'code': (
-                    'import sd\nfrom sd.api.sdgraphobjectframe import SDGraphObjectFrame\n'
-                    'g=[r for p in sd.getContext().getSDApplication().getPackageMgr().getUserPackages() '
-                    "for r in p.getChildrenResources(False) if r.getIdentifier()=='%s'][0]\n"
-                    'print([o.getDescription() for o in g.getGraphObjects() if isinstance(o, SDGraphObjectFrame) '
-                    "and o.getTitle()=='Described'])"
-                )
-                % TEST_GRAPH
+                'code': GRAPH_OF % TEST_GRAPH
+                + dedent("""\
+                    from sd.api.sdgraphobjectframe import SDGraphObjectFrame
+                    print([o.getDescription() for o in g.getGraphObjects() if isinstance(o, SDGraphObjectFrame) and o.getTitle() == 'Described'])""")
             },
         )
     )

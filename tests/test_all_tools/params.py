@@ -2,8 +2,9 @@
 the Designer facts about inheritance and seeds those checks rely on."""
 
 import re
+from textwrap import dedent
 
-from .common import GRAPH_OF, INHERIT, PIXELS, TEST_GRAPH, Ctx, added_id, check, text
+from .common import GRAPH_OF, TEST_GRAPH, Ctx, added_id, check, designer_script, text
 
 
 async def run(ctx: Ctx) -> None:
@@ -24,7 +25,7 @@ async def run(ctx: Ctx) -> None:
     await c('apply_edits', {'ops': [{'op': 'set', 'node': 'graph', 'params': {'$outputsize': [9, 9]}}], **G})
     # a node's $outputsize: made Absolute and taking effect (AGENTS.md, Graph size; TST-60)
     t = text(await c('apply_edits', {'ops': [{'op': 'set', 'node': lv, 'params': {'$outputsize': [7, 7]}}], **G}))
-    inherit = text(await c('execute_designer_code', {'code': INHERIT % (TEST_GRAPH, lv)}))
+    inherit = text(await designer_script(c, 'shared/node_size_inheritance', graph=TEST_GRAPH, node=lv))
     size = text(await c('node_stats', {'node_id': lv, **G}))
     check(
         'apply_edits',
@@ -32,15 +33,8 @@ async def run(ctx: Ctx) -> None:
         'INHERIT=Absolute' in inherit and 'x: 7, y: 7' in inherit and '128x128' in size,
         inherit.strip() + ' | ' + size.splitlines()[0] if size else inherit,
     )
-    await c(
-        'execute_designer_code',
-        {
-            'code': INHERIT % (TEST_GRAPH, lv)
-            + (
-                '\nfrom sd.api.sdproperty import SDPropertyInheritanceMethod as IM\n'
-                'n.setPropertyInheritanceMethod(p, IM.RelativeToInput)'
-            )
-        },
+    await designer_script(
+        c, 'shared/node_size_inheritance', graph=TEST_GRAPH, node=lv, relative_to_input=True
     )  # back as it was (its value resets)
     # on an overridable graph it is refused (it would quietly make the size fixed), pointing
     # to set_graph_size, and the graph stays overridable (REVIEW.md HLP-22)
@@ -51,11 +45,10 @@ async def run(ctx: Ctx) -> None:
             'execute_designer_code',
             {
                 'code': GRAPH_OF % TEST_GRAPH
-                + (
-                    'from sd.api.sdproperty import SDPropertyCategory\n'
-                    "p = g.getPropertyFromId('$outputsize', SDPropertyCategory.Input)\n"
-                    "print('INHERIT=' + str(g.getPropertyInheritanceMethod(p)).split('.')[-1])"
-                )
+                + dedent("""\
+                    from sd.api.sdproperty import SDPropertyCategory
+                    p = g.getPropertyFromId('$outputsize', SDPropertyCategory.Input)
+                    print('INHERIT=' + str(g.getPropertyInheritanceMethod(p)).split('.')[-1])""")
             },
         )
     )
@@ -69,28 +62,7 @@ async def run(ctx: Ctx) -> None:
     # the graph's other $ parameters follow its parent too, and a value set while they do
     # changes nothing, so the set op makes them Absolute (REVIEW.md HLP-24); measured on a
     # generator that inherits the graph's format
-    FORMAT_OF = GRAPH_OF % TEST_GRAPH + (
-        'from sd.api.sdproperty import SDPropertyCategory\n'
-        'from sd.api.sdvalueenum import SDValueEnum\n'
-        "p = g.getPropertyFromId('$format', SDPropertyCategory.Input)\n"
-        '%s\n'
-        "u = g.newNode('sbs::compositing::uniform'); o = g.newNode('sbs::compositing::output')\n"
-        "u.newPropertyConnectionFromId('unique_filter_output', o, 'inputNodeOutput')\n"
-        'try:\n    g.compute()\n'
-        "    t = u.getPropertyValue(u.getPropertyFromId('unique_filter_output', SDPropertyCategory.Output)).get()\n"
-        "    print('FORMAT=' + str(t.getPixelFormat()).split('.')[-1])\n"
-        'finally:\n    g.deleteNode(u); g.deleteNode(o)\n'  # no stray output if it fails (REVIEW.md TST-49)
-        "print('INHERIT=' + str(g.getPropertyInheritanceMethod(p)).split('.')[-1])"
-    )
-    fact = text(
-        await c(
-            'execute_designer_code',
-            {
-                'code': FORMAT_OF
-                % ("g.setPropertyValue(p, SDValueEnum.sFromValueId(p.getType().getId(), '16_bits_per_channel'))")
-            },
-        )
-    )
+    fact = text(await designer_script(c, 'params/graph_format', graph=TEST_GRAPH, set_16_bits=True))
     check(
         'designer facts',
         'an inherited graph $format ignores its value (AGENTS.md)',
@@ -102,7 +74,7 @@ async def run(ctx: Ctx) -> None:
             'apply_edits', {'ops': [{'op': 'set', 'node': 'graph', 'params': {'$format': '16_bits_per_channel'}}], **G}
         )
     )
-    fmt16 = text(await c('execute_designer_code', {'code': FORMAT_OF % ''}))
+    fmt16 = text(await designer_script(c, 'params/graph_format', graph=TEST_GRAPH))
     check(
         'apply_edits',
         'set: graph $format takes effect (made Absolute)',
@@ -110,22 +82,7 @@ async def run(ctx: Ctx) -> None:
         t.strip() + ' | ' + fmt16.strip(),
     )
     # later checks run on a graph like a new one: $format follows its parent again (REVIEW.md TST-35)
-    back = text(
-        await c(
-            'execute_designer_code',
-            {
-                'code': GRAPH_OF % TEST_GRAPH
-                + (
-                    'from sd.api.sdproperty import SDPropertyCategory, SDPropertyInheritanceMethod as IM\n'
-                    'from sd.api.sdvalueenum import SDValueEnum\n'
-                    "p = g.getPropertyFromId('$format', SDPropertyCategory.Input)\n"
-                    "g.setPropertyValue(p, SDValueEnum.sFromValueId(p.getType().getId(), '8_bits_per_channel'))\n"
-                    'g.setPropertyInheritanceMethod(p, IM.RelativeToParent)\n'
-                    "print('INHERIT=' + str(g.getPropertyInheritanceMethod(p)).split('.')[-1])"
-                )
-            },
-        )
-    )
+    back = text(await designer_script(c, 'params/graph_format_restore', graph=TEST_GRAPH))
     check(
         'self-test',
         'the graph $format check puts the graph back as it was',
@@ -135,30 +92,7 @@ async def run(ctx: Ctx) -> None:
     # the graph's $randomseed is different: one that follows its parent is exposed in a
     # .sbsar (an Absolute one isn't) and its value still counts, so the set op leaves its
     # inheritance (REVIEW.md HLP-25; sbsar_info checks the exposure further down)
-    SEED_OF = (
-        GRAPH_OF % TEST_GRAPH
-        + PIXELS
-        + (
-            'from sd.api.sdproperty import SDPropertyCategory\n'
-            'from sd.api.sdvalueint import SDValueInt\n'
-            "p = g.getPropertyFromId('$randomseed', SDPropertyCategory.Input)\n"
-            "n = g.getNodeFromId('%s'); out = n.getProperties(SDPropertyCategory.Output)[0]\n"
-            'def look(seed):\n'
-            '    g.setPropertyValue(p, SDValueInt.sNew(seed)); g.compute()\n'
-            '    return pixels(n.getPropertyValue(out).get())\n'
-            'o = None\n'
-            'try:\n'  # no stray output for later checks if a step fails (REVIEW.md TST-38, TST-53)
-            "    o = g.newNode('sbs::compositing::output')\n"
-            "    n.newPropertyConnectionFromId(out.getId(), o, 'inputNodeOutput')\n"
-            '    looks = [look(s) for s in (0, 3, 3)]\n'
-            'finally:\n'
-            '    if o is not None:\n        g.deleteNode(o)\n'
-            "print('DIFFERS=%%s REPEATS=%%s INHERIT=%%s' %% (apart(looks[0], looks[1]) > 8, apart(looks[1], looks[2]) <= 8, "
-            "str(g.getPropertyInheritanceMethod(p)).split('.')[-1]))"
-        )
-        % clouds
-    )
-    fact = text(await c('execute_designer_code', {'code': SEED_OF}))
+    fact = text(await designer_script(c, 'params/graph_seed_effect', graph=TEST_GRAPH, node=clouds))
     check(
         'designer facts',
         "an inherited graph $randomseed's value changes the output (AGENTS.md)",
@@ -168,27 +102,7 @@ async def run(ctx: Ctx) -> None:
     # graph.compute() computes what feeds an output node, and in a fresh graph not a node that
     # feeds none (AGENTS.md; REVIEW.md TST-64). In this graph a lone node did come back computed,
     # so the fact is measured in a package of its own
-    fact = text(
-        await c(
-            'execute_designer_code',
-            {
-                'code': (
-                    'import sd\nfrom sd.api.sdproperty import SDPropertyCategory\n'
-                    'pm = sd.getContext().getSDApplication().getPackageMgr()\npkg = pm.newUserPackage()\n'
-                    'try:\n'
-                    '    g = sd.api.sbs.sdsbscompgraph.SDSBSCompGraph.sNew(pkg)\n'
-                    '    tex = lambda n: (lambda v: v.get() if v is not None else None)(\n'
-                    '        n.getPropertyValue(n.getProperties(SDPropertyCategory.Output)[0]))\n'
-                    "    fed = g.newNode('sbs::compositing::uniform'); lone = g.newNode('sbs::compositing::uniform')\n"
-                    "    o = g.newNode('sbs::compositing::output')\n"
-                    "    fed.newPropertyConnectionFromId('unique_filter_output', o, 'inputNodeOutput')\n"
-                    '    g.compute()\n'
-                    "    print('ALONE_COMPUTED=%s FED_COMPUTED=%s' % (tex(lone) is not None, tex(fed) is not None))\n"
-                    'finally:\n    pm.unloadUserPackage(pkg)'
-                )
-            },
-        )
-    )
+    fact = text(await designer_script(c, 'params/compute_fresh_graph'))
     check(
         'designer facts',
         'graph.compute() computes what feeds an output, in a fresh graph only that (AGENTS.md)',
@@ -198,42 +112,7 @@ async def run(ctx: Ctx) -> None:
     # a node's seed: inherited, its value is added to the graph's; Absolute, it no longer follows
     # the graph's seed (nor a .sbsar's), so the set op leaves it inherited (REVIEW.md HLP-27).
     # Pixels compared with a tolerance: two computes of one setting differ by a step or two
-    fact = text(
-        await c(
-            'execute_designer_code',
-            {
-                'code': GRAPH_OF % TEST_GRAPH
-                + PIXELS
-                + (
-                    'from sd.api.sdproperty import SDPropertyCategory, SDPropertyInheritanceMethod as IM\n'
-                    'from sd.api.sdvalueint import SDValueInt\n'
-                    "n = g.getNodeFromId('%s'); out = n.getProperties(SDPropertyCategory.Output)[0]\n"
-                    "gp = g.getPropertyFromId('$randomseed', SDPropertyCategory.Input)\n"
-                    "np_ = n.getPropertyFromId('$randomseed', SDPropertyCategory.Input)\n"
-                    'kept = (g.getPropertyValue(gp).get(), n.getPropertyInheritanceMethod(np_), n.getPropertyValue(np_).get())\n'
-                    'def look(inherit, graph_seed, node_seed):\n'
-                    '    n.setPropertyInheritanceMethod(np_, inherit)\n'
-                    '    g.setPropertyValue(gp, SDValueInt.sNew(graph_seed)); n.setPropertyValue(np_, SDValueInt.sNew(node_seed))\n'
-                    '    g.compute(); return pixels(n.getPropertyValue(out).get())\n'
-                    'o = None\n'
-                    'try:\n'  # the output node inside the try too (REVIEW.md TST-53)
-                    "    o = g.newNode('sbs::compositing::output')\n"
-                    "    n.newPropertyConnectionFromId(out.getId(), o, 'inputNodeOutput')\n"
-                    '    r03 = look(IM.RelativeToParent, 0, 3)\n'
-                    '    near = max(apart(r03, look(IM.RelativeToParent, 3, 0)), apart(r03, look(IM.RelativeToParent, 1, 2)))\n'
-                    '    counts = apart(r03, look(IM.RelativeToParent, 0, 0))\n'
-                    '    a0 = look(IM.Absolute, 0, 0)\n'
-                    '    follows = apart(a0, look(IM.Absolute, 3, 0))\n'
-                    'finally:\n'
-                    '    if o is not None:\n        g.deleteNode(o)\n'
-                    '    n.setPropertyInheritanceMethod(np_, kept[1]); n.setPropertyValue(np_, SDValueInt.sNew(kept[2]))\n'
-                    '    g.setPropertyValue(gp, SDValueInt.sNew(kept[0]))\n'
-                    "print('ADDED_WITHIN=%%d VALUE_COUNTS_BY=%%d ABSOLUTE_MOVES_WITH_GRAPH_BY=%%d' %% (near, counts, follows))"
-                )
-                % clouds
-            },
-        )
-    )
+    fact = text(await designer_script(c, 'params/node_seed', graph=TEST_GRAPH, node=clouds))
     m = re.search(r'ADDED_WITHIN=(\d+) VALUE_COUNTS_BY=(\d+) ABSOLUTE_MOVES_WITH_GRAPH_BY=(\d+)', fact)
     check(
         'designer facts',
@@ -242,20 +121,7 @@ async def run(ctx: Ctx) -> None:
         fact.strip(),
     )
     t = text(await c('apply_edits', {'ops': [{'op': 'set', 'node': clouds, 'params': {'$randomseed': 7}}], **G}))
-    still = text(
-        await c(
-            'execute_designer_code',
-            {
-                'code': GRAPH_OF % TEST_GRAPH
-                + (
-                    "from sd.api.sdproperty import SDPropertyCategory\nn = g.getNodeFromId('%s')\n"
-                    "p = n.getPropertyFromId('$randomseed', SDPropertyCategory.Input)\n"
-                    "print('INHERIT=%%s VALUE=%%s' %% (n.getPropertyInheritanceMethod(p).name, n.getPropertyValue(p).get()))"
-                )
-                % clouds
-            },
-        )
-    )
+    still = text(await designer_script(c, 'params/seed_state', graph=TEST_GRAPH, node=clouds))
     check(
         'apply_edits',
         "set: a node's $randomseed keeps following the graph's",
@@ -264,21 +130,13 @@ async def run(ctx: Ctx) -> None:
     )
     # and one already Absolute stays Absolute, on a node and on the graph: the set op never
     # changes a seed's inheritance (AGENTS.md; REVIEW.md HLP-29, TST-57)
-    SEED_INHERIT = GRAPH_OF % TEST_GRAPH + (
-        'from sd.api.sdproperty import SDPropertyCategory, SDPropertyInheritanceMethod as IM\n'
-        'from sd.api.sdvalueint import SDValueInt\n'
-        "n = %s; p = n.getPropertyFromId('$randomseed', SDPropertyCategory.Input)\n"
-        "%s\nprint('INHERIT=%%s VALUE=%%s' %% (n.getPropertyInheritanceMethod(p).name, n.getPropertyValue(p).get()))"
-    )
-    for target, node_id in (("g.getNodeFromId('%s')" % clouds, clouds), ('g', 'graph')):
+    for seed_node, node_id in ((clouds, clouds), ('', 'graph')):
         kept = re.search(
-            r'VALUE=(-?\d+)', text(await c('execute_designer_code', {'code': SEED_INHERIT % (target, '')}))
+            r'VALUE=(-?\d+)', text(await designer_script(c, 'params/seed_state', graph=TEST_GRAPH, node=seed_node))
         )
-        await c(
-            'execute_designer_code', {'code': SEED_INHERIT % (target, 'n.setPropertyInheritanceMethod(p, IM.Absolute)')}
-        )
+        await designer_script(c, 'params/seed_state', graph=TEST_GRAPH, node=seed_node, absolute=True)
         t = text(await c('apply_edits', {'ops': [{'op': 'set', 'node': node_id, 'params': {'$randomseed': 4}}], **G}))
-        still = text(await c('execute_designer_code', {'code': SEED_INHERIT % (target, '')}))
+        still = text(await designer_script(c, 'params/seed_state', graph=TEST_GRAPH, node=seed_node))
         check(
             'apply_edits',
             'set: an Absolute $randomseed stays Absolute (%s)' % ('node' if node_id != 'graph' else 'graph'),
@@ -286,35 +144,13 @@ async def run(ctx: Ctx) -> None:
             t.strip() + ' | ' + still.strip(),
         )
         # back as it was: inherited, then the value (changing the inheritance resets it)
-        await c(
-            'execute_designer_code',
-            {
-                'code': SEED_INHERIT
-                % (
-                    target,
-                    (
-                        'n.setPropertyInheritanceMethod(p, IM.RelativeToParent); n.setPropertyValue(p, SDValueInt.sNew(%s))'
-                        % (kept.group(1) if kept else 0)
-                    ),
-                )
-            },
+        await designer_script(
+            c, 'params/seed_state', graph=TEST_GRAPH, node=seed_node, restore=int(kept.group(1)) if kept else 0
         )
     await c('apply_edits', {'ops': [{'op': 'set', 'node': clouds, 'params': {'$randomseed': 0}}], **G})
-    # 5: a value SEED_OF never set, so the check sees the set op write it (REVIEW.md TST-37)
+    # 5: a value params/graph_seed_effect.py never set, so the check sees the set op write it (REVIEW.md TST-37)
     t = text(await c('apply_edits', {'ops': [{'op': 'set', 'node': 'graph', 'params': {'$randomseed': 5}}], **G}))
-    still = text(
-        await c(
-            'execute_designer_code',
-            {
-                'code': GRAPH_OF % TEST_GRAPH
-                + (
-                    'from sd.api.sdproperty import SDPropertyCategory\n'
-                    "p = g.getPropertyFromId('$randomseed', SDPropertyCategory.Input)\n"
-                    "print('INHERIT=%s VALUE=%s' % (str(g.getPropertyInheritanceMethod(p)).split('.')[-1], g.getPropertyValue(p).get()))"
-                )
-            },
-        )
-    )
+    still = text(await designer_script(c, 'params/seed_state', graph=TEST_GRAPH))
     check(
         'apply_edits',
         'set: graph $randomseed keeps following its parent (stays exposed)',
@@ -323,9 +159,9 @@ async def run(ctx: Ctx) -> None:
     )
     r_ = await c('apply_edits', {'ops': [{'op': 'set', 'node': lv, 'params': {'levelinlow': [1, 2]}}], **G})
     check('apply_edits', 'set: error on bad length', r_.is_error and 'expects 4' in text(r_), text(r_))
-    before = text(await c('execute_designer_code', {'code': INHERIT % (TEST_GRAPH, lv)}))
+    before = text(await designer_script(c, 'shared/node_size_inheritance', graph=TEST_GRAPH, node=lv))
     r_ = await c('apply_edits', {'ops': [{'op': 'set', 'node': lv, 'params': {'$outputsize': 11}}], **G})
-    after = text(await c('execute_designer_code', {'code': INHERIT % (TEST_GRAPH, lv)}))
+    after = text(await designer_script(c, 'shared/node_size_inheritance', graph=TEST_GRAPH, node=lv))
     check(
         'apply_edits',
         'set: rejected value changes nothing (not even inheritance)',
@@ -342,10 +178,10 @@ async def run(ctx: Ctx) -> None:
             'execute_designer_code',
             {
                 'code': GRAPH_OF % TEST_GRAPH
-                + (
-                    "from sd.api.sdproperty import SDPropertyCategory\nn=g.getNodeFromId('%s')\n"
-                    "print('LOW=%%.2f' %% n.getPropertyValue(n.getPropertyFromId('levelinlow', SDPropertyCategory.Input)).get().x)"
-                )
+                + dedent("""\
+                    from sd.api.sdproperty import SDPropertyCategory
+                    n = g.getNodeFromId(%r)
+                    print('LOW=%%.2f' %% n.getPropertyValue(n.getPropertyFromId('levelinlow', SDPropertyCategory.Input)).get().x)""")
                 % lv
             },
         )

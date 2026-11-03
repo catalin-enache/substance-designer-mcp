@@ -1,6 +1,7 @@
 """Snapshots and diffs: snapshot_graph, list_snapshots, diff_graph, and the .sbs model they read."""
 
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -9,7 +10,7 @@ import tempfile
 import time
 import uuid
 import xml.etree.ElementTree as ET
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import TypedDict, cast
 
 from mcp.server.mcpserver.exceptions import ToolError
@@ -259,6 +260,66 @@ class _GraphModel(TypedDict):
     size: dict[str, str]
 
 
+def _function_value(function: ET.Element) -> str:
+    """A function graph on a parameter, comparable: 'function (reads 'a', 'b') <digest>' of what it computes, where its
+    nodes sit left out, and 'no output' in the brackets for one with no output node, which drives nothing (AGENTS.md)."""
+    root = function.find('rootnode')
+    parts = [root.get('v', '') if root is not None else '']
+    reads: set[str] = set()
+    for node in function.iter('paramNode'):
+        parts.extend(ET.canonicalize(ET.tostring(c), strip_text=True) for c in node if c.tag != 'GUILayout')
+        if node.find('function') is not None and _v(node, 'function').startswith('get_'):
+            reads.update(c.get('v', '') for c in node.iter('constantValueString'))
+    digest = hashlib.sha1('\n'.join(parts).encode('utf-8')).hexdigest()[:8]
+    notes = ([] if root is not None else ['no output']) + (
+        ['reads ' + ', '.join(map(repr, sorted(reads)))] if reads else []
+    )
+    return 'function %s%s' % ('(%s) ' % ', '.join(notes) if notes else '', digest)
+
+
+# A node's parameters whose value means something else at another inheritance (REVIEW.md SRV-69)
+_INHERITING_PARAMETERS = {'outputsize', 'format', 'pixelsize', 'pixelratio', 'tiling', 'randomseed'}
+
+
+def _node_params(impl: ET.Element, value_of: Callable[[ET.Element], str]) -> dict[str, str]:
+    """A node's parameters by a key of their own: same-named ones of a gradient's or curve's keys, or of an FX-Map's
+    inner nodes, mustn't overwrite each other. A key is 'name', 'array[index] name' or 'paramset <uid> name', the uid
+    being what describe_graph prints for the inner node. Arrays also give their number of cells, an FX-Map a digest of
+    its wiring."""
+    params: dict[str, str] = {}
+
+    def read(element: ET.Element, prefix: str) -> None:
+        for prm in element.findall('parameters/parameter'):
+            value = value_of(prm)
+            rel = prm.find('relativeTo')
+            if _v(prm, 'name') in _INHERITING_PARAMETERS and rel is not None:
+                value += ' (%s)' % _RELATIVE_TO.get(cast(str, rel.get('v')), 'relativeTo %s' % rel.get('v'))
+            params[prefix + _v(prm, 'name')] = value
+        for array in element.findall('paramsArrays/paramsArray'):
+            name = prefix + _v(array, 'name')
+            cells = array.findall('paramsArrayCells/paramsArrayCell')
+            params[name + ' cells'] = str(len(cells))
+            for index, cell in enumerate(cells):
+                read(cell, '%s[%d] ' % (name, index))
+
+    for implementation in impl:
+        read(implementation, '')
+    for graph in impl.iter('paramsGraph'):
+        node_of = {_v(n, 'data'): _v(n, 'uid') for n in graph.findall('paramsGraphNodes/paramsGraphNode')}
+        for data in graph.findall('paramsGraphDatas/paramsGraphData'):
+            read(data, '%s %s ' % (_v(data, 'type'), node_of.get(_v(data, 'uid'), _v(data, 'uid'))))
+        root = graph.find('rootnode')
+        wiring = sorted(
+            ET.canonicalize(ET.tostring(c), strip_text=True)
+            for n in graph.findall('paramsGraphNodes/paramsGraphNode')
+            for c in n
+            if c.tag != 'GUILayout'
+        )
+        text = '\n'.join([root.get('v', '') if root is not None else '', *wiring])
+        params['FX-Map wiring'] = hashlib.sha1(text.encode('utf-8')).hexdigest()[:8]
+    return params
+
+
 def _graph_model(sbs_path: str, graph_id: str) -> _GraphModel:
     """Parse one graph of a .sbs into comparable dicts."""
     root = ET.parse(sbs_path).getroot()
@@ -269,7 +330,10 @@ def _graph_model(sbs_path: str, graph_id: str) -> _GraphModel:
         if pv is None or not len(pv):
             return ''
         el = pv[0]
-        return 'function' if el.tag == 'dynamicValue' else (el.get('v') or '')
+        if el.tag == 'dynamicValue':
+            return _function_value(el)
+        # a resource's path names the package's own id, which differs after a reload: no change to the graph
+        return re.sub(r'\?dependency=\d+$', '', el.get('v') or '')
 
     output_names = {_v(b, 'uid'): _v(b, 'identifier') for b in g.iter('outputBridging')}
     nodes: dict[str, _NodeModel] = {}
@@ -289,7 +353,7 @@ def _graph_model(sbs_path: str, graph_id: str) -> _GraphModel:
             elif el.tag == 'compInputBridge':
                 kind = 'input'
         # atomic and library (instance) nodes store parameters the same way
-        params = {_v(prm, 'name'): value_of(prm) for prm in (impl.iter('parameter') if impl is not None else [])}
+        params = _node_params(impl, value_of) if impl is not None else {}
         links: set[tuple[str, str]] = set()
         display: dict[tuple[str, str], str] = {}
         conns = n.find('connections')

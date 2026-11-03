@@ -2,6 +2,7 @@
 
 import os
 import re
+from textwrap import dedent
 from typing import cast
 
 from .common import GRAPH_OF, TEST_GRAPH, Ctx, added_id, check, positions, text
@@ -18,7 +19,9 @@ async def run(ctx: Ctx) -> None:
     check('save_package', 'save in place', not r_.is_error and 'saved %s' % sbs in t, t)
     t = text(await c('save_package', {'graph_or_path': sbs}))
     check('save_package', 'by file path', 'saved %s' % sbs in t, t)
-    state = GRAPH_OF % TEST_GRAPH + "p=g.getPackage()\nprint('STATE=%s %s' % (p.getFilePath(), p.isModified()))"
+    state = GRAPH_OF % TEST_GRAPH + dedent("""\
+        p = g.getPackage()
+        print('STATE=%s %s' % (p.getFilePath(), p.isModified()))""")
     before = text(await c('execute_designer_code', {'code': state}))
     snap_path = text(await c('snapshot_graph', {'label': 'state check', **G})).split('saved: ', 1)[1].strip()
     after = text(await c('execute_designer_code', {'code': state}))
@@ -35,12 +38,13 @@ async def run(ctx: Ctx) -> None:
             'execute_designer_code',
             {
                 'code': GRAPH_OF % TEST_GRAPH
-                + (
-                    'pm = sd.getContext().getSDApplication().getPackageMgr()\n'
-                    'snap = pm.loadUserPackage(%r)\ntry:\n'
-                    '    print("SNAPSHOT_UID_SAME=%%s" %% (snap.getUID() == g.getPackage().getUID()))\n'
-                    'finally:\n    pm.unloadUserPackage(snap)\n'
-                )
+                + dedent("""\
+                    pm = sd.getContext().getSDApplication().getPackageMgr()
+                    snap = pm.loadUserPackage(%r)
+                    try:
+                        print('SNAPSHOT_UID_SAME=%%s' %% (snap.getUID() == g.getPackage().getUID()))
+                    finally:
+                        pm.unloadUserPackage(snap)""")
                 % snap_path
             },
         )

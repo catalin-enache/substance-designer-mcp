@@ -15,6 +15,7 @@ import time
 import types
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from textwrap import dedent
 from typing import Any, cast
 
 import pytest
@@ -309,10 +310,16 @@ def test_an_abort_lets_cleanup_code_finish(plugin: types.ModuleType) -> None:
     # as Designer's UndoGroup committing its transaction) must then run to the end.
     cancel = threading.Event()
     cancel.set()
-    code = (
-        'try:\n    while True:\n        pass\nfinally:\n    total = 0\n'
-        "    for i in range(20000):\n        total += i\n    print('cleanup finished', total)\n"
-    )
+    code = dedent("""\
+        try:
+            while True:
+                pass
+        finally:
+            total = 0
+            for i in range(20000):
+                total += i
+            print('cleanup finished', total)
+    """)
     result = plugin._run(code, None, None, cancel)
     assert not result['ok'] and 'ScriptAborted: cancelled by client' in result['error']
     assert 'cleanup finished 199990000' in result['output']
@@ -322,35 +329,35 @@ def test_an_abort_lets_cleanup_code_finish(plugin: types.ModuleType) -> None:
 # (every sd API object has a Python __del__ calling release()) or a weakref callback, Python
 # reports it as "Exception ignored" and drops it, and the tracer is gone: the script ran on to
 # the end with ok=True. Several runs, since where the abort lands varies from run to run.
-_FINALIZER_LOOP = """
-import time, weakref
-class Obj:
-    def __init__(self):
-        self.h = 1
-    def release(self):
-        self.h = None
-    def __del__(self):
-        if self.h:
-            self.release()
-end = time.monotonic() + 3
-while time.monotonic() < end:
-    o = Obj()
-print('ran to the end')
-"""
-_CALLBACK_LOOP = """
-import time, weakref
-class Obj:
-    pass
-def gone(ref):
-    x = 1
-    y = x + 1
-end = time.monotonic() + 3
-while time.monotonic() < end:
-    o = Obj()
-    r = weakref.ref(o, gone)
-    del o
-print('ran to the end')
-"""
+_FINALIZER_LOOP = dedent("""
+    import time, weakref
+    class Obj:
+        def __init__(self):
+            self.h = 1
+        def release(self):
+            self.h = None
+        def __del__(self):
+            if self.h:
+                self.release()
+    end = time.monotonic() + 3
+    while time.monotonic() < end:
+        o = Obj()
+    print('ran to the end')
+""")
+_CALLBACK_LOOP = dedent("""
+    import time, weakref
+    class Obj:
+        pass
+    def gone(ref):
+        x = 1
+        y = x + 1
+    end = time.monotonic() + 3
+    while time.monotonic() < end:
+        o = Obj()
+        r = weakref.ref(o, gone)
+        del o
+    print('ran to the end')
+""")
 
 
 @pytest.mark.parametrize('code', [_FINALIZER_LOOP, _CALLBACK_LOOP], ids=['__del__', 'weakref callback'])
@@ -367,27 +374,27 @@ def test_an_abort_landing_in_a_finalizer_still_stops_the_script(plugin: types.Mo
         assert 'ran to the end' not in result['output'] and took < 2, (result['output'][-300:], took)
 
 
-_RAISING_FINALIZER_LOOP = """
-import time
-class Obj:
-    def __del__(self):
-        raise ValueError('release failed')
-end = time.monotonic() + 3
-while time.monotonic() < end:
+_RAISING_FINALIZER_LOOP = dedent("""
+    import time
+    class Obj:
+        def __del__(self):
+            raise ValueError('release failed')
+    end = time.monotonic() + 3
+    while time.monotonic() < end:
+        o = Obj()
+    print('ran to the end')
+""")
+_LONG_FINALIZER = dedent("""
+    import time
+    class Obj:
+        def __del__(self):
+            end = time.monotonic() + 3
+            while time.monotonic() < end:
+                pass
     o = Obj()
-print('ran to the end')
-"""
-_LONG_FINALIZER = """
-import time
-class Obj:
-    def __del__(self):
-        end = time.monotonic() + 3
-        while time.monotonic() < end:
-            pass
-o = Obj()
-del o
-print('ran to the end')
-"""
+    del o
+    print('ran to the end')
+""")
 
 
 @pytest.mark.filterwarnings('ignore::pytest.PytestUnraisableExceptionWarning')  # the finalizers raise on purpose
@@ -450,11 +457,18 @@ def test_an_abort_landing_in_a_slot_reported_through_excepthook_still_stops_the_
 
     monkeypatch.setattr(builtins, 'EMIT_', emit, raising=False)
     monkeypatch.setattr(sys, 'excepthook', lambda *a: None)
-    code = (
-        'import time\ndef slot():\n    a = 1\n    b = 2\n    c = a + b\n    return c\n'
-        'end = time.monotonic() + 3\nwhile time.monotonic() < end:\n    EMIT_(slot)\n'
-        "print('ran to the end')\n"
-    )
+    code = dedent("""\
+        import time
+        def slot():
+            a = 1
+            b = 2
+            c = a + b
+            return c
+        end = time.monotonic() + 3
+        while time.monotonic() < end:
+            EMIT_(slot)
+        print('ran to the end')
+    """)
     for _ in range(8):
         started = time.monotonic()
         result = plugin._run(code, None, 0.2, threading.Event())
@@ -467,12 +481,19 @@ def test_an_abort_stops_a_loop_driven_by_c_code(plugin: types.ModuleType) -> Non
     # REVIEW.md PLG-30: after a dropped abort only frames already running were resumed; in a loop
     # driven from C (map, deque) the only one, the module frame, waits for the C call to return; and
     # each drop appended that frame again (quadratic). Every __init__ and __del__ is a new frame
-    code = (
-        'import collections\nclass Obj:\n    def __init__(self, i):\n        self.i = i\n'
-        '    def __del__(self):\n        x = self.__dict__.get("i", 0)\n        y = x + 1\n        z = y + 1\n'
-        'collections.deque(map(Obj, range(2 * 10 ** 5)), maxlen=0)\n'  # before the fix: about 60 s
-        "print('ran to the end')\n"
-    )
+    code = dedent("""\
+        import collections
+        class Obj:
+            def __init__(self, i):
+                self.i = i
+            def __del__(self):
+                x = self.__dict__.get("i", 0)
+                y = x + 1
+                z = y + 1
+        # before the fix: about 60 s
+        collections.deque(map(Obj, range(2 * 10 ** 5)), maxlen=0)
+        print('ran to the end')
+    """)
     for _ in range(3):
         started = time.monotonic()
         result = plugin._run(code, None, 0.2, threading.Event())
@@ -487,12 +508,20 @@ def test_cleanup_after_an_abort_runs_to_the_end_despite_a_raising_finalizer(plug
     # tracing back on, or the abort would fire again inside the cleanup
     cancel = threading.Event()
     cancel.set()
-    code = (
-        'class Obj:\n    def __del__(self):\n        raise ValueError("release failed")\n'
-        'try:\n    while True:\n        pass\nfinally:\n    total = 0\n'
-        '    for i in range(20000):\n        o = Obj()\n        total += i\n'
-        "    print('cleanup finished', total)\n"
-    )
+    code = dedent("""\
+        class Obj:
+            def __del__(self):
+                raise ValueError("release failed")
+        try:
+            while True:
+                pass
+        finally:
+            total = 0
+            for i in range(20000):
+                o = Obj()
+                total += i
+            print('cleanup finished', total)
+    """)
     result = plugin._run(code, None, None, cancel)
     assert not result['ok'] and 'ScriptAborted: cancelled by client' in result['error']
     assert 'cleanup finished 199990000' in result['output']
@@ -504,15 +533,35 @@ def test_an_abort_stops_a_loop_in_a_module_the_script_imports(plugin: types.Modu
     # imported module's function, with the weakref-callback loop's fixed number of events per pass,
     # could keep every check in the callback
     (tmp_path / 'helper_loop.py').write_text(
-        'import time, weakref\n'
-        'class Obj:\n    pass\n'
-        'def gone(ref):\n    x = 1\n    y = x + 1\n'
-        'def loop():\n    end = time.monotonic() + 3\n    while time.monotonic() < end:\n'
-        '        o = Obj()\n        r = weakref.ref(o, gone)\n        del o\n'
+        dedent("""\
+            import time, weakref
+            class Obj:
+                pass
+            def gone(ref):
+                x = 1
+                y = x + 1
+            def loop():
+                end = time.monotonic() + 3
+                while time.monotonic() < end:
+                    o = Obj()
+                    r = weakref.ref(o, gone)
+                    del o
+        """)
     )
     for extra in range(8):  # a different number of events before the call each time
-        code = 'import sys\nsys.path.insert(0, %r)\n' % str(tmp_path) + 'x = 1\n' * extra
-        code += 'import helper_loop\nhelper_loop.loop()\nprint("ran to the end")\n'
+        code = (
+            dedent("""\
+                import sys
+                sys.path.insert(0, %r)
+            """)
+            % str(tmp_path)
+            + 'x = 1\n' * extra
+        )
+        code += dedent("""\
+            import helper_loop
+            helper_loop.loop()
+            print("ran to the end")
+        """)
         started = time.monotonic()
         result = plugin._run(code, None, 0.2, threading.Event())
         took = time.monotonic() - started
@@ -767,7 +816,14 @@ def test_a_scripts_output_is_capped_keeping_the_end(bridge: Bridge, monkeypatch:
     # REVIEW.md PLG-22: output was buffered without limit; now only the last MAX_OUTPUT characters
     plugin, _, _ = bridge
     monkeypatch.setitem(vars(plugin), 'MAX_OUTPUT', 1000)
-    out = _call(plugin, {'code': "for i in range(2000):\n    print('line %d' % i)"})['output']
+    out = _call(
+        plugin,
+        {
+            'code': dedent("""\
+                for i in range(2000):
+                    print('line %d' % i)""")
+        },
+    )['output']
     assert len(out) < 1200 and out.endswith('line 1999\n') and 'cut' in out.splitlines()[0], out[:200]
 
 
@@ -809,3 +865,9 @@ def test_an_abort_anywhere_in_a_write_keeps_the_output_written_before(
         # the abort really fired on that line, and nothing written before it was lost (REVIEW.md TST-72)
         assert aborted, line
         assert 'KEEP' in buf.getvalue() or buf.getvalue().endswith('b' * 60), (line, buf.getvalue()[-80:])
+
+
+def test_the_plugin_declares_the_supported_designer() -> None:
+    """Only the current Designer is supported (README.md; REVIEW.md PLG-31)."""
+    with open(os.path.join(os.path.dirname(PLUGIN_PACKAGE_DIR), 'pluginInfo.json'), encoding='utf-8') as f:
+        assert json.load(f)['min_designer_version'].split('.')[0] == '16'

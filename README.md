@@ -90,7 +90,7 @@ saved file (details: [AGENTS.md](AGENTS.md), Portals).
 | Viewing | `screenshot_designer` (window, graph, 2D view, 3D view, panels; only Designer is captured, never other apps), `open_graph` (open a graph, fitted whole, zoomed to a frame, nodes or rectangle, or centred on a node) |
 | Editing | `apply_edits` (add nodes and image files, set parameters, connect, disconnect, move, delete, expose parameters as graph inputs: one or many edits per call, one undo step; a typo'd node id changes nothing), `create_graph`, `set_graph_size` |
 | Controls | `remove_graph_input` (exposing a parameter is `apply_edits`' `expose` op) |
-| Scripting | `execute_designer_code`, `run_designer_script` (with timeout) |
+| Scripting | `execute_designer_code`, `run_designer_script` (with timeout and `args`) |
 | Output | `save_package`, `export_outputs` (straight from Designer), `sbsar_info`, `render_sbs` (parameters, size, PNG/EXR…), `preview_maps` |
 
 Every change Claude makes through these tools is **one undo step** in Designer ("Claude: …"),
@@ -101,8 +101,7 @@ changes to your graphs, Claude can take a snapshot and afterwards show you exact
 
 ## Requirements
 
-- Substance 3D Designer 16 (tested on 16.0.7, which bundles Python 3.13). An older Designer may work if
-  its bundled Python is 3.10 or newer (the code sent to it uses 3.10 syntax); untested.
+- Substance 3D Designer 16 (tested on 16.0.7, which bundles Python 3.13). Older versions aren't supported.
 - Python **3.10+** (only for the MCP server; the plugin uses Designer's own Python). 3.10 is the
   minimum the installer accepts; the tests run on 3.12. The installer and `designer_status` show
   which Python the server uses. `install.py` and `uninstall.py` start on an older `python3` (a stock
@@ -230,8 +229,11 @@ mcp_server/venv/bin/python -m pytest
 ```
 
 **Working in PyCharm.** The repo's `.idea` marks the source roots, excludes `mcp_server/venv`,
-sets pytest as the test runner, and switches on PyCharm's built-in Ruff integration. The rest is
-per user (not in git), so do this once:
+sets pytest as the test runner, and switches on PyCharm's built-in Ruff integration. Its source roots
+include Designer's own `sd` and PySide6 folders at the default macOS install location, since the venv
+doesn't have them. With Designer elsewhere, add yours under Settings → Project Structure, or PyCharm reports
+those imports as errors: adding them as interpreter paths isn't enough for PySide6, whose stubs PyCharm
+then doesn't read (measured: 14 of `QtWidgets`' 193 classes found). The rest is per user (not in git), so do this once:
 
 1. **Interpreter:** choose `mcp_server/venv/bin/python` (Settings → Python → Interpreter). Ruff
    then runs the venv's `ruff` with `ruff.toml`.

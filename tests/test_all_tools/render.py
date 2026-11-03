@@ -4,9 +4,10 @@ import os
 import re
 import subprocess
 import sys
+from textwrap import dedent
 from typing import Any
 
-from .common import BUNDLE, GRAPH_OF, TEST_GRAPH, Ctx, _mean_png, check, helpers_source, is_image, text
+from .common import BUNDLE, TEST_GRAPH, Ctx, _mean_png, check, designer_script, helpers_source, is_image, text
 
 
 async def run(ctx: Ctx) -> None:
@@ -15,13 +16,10 @@ async def run(ctx: Ctx) -> None:
     check('export_outputs', 'from Designer', 'height.png  512x512' in t, t)
     # an output node with nothing connected: exported, or named as computing no image; never left
     # out without a word (REVIEW.md HLP-48)
-    add_empty = GRAPH_OF % TEST_GRAPH + (
-        'from sd.api.sdvaluestring import SDValueString\n'
-        "n = g.newNode('sbs::compositing::output')\n"
-        "n.setAnnotationPropertyValueFromId('identifier', SDValueString.sNew('mcp_empty'))\n"
-        "print('EMPTY=' + n.getIdentifier())"
+    empty = re.search(
+        r'EMPTY=(\d+)',
+        text(await designer_script(c, 'render/add_output', graph=TEST_GRAPH, identifier='mcp_empty', label='EMPTY')),
     )
-    empty = re.search(r'EMPTY=(\d+)', text(await c('execute_designer_code', {'code': add_empty})))
     try:
         r_ = await c(
             'export_outputs',
@@ -54,22 +52,7 @@ async def run(ctx: Ctx) -> None:
     # and an Absolute one is not (AGENTS.md): a copy saved with it Absolute, the graph put back;
     # changing the inheritance resets the value, so the value goes back after it
     abs_sbs = os.path.join(scratch, 'seed_absolute.sbs')
-    await c(
-        'execute_designer_code',
-        {
-            'code': GRAPH_OF % TEST_GRAPH
-            + (
-                'from sd.api.sdproperty import SDPropertyCategory, SDPropertyInheritanceMethod as IM\n'
-                'from sd.api.sdvalueint import SDValueInt\n'
-                "p = g.getPropertyFromId('$randomseed', SDPropertyCategory.Input)\nkept = g.getPropertyValue(p).get()\n"
-                'g.setPropertyInheritanceMethod(p, IM.Absolute)\n'
-                'try:\n    sd.getContext().getSDApplication().getPackageMgr().saveCopyOfPackageAs(g.getPackage(), %r)\n'
-                'finally:\n    g.setPropertyInheritanceMethod(p, IM.RelativeToParent)\n'
-                '    g.setPropertyValue(p, SDValueInt.sNew(kept))'
-            )
-            % abs_sbs
-        },
-    )
+    await designer_script(c, 'render/absolute_seed_copy', graph=TEST_GRAPH, path=abs_sbs)
     t_abs = text(await c('sbsar_info', {'sbs_path': abs_sbs}))
     check(
         'designer facts',
@@ -82,40 +65,13 @@ async def run(ctx: Ctx) -> None:
     seed_copies = {}
     for stored_seed in (0, 3):  # copies of the graph storing another seed
         seed_copies[stored_seed] = os.path.join(scratch, 'seed_stored%d.sbs' % stored_seed)
-        await c(
-            'execute_designer_code',
-            {
-                'code': GRAPH_OF % TEST_GRAPH
-                + (
-                    'from sd.api.sdproperty import SDPropertyCategory\nfrom sd.api.sdvalueint import SDValueInt\n'
-                    "p = g.getPropertyFromId('$randomseed', SDPropertyCategory.Input)\n"
-                    'kept = g.getPropertyValue(p).get()\n'
-                    'g.setPropertyValue(p, SDValueInt.sNew(%d))\n'
-                    'try:\n    sd.getContext().getSDApplication().getPackageMgr().saveCopyOfPackageAs(g.getPackage(), %r)\n'
-                    'finally:\n    g.setPropertyValue(p, SDValueInt.sNew(kept))'
-                )
-                % (stored_seed, seed_copies[stored_seed])
-            },
+        await designer_script(
+            c, 'render/stored_seed_copy', graph=TEST_GRAPH, seed=stored_seed, path=seed_copies[stored_seed]
         )
     zero_sbs = seed_copies[0]
     # and one with the clouds node's seed made Absolute (REVIEW.md TST-52); the graph's untouched
     abs_node_sbs = os.path.join(scratch, 'seed_absolute_node.sbs')
-    await c(
-        'execute_designer_code',
-        {
-            'code': GRAPH_OF % TEST_GRAPH
-            + (
-                'from sd.api.sdproperty import SDPropertyCategory, SDPropertyInheritanceMethod as IM\n'
-                'from sd.api.sdvalueint import SDValueInt\n'
-                "n = g.getNodeFromId('%s'); p = n.getPropertyFromId('$randomseed', SDPropertyCategory.Input)\n"
-                'was, kept = n.getPropertyInheritanceMethod(p), n.getPropertyValue(p).get()\n'
-                'try:\n    n.setPropertyInheritanceMethod(p, IM.Absolute)\n'
-                '    sd.getContext().getSDApplication().getPackageMgr().saveCopyOfPackageAs(g.getPackage(), %r)\n'
-                'finally:\n    n.setPropertyInheritanceMethod(p, was); n.setPropertyValue(p, SDValueInt.sNew(kept))'
-            )
-            % (clouds, abs_node_sbs)
-        },
-    )
+    await designer_script(c, 'render/node_seed_absolute_copy', graph=TEST_GRAPH, node=clouds, path=abs_node_sbs)
     import numpy as np
     from PIL import Image
 
@@ -231,20 +187,7 @@ async def run(ctx: Ctx) -> None:
         r_.is_error and 'height' in text(r_).replace('heigth', ''),
         text(r_).strip()[-150:],
     )
-    twin = text(
-        await c(
-            'execute_designer_code',
-            {
-                'code': GRAPH_OF % TEST_GRAPH
-                + (
-                    'from sd.api.sdvaluestring import SDValueString\n'
-                    "o = g.newNode('sbs::compositing::output')\n"
-                    "o.setAnnotationPropertyValueFromId('identifier', SDValueString.sNew('Height'))\n"
-                    "print('TWIN=' + o.getIdentifier())"
-                )
-            },
-        )
-    )
+    twin = text(await designer_script(c, 'render/add_output', graph=TEST_GRAPH, identifier='Height', label='TWIN'))
     twin_id = re.search(r'TWIN=(\S+)', twin)
     r_ = await c('export_outputs', {'graph': TEST_GRAPH, 'output_dir': os.path.join(scratch, 'twins')})
     # 'Height' and 'height': one file on macOS and Windows file systems (REVIEW.md HLP-36)
@@ -481,25 +424,31 @@ async def run(ctx: Ctx) -> None:
             {
                 'code': helpers_source()
                 + (
-                    '\nfrom sd.api.sdvaluearray import SDValueArray\nfrom sd.api.sdvaluestring import SDValueString\n'
-                    'from sd.api.sdvalueusage import SDValueUsage\nfrom sd.api.sdusage import SDUsage\n'
-                    'from sd.api.sdtypeusage import SDTypeUsage\n'
-                    "custom = SDSBSCompGraph.sNew(_PM.newUserPackage())\ncustom.setIdentifier('mcp_selftest_custom')\n"
-                    "for ident, tag in (('mask', None), ('albedo', 'baseColor')):\n"
-                    "    o = custom.newNode('sbs::compositing::output')\n"
-                    "    o.setAnnotationPropertyValueFromId('identifier', SDValueString.sNew(ident))\n"
-                    '    if tag:\n'
-                    '        tags = SDValueArray.sNew(SDTypeUsage.sNew(), 0)\n'
-                    "        tags.pushBack(SDValueUsage.sNew(SDUsage.sNew(tag, 'RGBA', 'sRGB')))\n"
-                    "        o.setAnnotationPropertyValueFromId('usages', tags)\n"
-                    "host = SDSBSCompGraph.sNew(_PM.newUserPackage())\nhost.setIdentifier('mcp_selftest_custom_host')\n"
-                    'n = host.newInstanceNode(custom)\n'
-                    'outs = [p.getId() for p in n.getProperties(SDPropertyCategory.Output)]\n'
-                    'try:\n'
-                    "    print('CUSTOM=' + _output_note(_default_output(n, outs)[1]))\n"
-                    'finally:\n'
-                    '    for g in (host, custom):\n'
-                    '        _PM.unloadUserPackage(g.getPackage())\n'
+                    dedent("""
+                        from sd.api.sdvaluearray import SDValueArray
+                        from sd.api.sdvaluestring import SDValueString
+                        from sd.api.sdvalueusage import SDValueUsage
+                        from sd.api.sdusage import SDUsage
+                        from sd.api.sdtypeusage import SDTypeUsage
+                        custom = SDSBSCompGraph.sNew(_PM.newUserPackage())
+                        custom.setIdentifier('mcp_selftest_custom')
+                        for ident, tag in (('mask', None), ('albedo', 'baseColor')):
+                            o = custom.newNode('sbs::compositing::output')
+                            o.setAnnotationPropertyValueFromId('identifier', SDValueString.sNew(ident))
+                            if tag:
+                                tags = SDValueArray.sNew(SDTypeUsage.sNew(), 0)
+                                tags.pushBack(SDValueUsage.sNew(SDUsage.sNew(tag, 'RGBA', 'sRGB')))
+                                o.setAnnotationPropertyValueFromId('usages', tags)
+                        host = SDSBSCompGraph.sNew(_PM.newUserPackage())
+                        host.setIdentifier('mcp_selftest_custom_host')
+                        n = host.newInstanceNode(custom)
+                        outs = [p.getId() for p in n.getProperties(SDPropertyCategory.Output)]
+                        try:
+                            print('CUSTOM=' + _output_note(_default_output(n, outs)[1]))
+                        finally:
+                            for g in (host, custom):
+                                _PM.unloadUserPackage(g.getPackage())
+                    """)
                 )
             },
         )

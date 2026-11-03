@@ -69,7 +69,7 @@ only, and each fix adding a test and a doc sentence the next review then audited
 | [ ] | 26 | **The self-test's clean-up and crash checks** | PLG-9 → TST-16 → TST-21; PLG-18 → TST-43 → TST-47; TST-30 → TST-33 → TST-51 → TST-59 | A clean-up step that failed skipped the rest; unguarded reads before the `try`; crash detection and the README's account of it | Register each clean-up step as its resource is made (a `contextlib.ExitStack` of callbacks, each run in its own `try`), so no failure can skip another; one crash-dump check at the end; README describes only what the run checks | M |
 | [x] | 27 | **Refusing Designer's library packages** | HLP-10 → HLP-14 → HLP-18 → HLP-20 → TST-26 / TST-27 | The refusal message kept pointing to a tool that refuses too | One refusal helper used by every path (`_package_of`, `package_file_of`, `save_package`, snapshots), and a test that runs the tool each message suggests on a library graph and sees it work | S |
 | [ ] | 28 | **`open_graph`'s default fit** | HLP-32 → HLP-35 → HLP-38 / HLP-39, TST-68 | What "the whole graph" includes (nodes, frames, comments) and which errors the fit must not hide | Define the fitted area in one place (every node, frame and free comment) and check each kind once, plus each error path (another graph in the editor, an empty graph, no view) | S |
-| [ ] | 29 | **Empty function graphs** | HLP-13 → HLP-16 → TST-22 / TST-24, TST-20 | Whether Designer ignores an empty function graph was assumed, then measured piece by piece | One facts probe: no function graph, an empty one, one with nodes × set the value, compute, expose; AGENTS.md states the table; every caller of `_driving_graph` checked against it | S |
+| [x] | 29 | **Empty function graphs** | HLP-13 → HLP-16 → TST-22 / TST-24, TST-20 | Whether Designer ignores an empty function graph was assumed, then measured piece by piece | One facts probe: no function graph, an empty one, one with nodes × set the value, compute, expose; AGENTS.md states the table; every caller of `_driving_graph` checked against it | S |
 | [ ] | 30 | **Smaller three-deep chains** | SRV-3 → SRV-14 → SRV-17 (snapshot copies); PLG-15 → PLG-20 → TST-55 (accept loop); PLG-22 → PLG-24 → TST-72 (output buffer); PLG-3 → SRV-16 → SRV-18 (client wait in docstrings); TST-28 → TST-34 → TST-62 (token in the self-test); INS-5 → INS-14 → INS-18 (`.mcp.json`); INS-8 → INS-22 → TST-50 (example re-run); TST-64 → TST-70 → TST-71 (Home screen fact); HLP-26 → TST-42 → TST-45 / TST-46 (inheritance fact) | Mostly a test or a sentence following its fix | Check each is settled: read its last entry and the code; if the pattern could recur, apply step 3 of the address-review skill once; otherwise delete it from this row | S |
 
 ## Needs the user or other machines
@@ -77,9 +77,10 @@ only, and each fix adding a test and a doc sentence the next review then audited
 | Done | # | Item | Why | What's needed |
 |---|---|---|---|---|
 | [ ] | 18 | **Test on Windows** | Paths, installer, log location and plugin folder are written for Windows but untested; so are the exclusive port binding (`SO_EXCLUSIVEADDRUSE`), the `tasklist` CSV check, the installer running `claude.cmd`, and reading `.sbsar` archives with Windows' `tar` | Someone with Windows and Designer runs `install.py` and the self-test, and reports the failures |
-| [ ] | 19 | **Test on other Designer versions** | Only Designer 16.0.7 is tested; 15.x reportedly hangs on unknown node ids, which the server already guards against | Run the self-test on Designer 14.x / 15.x and note differences in AGENTS.md |
 | [ ] | 20 | **Releases** | Users currently clone `main` | Version numbers, a CHANGELOG, tagged GitHub releases; maybe a one-line install command |
 
 ## Ideas, not yet decided
 
-None right now. Add ideas here before they are prioritised into a table above.
+Add ideas here before they are prioritised into a table above.
+
+- **The function-graph table on bool and string parameters:** AGENTS.md's table is measured on float4 and enum parameters and `$` ones; nothing says these differ, and nothing has measured them.

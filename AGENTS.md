@@ -79,7 +79,7 @@ on intermediate nodes → `sweep_param` to pick values → `node_stats` / `check
 export → `preview_maps` → fix → repeat. Look at the result before telling the user it works.
 
 Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `-c CODE`, `--status`,
-`--cancel` (no undo grouping).
+`--cancel` (no undo grouping, no `ARGS`).
 
 ## Undo, timeouts, plugin lifecycle
 
@@ -168,15 +168,35 @@ Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `-c COD
   parameter (`node.newPropertyGraph(prop, 'SDSBSFunctionGraph')`) whose output node is
   `sbs::function::get_<type>` with `__constant__` = the input id (`get_float1..4`,
   `get_integer1..4`, `get_bool`, `get_string`). Use the parameter's own type; enums → int.
-  Adding a function graph to a parameter resets its stored value to the default; setting the
-  value deletes an empty function graph (measured with a `set` op; not checked for a graph with
-  nodes). An empty function graph drives nothing: the output follows the stored value (the tools
-  treat such a parameter as not driven).
+  What a function graph on a parameter does (measured on a float4 and an enum parameter of atomic nodes and a float4
+  one of an instance node, "designer facts"; only a graph with an output node drives the value, and `fg.getOutputNodes()` tells, also after a reload):
+
+  | Function graph | Output follows | `setPropertyValue` | `deletePropertyGraph` | The tools |
+  |---|---|---|---|---|
+  | None | stored value | sets it | - | set, sweep, expose |
+  | Empty | stored value | sets it, **deletes the graph** | stored value stays reset | set, sweep, expose (reuses it) |
+  | Nodes, no output node | stored value | sets it, **deletes the graph and its nodes** | stored value stays reset | refuse, and say it drives nothing |
+  | Nodes and an output node | the function | sets it, **deletes the graph and its nodes** | stored value stays reset | refuse |
+
+  `$` parameters differ. `deletePropertyGraph` switches any of them back to the node's default, whatever it was: relative to input on a
+  levels node (all six measured), relative to parent on an instance node (`$outputsize` measured), so put the inheritance back, then set the value, as
+  `remove_graph_input` does. And at Absolute, `$outputsize` with an empty function or none reaching an output node follows its
+  input or parent, not the stored value (8,8 stored, 16 px on a 16 px graph).
+  Setting an int on an enum parameter is accepted whatever it is, and a value beyond the enum's can't be read back
+  (`get()` raises).
+  Adding a function graph resets the stored value to the default. `newPropertyGraph` on a parameter
+  that already has one returns it, nodes kept. A graph has one output node: `setOutputNode(k, True)`
+  moves it to `k`, leaving the old function in the graph, unused. A `get` node that doesn't feed the
+  output has no effect (`list_graph_inputs` leaves it out of `drives:`). An FX-Map's own graph
+  (`node.getReferencedResource()`, with no identifier) holds functions that read the graph's inputs too: its output follows
+  such an input, and the tools count and list them. A function on the graph's own parameter drives it too (measured on
+  `$outputsize`), but `SDGraph` has no `getPropertyGraph`, so the tools read those from the package's file, as last saved. Removing an
+  input that a connected `get` reads changes the output with no error, which is why `remove_graph_input` refuses while a function other than a plain binding (one `get`, its output) names it.
 - Graph size is log2 (`$outputsize` 11 = 2048), set with
   `graph.setInputPropertyValueFromId('$outputsize', SDValueInt2.sNew(int2(11, 11)))`.
-  Generators inherit the graph size; filters inherit from their input. A node's `$format` /
-  `$outputsize` only take effect with inheritance set to Absolute (`apply_edits`' `set` op
-  and `sweep_param` do that). So does the graph's own `$format` (a new graph's follows its parent:
+  Generators inherit the graph size; filters inherit from their input. A node's `$format` and an absolute `$outputsize` only take
+  effect with inheritance set to Absolute (`apply_edits`' `set` op and `sweep_param` do that); relative to parent or input,
+  `$outputsize` is a log2 offset. So does the graph's own `$format` (a new graph's follows its parent:
   setting 16 bits left a generator at RGBA8 until made Absolute); the `set` op does that too.
   A `$randomseed` (the graph's or a node's) is the exception: inherited, its value is added to its
   parent's seed (a render's, or the graph's), and only an inherited graph seed stays a control of
@@ -407,7 +427,7 @@ the self-test, when an `apply_edits` op or an op's field is never passed in one 
 tool is missing from README's Tools table.
 
 **Running the tests** (both must pass before a change is done):
-- `mcp_server/venv/bin/python -m pytest`: unit tests, no Designer needed, a few seconds
+- `mcp_server/venv/bin/python -m pytest`: unit tests, no Designer needed, under a minute
   (`pip install -r mcp_server/requirements-dev.txt` once). They include `test_types.py`, which runs
   mypy strict (`mypy.ini`) over every Python file: everything you write is fully annotated. The
   helpers, the plugin and the example are checked against Designer's own `sd` package and PySide6
@@ -435,7 +455,18 @@ tool is missing from README's Tools table.
   the order of its `CATEGORIES` list. They share one graph and run only in that order; what an
   earlier category made (the graph `G`, node ids, the saved `.sbs`) reaches later ones through
   `ctx`. Add a check to the category it belongs to; a new category is a module with an
-  `async def run(ctx)` added to `CATEGORIES`.
+  `async def run(ctx)` added to `CATEGORIES`. **Python with real logic that runs inside Designer (more than a handful of
+  lines, imports and the graph lookup included, or Qt code that gains from type checks), or that several modules run, goes in `designer_scripts/<module>/`, the folder named after the
+  module that runs it (`shared/` for one that several run), as a real file, run with `common.designer_script`
+  (`run_designer_script`, its values in `args`), so ruff and mypy check it; a script that raises fails the run.** A shorter probe stays inline, where the check
+  reads it, as do snippets that need the helpers' text (`helpers_source()`: `run_designer_script` doesn't send them),
+  strings that are what the test is about (`execute_designer_code`, its undo step and abort, the bridge, the plugin's
+  unit tests), and the clean-up and undo snippets of `common.py`, which guard the user's session. The server's own calls
+  into the helpers are strings too, by design: one line each, the helpers real files. A string of several lines is
+  written `dedent("""...""")` (`textwrap`), not joined pieces with `\n`; `tests/unit/test_selftest_safety.py` checks it in the self-test's modules and the server's (not in `tests/unit`).
+  A snippet that loads one of Designer's library packages stays inline, in a branch that runs only where the self-test
+  started Designer (the `else` of `if was_running:`, or `if not was_running:`), and never goes in a script: the unit test can't see a branch in another file, so it fails on a script naming both `loadUserPackage` and
+  `DefaultResourcesDir`. (A library path passed in through `ARGS` goes unseen: don't.)
 
 **Keeping the docs current.** README.md is for people, AGENTS.md is for agents. With every
 change (a tool, a fix, a workaround, a fact learned about Designer), add a short note where it
@@ -465,8 +496,9 @@ new ideas there.
   `tests/unit/test_designer_helpers.py` fails on a missing, extra or misplaced import, on a name no part
   defines, and on a part file not in `PARTS`. Code that needs the helpers' text (the self-test's
   snippets) takes it from `designer_helpers.source()`, never from one file.
-- **PyCharm** (the repo's `.idea` marks `client`, `mcp_server`, `tests` and `tests/unit` as source roots;
-  the interpreter is `mcp_server/venv`): tests patch a module loaded from its file with
+- **PyCharm** (the repo's `.idea` marks `client`, `mcp_server`, `tests` and `tests/unit` as source roots,
+  also Designer's own `sd` and PySide6 folders, which the interpreter `mcp_server/venv` doesn't have: README.md,
+  Working in PyCharm): tests patch a module loaded from its file with
   `monkeypatch.setitem(vars(module), 'NAME', value)`, not `setattr`, whose name PyCharm checks against the
   fixture and reports as missing; standard modules are patched directly (`time`, not `server.time`).
 - **The server** (`mcp_server/server.py`) only starts it and re-exports the names of

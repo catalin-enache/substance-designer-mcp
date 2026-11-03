@@ -2,8 +2,9 @@
 
 import os
 import re
+from textwrap import dedent
 
-from .common import GRAPH_OF, INHERIT, PLUGIN, TEST_GRAPH, Ctx, added_id, check, text
+from .common import PLUGIN, TEST_GRAPH, Ctx, added_id, check, designer_script, text
 
 
 async def run(ctx: Ctx) -> None:
@@ -41,9 +42,9 @@ async def run(ctx: Ctx) -> None:
         sweep_text.splitlines()[0],
     )
     check('sweep_param', 'original restored', 'restored' in sweep_text and before == after, '')
-    before = text(await c('execute_designer_code', {'code': INHERIT % (TEST_GRAPH, lv)}))
+    before = text(await designer_script(c, 'shared/node_size_inheritance', graph=TEST_GRAPH, node=lv))
     t = text(await c('sweep_param', {'node_id': lv, 'param': '$outputsize', 'values': [[7, 7], [8, 8]], **G}))
-    after = text(await c('execute_designer_code', {'code': INHERIT % (TEST_GRAPH, lv)}))
+    after = text(await designer_script(c, 'shared/node_size_inheritance', graph=TEST_GRAPH, node=lv))
     check(
         'sweep_param',
         '$outputsize takes effect and is restored',
@@ -52,45 +53,8 @@ async def run(ctx: Ctx) -> None:
     )
     # changing a parameter's inheritance resets its value to the default (AGENTS.md), so a sweep
     # of one that isn't Absolute must put the inheritance back before the value (REVIEW.md HLP-26)
-    RELATIVE_SIZE = GRAPH_OF % TEST_GRAPH + (
-        'from sd.api.sdproperty import SDPropertyCategory, SDPropertyInheritanceMethod as IM\n'
-        'from sd.api.sdvalueint2 import SDValueInt2\nfrom sd.api.sdbasetypes import int2\n'
-        "n = g.getNodeFromId('%s'); p = n.getPropertyFromId('$outputsize', SDPropertyCategory.Input)\n"
-        'n.setPropertyInheritanceMethod(p, IM.RelativeToParent)\n'
-        'n.setPropertyValue(p, SDValueInt2.sNew(int2(1, 1)))\n'
-        '%s\n'
-        'v = n.getPropertyValue(p).get()\n'
-        "print('INHERIT=%%s VALUE=%%d,%%d' %% (n.getPropertyInheritanceMethod(p).name, v.x, v.y))"
-    )
     # each switch on its own, on a node and on the graph (REVIEW.md TST-42)
-    fact = text(
-        await c(
-            'execute_designer_code',
-            {
-                'code': GRAPH_OF % TEST_GRAPH
-                + (
-                    'from sd.api.sdproperty import SDPropertyCategory, SDPropertyInheritanceMethod as IM\n'
-                    'from sd.api.sdvalueint import SDValueInt\nfrom sd.api.sdvalueint2 import SDValueInt2\n'
-                    'from sd.api.sdbasetypes import int2\n'
-                    'def resets(target, pid, value, read, start):\n'
-                    '    p = target.getPropertyFromId(pid, SDPropertyCategory.Input); was = target.getPropertyInheritanceMethod(p)\n'
-                    '    kept = target.getPropertyValue(p)\n'
-                    '    seen = []\n'
-                    '    try:\n'  # put back even if a call fails, for the later checks (REVIEW.md TST-46)
-                    '        for there, back in ((start, IM.Absolute), (IM.Absolute, start)):\n'
-                    '            target.setPropertyInheritanceMethod(p, there); target.setPropertyValue(p, value)\n'
-                    '            target.setPropertyInheritanceMethod(p, back); seen.append(read(target.getPropertyValue(p).get()))\n'
-                    '    finally:\n'
-                    '        target.setPropertyInheritanceMethod(p, was); target.setPropertyValue(p, kept)\n'
-                    '    return seen\n'
-                    "n = g.getNodeFromId('%s')\n"
-                    "print('NODE_SIZE=%%s' %% resets(n, '$outputsize', SDValueInt2.sNew(int2(1, 1)), lambda v: (v.x, v.y), IM.RelativeToParent))\n"
-                    "print('GRAPH_SEED=%%s' %% resets(g, '$randomseed', SDValueInt.sNew(5), lambda v: v, IM.RelativeToParent))"
-                )
-                % lv
-            },
-        )
-    )
+    fact = text(await designer_script(c, 'measure/inheritance_resets', graph=TEST_GRAPH, node=lv))
     # neither switch keeps the value set (1, 1 / 5), and back to inherited gives the default
     # (REVIEW.md TST-45)
     kept_any = re.search(r'\(1, 1\)|SEED=\[[^]]*\b5\b', fact)
@@ -101,24 +65,17 @@ async def run(ctx: Ctx) -> None:
         default_back and not kept_any,
         fact.strip(),
     )
-    await c('execute_designer_code', {'code': RELATIVE_SIZE % (lv, '')})
+    await designer_script(c, 'measure/relative_size', graph=TEST_GRAPH, node=lv)
     t = text(await c('sweep_param', {'node_id': lv, 'param': '$outputsize', 'values': [[7, 7]], **G}))
-    after = text(await c('execute_designer_code', {'code': INHERIT % (TEST_GRAPH, lv)}))
+    after = text(await designer_script(c, 'shared/node_size_inheritance', graph=TEST_GRAPH, node=lv))
     check(
         'sweep_param',
         'a relative $outputsize comes back with its offset',
         'INHERIT=RelativeToParent' in after and 'VALUE=x: 1, y: 1' in after,
         t.splitlines()[-1] + ' | ' + after.strip(),
     )
-    await c(
-        'execute_designer_code',
-        {
-            'code': INHERIT % (TEST_GRAPH, lv)
-            + (
-                '\nfrom sd.api.sdproperty import SDPropertyInheritanceMethod as IM\n'
-                'n.setPropertyInheritanceMethod(p, IM.RelativeToInput)'
-            )
-        },
+    await designer_script(
+        c, 'shared/node_size_inheritance', graph=TEST_GRAPH, node=lv, relative_to_input=True
     )  # back as before
     r_ = await c('sweep_param', {'node_id': lv, 'param': 'nope', 'values': [1], **G})
     check('sweep_param', 'error on bad param', r_.is_error and 'not a parameter' in text(r_), text(r_))
@@ -134,7 +91,15 @@ async def run(ctx: Ctx) -> None:
     check('read_designer_log', 'finds bridge start', 'listening on' in t, t.splitlines()[0])
     # a warning of our own, so the filter has something to find (REVIEW.md TST-4)
     marker = 'mcp self-test warning %d' % os.getpid()
-    await c('execute_designer_code', {'code': 'import sd\nsd.getContext().getLogger().warning(%r)' % marker})
+    await c(
+        'execute_designer_code',
+        {
+            'code': dedent("""\
+                import sd
+                sd.getContext().getLogger().warning(%r)""")
+            % marker
+        },
+    )
     t = text(await c('read_designer_log', {'errors_only': True, 'lines': 400}))
     found = t.splitlines()[1:]
     check(

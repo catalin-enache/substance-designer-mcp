@@ -2,11 +2,11 @@
 
 import re
 
-from .common import Ctx, check, text
+from .common import TEST_GRAPH, Ctx, check, designer_script, text
 
 
 async def run(ctx: Ctx) -> None:
-    c, G, slope, lv, COUNT_NODES = ctx.c, ctx.G, ctx.slope, ctx.lv, ctx.COUNT_NODES
+    c, G, slope, lv = ctx.c, ctx.G, ctx.slope, ctx.lv
     # --- batch edits
     t = text(
         await c(
@@ -134,9 +134,9 @@ async def run(ctx: Ctx) -> None:
         text(r_),
     )
     # an add whose params fail now leaves no node at all, and says so (REVIEW.md HLP-30)
-    before = text(await c('execute_designer_code', {'code': COUNT_NODES}))
+    before = text(await designer_script(c, 'shared/count_nodes', graph=TEST_GRAPH))
     r_ = await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'levels', 'params': {'nope': 1}}], **G})
-    after = text(await c('execute_designer_code', {'code': COUNT_NODES}))
+    after = text(await designer_script(c, 'shared/count_nodes', graph=TEST_GRAPH))
     check(
         'apply_edits',
         'an add whose params failed leaves no node, and says so',
@@ -178,7 +178,7 @@ async def run(ctx: Ctx) -> None:
     )
     # a field the op doesn't take refuses the whole batch: a typo reported success, the node somewhere else and its
     # parameters unset (REVIEW.md HLP-62)
-    before = text(await c('execute_designer_code', {'code': COUNT_NODES}))
+    before = text(await designer_script(c, 'shared/count_nodes', graph=TEST_GRAPH))
     r_ = await c(
         'apply_edits',
         {
@@ -189,7 +189,7 @@ async def run(ctx: Ctx) -> None:
             **G,
         },
     )
-    after = text(await c('execute_designer_code', {'code': COUNT_NODES}))
+    after = text(await designer_script(c, 'shared/count_nodes', graph=TEST_GRAPH))
     check(
         'apply_edits',
         'refuses a field the op does not take, nothing added',

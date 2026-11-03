@@ -3,8 +3,9 @@ and delete ops; execute_designer_code, describe_graph, preview_node)."""
 
 import os
 import time
+from textwrap import dedent
 
-from .common import GRAPH_OF, SAVED_GRAPH, TEST_GRAPH, Ctx, added_id, check, is_image, skip, text
+from .common import SAVED_GRAPH, TEST_GRAPH, Ctx, added_id, check, designer_script, is_image, skip, text
 
 
 async def create(ctx: Ctx) -> None:
@@ -42,10 +43,9 @@ async def create(ctx: Ctx) -> None:
     r_ = await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'not_a_real_node'}], **G})
     check('apply_edits', 'add: error on unknown type', r_.is_error and 'neither an atomic' in text(r_), '')
     # a bad param refuses the whole add, and says so: the node isn't left behind (REVIEW.md HLP-30)
-    COUNT_NODES = GRAPH_OF % TEST_GRAPH + "print('NODES=%d' % len(g.getNodes()))"
-    before = text(await c('execute_designer_code', {'code': COUNT_NODES}))
+    before = text(await designer_script(c, 'shared/count_nodes', graph=TEST_GRAPH))
     r_ = await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'levels', 'params': {'levelinhigh': 0.5}}], **G})
-    after = text(await c('execute_designer_code', {'code': COUNT_NODES}))
+    after = text(await designer_script(c, 'shared/count_nodes', graph=TEST_GRAPH))
     # if removing it fails too, both errors are reported (REVIEW.md HLP-37)
     t = text(
         await c(
@@ -53,15 +53,22 @@ async def create(ctx: Ctx) -> None:
             {
                 'code': helper_source
                 + (
-                    '\ng = find_graph(%r); had = {n.getIdentifier() for n in g.getNodes()}\n'
-                    'real = SDSBSCompGraph.deleteNode\n'
-                    "def failing(self, node):\n    raise RuntimeError('delete failed on purpose')\n"
-                    'SDSBSCompGraph.deleteNode = failing\n'
-                    "try:\n    add_node(%r, 'levels', None, {'levelinhigh': 0.5})\n"
-                    "except Exception as e:\n    print('ERROR=' + str(e))\n"
-                    'finally:\n    del SDSBSCompGraph.deleteNode\n'  # it is SDGraph's: leave no copy behind (TST-73)
-                    '    for n in [n for n in g.getNodes() if n.getIdentifier() not in had]:\n'
-                    '        g.deleteNode(n)\n'
+                    dedent("""
+                        g = find_graph(%r); had = {n.getIdentifier() for n in g.getNodes()}
+                        real = SDSBSCompGraph.deleteNode
+                        def failing(self, node):
+                            raise RuntimeError('delete failed on purpose')
+                        SDSBSCompGraph.deleteNode = failing
+                        try:
+                            add_node(%r, 'levels', None, {'levelinhigh': 0.5})
+                        except Exception as e:
+                            print('ERROR=' + str(e))
+                        finally:
+                            # it is SDGraph's: leave no copy behind (TST-73)
+                            del SDSBSCompGraph.deleteNode
+                            for n in [n for n in g.getNodes() if n.getIdentifier() not in had]:
+                                g.deleteNode(n)
+                    """)
                 )
                 % (TEST_GRAPH, TEST_GRAPH)
             },
@@ -84,7 +91,6 @@ async def create(ctx: Ctx) -> None:
     ctx.slope = slope
     ctx.lv = lv
     ctx.out = out
-    ctx.COUNT_NODES = COUNT_NODES
 
 
 async def wire(ctx: Ctx) -> None:
@@ -107,11 +113,12 @@ async def wire(ctx: Ctx) -> None:
             'execute_designer_code',
             {
                 'code': (
-                    'import sd\nfrom sd.api.sdvaluestring import SDValueString\n'
-                    'g=[r for p in sd.getContext().getSDApplication().getPackageMgr().getUserPackages() '
-                    "for r in p.getChildrenResources(False) if r.getIdentifier()=='%s'][0]\n"
-                    "n=g.getNodeFromId('%s'); n.setAnnotationPropertyValueFromId('identifier', SDValueString.sNew('height'))\n"
-                    "print('output named height')"
+                    dedent("""\
+                        import sd
+                        from sd.api.sdvaluestring import SDValueString
+                        g=[r for p in sd.getContext().getSDApplication().getPackageMgr().getUserPackages() for r in p.getChildrenResources(False) if r.getIdentifier()=='%s'][0]
+                        n=g.getNodeFromId('%s'); n.setAnnotationPropertyValueFromId('identifier', SDValueString.sNew('height'))
+                        print('output named height')""")
                 )
                 % (TEST_GRAPH, out),
                 'undo_label': 'self-test: name output',
@@ -126,13 +133,20 @@ async def wire(ctx: Ctx) -> None:
     # an abort landing in a Python finalizer (every sd API object has a __del__ calling release())
     # was dropped and the script ran on to the end: before the fix, 3 of 6 runs of this loop in
     # Designer ignored a 1 s timeout (REVIEW.md PLG-25). Several runs, since where it lands varies
-    finalizer_loop = (
-        'import time\nclass Obj:\n    def __init__(self):\n        self.h = 1\n'
-        '    def release(self):\n        self.h = None\n'
-        '    def __del__(self):\n        if self.h:\n            self.release()\n'
-        'end = time.monotonic() + 5\nwhile time.monotonic() < end:\n    o = Obj()\n'
-        "print('RAN TO THE END')"
-    )
+    finalizer_loop = dedent("""\
+        import time
+        class Obj:
+            def __init__(self):
+                self.h = 1
+            def release(self):
+                self.h = None
+            def __del__(self):
+                if self.h:
+                    self.release()
+        end = time.monotonic() + 5
+        while time.monotonic() < end:
+            o = Obj()
+        print('RAN TO THE END')""")
     # and one whose __del__ raises an ordinary error: its "Exception ignored" report ran traced and the
     # abort landed there, dropped for good (REVIEW.md PLG-26)
     raising_loop = finalizer_loop.replace(
@@ -145,14 +159,23 @@ async def wire(ctx: Ctx) -> None:
         runs.append(('ScriptAborted: timed out' in t, 'RAN TO THE END' in t, round(time.monotonic() - started, 1)))
     # PySide reports an exception raised in a slot through sys.excepthook, and emit() returns: an
     # abort landing in a slot was dropped there (REVIEW.md PLG-29)
-    slot_loop = (
-        'import time\nfrom PySide6.QtCore import QObject, Signal\n'
-        'class Emitter(QObject):\n    fired = Signal()\n'
-        'def slot():\n    a = 1\n    b = 2\n    c = a + b\n    d = c * 2\n    return d - 1\n'
-        'e = Emitter()\ne.fired.connect(slot)\n'
-        'end = time.monotonic() + 5\nwhile time.monotonic() < end:\n    e.fired.emit()\n'
-        "print('RAN TO THE END')"
-    )
+    slot_loop = dedent("""\
+        import time
+        from PySide6.QtCore import QObject, Signal
+        class Emitter(QObject):
+            fired = Signal()
+        def slot():
+            a = 1
+            b = 2
+            c = a + b
+            d = c * 2
+            return d - 1
+        e = Emitter()
+        e.fired.connect(slot)
+        end = time.monotonic() + 5
+        while time.monotonic() < end:
+            e.fired.emit()
+        print('RAN TO THE END')""")
     for _ in range(4):
         started = time.monotonic()
         t = text(await c('execute_designer_code', {'code': slot_loop, 'timeout_s': 1}))
@@ -170,8 +193,15 @@ async def wire(ctx: Ctx) -> None:
             'execute_designer_code',
             {
                 'code': (
-                    'try:\n    while True:\n        pass\nfinally:\n    total = 0\n'
-                    "    for i in range(20000):\n        total += i\n    print('CLEANUP DONE', total)"
+                    dedent("""\
+                        try:
+                            while True:
+                                pass
+                        finally:
+                            total = 0
+                            for i in range(20000):
+                                total += i
+                            print('CLEANUP DONE', total)""")
                 ),
                 'timeout_s': 1,
             },
@@ -187,11 +217,11 @@ async def wire(ctx: Ctx) -> None:
         await c(
             'execute_designer_code',
             {
-                'code': (
-                    "import sd\nprint('MODIFIED=%%s' %% any(p.isModified() for p in sd.getContext().getSDApplication()"
-                    ".getPackageMgr().getUserPackages() if any(r.getIdentifier()=='%s' for r in p.getChildrenResources(False))))"
-                    % TEST_GRAPH
-                )
+                'code': dedent("""\
+                    import sd
+                    pm = sd.getContext().getSDApplication().getPackageMgr()
+                    print('MODIFIED=%%s' %% any(p.isModified() for p in pm.getUserPackages() if any(r.getIdentifier() == %r for r in p.getChildrenResources(False))))""")
+                % TEST_GRAPH
             },
         )
     )

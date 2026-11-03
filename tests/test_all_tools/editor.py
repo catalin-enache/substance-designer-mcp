@@ -2,8 +2,19 @@
 
 import re
 from collections.abc import Sequence
+from textwrap import dedent
 
-from .common import GRAPH_OF, TEST_GRAPH, Ctx, check, clipboard_fingerprint, image_size, is_image, skip, text
+from .common import (
+    TEST_GRAPH,
+    Ctx,
+    check,
+    clipboard_fingerprint,
+    designer_script,
+    image_size,
+    is_image,
+    skip,
+    text,
+)
 
 
 async def open_and_zoom(ctx: Ctx) -> None:
@@ -24,19 +35,7 @@ async def open_and_zoom(ctx: Ctx) -> None:
             box is not None and bool(points) and all(box[0] <= x <= box[2] and box[1] <= y <= box[3] for x, y in points)
         )
 
-    t = text(
-        await c(
-            'execute_designer_code',
-            {
-                'code': GRAPH_OF % TEST_GRAPH
-                + (
-                    'from sd.api.sdgraphobjectframe import SDGraphObjectFrame\n'
-                    "f=[o for o in g.getGraphObjects() if isinstance(o, SDGraphObjectFrame) and o.getTitle()=='Shape'][0]\n"
-                    "p,s=f.getPosition(),f.getSize()\nprint('FRAME=%d,%d,%d,%d' % (p.x, p.y, p.x+s.x, p.y+s.y))"
-                )
-            },
-        )
-    )
+    t = text(await designer_script(c, 'editor/frame_bounds', graph=TEST_GRAPH))
     # no match raises AttributeError, which the run's except reports (REVIEW.md TST-63)
     fx0, fy0, fx1, fy1 = [int(v) for v in re.search(r'FRAME=(-?\d+),(-?\d+),(-?\d+),(-?\d+)', t).groups()]  # type: ignore[union-attr]
     t = text(await c('open_graph', {'graph': TEST_GRAPH, 'frame': 'shape'}))  # title, any case
@@ -74,24 +73,7 @@ async def open_and_zoom(ctx: Ctx) -> None:
     )
     # the fit zooms through Designer's own wheel handling, so the user's next wheel step
     # continues from the fitted zoom (setting the view's transform directly made it jump)
-    t = text(
-        await c(
-            'execute_designer_code',
-            {
-                'code': (
-                    'import sd\nfrom PySide6.QtWidgets import QApplication, QGraphicsView, QDockWidget\n'
-                    'from PySide6.QtGui import QWheelEvent\nfrom PySide6.QtCore import QPoint, QPointF, Qt\n'
-                    'mw=sd.getContext().getSDApplication().getQtForPythonUIMgr().getMainWindow()\n'
-                    "d=[w for w in mw.findChildren(QDockWidget) if w.objectName().startswith('areaB_') and w.isVisible()][0]\n"
-                    'v=max((x for x in d.findChildren(QGraphicsView) if x.isVisible()), key=lambda x: x.width()*x.height())\n'
-                    'vp=v.viewport(); c=QPointF(vp.width()/2, vp.height()/2); before=v.transform().m11()\n'
-                    'QApplication.sendEvent(vp, QWheelEvent(c, QPointF(vp.mapToGlobal(c.toPoint())), QPoint(0,0), QPoint(0,120), '
-                    'Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False))\n'
-                    "QApplication.processEvents(); print('STEP=%.4f' % (v.transform().m11() / before))"
-                )
-            },
-        )
-    )
+    t = text(await designer_script(c, 'editor/wheel_step'))
     step = re.search(r'STEP=([\d.]+)', t)
     check(
         'open_graph',
@@ -136,24 +118,7 @@ async def open_and_zoom(ctx: Ctx) -> None:
     check('open_graph', 'error on unknown frame lists the frames', r_.is_error and "'Shape'" in text(r_), text(r_))
     # 'graph' captures the node view alone (no title bar, no toolbars); crop takes a part of it
     full = await c('screenshot_designer', {'panel': 'graph', 'max_size': 4000})
-    t = text(
-        await c(
-            'execute_designer_code',
-            {
-                'code': (
-                    'from PySide6.QtWidgets import QApplication, QGraphicsView, QDockWidget\n'
-                    'def graph_dock(w):\n'  # a dead wrapper raises, now or on its children: skip it (AGENTS.md, Designer UI)
-                    "    try:\n        return isinstance(w, QDockWidget) and w.objectName().startswith('areaB_') and w.isVisible() \\\n"
-                    '            and bool(w.findChildren(QGraphicsView))\n'
-                    '    except RuntimeError:\n        return False\n'
-                    'd=[w for w in QApplication.instance().allWidgets() if graph_dock(w)][0]\n'
-                    'v=max((x for x in d.findChildren(QGraphicsView) if x.isVisible()), key=lambda x: x.width()*x.height())\n'
-                    "r=v.devicePixelRatioF()\nprint('VIEW=%d,%d DOCK=%d,%d' % (round(v.width()*r), round(v.height()*r), "
-                    'round(d.width()*r), round(d.height()*r)))'
-                )
-            },
-        )
-    )
+    t = text(await designer_script(c, 'editor/graph_view_size'))
     sizes = re.search(r'VIEW=(\d+),(\d+) DOCK=(\d+),(\d+)', t)
     view_size = (int(sizes.group(1)), int(sizes.group(2))) if sizes else None
     check(
@@ -187,20 +152,7 @@ async def panels_and_fit(ctx: Ctx) -> None:
     c, helper_source, was_running = ctx.c, ctx.helper_source, ctx.was_running
     if not was_running:
         # our own instance, so its layout doesn't matter: show the console (hidden by default)
-        await c(
-            'execute_designer_code',
-            {
-                'code': (
-                    'from PySide6.QtWidgets import QApplication, QMenu\n'
-                    'for w in QApplication.instance().allWidgets():\n'
-                    "    if isinstance(w, QMenu) and w.title() == '&Windows':\n"
-                    '        w.aboutToShow.emit()\n'
-                    '        for a in w.actions():\n'
-                    "            if a.text() == 'Console' and not a.isChecked(): a.trigger()\n"
-                    '        break\nQApplication.processEvents()'
-                )
-            },
-        )
+        await designer_script(c, 'editor/show_console')
     for panel in ('window', 'graph', '2d', 'parameters', 'explorer', 'library', 'console'):
         r_ = await c('screenshot_designer', {'panel': panel, 'max_size': 700})
         if not is_image(r_) and 'not visible' in text(r_):
@@ -236,21 +188,7 @@ async def panels_and_fit(ctx: Ctx) -> None:
         )
     else:
         before = clipboard_fingerprint()
-        t = text(
-            await c(
-                'execute_designer_code',
-                {
-                    'code': (
-                        'from PySide6 import QtCore, QtWidgets\napp = QtWidgets.QApplication.instance()\ncb = app.clipboard()\n'
-                        'orig = cb.mimeData()\nbackup = QtCore.QMimeData()\n'
-                        'for f in orig.formats():\n    backup.setData(f, orig.data(f))\n'
-                        'try:\n    cb.clear()\n    app.processEvents()\n    m = cb.mimeData()\n'
-                        "    print('EMPTY_MIME=%s' % ('None' if m is None else len(m.formats())))\n"
-                        'finally:\n    cb.setMimeData(backup)\n    app.processEvents()'
-                    )
-                },
-            )
-        )
+        t = text(await designer_script(c, 'editor/empty_clipboard'))
         kept = clipboard_fingerprint() == before
         check(
             'designer facts',
@@ -264,20 +202,21 @@ async def panels_and_fit(ctx: Ctx) -> None:
     # screenshot check's widget scan met; what Designer rebuilds there wasn't pinned down)
     # by default the whole graph is fitted, even with nodes selected (Designer's own "Fit in view
     # (selection)" fits only the selection), and the result says what it fitted (REVIEW.md HLP-32)
-    VIEW_SELECT = (
-        '\nfrom PySide6.QtWidgets import QGraphicsItem\n'
-        'mw = _APP.getQtForPythonUIMgr().getMainWindow(); view = _graph_view(mw)\n'
-        'items = [i for i in view.scene().items() if i.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsSelectable]\n'
-        '%s\n_process_events()\n'
-        'g = find_graph(%r); seen = view.mapToScene(view.viewport().rect()).boundingRect()\n'
-        'inside = [seen.contains(n.getPosition().x, n.getPosition().y) for n in g.getNodes()]\n'
-        'from sd.api.sdgraphobjectframe import SDGraphObjectFrame\n'  # frames whole, titles included (HLP-35)
-        'frames = [o for o in g.getGraphObjects() if isinstance(o, SDGraphObjectFrame)]\n'
-        'framed = [seen.contains(f.getPosition().x, f.getPosition().y) and seen.contains(\n'
-        '    f.getPosition().x + f.getSize().x, f.getPosition().y + f.getSize().y) for f in frames]\n'
-        "print('SELECTED=%%d INSIDE=%%d/%%d FRAMES=%%d/%%d' %% (len(view.scene().selectedItems()), sum(inside), len(inside),\n"
-        '      sum(framed), len(framed)))'
-    )
+    VIEW_SELECT = dedent("""
+        from PySide6.QtWidgets import QGraphicsItem
+        mw = _APP.getQtForPythonUIMgr().getMainWindow(); view = _graph_view(mw)
+        items = [i for i in view.scene().items() if i.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsSelectable]
+        %s
+        _process_events()
+        g = find_graph(%r); seen = view.mapToScene(view.viewport().rect()).boundingRect()
+        inside = [seen.contains(n.getPosition().x, n.getPosition().y) for n in g.getNodes()]
+        from sd.api.sdgraphobjectframe import SDGraphObjectFrame
+        # frames whole, titles included (HLP-35)
+        frames = [o for o in g.getGraphObjects() if isinstance(o, SDGraphObjectFrame)]
+        framed = [seen.contains(f.getPosition().x, f.getPosition().y) and seen.contains(
+            f.getPosition().x + f.getSize().x, f.getPosition().y + f.getSize().y) for f in frames]
+        print('SELECTED=%%d INSIDE=%%d/%%d FRAMES=%%d/%%d' %% (len(view.scene().selectedItems()), sum(inside), len(inside),
+              sum(framed), len(framed)))""")
     # first the fact behind it (AGENTS.md, Designer UI): F fits the selection, or everything
     # when nothing is selected
     f_sel = text(
@@ -285,14 +224,29 @@ async def panels_and_fit(ctx: Ctx) -> None:
             'execute_designer_code',
             {
                 'code': helper_source
-                + VIEW_SELECT % ('items[0].setSelected(True) if items else None\n_fit_graph_view()', TEST_GRAPH)
+                + VIEW_SELECT
+                % (
+                    dedent("""\
+                        items[0].setSelected(True) if items else None
+                        _fit_graph_view()"""),
+                    TEST_GRAPH,
+                )
             },
         )
     )
     f_none = text(
         await c(
             'execute_designer_code',
-            {'code': helper_source + VIEW_SELECT % ('view.scene().clearSelection()\n_fit_graph_view()', TEST_GRAPH)},
+            {
+                'code': helper_source
+                + VIEW_SELECT
+                % (
+                    dedent("""\
+                        view.scene().clearSelection()
+                        _fit_graph_view()"""),
+                    TEST_GRAPH,
+                )
+            },
         )
     )
     m_sel = re.search(r'SELECTED=(\d+) INSIDE=(\d+)/(\d+)', f_sel)
@@ -315,7 +269,13 @@ async def panels_and_fit(ctx: Ctx) -> None:
             'execute_designer_code',
             {
                 'code': helper_source
-                + VIEW_SELECT % ('items[0].setSelected(True) if items else None\n_fit_graph_view()', TEST_GRAPH)
+                + VIEW_SELECT
+                % (
+                    dedent("""\
+                        items[0].setSelected(True) if items else None
+                        _fit_graph_view()"""),
+                    TEST_GRAPH,
+                )
             },
         )
     )
@@ -342,8 +302,10 @@ async def panels_and_fit(ctx: Ctx) -> None:
             {
                 'code': helper_source
                 + (
-                    "\ndef _fit_view_to(*a, **k):\n    raise RuntimeError('the graph view is not visible in Designer')\n"
-                    'open_graph(%r)'
+                    dedent("""
+                        def _fit_view_to(*a, **k):
+                            raise RuntimeError('the graph view is not visible in Designer')
+                        open_graph(%r)""")
                 )
                 % TEST_GRAPH
             },
@@ -359,7 +321,15 @@ async def panels_and_fit(ctx: Ctx) -> None:
     t = text(
         await c(
             'execute_designer_code',
-            {'code': helper_source + ('\n_current_graph = lambda: None\nopen_graph(%r)') % TEST_GRAPH},
+            {
+                'code': helper_source
+                + (
+                    dedent("""
+                        _current_graph = lambda: None
+                        open_graph(%r)""")
+                )
+                % TEST_GRAPH
+            },
         )
     )
     check(
@@ -369,19 +339,7 @@ async def panels_and_fit(ctx: Ctx) -> None:
         t.strip()[-150:],
     )
     # a free comment far from the nodes is fitted too (REVIEW.md HLP-39)
-    t = text(
-        await c(
-            'execute_designer_code',
-            {
-                'code': GRAPH_OF % TEST_GRAPH
-                + (
-                    'from sd.api.sdgraphobjectcomment import SDGraphObjectComment\nfrom sd.api.sdbasetypes import float2\n'
-                    "note = SDGraphObjectComment.sNew(g); note.setPosition(float2(2500, -1500)); note.setDescription('far away')\n"
-                    "print('COMMENT=ok')"
-                )
-            },
-        )
-    )
+    t = text(await designer_script(c, 'editor/far_comment', graph=TEST_GRAPH))
     fitted = text(await c('open_graph', {'graph': TEST_GRAPH}))
     seen = text(
         await c(
@@ -389,12 +347,15 @@ async def panels_and_fit(ctx: Ctx) -> None:
             {
                 'code': helper_source
                 + (
-                    '\nmw = _APP.getQtForPythonUIMgr().getMainWindow(); view = _graph_view(mw)\n'
-                    'seen = view.mapToScene(view.viewport().rect()).boundingRect()\n'
-                    'from sd.api.sdgraphobjectcomment import SDGraphObjectComment\ng = find_graph(%r)\n'
-                    "notes = [o for o in g.getGraphObjects() if isinstance(o, SDGraphObjectComment) and o.getDescription() == 'far away']\n"
-                    "print('FAR_COMMENT_INSIDE=%%s' %% all(seen.contains(o.getPosition().x, o.getPosition().y) for o in notes))\n"
-                    'for o in notes:\n    g.deleteGraphObject(o)'
+                    dedent("""
+                        mw = _APP.getQtForPythonUIMgr().getMainWindow(); view = _graph_view(mw)
+                        seen = view.mapToScene(view.viewport().rect()).boundingRect()
+                        from sd.api.sdgraphobjectcomment import SDGraphObjectComment
+                        g = find_graph(%r)
+                        notes = [o for o in g.getGraphObjects() if isinstance(o, SDGraphObjectComment) and o.getDescription() == 'far away']
+                        print('FAR_COMMENT_INSIDE=%%s' %% all(seen.contains(o.getPosition().x, o.getPosition().y) for o in notes))
+                        for o in notes:
+                            g.deleteGraphObject(o)""")
                 )
                 % TEST_GRAPH
             },

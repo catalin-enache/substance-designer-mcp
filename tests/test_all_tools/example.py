@@ -3,8 +3,9 @@ you have open (it closes earlier builds of its graph id) and saved to the scratc
 
 import os
 import re
+from textwrap import dedent
 
-from .common import BUNDLE, EXAMPLE_GRAPH, GRAPH_OF, TEST_GRAPH, Ctx, check, helpers_source, text
+from .common import BUNDLE, EXAMPLE_GRAPH, GRAPH_OF, TEST_GRAPH, Ctx, check, designer_script, helpers_source, text
 
 
 async def run(ctx: Ctx) -> None:
@@ -35,11 +36,10 @@ async def run(ctx: Ctx) -> None:
                 await c(
                     'execute_designer_code',
                     {
-                        'code': (
-                            'import sd\npm = sd.getContext().getSDApplication().getPackageMgr()\n'
-                            "print('UNSAVED_LEFT=%%d' %% sum(1 for p in pm.getUserPackages() if not p.getFilePath() and "
-                            'any(r.getIdentifier() == %r for r in p.getChildrenResources(False))))'
-                        )
+                        'code': dedent("""\
+                            import sd
+                            pm = sd.getContext().getSDApplication().getPackageMgr()
+                            print('UNSAVED_LEFT=%%d' %% sum(1 for p in pm.getUserPackages() if not p.getFilePath() and any(r.getIdentifier() == %r for r in p.getChildrenResources(False))))""")
                         % EXAMPLE_GRAPH
                     },
                 )
@@ -63,21 +63,7 @@ async def run(ctx: Ctx) -> None:
         )
         # the readable-graph finish (ROADMAP item, now in the script): a frame per
         # section, overridable size, portals written into the saved file
-        t = text(
-            await c(
-                'execute_designer_code',
-                {
-                    'code': GRAPH_OF % EXAMPLE_GRAPH
-                    + (
-                        'from sd.api.sdgraphobjectframe import SDGraphObjectFrame\n'
-                        'from sd.api.sdproperty import SDPropertyCategory\n'
-                        "p=g.getPropertyFromId('$outputsize', SDPropertyCategory.Input)\n"
-                        "print('FRAMES=%d SIZE=%s PARENT=%d' % (sum(isinstance(o, SDGraphObjectFrame) for o in g.getGraphObjects()),"
-                        ' g.getPropertyInheritanceMethod(p).name, g.getDefaultParentSize().x))'
-                    )
-                },
-            )
-        )
+        t = text(await designer_script(c, 'example/frames_and_size', graph=EXAMPLE_GRAPH))
         check(E, 'frames per section, overridable 2048 size', 'FRAMES=17 SIZE=RelativeToParent PARENT=2048' in t, t)
         with open(example_sbs, encoding='utf-8') as f:
             portals = len(re.findall(r'<displayType v="1"\s*/>', f.read()))
@@ -102,30 +88,13 @@ async def run(ctx: Ctx) -> None:
             await c(
                 'execute_designer_code',
                 {
-                    'code': (
-                        'import sd\ng=[r for p in sd.getContext().getSDApplication().getPackageMgr().getUserPackages() '
-                        "for r in p.getChildrenResources(False) if r.getIdentifier()=='%s'][0]\n"
-                        "print(' '.join('%%s=%%s' %% (n.getAnnotationPropertyValueFromId('identifier').get(), n.getIdentifier()) "
-                        'for n in g.getOutputNodes()))'
-                    )
-                    % EXAMPLE_GRAPH
+                    'code': GRAPH_OF % EXAMPLE_GRAPH
+                    + "print(' '.join('%s=%s' % (n.getAnnotationPropertyValueFromId('identifier').get(), n.getIdentifier()) for n in g.getOutputNodes()))"
                 },
             )
         )
         outs = dict(re.findall(r'(\w+)=(\d+)', t))
-        t = text(
-            await c(
-                'execute_designer_code',
-                {
-                    'code': GRAPH_OF % EXAMPLE_GRAPH
-                    + (
-                        "n=g.getNodeFromId(%r)\nu=n.getAnnotationPropertyValueFromId('usages').get()[0].get()\n"
-                        "print('USAGE=%%s %%s %%s' %% (u.getName(), u.getComponents(), u.getColorSpace()))"
-                    )
-                    % outs.get('basecolor', '0')
-                },
-            )
-        )
+        t = text(await designer_script(c, 'example/output_usage', graph=EXAMPLE_GRAPH, node=outs.get('basecolor', '0')))
         check('designer facts', 'output usages read back (baseColor RGBA sRGB)', 'USAGE=baseColor RGBA sRGB' in t, t)
         t = text(
             await c(
@@ -146,8 +115,13 @@ async def run(ctx: Ctx) -> None:
                 {
                     'code': helpers
                     + (
-                        "\ntry:\n    _fit_view_to(find_graph(%r), frame='K: wood planks')\n    print('FITTED')\n"
-                        "except RuntimeError as e:\n    print('REFUSED', e)\n"
+                        dedent("""
+                            try:
+                                _fit_view_to(find_graph(%r), frame='K: wood planks')
+                                print('FITTED')
+                            except RuntimeError as e:
+                                print('REFUSED', e)
+                        """)
                     )
                     % EXAMPLE_GRAPH
                 },
@@ -164,21 +138,16 @@ async def run(ctx: Ctx) -> None:
         # graph saved elsewhere and edited is left open, and unsaved edits to the
         # previous build make it refuse instead of unloading them
         decoy_sbs = os.path.join(scratch, 'example', 'my_copy.sbs')
-        edit_both = GRAPH_OF % EXAMPLE_GRAPH + (
-            'pm=sd.getContext().getSDApplication().getPackageMgr()\npm.saveCopyOfPackageAs(g.getPackage(), %r)\n'
-            "copy=pm.loadUserPackage(%r)\ncopy.getChildrenResources(False)[0].newNode('sbs::compositing::blur')\n"
-            "print('DECOY_MODIFIED=%%s' %% copy.isModified())"
-        ) % (decoy_sbs, decoy_sbs)
-        state = (
-            'import os\n'
-            + GRAPH_OF.replace('[0]\n', '\n') % EXAMPLE_GRAPH
-            + (
-                "print('OPEN=' + ','.join('%s:%s' % (os.path.basename(r.getPackage().getFilePath() or '-'), "
-                'r.getPackage().isModified()) for r in g))'
-            )
-        )
-        t = text(await c('execute_designer_code', {'code': edit_both}))
+        t = text(await designer_script(c, 'example/edit_saved_copy', graph=EXAMPLE_GRAPH, path=decoy_sbs))
         t = text(await c('run_designer_script', {'path': example, 'timeout_s': 300}))
+        state = (
+            dedent("""\
+                import os
+                import sd
+                graphs = [r for p in sd.getContext().getSDApplication().getPackageMgr().getUserPackages() for r in p.getChildrenResources(False) if r.getIdentifier() == %r]
+                print('OPEN=' + ','.join('%%s:%%s' %% (os.path.basename(r.getPackage().getFilePath() or '-'), r.getPackage().isModified()) for r in graphs))""")
+            % EXAMPLE_GRAPH
+        )
         after = text(await c('execute_designer_code', {'code': state}))
         check(
             E,
@@ -190,12 +159,13 @@ async def run(ctx: Ctx) -> None:
             await c(
                 'execute_designer_code',
                 {
-                    'code': (
-                        'import sd\npm=sd.getContext().getSDApplication().getPackageMgr()\n'
-                        'for p in pm.getUserPackages():\n'
-                        "    if (p.getFilePath() or '') == %r:\n        p.getChildrenResources(False)[0].newNode('sbs::compositing::blur')\n"
-                        "        print('EDITED', p.isModified())"
-                    )
+                    'code': dedent("""\
+                        import sd
+                        pm = sd.getContext().getSDApplication().getPackageMgr()
+                        for p in pm.getUserPackages():
+                            if (p.getFilePath() or '') == %r:
+                                p.getChildrenResources(False)[0].newNode('sbs::compositing::blur')
+                                print('EDITED', p.isModified())""")
                     % example_sbs
                 },
             )
@@ -214,13 +184,13 @@ async def run(ctx: Ctx) -> None:
             await c(
                 'execute_designer_code',
                 {
-                    'code': (
-                        'import sd\npm=sd.getContext().getSDApplication().getPackageMgr()\n'
-                        'for p in pm.getUserPackages():\n'
-                        "    if (p.getFilePath() or '') == %r:\n"
-                        "        p.getChildrenResources(False)[0].setIdentifier('mcp_selftest_trimsheet_renamed')\n"
-                        "        print('RENAMED', p.isModified(), p.getChildrenResources(False)[0].getIdentifier())"
-                    )
+                    'code': dedent("""\
+                        import sd
+                        pm = sd.getContext().getSDApplication().getPackageMgr()
+                        for p in pm.getUserPackages():
+                            if (p.getFilePath() or '') == %r:
+                                p.getChildrenResources(False)[0].setIdentifier('mcp_selftest_trimsheet_renamed')
+                                print('RENAMED', p.isModified(), p.getChildrenResources(False)[0].getIdentifier())""")
                     % example_sbs
                 },
             )
@@ -233,13 +203,4 @@ async def run(ctx: Ctx) -> None:
             'RENAMED True mcp_selftest_trimsheet_renamed' in t and 'ERROR' in t2 and 'unsaved' in t2,
             t.strip() + ' / ' + t2.strip()[-150:],
         )
-        await c(
-            'execute_designer_code',
-            {
-                'code': (
-                    'import sd\npm=sd.getContext().getSDApplication().getPackageMgr()\n'
-                    "for p in list(pm.getUserPackages()):\n    if (p.getFilePath() or '') == %r:\n        pm.unloadUserPackage(p)"
-                )
-                % decoy_sbs
-            },
-        )
+        await designer_script(c, 'shared/unload_packages', paths=[decoy_sbs])

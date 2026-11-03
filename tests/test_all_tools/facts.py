@@ -4,9 +4,20 @@ import base64
 import os
 import re
 import tempfile
+from textwrap import dedent
 from typing import cast
 
-from .common import FACTS, GRAPH_OF, TEST_GRAPH, Ctx, added_id, check, is_image, pixel_values, skip, text
+from .common import (
+    TEST_GRAPH,
+    Ctx,
+    added_id,
+    check,
+    designer_script,
+    is_image,
+    pixel_values,
+    skip,
+    text,
+)
 
 
 async def run(ctx: Ctx) -> None:
@@ -41,32 +52,108 @@ async def run(ctx: Ctx) -> None:
             and all(re.search(r'^\s+%s\s+CONNECTOR' % i, t, re.M) for i in ins)
         )
         check(F, '%s connectors' % definition, ok, out_line.group(0) if out_line else t[:150])
-    t = text(await c('execute_designer_code', {'code': FACTS % (TEST_GRAPH, lv, lv, slope)}))
+    t = text(await designer_script(c, 'facts/api_basics', graph=TEST_GRAPH, node=lv, source=slope))
     check(F, '29 atomic nodes', 'ATOMIC=29' in t, t)
     check(F, 'APIException is not an Exception', 'APIEXC_BASE_ONLY=True' in t, t)
     check(F, 'connections reported from queried side', 'QUERIED_SIDE=True' in t, t)
+    # the table in AGENTS.md: what a function graph on a parameter does, per state. The stored value
+    # is 0.5 before any function graph, the function reads an input at 0.25, expose adds a second at 0.75
+    t = text(await designer_script(c, 'facts/function_states'))
+    for state, cells in (
+        (
+            'none',
+            'stored 0.50, output 0.50 | set: function none, output 0.60 '
+            '| expose: function 1 nodes 1 outputs, output 0.75 | delete: stored 0.50, output 0.50',
+        ),
+        (
+            'empty',
+            'stored 1.00, output 1.00 | set: function none, output 0.60 '
+            '| expose: function 1 nodes 1 outputs, output 0.75 | delete: stored 1.00, output 1.00',
+        ),
+        (
+            'no-output',
+            'stored 1.00, output 1.00 | set: function none, output 0.60 '
+            '| expose: function 2 nodes 1 outputs, output 0.75 | delete: stored 1.00, output 1.00',
+        ),
+        (
+            'output',
+            'stored 1.00, output 0.25 | set: function none, output 0.60 '
+            '| expose: function 2 nodes 1 outputs, output 0.75 | delete: stored 1.00, output 1.00',
+        ),
+    ):
+        check(F, 'function graph on a parameter, state %s' % state, '%s | %s' % (state, cells) in t, t)
+    check(
+        F,
+        'an unconnected get node has no effect; removing an input a connected one reads changes the output',
+        'unconnected get | output 0.25, its input changed 0.25, the connected input removed 1.00' in t,
+        t,
+    )
+    check(
+        F,
+        'a function graph keeps its output node, or lack of one, after a reload',
+        'reloaded | 1 nodes 1 outputs | 1 nodes 0 outputs' in t,
+        t,
+    )
+    # the table on other kinds of parameter: an enum's and an instance node's follow it, $outputsize doesn't
+    for row in (
+        'enum none | output 1.00 | set: function none, output 0.50 | delete: output 1.00',
+        'enum empty | output 0.50 | set: function none, output 0.50 | delete: output 0.50',
+        'enum no-output | output 0.50 | set: function none, output 0.50 | delete: output 0.50',
+        'enum output | output 0.25 | set: function none, output 0.50 | delete: output 0.50',
+        'instance none | output 0.50 | set: function none, output 0.60 | delete: output 0.50',
+        'instance empty | output 1.00 | set: function none, output 0.60 | delete: output 1.00',
+        'instance no-output | output 1.00 | set: function none, output 0.60 | delete: output 1.00',
+        'instance output | output 0.25 | set: function none, output 0.60 | delete: output 1.00',
+        '$outputsize Absolute none | Absolute, stored 5,5, 32 px | delete: Absolute',
+        '$outputsize Absolute empty | Absolute, stored 8,8, 16 px | delete: RelativeToInput',
+        '$outputsize Absolute no-output | Absolute, stored 8,8, 16 px | delete: RelativeToInput',
+        '$outputsize Absolute output | Absolute, stored 8,8, 8 px | delete: RelativeToInput',
+        '$outputsize RelativeToParent none | RelativeToParent, stored 5,5, 512 px | delete: RelativeToParent',
+        '$outputsize RelativeToParent empty | RelativeToParent, stored 0,0, 16 px | delete: RelativeToInput',
+        '$outputsize RelativeToParent no-output | RelativeToParent, stored 0,0, 16 px | delete: RelativeToInput',
+        '$outputsize RelativeToParent output | RelativeToParent, stored 0,0, 128 px | delete: RelativeToInput',
+        '$format on levels: delete: Absolute -> RelativeToInput, RelativeToParent -> RelativeToInput',
+        '$tiling on levels: delete: Absolute -> RelativeToInput, RelativeToParent -> RelativeToInput',
+        '$pixelratio on levels: delete: Absolute -> RelativeToInput, RelativeToParent -> RelativeToInput',
+        '$pixelsize on levels: delete: Absolute -> RelativeToInput, RelativeToParent -> RelativeToInput',
+        '$randomseed on levels: delete: Absolute -> RelativeToInput, RelativeToParent -> RelativeToInput',
+        '$outputsize on instance: delete: Absolute -> RelativeToParent, RelativeToParent -> RelativeToParent',
+    ):
+        check(F, 'function graph: %s' % row, row in t, t)
+    check(
+        F,
+        "an FX-Map's function reads the input, and removing it changes the output",
+        'fx-map | input at 0.25 0.25 | at 0.75 0.75 | removed 1.00' in t,
+        t,
+    )
+    # a graph's model is the same through a save and a reload, so a diff against a saved file reports no change
+    # (REVIEW.md SRV-70)
+    first, second = os.path.join(scratch, 'round_trip_1.sbs'), os.path.join(scratch, 'round_trip_2.sbs')
+    await designer_script(c, 'facts/save_round_trip', graph=TEST_GRAPH, first=first, second=second)
+    from server_tools.snapshots import _graph_model
+
+    one, two = _graph_model(first, TEST_GRAPH), _graph_model(second, TEST_GRAPH)
+    differing = [key for key in one if one[key] != two[key]]  # type: ignore[literal-required]
+    nodes = [
+        (node, field, one['nodes'][node][field], two['nodes'][node][field])  # type: ignore[literal-required]
+        for node in one['nodes']
+        if node in two['nodes']
+        for field in one['nodes'][node]
+        if one['nodes'][node][field] != two['nodes'][node][field]  # type: ignore[literal-required]
+    ]
+    check(F, "a graph's model is the same after a save and a reload", not differing, '%s %s' % (differing, nodes[:2]))
+    # an int on an enum parameter is accepted whatever it is, and one beyond the enum's can't be read back: why
+    # remove_graph_input checks first (AGENTS.md; REVIEW.md HLP-73)
+    t = text(await designer_script(c, 'facts/enum_int_beyond_values'))
+    check(
+        F,
+        "an int beyond an enum's values is accepted and can't be read back",
+        'ENUM_5=5' in t and 'ACCEPTED_99' in t and 'READ_99_RAISES' in t,
+        t,
+    )
     # how a .sbs stores size inheritance (server._RELATIVE_TO): measure it
     inherit_dir = os.path.join(scratch, 'inherit')
-    t = text(
-        await c(
-            'execute_designer_code',
-            {
-                'code': (
-                    'import sd, os\nfrom sd.api.sbs.sdsbscompgraph import SDSBSCompGraph\n'
-                    'from sd.api.sdproperty import SDPropertyCategory, SDPropertyInheritanceMethod as M\n'
-                    'pm=sd.getContext().getSDApplication().getPackageMgr()\nos.makedirs(%r, exist_ok=True)\n'
-                    'for m in (M.Absolute, M.RelativeToInput, M.RelativeToParent):\n'
-                    "    pkg=pm.newUserPackage(); g=SDSBSCompGraph.sNew(pkg); g.setIdentifier('mcp_selftest_inherit_'+m.name)\n"
-                    "    n=g.newNode('sbs::compositing::blur')\n"
-                    "    g.setPropertyInheritanceMethod(g.getPropertyFromId('$outputsize', SDPropertyCategory.Input), m)\n"
-                    "    n.setPropertyInheritanceMethod(n.getPropertyFromId('$outputsize', SDPropertyCategory.Input), m)\n"
-                    "    pm.savePackageAs(pkg, os.path.join(%r, m.name + '.sbs')); pm.unloadUserPackage(pkg)\n"
-                    "print('saved')"
-                )
-                % (inherit_dir, inherit_dir)
-            },
-        )
-    )
+    t = text(await designer_script(c, 'facts/size_inheritance_files', folder=inherit_dir))
     stored = {}
     for name in ('Absolute', 'RelativeToInput', 'RelativeToParent'):
         import xml.etree.ElementTree as ET
@@ -92,10 +179,9 @@ async def run(ctx: Ctx) -> None:
         await c(
             'execute_designer_code',
             {
-                'code': (
-                    'from sd.api.sdproperty import SDPropertyInheritanceMethod as M\n'
-                    "print('API_INHERIT=%d,%d,%d' % (M.RelativeToInput.value, M.RelativeToParent.value, M.Absolute.value))"
-                )
+                'code': dedent("""\
+                    from sd.api.sdproperty import SDPropertyInheritanceMethod as M
+                    print('API_INHERIT=%d,%d,%d' % (M.RelativeToInput.value, M.RelativeToParent.value, M.Absolute.value))""")
             },
         )
     )
@@ -104,25 +190,7 @@ async def run(ctx: Ctx) -> None:
     # goes to <OS temp>/Adobe/Adobe Substance 3D Designer/ with an XXXXXX- prefix, stays
     # after its package closes, and so the next copy of that name gets 1- in front
     # (REVIEW.md TST-15: the check used to test only "under the temp folder")
-    t = text(
-        await c(
-            'execute_designer_code',
-            {
-                'code': (
-                    'import os, sd\nfrom sd.api.sbs.sdsbscompgraph import SDSBSCompGraph\n'
-                    'from sd.api.sdresourcebitmap import SDResourceBitmap\nfrom sd.api.sdresource import EmbedMethod\n'
-                    'pm=sd.getContext().getSDApplication().getPackageMgr()\n'
-                    'for i in range(2):\n'
-                    '    pkg=pm.newUserPackage()\n'
-                    "    SDSBSCompGraph.sNew(pkg).setIdentifier('mcp_selftest_unsaved_copy')\n"
-                    '    res=SDResourceBitmap.sNewFromFile(pkg, %r, EmbedMethod.CopiedAndLinked)\n'
-                    '    path=res.getFilePath()\n    pm.unloadUserPackage(pkg)\n'
-                    "    print('COPY=%%s STAYS=%%s' %% (path, os.path.isfile(path)))"
-                )
-                % png
-            },
-        )
-    )
+    t = text(await designer_script(c, 'facts/unsaved_bitmap_copies', png=png))
     copies = re.findall(r'COPY=(.*) STAYS=(\w+)', t)
     names = [os.path.basename(p) for p, _ in copies]
     folders = {os.path.normcase(os.path.realpath(os.path.dirname(p))) for p, _ in copies}
@@ -228,21 +296,7 @@ async def run(ctx: Ctx) -> None:
     # widget capture can't see the GPU-drawn 3D render: a grab of its viewport (leftover
     # content that changes from call to call) is clearly unlike the view's own render
     grab_png = os.path.join(scratch, 'grab3d.png')
-    t = text(
-        await c(
-            'execute_designer_code',
-            {
-                'code': (
-                    'import sd\nfrom PySide6.QtWidgets import QDockWidget, QWidget\n'
-                    'mw=sd.getContext().getSDApplication().getQtForPythonUIMgr().getMainWindow()\n'
-                    "d=[d for d in mw.findChildren(QDockWidget) if d.objectName().startswith('areaD_') and d.isVisible()]\n"
-                    "vp=[w for w in d[0].findChildren(QWidget) if w.metaObject().className()=='Alg::Gui3D::ViewportWidget'] if d else []\n"
-                    "print('NO_3D_VIEW' if not vp else 'SAVED=%%s' %% vp[0].grab().save(%r))"
-                )
-                % grab_png
-            },
-        )
-    )
+    t = text(await designer_script(c, 'facts/grab_3d_view', path=grab_png))
     render = await c('screenshot_designer', {'panel': '3d', 'max_size': 128})
     if 'NO_3D_VIEW' in t or not is_image(render):
         skip(F, 'widget capture of the 3D view is not the render', 'no 3D View visible in Designer')
@@ -263,24 +317,7 @@ async def run(ctx: Ctx) -> None:
             diff > 20,
             'mean difference %.1f of 255 between the grab and the render' % diff,
         )
-    t = text(
-        await c(
-            'execute_designer_code',
-            {
-                'code': GRAPH_OF % TEST_GRAPH
-                + (
-                    'from sd.api.sdresourcebitmap import SDResourceBitmap\nfrom sd.api.sdresource import EmbedMethod\n'
-                    'from sd.api.apiexception import APIException\n'
-                    "try:\n    SDResourceBitmap.sNewFromFile(g.getPackage(), %r, EmbedMethod.BinaryEmbedded); print('EMBED=ok')\n"
-                    "except APIException as e:\n    print('EMBED=' + str(e))\n"
-                    'from sd.api.sdbasetypes import int2\nsaved=g.getDefaultParentSize()\n'
-                    "g.setDefaultParentSize(int2(256, 256)); print('PARENT=%%d' %% g.getDefaultParentSize().x)\n"
-                    'g.setDefaultParentSize(saved)'
-                )
-                % png
-            },
-        )
-    )
+    t = text(await designer_script(c, 'facts/embed_and_parent_size', graph=TEST_GRAPH, png=png))
     check(F, 'bitmaps cannot be embedded (NotSupported)', 'EMBED=SDApiError.NotSupported' in t, t)
     check(F, 'setDefaultParentSize takes pixels, not log2', 'PARENT=256' in t, t)
     grad = added_id(
@@ -332,23 +369,7 @@ async def run(ctx: Ctx) -> None:
     await c('apply_edits', {'ops': [{'op': 'delete', 'node': grad}, {'op': 'delete', 'node': nrm}], **G})
     # a Dot node (passthrough) has no ID property: Designer's UI portals store it as <userId> in the
     # file and in Designer's memory, not exposed to the API, so the API can't make one (AGENTS.md, Portals). Any id-like property here would be new
-    t = text(
-        await c(
-            'execute_designer_code',
-            {
-                'code': (
-                    'import sd\nfrom sd.api.sbs.sdsbscompgraph import SDSBSCompGraph\n'
-                    'from sd.api.sdproperty import SDPropertyCategory as C\n'
-                    'pm = sd.getContext().getSDApplication().getPackageMgr()\npkg = pm.newUserPackage()\ntry:\n'
-                    '    g = SDSBSCompGraph.sNew(pkg)\n    g.setIdentifier("mcp_selftest_dot")\n'
-                    '    n = g.newNode("sbs::compositing::passthrough")\n'
-                    '    ids = sorted(p.getId() for cat in (C.Annotation, C.Input, C.Output) for p in n.getProperties(cat))\n'
-                    '    print("DOT_PROPS=" + ",".join(ids))\n'
-                    'finally:\n    pm.unloadUserPackage(pkg)\n'
-                )
-            },
-        )
-    )
+    t = text(await designer_script(c, 'facts/dot_properties'))
     props = re.search(r'DOT_PROPS=(.*)', t)
     check(
         F,
@@ -373,30 +394,7 @@ async def run(ctx: Ctx) -> None:
     # the file loaded again; mHandle differs for every Python object wrapping one package. What
     # snapshots' package notes rely on (REVIEW.md SRV-34, SRV-36)
     uid_dir = os.path.join(scratch, 'uid_probe')
-    probe = (
-        'import os, re, shutil\nfrom sd.api.sbs.sdsbscompgraph import SDSBSCompGraph\n'
-        'pm = sd.getContext().getSDApplication().getPackageMgr()\nd = %r\nos.makedirs(d, exist_ok=True)\n'
-        'pkg = pm.newUserPackage()\ng = SDSBSCompGraph.sNew(pkg)\ng.setIdentifier("mcp_selftest_uid")\n'
-        'loaded = []\ntry:\n'
-        '    u0 = pkg.getUID()\n    pm.savePackageAs(pkg, os.path.join(d, "A.sbs"))\n    u1 = pkg.getUID()\n'
-        '    pm.savePackageAs(pkg, os.path.join(d, "B.sbs"))\n    u2 = pkg.getUID()\n'
-        '    f = re.search(r\'<fileUID v="([^"]+)"\', open(os.path.join(d, "B.sbs")).read()).group(1)\n'
-        '    shutil.copy(os.path.join(d, "B.sbs"), os.path.join(d, "C.sbs"))\n'
-        '    loaded.append(pm.loadUserPackage(os.path.join(d, "C.sbs")))\n    u3 = loaded[-1].getUID()\n'
-        '    print("SAME_UID=%%s" %% (u0 == u1 == u2 == f == u3))\n'
-        # a snapshot copy keeps it too (SRV-42); and a package using this one's graph, for the check below
-        '    pm.saveCopyOfPackageAs(pkg, os.path.join(d, "S.sbs"))\n'
-        '    s_uid = re.search(r\'<fileUID v="([^"]+)"\', open(os.path.join(d, "S.sbs")).read()).group(1)\n'
-        '    print("COPY_KEEPS_UID=%%s" %% (s_uid == u0))\n'
-        '    user = pm.newUserPackage()\n    loaded.append(user)\n    ug = SDSBSCompGraph.sNew(user)\n'
-        '    ug.setIdentifier("mcp_selftest_uid_user")\n    ug.newInstanceNode(g)\n'
-        '    pm.savePackageAs(user, os.path.join(d, "D.sbs"))\n'
-        # both wrappers alive at once: a freed one's address can be reused by the next
-        '    w1, w2 = g.getPackage(), g.getPackage()\n'
-        '    print("HANDLES_DIFFER=%%s" %% (w1.mHandle != w2.mHandle))\n'
-        'finally:\n    for p in [pkg] + loaded:\n        pm.unloadUserPackage(p)\n'
-    ) % uid_dir
-    t = text(await c('execute_designer_code', {'code': 'import sd\n' + probe}))
+    t = text(await designer_script(c, 'facts/package_uid', folder=uid_dir))
     check(
         F,
         "a package's UID survives saving, a loaded copy and a snapshot copy share it; mHandle isn't stable",
@@ -421,17 +419,17 @@ async def run(ctx: Ctx) -> None:
     _fresh_uid(b_sbs)
     with open(d_sbs, encoding='utf-8') as f:
         dep_zero = bool(re.search(r'<dependency><filename v="B\.sbs"/>.*?<fileUID v="0"/>', f.read()))
-    probe = (
-        'import sd\npm = sd.getContext().getSDApplication().getPackageMgr()\nloaded = []\ntry:\n'
-        '    loaded.append(pm.loadUserPackage(%r))\n    print("SNAP_LOADS_NEW=%%s" %% (loaded[-1].getUID() == %r))\n'
-        '    loaded.append(pm.loadUserPackage(%r))\n'
-        '    ug = loaded[-1].findResourceFromUrl("mcp_selftest_uid_user")\n'
-        '    ref = [n.getReferencedResource() for n in ug.getNodes()][0]\n'
-        '    pkg = ref.getPackage() if ref else None\n'
-        '    print("DEP_FOUND=%%s" %% (pkg is not None and pkg.getFilePath() == %r and pkg.getUID() == %r))\n'
-        'finally:\n    for p in loaded:\n        pm.unloadUserPackage(p)\n'
-    ) % (s_sbs, own_uid(s_sbs), d_sbs, b_sbs, own_uid(b_sbs))
-    t = text(await c('execute_designer_code', {'code': probe}))
+    t = text(
+        await designer_script(
+            c,
+            'facts/reload_uid',
+            snapshot=s_sbs,
+            snapshot_uid=own_uid(s_sbs),
+            user=d_sbs,
+            dependency=b_sbs,
+            dependency_uid=own_uid(b_sbs),
+        )
+    )
     check(
         F,
         'a re-stamped UID loads, and a package using its graph still finds it (stored by file name)',

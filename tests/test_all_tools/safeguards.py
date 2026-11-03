@@ -5,9 +5,10 @@ import os
 import re
 import time
 from collections.abc import Callable
+from textwrap import dedent
 from typing import Any
 
-from .common import TEST_GRAPH, Ctx, added_id, check, helpers_source, skip, text
+from .common import TEST_GRAPH, Ctx, added_id, check, designer_script, helpers_source, skip, text
 
 # what the refusal for Designer's library packages says to do (designer_helpers/core.py)
 LIBRARY_WAY = (
@@ -28,13 +29,22 @@ async def run(ctx: Ctx) -> None:
             {
                 'code': helpers
                 + (
-                    '\nfrom sd.api.sbs.sdsbscompgraph import SDSBSCompGraph\n'
-                    "pkg = _PM.newUserPackage()\ng = SDSBSCompGraph.sNew(pkg)\ng.setIdentifier('mcp_selftest_unsaved')\n"
-                    "_PM.savePackageAs(pkg, %r)\ng.newNode('sbs::compositing::blur')\n"
-                    "try:\n    unload_package_file(%r)\nexcept RuntimeError as e:\n    print('REFUSED', e)\n"
-                    "still = [p for p in _PM.getUserPackages() if (p.getFilePath() or '') == %r]\n"
-                    "print('STILL_OPEN=%%d' %% len(still))\n"
-                    'for p in still:\n    _PM.unloadUserPackage(p)\n'
+                    dedent("""
+                        from sd.api.sbs.sdsbscompgraph import SDSBSCompGraph
+                        pkg = _PM.newUserPackage()
+                        g = SDSBSCompGraph.sNew(pkg)
+                        g.setIdentifier('mcp_selftest_unsaved')
+                        _PM.savePackageAs(pkg, %r)
+                        g.newNode('sbs::compositing::blur')
+                        try:
+                            unload_package_file(%r)
+                        except RuntimeError as e:
+                            print('REFUSED', e)
+                        still = [p for p in _PM.getUserPackages() if (p.getFilePath() or '') == %r]
+                        print('STILL_OPEN=%%d' %% len(still))
+                        for p in still:
+                            _PM.unloadUserPackage(p)
+                    """)
                 )
                 % (unsaved_sbs, unsaved_sbs, unsaved_sbs)
             },
@@ -256,22 +266,28 @@ async def run(ctx: Ctx) -> None:
             {
                 'code': helpers
                 + (
-                    '\nfrom sd.api.sdnode import SDNode\nfrom sd.api.sdproperty import SDPropertyInheritanceMethod\n'
-                    "g = find_graph(%r); n = g.getNodeFromId(%r)\np = n.getPropertyFromId('$outputsize', SDPropertyCategory.Input)\n"
-                    'before = n.getPropertyInheritanceMethod(p).name; orig = n.getPropertyValue(p).get()\n'
-                    'real = SDNode.setPropertyValue\n'
-                    'def failing(self, prop, value):\n'
-                    '    v = value.get()\n'
-                    "    if prop.getId() == '$outputsize' and (v.x, v.y) == (orig.x, orig.y):\n"
-                    "        raise RuntimeError('restore failed on purpose')\n"
-                    '    return real(self, prop, value)\n'
-                    'SDNode.setPropertyValue = failing\n'
-                    "try:\n    sweep_param(%r, %r, '$outputsize', [[10, 10]], %r, None, None)\n"
-                    "except Exception as e:\n    print('ERROR=' + str(e))\n"
-                    'finally:\n    SDNode.setPropertyValue = real\n'
-                    '    real(n, p, n.getPropertyValue(p).__class__.sNew(orig))\n'
-                    "print('INHERIT before=%%s after=%%s' %% (before, n.getPropertyInheritanceMethod(p).name))\n"
-                    'n.setPropertyInheritanceMethod(p, getattr(SDPropertyInheritanceMethod, before))'
+                    dedent("""
+                        from sd.api.sdnode import SDNode
+                        from sd.api.sdproperty import SDPropertyInheritanceMethod
+                        g = find_graph(%r); n = g.getNodeFromId(%r)
+                        p = n.getPropertyFromId('$outputsize', SDPropertyCategory.Input)
+                        before = n.getPropertyInheritanceMethod(p).name; orig = n.getPropertyValue(p).get()
+                        real = SDNode.setPropertyValue
+                        def failing(self, prop, value):
+                            v = value.get()
+                            if prop.getId() == '$outputsize' and (v.x, v.y) == (orig.x, orig.y):
+                                raise RuntimeError('restore failed on purpose')
+                            return real(self, prop, value)
+                        SDNode.setPropertyValue = failing
+                        try:
+                            sweep_param(%r, %r, '$outputsize', [[10, 10]], %r, None, None)
+                        except Exception as e:
+                            print('ERROR=' + str(e))
+                        finally:
+                            SDNode.setPropertyValue = real
+                            real(n, p, n.getPropertyValue(p).__class__.sNew(orig))
+                        print('INHERIT before=%%s after=%%s' %% (before, n.getPropertyInheritanceMethod(p).name))
+                        n.setPropertyInheritanceMethod(p, getattr(SDPropertyInheritanceMethod, before))""")
                 )
                 % (TEST_GRAPH, lv, TEST_GRAPH, lv, os.path.join(scratch, 'sweep_restore'))
             },
@@ -292,24 +308,31 @@ async def run(ctx: Ctx) -> None:
             {
                 'code': helpers
                 + (
-                    '\nfrom sd.api.sdnode import SDNode\nfrom sd.api.sdproperty import SDPropertyInheritanceMethod as IM\n'
-                    'from sd.api.sdvalueint2 import SDValueInt2\nfrom sd.api.sdbasetypes import int2\n'
-                    "g = find_graph(%r); n = g.getNodeFromId(%r)\np = n.getPropertyFromId('$outputsize', SDPropertyCategory.Input)\n"
-                    'before = n.getPropertyInheritanceMethod(p)\n'
-                    'n.setPropertyInheritanceMethod(p, IM.RelativeToParent); n.setPropertyValue(p, SDValueInt2.sNew(int2(1, 1)))\n'
-                    "owner = next(k for k in type(n).__mro__ if 'setPropertyInheritanceMethod' in k.__dict__)\n"
-                    'real = owner.setPropertyInheritanceMethod\n'
-                    'def failing(self, prop, method):\n'
-                    "    if prop.getId() == '$outputsize' and method == IM.RelativeToParent:\n"
-                    "        raise RuntimeError('inheritance restore failed on purpose')\n"
-                    '    return real(self, prop, method)\n'
-                    'owner.setPropertyInheritanceMethod = failing\n'
-                    "try:\n    sweep_param(%r, %r, '$outputsize', [[10, 10]], %r, None, None)\n"
-                    "except Exception as e:\n    print('ERROR=' + str(e))\n"
-                    'finally:\n    owner.setPropertyInheritanceMethod = real\n'
-                    "    v = n.getPropertyValue(p).get(); print('VALUE=%%d,%%d' %% (v.x, v.y))\n"
-                    '    n.setPropertyInheritanceMethod(p, before)\n'
-                    '    n.setPropertyValue(p, SDValueInt2.sNew(int2(0, 0)))'
+                    dedent("""
+                        from sd.api.sdnode import SDNode
+                        from sd.api.sdproperty import SDPropertyInheritanceMethod as IM
+                        from sd.api.sdvalueint2 import SDValueInt2
+                        from sd.api.sdbasetypes import int2
+                        g = find_graph(%r); n = g.getNodeFromId(%r)
+                        p = n.getPropertyFromId('$outputsize', SDPropertyCategory.Input)
+                        before = n.getPropertyInheritanceMethod(p)
+                        n.setPropertyInheritanceMethod(p, IM.RelativeToParent); n.setPropertyValue(p, SDValueInt2.sNew(int2(1, 1)))
+                        owner = next(k for k in type(n).__mro__ if 'setPropertyInheritanceMethod' in k.__dict__)
+                        real = owner.setPropertyInheritanceMethod
+                        def failing(self, prop, method):
+                            if prop.getId() == '$outputsize' and method == IM.RelativeToParent:
+                                raise RuntimeError('inheritance restore failed on purpose')
+                            return real(self, prop, method)
+                        owner.setPropertyInheritanceMethod = failing
+                        try:
+                            sweep_param(%r, %r, '$outputsize', [[10, 10]], %r, None, None)
+                        except Exception as e:
+                            print('ERROR=' + str(e))
+                        finally:
+                            owner.setPropertyInheritanceMethod = real
+                            v = n.getPropertyValue(p).get(); print('VALUE=%%d,%%d' %% (v.x, v.y))
+                            n.setPropertyInheritanceMethod(p, before)
+                            n.setPropertyValue(p, SDValueInt2.sNew(int2(0, 0)))""")
                 )
                 % (TEST_GRAPH, lv, TEST_GRAPH, lv, os.path.join(scratch, 'sweep_restore2'))
             },
@@ -329,14 +352,19 @@ async def run(ctx: Ctx) -> None:
             {
                 'code': helpers
                 + (
-                    '\nlib = next(p for p in _PM.getUserPackages() if _is_library_package(p))\n'
-                    "for how in ('path', 'editor'):\n"
-                    '    try:\n'
-                    "        if how == 'path':\n            pkg, _ = _package_of(lib.getFilePath())\n"
-                    '        else:\n            _current_graph = lambda: lib.getChildrenResources(False)[0]\n'
-                    '            pkg, _ = _package_of(None)\n'
-                    "        print(how.upper() + '=CHOSEN' if _is_library_package(pkg) else how.upper() + '=OTHER')\n"
-                    "    except RuntimeError as e:\n        print(how.upper() + '=REFUSED', e)\n"
+                    dedent("""
+                        lib = next(p for p in _PM.getUserPackages() if _is_library_package(p))
+                        for how in ('path', 'editor'):
+                            try:
+                                if how == 'path':
+                                    pkg, _ = _package_of(lib.getFilePath())
+                                else:
+                                    _current_graph = lambda: lib.getChildrenResources(False)[0]
+                                    pkg, _ = _package_of(None)
+                                print(how.upper() + '=CHOSEN' if _is_library_package(pkg) else how.upper() + '=OTHER')
+                            except RuntimeError as e:
+                                print(how.upper() + '=REFUSED', e)
+                    """)
                 )
             },
         )
@@ -379,23 +407,25 @@ async def run(ctx: Ctx) -> None:
                 {
                     'code': helpers
                     + (
-                        '\nfrom sd.api.sdapplication import SDApplicationPath as _Paths\n'
-                        "root = os.path.join(_APP.getPath(_Paths.DefaultResourcesDir), 'packages')\n"
-                        "path = next(os.path.join(d, f) for d, _, fs in sorted(os.walk(root)) if d != root for f in sorted(fs) if f.endswith('.sbs'))\n"
-                        'had = [p for p in _PM.getUserPackages() if p.getFilePath() == path]\n'
-                        'pkg = had[0] if had else _PM.loadUserPackage(path)\n'
-                        'try:\n'
-                        "    print('SUBFOLDER=' + os.path.relpath(path, root))\n"
-                        "    print('LIBRARY=' + str(_is_library_package(pkg)))\n"
-                        '    name = next(r.getIdentifier() for r in pkg.getChildrenResources(True) if isinstance(r, SDSBSCompGraph))\n'
-                        '    try:\n'
-                        '        find_graph(name)\n'
-                        "        print('BY_NAME=found')\n"
-                        '    except RuntimeError as e:\n'
-                        "        print('BY_NAME=' + str(e))\n"
-                        'finally:\n'
-                        '    if not had:\n'
-                        '        _PM.unloadUserPackage(pkg)\n'
+                        dedent("""
+                            from sd.api.sdapplication import SDApplicationPath as _Paths
+                            root = os.path.join(_APP.getPath(_Paths.DefaultResourcesDir), 'packages')
+                            path = next(os.path.join(d, f) for d, _, fs in sorted(os.walk(root)) if d != root for f in sorted(fs) if f.endswith('.sbs'))
+                            had = [p for p in _PM.getUserPackages() if p.getFilePath() == path]
+                            pkg = had[0] if had else _PM.loadUserPackage(path)
+                            try:
+                                print('SUBFOLDER=' + os.path.relpath(path, root))
+                                print('LIBRARY=' + str(_is_library_package(pkg)))
+                                name = next(r.getIdentifier() for r in pkg.getChildrenResources(True) if isinstance(r, SDSBSCompGraph))
+                                try:
+                                    find_graph(name)
+                                    print('BY_NAME=found')
+                                except RuntimeError as e:
+                                    print('BY_NAME=' + str(e))
+                            finally:
+                                if not had:
+                                    _PM.unloadUserPackage(pkg)
+                        """)
                     )
                 },
             )
@@ -428,10 +458,12 @@ async def run(ctx: Ctx) -> None:
                 {
                     'code': helpers
                     + (
-                        '\nlib = next(p for p in _PM.getUserPackages() if _is_library_package(p))\n'
-                        'lg = next(r for r in lib.getChildrenResources(False) if isinstance(r, SDSBSCompGraph))\n'
-                        '_APP.getUIMgr().openResourceInEditor(lg)\n_process_events()\n'
-                        "print('LIBRARY_GRAPH=' + lg.getIdentifier())"
+                        dedent("""
+                            lib = next(p for p in _PM.getUserPackages() if _is_library_package(p))
+                            lg = next(r for r in lib.getChildrenResources(False) if isinstance(r, SDSBSCompGraph))
+                            _APP.getUIMgr().openResourceInEditor(lg)
+                            _process_events()
+                            print('LIBRARY_GRAPH=' + lg.getIdentifier())""")
                     )
                 },
             )
@@ -446,10 +478,10 @@ async def run(ctx: Ctx) -> None:
         )
         # no tool edits it: Designer would take the edit, and graphs using it would see it (REVIEW.md HLP-55).
         # Every call goes to the editor's graph, the library one
-        lib_state = (
-            'import sd\ng = sd.getContext().getSDApplication().getQtForPythonUIMgr().getCurrentGraph()\n'
-            "print('STATE', g.getIdentifier(), len(g.getNodes()), g.getPackage().isModified())"
-        )
+        lib_state = dedent("""\
+            import sd
+            g = sd.getContext().getSDApplication().getQtForPythonUIMgr().getCurrentGraph()
+            print('STATE', g.getIdentifier(), len(g.getNodes()), g.getPackage().isModified())""")
         state = text(await c('execute_designer_code', {'code': lib_state}))
         edits: list[tuple[str, dict[str, Any]]] = [
             ('apply_edits', {'ops': [{'op': 'add', 'definition': 'levels'}]}),
@@ -514,14 +546,19 @@ async def run(ctx: Ctx) -> None:
             {
                 'code': helpers
                 + (
-                    "\ndep = SDSBSCompGraph.sNew(_PM.newUserPackage())\ndep.setIdentifier('mcp_selftest_dep')\n"
-                    "host = SDSBSCompGraph.sNew(_PM.newUserPackage())\nhost.setIdentifier('mcp_selftest_host')\n"
-                    '_PM.savePackageAs(host.getPackage(), %r)\nhost.newInstanceNode(dep)\n'
-                    'try:\n'
-                    '    _refuse_unsaved_dependencies(host.getPackage())\n'
-                    "    print('NOT_REFUSED')\n"
-                    'except RuntimeError as e:\n'
-                    "    print('REFUSES=' + str(e))\n"
+                    dedent("""
+                        dep = SDSBSCompGraph.sNew(_PM.newUserPackage())
+                        dep.setIdentifier('mcp_selftest_dep')
+                        host = SDSBSCompGraph.sNew(_PM.newUserPackage())
+                        host.setIdentifier('mcp_selftest_host')
+                        _PM.savePackageAs(host.getPackage(), %r)
+                        host.newInstanceNode(dep)
+                        try:
+                            _refuse_unsaved_dependencies(host.getPackage())
+                            print('NOT_REFUSED')
+                        except RuntimeError as e:
+                            print('REFUSES=' + str(e))
+                    """)
                 )
                 % host_sbs
             },
@@ -563,25 +600,33 @@ async def run(ctx: Ctx) -> None:
                 {
                     'code': helpers
                     + (
-                        '\ndef refused(pkg):\n'
-                        '    try:\n'
-                        '        _refuse_unsaved_dependencies(pkg)\n'
-                        "        return 'SAVES'\n"
-                        '    except RuntimeError as e:\n'
-                        '        return str(e)\n'
-                        'def graph(name, pkg=None):\n'
-                        '    p = pkg or _PM.newUserPackage()\n'
-                        '    g = SDSBSCompGraph.sNew(p)\n'
-                        '    g.setIdentifier(name)\n'
-                        '    return p, g\n'
-                        "own, a = graph('mcp_selftest_own_a')\n"
-                        "b = graph('mcp_selftest_own_b', own)[1]\n"
-                        "a.newInstanceNode(b)\nprint('OWN=' + refused(own))\n"
-                        "dep, dg = graph('mcp_selftest_closed')\nhost, hg = graph('mcp_selftest_closed_host')\n"
-                        "n = hg.newInstanceNode(dg)\nprint('OPEN=' + refused(host))\n"
-                        "_PM.unloadUserPackage(dep)\nprint('CLOSED=' + refused(host))\n"
-                        "hg.deleteNode(n)\nprint('DELETED=' + refused(host))\n"
-                        'for p in (own, host):\n    _PM.unloadUserPackage(p)\n'
+                        dedent("""
+                            def refused(pkg):
+                                try:
+                                    _refuse_unsaved_dependencies(pkg)
+                                    return 'SAVES'
+                                except RuntimeError as e:
+                                    return str(e)
+                            def graph(name, pkg=None):
+                                p = pkg or _PM.newUserPackage()
+                                g = SDSBSCompGraph.sNew(p)
+                                g.setIdentifier(name)
+                                return p, g
+                            own, a = graph('mcp_selftest_own_a')
+                            b = graph('mcp_selftest_own_b', own)[1]
+                            a.newInstanceNode(b)
+                            print('OWN=' + refused(own))
+                            dep, dg = graph('mcp_selftest_closed')
+                            host, hg = graph('mcp_selftest_closed_host')
+                            n = hg.newInstanceNode(dg)
+                            print('OPEN=' + refused(host))
+                            _PM.unloadUserPackage(dep)
+                            print('CLOSED=' + refused(host))
+                            hg.deleteNode(n)
+                            print('DELETED=' + refused(host))
+                            for p in (own, host):
+                                _PM.unloadUserPackage(p)
+                        """)
                     )
                 },
             )
@@ -609,17 +654,23 @@ async def run(ctx: Ctx) -> None:
                 {
                     'code': helpers
                     + (
-                        "\ndep = SDSBSCompGraph.sNew(_PM.newUserPackage())\ndep.setIdentifier('mcp_selftest_gone')\n"
-                        '_PM.savePackageAs(dep.getPackage(), %r)\n'
-                        "host = SDSBSCompGraph.sNew(_PM.newUserPackage())\nhost.setIdentifier('mcp_selftest_gone_host')\n"
-                        'host.newInstanceNode(dep)\n_PM.savePackageAs(host.getPackage(), %r)\n'
-                        'for g in (host, dep):\n    _PM.unloadUserPackage(g.getPackage())\n'
-                        'os.remove(%r)\n'
-                        'pkg = _PM.loadUserPackage(%r)\n'
-                        "print('DEPS=%%s' %% [(os.path.basename(d.getFilePath()), d.getPackage()) for d in pkg.getDependencies()])\n"
-                        '_refuse_unsaved_dependencies(pkg)\n'
-                        "print('NOT_REFUSED')\n"
-                        '_PM.unloadUserPackage(pkg)\n'
+                        dedent("""
+                            dep = SDSBSCompGraph.sNew(_PM.newUserPackage())
+                            dep.setIdentifier('mcp_selftest_gone')
+                            _PM.savePackageAs(dep.getPackage(), %r)
+                            host = SDSBSCompGraph.sNew(_PM.newUserPackage())
+                            host.setIdentifier('mcp_selftest_gone_host')
+                            host.newInstanceNode(dep)
+                            _PM.savePackageAs(host.getPackage(), %r)
+                            for g in (host, dep):
+                                _PM.unloadUserPackage(g.getPackage())
+                            os.remove(%r)
+                            pkg = _PM.loadUserPackage(%r)
+                            print('DEPS=%%s' %% [(os.path.basename(d.getFilePath()), d.getPackage()) for d in pkg.getDependencies()])
+                            _refuse_unsaved_dependencies(pkg)
+                            print('NOT_REFUSED')
+                            _PM.unloadUserPackage(pkg)
+                        """)
                     )
                     % (gone_dep, gone_host, gone_dep, gone_host)
                 },
@@ -641,18 +692,25 @@ async def run(ctx: Ctx) -> None:
                 {
                     'code': helpers
                     + (
-                        "\nname = 'mcp_selftest_same_name'\n"
-                        'dep = SDSBSCompGraph.sNew(_PM.newUserPackage())\ndep.setIdentifier(name)\n'
-                        'host = SDSBSCompGraph.sNew(_PM.newUserPackage())\nhost.setIdentifier(name)\n'
-                        '_PM.savePackageAs(host.getPackage(), %r)\nhost.newInstanceNode(dep)\n'
-                        '_APP.getUIMgr().openResourceInEditor(host)\n_process_events()\n'
-                        'try:\n'
-                        '    _refuse_unsaved_dependencies(host.getPackage())\n'
-                        'except RuntimeError as e:\n'
-                        "    print('ROUTE=' + str(e))\n"
-                        "print('UID=' + dep.getPackage().getUID())\n"
-                        '_APP.getUIMgr().openResourceInEditor(dep)\n_process_events()\n'
-                        "print('FOCUS=' + str(_same_graph(_current_graph(), dep)))\n"
+                        dedent("""
+                            name = 'mcp_selftest_same_name'
+                            dep = SDSBSCompGraph.sNew(_PM.newUserPackage())
+                            dep.setIdentifier(name)
+                            host = SDSBSCompGraph.sNew(_PM.newUserPackage())
+                            host.setIdentifier(name)
+                            _PM.savePackageAs(host.getPackage(), %r)
+                            host.newInstanceNode(dep)
+                            _APP.getUIMgr().openResourceInEditor(host)
+                            _process_events()
+                            try:
+                                _refuse_unsaved_dependencies(host.getPackage())
+                            except RuntimeError as e:
+                                print('ROUTE=' + str(e))
+                            print('UID=' + dep.getPackage().getUID())
+                            _APP.getUIMgr().openResourceInEditor(dep)
+                            _process_events()
+                            print('FOCUS=' + str(_same_graph(_current_graph(), dep)))
+                        """)
                     )
                     % host2_sbs
                 },
@@ -690,19 +748,26 @@ async def run(ctx: Ctx) -> None:
             {
                 'code': helpers
                 + (
-                    '\nfrom sd.api.sbs.sdsbscompgraph import SDSBSCompGraph\n'
-                    'made = []\n'
-                    'for path in (%r, %r):\n'
-                    '    pkg = _PM.newUserPackage()\n    g = SDSBSCompGraph.sNew(pkg)\n'
-                    "    g.setIdentifier('mcp_selftest_dup')\n    n = g.newNode('sbs::compositing::blur')\n"
-                    '    _PM.savePackageAs(pkg, path)\n    made.append((pkg, g, n))\n'
-                    '    _APP.getUIMgr().openResourceInEditor(g)\n    _process_events()\n'
-                    '(pa, ga, na), (pb, gb, nb) = made\n'
-                    'package_file_of(ga)\n'  # B is in the editor, A isn't
-                    'open_graph(ga, node_id=na.getIdentifier())\n'
-                    'open_graph(gb, node_id=nb.getIdentifier())\n'
-                    'cur = _current_graph()\n'
-                    "print('FOCUS_B=%%s' %% (cur.getPackage().getUID() == pb.getUID()))\n"
+                    dedent("""
+                        from sd.api.sbs.sdsbscompgraph import SDSBSCompGraph
+                        made = []
+                        for path in (%r, %r):
+                            pkg = _PM.newUserPackage()
+                            g = SDSBSCompGraph.sNew(pkg)
+                            g.setIdentifier('mcp_selftest_dup')
+                            n = g.newNode('sbs::compositing::blur')
+                            _PM.savePackageAs(pkg, path)
+                            made.append((pkg, g, n))
+                            _APP.getUIMgr().openResourceInEditor(g)
+                            _process_events()
+                        (pa, ga, na), (pb, gb, nb) = made
+                        package_file_of(ga)
+                        # B is in the editor, A isn't
+                        open_graph(ga, node_id=na.getIdentifier())
+                        open_graph(gb, node_id=nb.getIdentifier())
+                        cur = _current_graph()
+                        print('FOCUS_B=%%s' %% (cur.getPackage().getUID() == pb.getUID()))
+                    """)
                 )
                 % (dup_a, dup_b)
             },
@@ -712,17 +777,7 @@ async def run(ctx: Ctx) -> None:
     # editor views, and an unload in the same call as the opening risks a crash (AGENTS.md,
     # Portals; after an unload in one call, Designer crashed once as the test ended, PLG-9)
     time.sleep(0.5)
-    await c(
-        'execute_designer_code',
-        {
-            'code': (
-                'import sd\npm = sd.getContext().getSDApplication().getPackageMgr()\n'
-                'for p in list(pm.getUserPackages()):\n'
-                "    if (p.getFilePath() or '') in (%r, %r):\n        pm.unloadUserPackage(p)\n"
-            )
-            % (dup_a, dup_b)
-        },
-    )
+    await designer_script(c, 'shared/unload_packages', paths=[dup_a, dup_b])
     found = ' | '.join(l for l in t.splitlines() if l.startswith(('OPEN=', 'FOCUS_B=', 'sd.api.')))
     check('open_graph', 'two graphs with one name: the given one is focused', 'FOCUS_B=True' in t, found)
     check(
@@ -737,34 +792,32 @@ async def run(ctx: Ctx) -> None:
             {
                 'code': helpers
                 + (
-                    '\nfrom sd.api.sbs.sdsbscompgraph import SDSBSCompGraph\n'
-                    'pkg = _PM.newUserPackage()\ng = SDSBSCompGraph.sNew(pkg)\n'
-                    "g.setIdentifier('mcp_selftest_same_uid')\nn = g.newNode('sbs::compositing::blur')\n"
-                    '_PM.savePackageAs(pkg, %r)\n_PM.saveCopyOfPackageAs(pkg, %r)\n'
-                    'cp = _PM.loadUserPackage(%r)\ncg = cp.findResourceFromUrl("mcp_selftest_same_uid")\n'
-                    "print('SAME_UID=%%s' %% (cp.getUID() == pkg.getUID()))\n"
-                    '_APP.getUIMgr().openResourceInEditor(cg)\n_process_events()\n'
-                    "print('FOUND_COPY=%%s' %% (find_graph('mcp_selftest_same_uid').getPackage().getFilePath() == %r))\n"
-                    'package_file_of(g)\n'  # the copy is in the editor, the original isn't
-                    'open_graph(g, node_id=n.getIdentifier())\n'
-                    "print('FOCUS_ORIG=%%s' %% (_current_graph().getPackage().getFilePath() == %r))\n"
+                    dedent("""
+                        from sd.api.sbs.sdsbscompgraph import SDSBSCompGraph
+                        pkg = _PM.newUserPackage()
+                        g = SDSBSCompGraph.sNew(pkg)
+                        g.setIdentifier('mcp_selftest_same_uid')
+                        n = g.newNode('sbs::compositing::blur')
+                        _PM.savePackageAs(pkg, %r)
+                        _PM.saveCopyOfPackageAs(pkg, %r)
+                        cp = _PM.loadUserPackage(%r)
+                        cg = cp.findResourceFromUrl("mcp_selftest_same_uid")
+                        print('SAME_UID=%%s' %% (cp.getUID() == pkg.getUID()))
+                        _APP.getUIMgr().openResourceInEditor(cg)
+                        _process_events()
+                        print('FOUND_COPY=%%s' %% (find_graph('mcp_selftest_same_uid').getPackage().getFilePath() == %r))
+                        package_file_of(g)
+                        # the copy is in the editor, the original isn't
+                        open_graph(g, node_id=n.getIdentifier())
+                        print('FOCUS_ORIG=%%s' %% (_current_graph().getPackage().getFilePath() == %r))
+                    """)
                 )
                 % (orig, copy, copy, copy, orig)
             },
         )
     )
     time.sleep(0.5)  # unloaded in a separate call, as above
-    await c(
-        'execute_designer_code',
-        {
-            'code': (
-                'import sd\npm = sd.getContext().getSDApplication().getPackageMgr()\n'
-                'for p in list(pm.getUserPackages()):\n'
-                "    if (p.getFilePath() or '') in (%r, %r):\n        pm.unloadUserPackage(p)\n"
-            )
-            % (orig, copy)
-        },
-    )
+    await designer_script(c, 'shared/unload_packages', paths=[orig, copy])
     found = ' | '.join(
         l for l in t.splitlines() if l.startswith(('SAME_UID=', 'FOUND_COPY=', 'OPEN=', 'FOCUS_', 'sd.'))
     )

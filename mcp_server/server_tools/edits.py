@@ -16,15 +16,21 @@ def create_graph(name: str, save_path: str | None = None, size_log2: int = 11) -
 @_tool()
 def list_graph_inputs(graph: str | None = None) -> str:
     """List a graph's exposed inputs (type, value, label/min/max, which node parameters they
-    drive) and whether its output size is fixed or overridable."""
+    drive, FX-Map functions and those on the graph's own parameters as last saved included) and
+    whether its output size is fixed or overridable. A get
+    node that doesn't feed its function's output, or a function with no output node, drives nothing
+    and isn't listed, though remove_graph_input still refuses while it names the input."""
     return _checked(_bridge(_helpers_call('list_graph_inputs(%r)' % graph), timeout=60))
 
 
 @_tool()
 def remove_graph_input(input_id: str, graph: str | None = None) -> str:
     """Delete an exposed graph input. Parameters bound to it (as an expose op binds them) keep its
-    current value. Refuses, changing nothing, while a larger function (an expression, a Pixel
-    Processor) still reads the input. One undo step."""
+    current value. Refuses, changing nothing, while another function (an expression, a Pixel
+    Processor, even if it is one get, an FX-Map's, one on the graph's own parameter as last saved, one
+    with no output node yet, a leftover get node) still names the input,
+    saying which have no effect today, or while a parameter can't hold its value (an int beyond an
+    enum's values). One undo step."""
     return _edit('remove_graph_input(%r, %r)' % (graph, input_id), 'Claude: remove input ' + input_id)
 
 
@@ -69,7 +75,8 @@ def apply_edits(ops: list[dict[str, Any]], graph: str | None = None) -> str:
       graph's size is refused: use set_graph_size). Values are converted to the parameter's type:
       numbers, bools, lists for vectors/colors ([r,g,b(,a)]), enums by id or number ('max', 5 or
       '5'). Every value is checked before any is set. A parameter driven by a graph input (an
-      expose op) or a function is refused: set the graph input instead (node "graph"). A $
+      expose op) or a function is refused: set the graph input instead (node "graph"); so is one
+      with a function that has no output node, which drives nothing but would be deleted. A $
       parameter is made Absolute so its value takes effect ($format and $outputsize ignore theirs
       while inherited); except $randomseed, on a node or the graph, whose inheritance is left as it
       is: inherited, its value counts (added to the parent's seed), and only an inherited seed
@@ -82,8 +89,8 @@ def apply_edits(ops: list[dict[str, Any]], graph: str | None = None) -> str:
     expose: a node parameter as a graph input (same type as the parameter; enums become ints),
       like Designer's own "Expose" action. The input starts at the parameter's current value
       unless default is given; min/max/step/group set the slider. The input then shows up in
-      sbsar_info and can be set with render_sbs(params=...). Refuses a parameter already driven by
-      a function (replacing it would lose that logic)."""
+      sbsar_info and can be set with render_sbs(params=...). Refuses a parameter that already has a
+      function with nodes (replacing it would lose that logic)."""
     ops = [
         {**op, 'path': _local_path(op['path'])} if isinstance(op, dict) and isinstance(op.get('path'), str) else op
         for op in ops

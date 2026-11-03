@@ -6,8 +6,9 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from textwrap import dedent
 
-from .common import Ctx, check, crash_dumps, designer_alive, new_crash_dumps, text
+from .common import Ctx, check, crash_dumps, designer_alive, designer_script, new_crash_dumps, text
 
 
 async def run(ctx: Ctx) -> None:
@@ -18,23 +19,7 @@ async def run(ctx: Ctx) -> None:
     # earlier exit() fallback crashed Designer's teardown, twice)
     dumps_before = crash_dumps()
     forced_marker = os.path.join(scratch, 'forced_quit_about_to_quit')
-    await c(
-        'execute_designer_code',
-        {
-            'code': (
-                'import sys\nfrom PySide6.QtCore import QObject, QEvent\nfrom PySide6.QtWidgets import QApplication\n'
-                'class _KeepOpen(QObject):\n    def eventFilter(self, obj, event):\n'
-                '        if event.type() == QEvent.Type.Close:\n            event.ignore()\n            return True\n'
-                '        return False\n'
-                'sys._selftest_keep_open = _KeepOpen()\n'
-                'for w in QApplication.instance().topLevelWidgets():\n'
-                '    if w.isVisible(): w.installEventFilter(sys._selftest_keep_open)\n'
-                "QApplication.instance().aboutToQuit.connect(lambda: open(%r, 'w').close())\n"
-                "print('ignoring Close')"
-            )
-            % forced_marker
-        },
-    )
+    await designer_script(c, 'lifecycle/quit_ignores_close', marker=forced_marker)
     r_ = await c('quit_designer', {'discard_unsaved': True, 'wait_s': 2})
     check(
         'quit_designer',
@@ -78,28 +63,7 @@ async def run(ctx: Ctx) -> None:
     # A quit by itself emits aboutToQuit, which writes a marker; the fallback's os._exit
     # (here at about 5 s, as the prompt stays visible) never does (REVIEW.md TST-25)
     normal_quit = os.path.join(scratch, 'quit_normally')
-    await c(
-        'execute_designer_code',
-        {
-            'code': (
-                'import sys\nfrom PySide6.QtCore import QObject, QEvent, QTimer\n'
-                'from PySide6.QtWidgets import QApplication, QLabel\n'
-                'def _prompt():\n'
-                "    sys._selftest_prompt = QLabel('sd_mcp self-test: a prompt after closing')\n"
-                '    sys._selftest_prompt.show()\n'
-                'class _PromptAfterClose(QObject):\n    def eventFilter(self, obj, event):\n'
-                '        if event.type() == QEvent.Type.Close:\n            _prompt()\n'
-                "            open(%r, 'w').write(str(sys._selftest_prompt.isVisible()))\n"
-                '        return False\n'
-                'sys._selftest_prompt_filter = _PromptAfterClose()\n'
-                "QApplication.instance().aboutToQuit.connect(lambda: open(%r, 'w').close())\n"
-                'for w in QApplication.instance().topLevelWidgets():\n'
-                "    if w.isVisible() and w.metaObject().className() == 'QStackedWidget':\n"
-                '        w.installEventFilter(sys._selftest_prompt_filter)'
-            )
-            % (prompt_marker, normal_quit)
-        },
-    )
+    await designer_script(c, 'lifecycle/quit_prompt_after_close', prompt_marker=prompt_marker, normal_quit=normal_quit)
     dumps_before, quit_started = crash_dumps(), time.time()
     await c('quit_designer', {'discard_unsaved': True, 'wait_s': 2})
     while time.time() - quit_started < 60 and designer_alive():
@@ -134,32 +98,7 @@ async def run(ctx: Ctx) -> None:
     # closing it still quits in 2 s)
     slow_close = os.path.join(scratch, 'slow_close_finished')
     slow_marker = os.path.join(scratch, 'slow_shutdown_finished')
-    await c(
-        'execute_designer_code',
-        {
-            'code': (
-                'import sys, time\nfrom PySide6.QtCore import QObject, QEvent\n'
-                'from PySide6.QtWidgets import QApplication, QLabel\n'
-                'def _busy(seconds):\n    started = time.time()\n'
-                '    while time.time() - started < seconds:\n'
-                '        QApplication.processEvents()\n        time.sleep(0.05)\n'
-                'class _SlowClose(QObject):\n    def eventFilter(self, obj, event):\n'
-                "        if event.type() == QEvent.Type.Close and not getattr(self, 'done', False):\n"
-                "            self.done = True\n            _busy(7)\n            open(%r, 'w').close()\n"
-                '        return False\n'
-                'def _slow_shutdown():\n'
-                "    sys._selftest_label = QLabel('sd_mcp self-test: slow shutdown')\n"
-                "    sys._selftest_label.show()\n    _busy(7)\n    open(%r, 'w').close()\n"
-                'sys._selftest_slow_close = _SlowClose()\n'
-                'for w in QApplication.instance().topLevelWidgets():\n'
-                "    if w.isVisible() and w.metaObject().className() == 'QStackedWidget':\n"
-                '        w.installEventFilter(sys._selftest_slow_close)\n'
-                'sys._selftest_slow_shutdown = _slow_shutdown\n'
-                'QApplication.instance().aboutToQuit.connect(_slow_shutdown)'
-            )
-            % (slow_close, slow_marker)
-        },
-    )
+    await designer_script(c, 'lifecycle/quit_slow_shutdown', slow_close=slow_close, slow_marker=slow_marker)
     dumps_before = crash_dumps()
     t = text(await c('quit_designer', {'discard_unsaved': True}))
     gone = (await c('designer_status')).is_error
@@ -184,25 +123,15 @@ async def run(ctx: Ctx) -> None:
     t = text(await c('launch_designer', {'wait_s': 240}))
     check('launch_designer', 'starts again after a slow quit', 'Designer started in' in t and 'ERROR' not in t, t)
     # the realistic blocker: a modal dialog (its own event loop) must not stop quitting
-    await c(
-        'execute_designer_code',
-        {
-            'code': (
-                'from PySide6.QtCore import QTimer\nfrom PySide6.QtWidgets import QMessageBox\n'
-                "QTimer.singleShot(0, lambda: QMessageBox.information(None, 'sd_mcp self-test', "
-                "'A modal dialog; quit_designer must still close Designer.'))"
-            )
-        },
-    )
+    await designer_script(c, 'lifecycle/modal_dialog')
     time.sleep(1)
     modal = text(
         await c(
             'execute_designer_code',
             {
-                'code': (
-                    'from PySide6.QtWidgets import QApplication\n'
-                    "print('MODAL=' + type(QApplication.instance().activeModalWidget()).__name__)"
-                )
+                'code': dedent("""\
+                    from PySide6.QtWidgets import QApplication
+                    print('MODAL=' + type(QApplication.instance().activeModalWidget()).__name__)""")
             },
         )
     )

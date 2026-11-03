@@ -10,6 +10,7 @@ import socket
 import sys
 import threading
 import time
+from textwrap import dedent
 from typing import Any, cast
 
 from mcp.types import TextResourceContents
@@ -38,7 +39,16 @@ async def run(ctx: Ctx) -> None:
     t = text(await c('cancel_designer_job'))
     check('cancel_designer_job', 'idle', 'running: False' in t, t)
     task = asyncio.create_task(
-        c('execute_designer_code', {'code': 'import time\nwhile True:\n    time.sleep(0.05)', 'timeout_s': 60})
+        c(
+            'execute_designer_code',
+            {
+                'code': dedent("""\
+                    import time
+                    while True:
+                        time.sleep(0.05)"""),
+                'timeout_s': 60,
+            },
+        )
     )
     cancel_text = await cancel_from_second_client()
     t = text(await task)
@@ -112,7 +122,17 @@ async def run(ctx: Ctx) -> None:
         return False
 
     long_job = threading.Thread(
-        target=job, args=('long', {'code': 'import time\nwhile True:\n    time.sleep(0.05)', 'timeout': 30})
+        target=job,
+        args=(
+            'long',
+            {
+                'code': dedent("""\
+                    import time
+                    while True:
+                        time.sleep(0.05)"""),
+                'timeout': 30,
+            },
+        ),
     )
     long_job.start()
     wait_for('running')
@@ -140,9 +160,14 @@ async def run(ctx: Ctx) -> None:
             'pumping',
             {
                 'code': (
-                    'import time\nfrom PySide6.QtWidgets import QApplication\nt = time.time()\n'
-                    'while time.time() - t < 1.5:\n    QApplication.processEvents()\n    time.sleep(0.01)\n'
-                    "print('A_END=%.3f' % time.time())"
+                    dedent("""\
+                        import time
+                        from PySide6.QtWidgets import QApplication
+                        t = time.time()
+                        while time.time() - t < 1.5:
+                            QApplication.processEvents()
+                            time.sleep(0.01)
+                        print('A_END=%.3f' % time.time())""")
                 ),
                 'timeout': 30,
             },
@@ -150,7 +175,17 @@ async def run(ctx: Ctx) -> None:
     )
     pumping.start()
     wait_for('running')
-    second = threading.Thread(target=job, args=('second', {'code': "import time\nprint('B_START=%.3f' % time.time())"}))
+    second = threading.Thread(
+        target=job,
+        args=(
+            'second',
+            {
+                'code': dedent("""\
+                    import time
+                    print('B_START=%.3f' % time.time())""")
+            },
+        ),
+    )
     second.start()
     pumping.join(20)
     second.join(20)
@@ -174,7 +209,10 @@ async def run(ctx: Ctx) -> None:
     cli_script = os.path.join(scratch, 'cli_probe.py')
     with open(cli_script, 'w') as f:
         f.write(
-            "import sd\nprint('cli', __file__.endswith('cli_probe.py'), sd.getContext().getSDApplication().getVersion())\n"
+            dedent("""\
+                import sd
+                print('cli', __file__.endswith('cli_probe.py'), sd.getContext().getSDApplication().getVersion())
+            """)
         )
     r = sd_run(cli_script)
     check('sd_run.py', 'script file', r.returncode == 0 and 'cli True' in r.stdout, r.stdout + r.stderr)
@@ -185,7 +223,15 @@ async def run(ctx: Ctx) -> None:
 
     # --- the installed plugin is this repo's (README, Install: re-run install.py after changes)
     t = text(
-        await c('execute_designer_code', {'code': "import sys\nprint('PLUGIN=' + sys.modules[%r].__file__)" % PLUGIN})
+        await c(
+            'execute_designer_code',
+            {
+                'code': dedent("""\
+                    import sys
+                    print('PLUGIN=' + sys.modules[%r].__file__)""")
+                % PLUGIN
+            },
+        )
     )
     found = re.search(r'PLUGIN=(.*)', t)
     if found:

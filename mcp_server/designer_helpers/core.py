@@ -251,7 +251,8 @@ def fmt(value: SDValue | None) -> Any:
 
 def node_kind(node: SDNode) -> str:
     ref = node.getReferencedResource()
-    if ref is not None:
+    # an FX-Map also refers to a resource, its own graph, which has no identifier
+    if ref is not None and ref.getIdentifier():
         return 'instance:' + ref.getIdentifier()
     return cast(SDDefinition, node.getDefinition()).getId().replace('sbs::compositing::', '')
 

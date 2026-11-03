@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import time
+from textwrap import dedent
 
 from mcp.server.mcpserver.exceptions import ToolError
 
@@ -25,15 +26,17 @@ def designer_status() -> str:
         + '\n'
         + _server_versions()
         + '\n'
+        # an unsaved package is named by its UID, as list_snapshots names them (REVIEW.md SRV-45)
         + _bridge(
-            'import sd\n'
-            'app = sd.getContext().getSDApplication()\n'
-            "print('Designer', app.getVersion())\n"
-            'for p in app.getPackageMgr().getUserPackages():\n'
-            # unsaved: named by UID, as list_snapshots names them (REVIEW.md SRV-45)
-            "    print('package:', p.getFilePath() or '(an unsaved package, UID %s)' % p.getUID())\n"
-            '    for r in p.getChildrenResources(True):\n'
-            "        print('   ', type(r).__name__, r.getIdentifier())\n"
+            dedent("""\
+                import sd
+                app = sd.getContext().getSDApplication()
+                print('Designer', app.getVersion())
+                for p in app.getPackageMgr().getUserPackages():
+                    print('package:', p.getFilePath() or '(an unsaved package, UID %s)' % p.getUID())
+                    for r in p.getChildrenResources(True):
+                        print('   ', type(r).__name__, r.getIdentifier())
+            """)
         )
     )
 

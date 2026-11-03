@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Coroutine
+from textwrap import dedent
 from typing import Any, Protocol
 
 from mcp.client.session import ClientSession
@@ -147,96 +148,80 @@ def clipboard_fingerprint() -> str | None:
 
 # Designer's library packages loaded right now (their paths), so the run can unload the ones it
 # loaded itself (describe_node, add ops of library graphs) and leave the user's (REVIEW.md TST-30)
-LIBRARY_PACKAGES = (
-    'import os, sd\nfrom sd.api.sdapplication import SDApplicationPath\napp = sd.getContext().getSDApplication()\n'
-    "lib = os.path.normcase(os.path.join(app.getPath(SDApplicationPath.DefaultResourcesDir), 'packages'))\n"
-    "print('LIBS=' + '|'.join(sorted(p.getFilePath() for p in app.getPackageMgr().getUserPackages()\n"
-    "                                if os.path.normcase(p.getFilePath() or '').startswith(lib))))"
-)
-UNLOAD_LIBRARY_PACKAGES = (
-    'import os, sd\nfrom sd.api.sdapplication import SDApplicationPath\napp = sd.getContext().getSDApplication()\n'
-    "keep = set(%r)\nlib = os.path.normcase(os.path.join(app.getPath(SDApplicationPath.DefaultResourcesDir), 'packages'))\n"
-    'for p in list(app.getPackageMgr().getUserPackages()):\n'
-    "    path = p.getFilePath() or ''\n"
-    '    if os.path.normcase(path).startswith(lib) and path not in keep:\n'
-    '        app.getPackageMgr().unloadUserPackage(p)\n'
-)
+LIBRARY_PACKAGES = dedent("""\
+    import os, sd
+    from sd.api.sdapplication import SDApplicationPath
+    app = sd.getContext().getSDApplication()
+    lib = os.path.normcase(os.path.join(app.getPath(SDApplicationPath.DefaultResourcesDir), 'packages'))
+    print('LIBS=' + '|'.join(sorted(p.getFilePath() for p in app.getPackageMgr().getUserPackages()
+                                    if os.path.normcase(p.getFilePath() or '').startswith(lib))))""")
+UNLOAD_LIBRARY_PACKAGES = dedent("""\
+    import os, sd
+    from sd.api.sdapplication import SDApplicationPath
+    app = sd.getContext().getSDApplication()
+    keep = set(%r)
+    lib = os.path.normcase(os.path.join(app.getPath(SDApplicationPath.DefaultResourcesDir), 'packages'))
+    for p in list(app.getPackageMgr().getUserPackages()):
+        path = p.getFilePath() or ''
+        if os.path.normcase(path).startswith(lib) and path not in keep:
+            app.getPackageMgr().unloadUserPackage(p)
+""")
 # Every graph the self-test creates is named mcp_selftest...: this closes them all
-CLEAN = (
-    'import sd\npm=sd.getContext().getSDApplication().getPackageMgr()\nn=0\n'
-    'for p in list(pm.getUserPackages()):\n'
-    "    if any(r.getIdentifier().startswith('mcp_selftest') for r in p.getChildrenResources(False)):\n"
-    "        pm.unloadUserPackage(p); n+=1\nprint('removed', n)"
-)
+CLEAN = dedent("""\
+    import sd
+    pm=sd.getContext().getSDApplication().getPackageMgr()
+    n=0
+    for p in list(pm.getUserPackages()):
+        if any(r.getIdentifier().startswith('mcp_selftest') for r in p.getChildrenResources(False)):
+            pm.unloadUserPackage(p); n+=1
+    print('removed', n)""")
 # Undo/Redo via Designer's Edit menu, scheduled to run after this call's own undo group closes
-UNDO_REDO = (
-    'import sd\nfrom PySide6.QtCore import QTimer\nfrom PySide6.QtWidgets import QApplication, QMenu\n'
-    'g=sd.getContext().getSDApplication().getQtForPythonUIMgr().getCurrentGraph()\n'
-    "if g is None or g.getIdentifier()!='%s':\n    print('NOT_FOCUSED')\nelse:\n"
-    "    acts=[a for w in QApplication.instance().allWidgets() if isinstance(w, QMenu) and w.title()=='&Edit'\n"
-    "          for a in w.actions() if a.text()=='%s' and a.isEnabled()]\n"
-    "    if acts:\n        QTimer.singleShot(0, acts[0].trigger)\n        print('SCHEDULED')\n"
-    "    else:\n        print('NO_ACTION')"
-)
-NODE_EXISTS = (
-    'import sd\nfrom PySide6.QtWidgets import QApplication\n'
-    'for _ in range(20):\n    QApplication.processEvents()\n'
-    'g=[r for p in sd.getContext().getSDApplication().getPackageMgr().getUserPackages() '
-    "for r in p.getChildrenResources(False) if r.getIdentifier()=='%s'][0]\n"
-    "print('EXISTS=%%s' %% (g.getNodeFromId('%s') is not None))"
-)
-FACTS = (
-    'import sd\nfrom sd.api.apiexception import APIException\nfrom sd.api.sdproperty import SDPropertyCategory\n'
-    'g=[r for p in sd.getContext().getSDApplication().getPackageMgr().getUserPackages() '
-    "for r in p.getChildrenResources(False) if r.getIdentifier()=='%s'][0]\n"
-    "print('ATOMIC=%%d' %% len(g.getNodeDefinitions()))\n"
-    "print('APIEXC_BASE_ONLY=%%s' %% (issubclass(APIException, BaseException) and not issubclass(APIException, Exception)))\n"
-    "n=g.getNodeFromId('%s')\nc=n.getPropertyConnections(n.getPropertyFromId('input1', SDPropertyCategory.Input))[0]\n"
-    "print('QUERIED_SIDE=%%s' %% (c.getOutputPropertyNode().getIdentifier()=='%s' and "
-    "c.getInputPropertyNode().getIdentifier()=='%s' and c.getOutputProperty().getId()=='input1'))"
-)
-GRAPH_OF = (
-    'import sd\ng=[r for p in sd.getContext().getSDApplication().getPackageMgr().getUserPackages() '
-    "for r in p.getChildrenResources(False) if r.getIdentifier()=='%s'][0]\n"
-)
-# Computed pixels to compare with a tolerance (two computes of one setting differ by a step or two,
-# and raw buffers carry row padding; AGENTS.md): pixels(texture) -> integers, apart(a, b) -> the
-# largest difference. Only 8- and 16-bit integer formats, where a tolerance in steps means something
-# (REVIEW.md TST-54, TST-56)
-PIXELS = (
-    'import ctypes, array\n'
-    'def pixels(t):\n'
-    "    fmt = str(t.getPixelFormat()).split('.')[-1]\n"
-    "    if not (fmt.endswith('8') or fmt.endswith('16')):\n"
-    "        raise RuntimeError('pixels(): %s is not an 8- or 16-bit integer format' % fmt)\n"
-    '    w, h, pitch, bpp = t.getSize().x, t.getSize().y, t.getRowPitch(), t.getBytesPerPixel()\n'
-    '    raw = ctypes.string_at(t.getPixelBufferAddress(), pitch * h)\n'
-    "    rows = b''.join(raw[y * pitch:y * pitch + w * bpp] for y in range(h))\n"
-    "    return array.array('H' if fmt.endswith('16') else 'B', rows)\n"
-    'def apart(a, b):\n'
-    '    return max(abs(x - y) for x, y in zip(a, b))\n'
-)
-INHERIT = GRAPH_OF + (
-    "from sd.api.sdproperty import SDPropertyCategory\nn=g.getNodeFromId('%s')\n"
-    "p=n.getPropertyFromId('$outputsize', SDPropertyCategory.Input)\n"
-    "print('INHERIT=%%s VALUE=%%s' %% (n.getPropertyInheritanceMethod(p).name, n.getPropertyValue(p).get()))"
-)
+UNDO_REDO = dedent("""\
+    import sd
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication, QMenu
+    g=sd.getContext().getSDApplication().getQtForPythonUIMgr().getCurrentGraph()
+    if g is None or g.getIdentifier()!='%s':
+        print('NOT_FOCUSED')
+    else:
+        acts=[a for w in QApplication.instance().allWidgets() if isinstance(w, QMenu) and w.title()=='&Edit'
+              for a in w.actions() if a.text()=='%s' and a.isEnabled()]
+        if acts:
+            QTimer.singleShot(0, acts[0].trigger)
+            print('SCHEDULED')
+        else:
+            print('NO_ACTION')""")
+# The start of a short snippet: finds the graph with this identifier as g
+GRAPH_OF = dedent("""\
+    import sd
+    g = [r for p in sd.getContext().getSDApplication().getPackageMgr().getUserPackages() for r in p.getChildrenResources(False) if r.getIdentifier() == '%s'][0]
+""")
+NODE_EXISTS = dedent("""\
+    import sd
+    from PySide6.QtWidgets import QApplication
+    for _ in range(20):
+        QApplication.processEvents()
+    g=[r for p in sd.getContext().getSDApplication().getPackageMgr().getUserPackages() for r in p.getChildrenResources(False) if r.getIdentifier()=='%s'][0]
+    print('EXISTS=%%s' %% (g.getNodeFromId('%s') is not None))""")
 # The graph in the editor when the run starts; the graph object is kept so the end of the run can
 # check that the very same graph is back in the editor (REVIEW.md TST-5)
-CURRENT_GRAPH = (
-    'import sd, sys\ng=sd.getContext().getSDApplication().getQtForPythonUIMgr().getCurrentGraph()\n'
-    "sys._selftest_user_graph = g\nprint('CURRENT=' + (g.getIdentifier() if g else ''))"
-)
+CURRENT_GRAPH = dedent("""\
+    import sd, sys
+    g=sd.getContext().getSDApplication().getQtForPythonUIMgr().getCurrentGraph()
+    sys._selftest_user_graph = g
+    print('CURRENT=' + (g.getIdentifier() if g else ''))""")
 # Reopens that graph object, not a graph found by name: two open graphs can share a name
-SAME_GRAPH_BACK = (
-    'import sd, sys\nfrom PySide6.QtWidgets import QApplication\n'
-    "g = sys.__dict__.pop('_selftest_user_graph', None)\napp = sd.getContext().getSDApplication()\n"
-    'if g is not None:\n    app.getUIMgr().openResourceInEditor(g)\n    QApplication.processEvents()\n'
-    'cur = app.getQtForPythonUIMgr().getCurrentGraph()\n'
-    'same = cur is not None and g is not None and cur.getPackage().getUID() == g.getPackage().getUID() '
-    'and cur.getIdentifier() == g.getIdentifier()\n'
-    "print('SAME=%s current=%s' % (same, cur.getIdentifier() if cur else None))"
-)
+SAME_GRAPH_BACK = dedent("""\
+    import sd, sys
+    from PySide6.QtWidgets import QApplication
+    g = sys.__dict__.pop('_selftest_user_graph', None)
+    app = sd.getContext().getSDApplication()
+    if g is not None:
+        app.getUIMgr().openResourceInEditor(g)
+        QApplication.processEvents()
+    cur = app.getQtForPythonUIMgr().getCurrentGraph()
+    same = cur is not None and g is not None and cur.getPackage().getUID() == g.getPackage().getUID() and cur.getIdentifier() == g.getIdentifier()
+    print('SAME=%s current=%s' % (same, cur.getIdentifier() if cur else None))""")
 
 
 def crash_dumps() -> set[str]:
@@ -284,6 +269,19 @@ class Call(Protocol):
     def __call__(self, name: str, args: dict[str, Any] | None = None, /) -> Coroutine[Any, Any, CallToolResult]: ...
 
 
+async def designer_script(c: Call, name: str, /, **args: Any) -> CallToolResult:
+    """Run designer_scripts/<module>/<script>.py inside Designer, name being '<module>/<script>', the folder the module that runs it, or 'shared/<script>' for one that several modules run: Python with real logic lives in real files, which ruff and mypy check (AGENTS.md).
+    The keywords reach it as its ARGS. A script that raises is a failed check here, whatever the caller reads from the
+    result: a traceback shows the failing source line, output token included, and a tool returns a script's error as
+    normal text."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'designer_scripts', *name.split('/')) + '.py'
+    result = await c('run_designer_script', {'path': path, 'timeout_s': 120, 'args': args})
+    if result.is_error or '--- ERROR ---' in text(result):
+        print(text(result))  # a setup script discards its result: this is the only place the error shows
+        check('run_designer_script', 'script %s ran' % name, False, text(result).strip().splitlines()[-1])
+    return result
+
+
 class Ctx:
     """What the categories share, in the order they run (__main__.py): set when the run starts, then by
     the category named beside each later one. One not yet set raises AttributeError when read."""
@@ -298,7 +296,6 @@ class Ctx:
     slope: str
     lv: str
     out: str
-    COUNT_NODES: str  # graph_edit.create: a snippet printing NODES=<count>
     png: str  # bitmaps.run: the path of the PNG it imported
     sbs: str  # save.run: where the self-test graph was saved
     stats_before: str  # save.run: node_stats of lv, for set_link_display

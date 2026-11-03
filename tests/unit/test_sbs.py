@@ -14,7 +14,7 @@ def test_graph_model(sbs_path: str) -> None:
     assert n['200']['kind'] == 'instance:gradient_linear_1'
     assert n['200']['params'] == {'rotation': '0.25'}
     assert n['201']['kind'] == 'blend'
-    assert n['201']['params'] == {'blendingmode': '6', 'opacitymult': 'function'}
+    assert n['201']['params'] == {'blendingmode': '6', 'opacitymult': 'function 22e2d023'}
     assert n['201']['links'] == {('source', '200')}
     assert n['201']['display'] == {('source', '200'): 'wire'}
     assert n['202']['kind'] == 'output'
@@ -206,3 +206,142 @@ def test_a_diff_names_the_output_of_a_link(tmp_path: Path) -> None:
     # an output with no name stays its uid: an atomic node's
     _, lines = server._diff_models(model('1101'), model('777'), False)
     assert any('<- 11.777 added' in line for line in lines), lines
+
+
+def _levels_with(tmp_path: Path, name: str, value_xml: str) -> str:
+    """What _graph_model reads as a levels node's levelinlow, stored as this XML."""
+    sbs = tmp_path / name
+    sbs.write_text(
+        '<package><content><graph><identifier v="g"/><compNodes><compNode><uid v="1"/><compImplementation><compFilter>'
+        '<filter v="levels"/><parameters><parameter><name v="levelinlow"/><paramValue>%s</paramValue></parameter>'
+        '</parameters></compFilter></compImplementation></compNode></compNodes></graph></content></package>' % value_xml
+    )
+    return cast(str, server._graph_model(str(sbs), 'g')['nodes']['1']['params']['levelinlow'])
+
+
+def _function(root: str = '<rootnode v="7"/>', get: str = 'a', x: str = '0') -> str:
+    return (
+        '<dynamicValue>%s<paramNodes><paramNode><uid v="7"/><GUILayout><gpos v="%s 0 0"/></GUILayout>'
+        '<function v="get_float4"/><funcDatas><funcData><constantValueString v="%s"/></funcData></funcDatas>'
+        '</paramNode></paramNodes></dynamicValue>'
+    ) % (root, x, get)
+
+
+def test_diff_values_tell_functions_apart(tmp_path: Path) -> None:
+    """REVIEW.md SRV-63: every function used to read 'function', so no change inside one showed."""
+    base = _levels_with(tmp_path, 'a.sbs', _function())
+    assert base.startswith('function')
+    assert _levels_with(tmp_path, 'b.sbs', _function(get='b')) != base  # retargeted
+    no_output = _levels_with(tmp_path, 'c.sbs', _function(root=''))
+    assert no_output != base and 'no output' in no_output
+
+
+def test_moving_a_function_node_is_no_change(tmp_path: Path) -> None:
+    assert _levels_with(tmp_path, 'a.sbs', _function()) == _levels_with(tmp_path, 'b.sbs', _function(x='500'))
+
+
+def test_a_diff_value_says_what_a_function_reads(tmp_path: Path) -> None:
+    assert "reads 'a'" in _levels_with(tmp_path, 'a.sbs', _function())
+    assert "reads 'b'" in _levels_with(tmp_path, 'b.sbs', _function(get='b'))
+
+
+def test_each_paramset_of_an_fx_map_keeps_its_own_parameters(tmp_path: Path) -> None:
+    """Same-named parameters of two paramsets used to overwrite each other, hiding a change in the first."""
+
+    def paramset(uid: str, value: str) -> str:
+        return (
+            '<paramsGraphData><uid v="%s"/><type v="paramset"/><parameters><parameter><name v="opacity"/>'
+            '<paramValue><constantValueFloat1 v="%s"/></paramValue></parameter></parameters></paramsGraphData>'
+        ) % (uid, value)
+
+    sbs = tmp_path / 'fx.sbs'
+    sbs.write_text(
+        '<package><content><graph><identifier v="g"/><compNodes><compNode><uid v="1"/><compImplementation><compFilter>'
+        '<filter v="fxmaps"/><parameters><parameter><name v="colorswitch"/><paramValue><constantValueBool v="1"/>'
+        '</paramValue></parameter></parameters><paramsGraphs><paramsGraph><paramsGraphDatas>%s%s</paramsGraphDatas>'
+        '</paramsGraph></paramsGraphs></compFilter></compImplementation></compNode></compNodes></graph></content>'
+        '</package>' % (paramset('7', '0.25'), paramset('8', '0.75'))
+    )
+    params = server._graph_model(str(sbs), 'g')['nodes']['1']['params']
+    assert params['colorswitch'] == '1'
+    assert params['paramset 7 opacity'] == '0.25' and params['paramset 8 opacity'] == '0.75'
+
+
+def _filter_node(tmp_path: Path, name: str, body: str) -> dict[str, str]:
+    sbs = tmp_path / name
+    sbs.write_text(
+        '<package><content><graph><identifier v="g"/><compNodes><compNode><uid v="1"/><compImplementation><compFilter>'
+        '<filter v="f"/>%s</compFilter></compImplementation></compNode></compNodes></graph></content></package>' % body
+    )
+    return cast('dict[str, str]', server._graph_model(str(sbs), 'g')['nodes']['1']['params'])
+
+
+def _gradient(*positions: str) -> str:
+    cells = ''.join(
+        '<paramsArrayCell><uid v="%d"/><parameters><parameter><name v="position"/><paramValue>'
+        '<constantValueFloat1 v="%s"/></paramValue></parameter></parameters></paramsArrayCell>' % (i, position)
+        for i, position in enumerate(positions)
+    )
+    return (
+        '<paramsArrays><paramsArray><name v="gradientrgba"/><uid v="9"/><paramsArrayCells>%s</paramsArrayCells>'
+        '</paramsArray></paramsArrays>' % cells
+    )
+
+
+def test_each_gradient_key_counts(tmp_path: Path) -> None:
+    """REVIEW.md SRV-66: same-named keys overwrote each other, so only the last one was compared."""
+    base = _filter_node(tmp_path, 'a.sbs', _gradient('0.1', '0.9'))
+    assert base == {'gradientrgba cells': '2', 'gradientrgba[0] position': '0.1', 'gradientrgba[1] position': '0.9'}
+    assert _filter_node(tmp_path, 'b.sbs', _gradient('0.2', '0.9')) != base  # the first key moved
+    assert _filter_node(tmp_path, 'c.sbs', _gradient('0.9'))['gradientrgba cells'] == '1'  # one deleted
+
+
+def _fx_graph(link: str = '', root: str = '<rootnode v="10"/>') -> str:
+    return (
+        '<paramsGraphs><paramsGraph><uid v="5"/>%s<paramsGraphDatas><paramsGraphData><uid v="11"/><type v="paramset"/>'
+        '<parameters><parameter><name v="opacity"/><paramValue><constantValueFloat1 v="0.5"/></paramValue></parameter>'
+        '</parameters></paramsGraphData></paramsGraphDatas><paramsGraphNodes><paramsGraphNode><uid v="10"/>'
+        '<GUILayout><gpos v="0 0 0"/></GUILayout><type v="paramset"/><data v="11"/>%s</paramsGraphNode>'
+        '</paramsGraphNodes></paramsGraph></paramsGraphs>'
+    ) % (root, link)
+
+
+def test_an_fx_map_parameter_uses_the_id_describe_graph_prints(tmp_path: Path) -> None:
+    """REVIEW.md SRV-68: measured, an inner node's getIdentifier() is the file's node uid, not its data's."""
+    assert _filter_node(tmp_path, 'a.sbs', _fx_graph())['paramset 10 opacity'] == '0.5'
+
+
+def test_an_fx_map_wiring_change_shows(tmp_path: Path) -> None:
+    """REVIEW.md SRV-67."""
+    base = _filter_node(tmp_path, 'a.sbs', _fx_graph())
+    assert _filter_node(tmp_path, 'b.sbs', _fx_graph(link='<connections><connection/></connections>')) != base
+    assert _filter_node(tmp_path, 'c.sbs', _fx_graph(root='<rootnode v="11"/>')) != base
+    moved = _fx_graph().replace('0 0 0', '5 5 0')
+    assert _filter_node(tmp_path, 'd.sbs', moved) == base
+
+
+def test_a_node_size_parameters_inheritance_shows(tmp_path: Path) -> None:
+    """REVIEW.md SRV-69, HLP-74: the same value at another inheritance is another size."""
+
+    def size(relative: str) -> str:
+        return (
+            '<parameters><parameter><name v="outputsize"/>%s<paramValue><constantValueInt2 v="3 3"/></paramValue>'
+            '</parameter></parameters>' % relative
+        )
+
+    absolute = _filter_node(tmp_path, 'a.sbs', size('<relativeTo v="0"/>'))['outputsize']
+    relative = _filter_node(tmp_path, 'b.sbs', size(''))['outputsize']
+    assert absolute != relative and 'absolute' in absolute
+
+
+def test_a_float_parameters_relative_to_is_no_noise(tmp_path: Path) -> None:
+    body = '<parameters><parameter><name v="luminance"/><relativeTo v="0"/><paramValue><constantValueFloat1 v="0.5"/></paramValue></parameter></parameters>'
+    assert _filter_node(tmp_path, 'a.sbs', body)['luminance'] == '0.5'
+
+
+def test_a_resource_paths_package_id_is_no_change(tmp_path: Path) -> None:
+    """REVIEW.md SRV-70: the id differs after a reload, so a diff reported a bitmap as changed with no edit."""
+    value = '<constantValueString v="pkg:///bitmap?dependency=%s"/>'
+    assert (
+        _levels_with(tmp_path, 'a.sbs', value % '1') == _levels_with(tmp_path, 'b.sbs', value % '2') == 'pkg:///bitmap'
+    )

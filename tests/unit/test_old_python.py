@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from textwrap import dedent
 
 import pytest
 
@@ -62,13 +63,15 @@ def test_uninstall_runs_on_an_old_python(old_python: str) -> None:
 def test_sd_run_explains_a_timeout_on_an_old_python(old_python: str) -> None:
     # on 3.9 socket.timeout is not a TimeoutError: the bridge never answering raised it raw
     code = (
-        'import socket, sys\n'
-        'sys.path[:0] = [%r, %r]\n'
-        'import sd_run\n'
-        'def send(request, wait):\n'
-        "    raise socket.timeout('timed out')\n"
-        'sd_run.send = send\n'
-        "sd_run._send_or_explain({'cmd': 'status'}, 1)\n"
+        dedent("""\
+            import socket, sys
+            sys.path[:0] = [%r, %r]
+            import sd_run
+            def send(request, wait):
+                raise socket.timeout('timed out')
+            sd_run.send = send
+            sd_run._send_or_explain({'cmd': 'status'}, 1)
+        """)
     ) % (os.path.join(ROOT, 'client'), ROOT)
     result = subprocess.run([old_python, '-c', code], capture_output=True, text=True, timeout=60)
     assert result.returncode == 1 and 'No reply from Designer' in result.stderr, result.stderr

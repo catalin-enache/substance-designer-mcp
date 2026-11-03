@@ -3,11 +3,12 @@
 The helpers, the plugin and the example run inside Designer, so they are checked against Designer's
 own `sd` package and the PySide6 stubs it bundles, found in the Designer install (SD_DESIGNER_APP or
 the default location, as launch_designer finds it). Without Designer those imports count as Any, so
-the ignores written for sd calls go unused and sd values return Any: the check then drops those two
-warnings (unused ignores, Any returns) for the whole repository, and keeps the rest of strict mode."""
+the ignores written for sd calls go unused, sd values return Any and a QObject subclass subclasses Any: the check
+then drops those three warnings for the whole repository, and keeps the rest of strict mode."""
 
 import glob
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -39,6 +40,15 @@ def designer_packages() -> dict[str, str]:
 
 
 def test_mypy_strict_finds_nothing(tmp_path: Path) -> None:
+    _assert_mypy_finds_nothing(tmp_path, designer_packages())
+
+
+def test_mypy_finds_nothing_without_designer(tmp_path: Path) -> None:
+    """A fresh clone on a machine without Designer (REVIEW.md TST-131): sd and PySide6 are Any there."""
+    _assert_mypy_finds_nothing(tmp_path, {})
+
+
+def _assert_mypy_finds_nothing(tmp_path: Path, packages: dict[str, str]) -> None:
     try:
         import mypy  # noqa: F401
     except ImportError:
@@ -47,7 +57,6 @@ def test_mypy_strict_finds_nothing(tmp_path: Path) -> None:
         )
     # Designer's packages sit next to its whole site-packages, which mypy refuses on its path:
     # link just these three into a folder of their own
-    packages = designer_packages()
     for name, folder in packages.items():
         try:
             (tmp_path / name).symlink_to(folder, target_is_directory=True)
@@ -60,7 +69,9 @@ def test_mypy_strict_finds_nothing(tmp_path: Path) -> None:
                 ],
             )
     env = dict(os.environ, MYPYPATH=str(tmp_path))
-    relaxed = [] if 'sd' in packages else ['--no-warn-unused-ignores', '--no-warn-return-any']
+    relaxed = (
+        [] if 'sd' in packages else ['--no-warn-unused-ignores', '--no-warn-return-any', '--allow-subclassing-any']
+    )
     result = subprocess.run(
         [sys.executable, '-m', 'mypy', '--cache-dir', str(tmp_path / '.cache'), *relaxed],
         cwd=ROOT,
@@ -79,3 +90,42 @@ def test_designer_packages_found_when_designer_is_installed() -> None:
     found = designer_packages()
     assert os.path.isfile(os.path.join(found['sd'], 'api', 'sdnode.py'))
     assert os.path.isfile(os.path.join(found['PySide6'], 'QtCore.pyi'))
+
+
+def _iml_source_roots() -> list[str]:
+    with open(os.path.join(ROOT, '.idea', 'substance-designer-mcp.iml'), encoding='utf-8') as f:
+        return re.findall(r'<sourceFolder url="file://([^"]+)"', f.read())
+
+
+def _dead_roots(roots: list[str], found: dict[str, str], app: str) -> list[str]:
+    """The folders holding Designer's packages that the source roots miss, for an install where the repo's paths
+    apply. Elsewhere, a person adds their own (README.md, Working in PyCharm)."""
+    return [
+        os.path.dirname(folder)
+        for name, folder in found.items()
+        if name in ('sd', 'PySide6') and folder.startswith(app + '/') and os.path.dirname(folder) not in roots
+    ]
+
+
+def test_pycharm_reads_designers_own_packages() -> None:
+    """The venv has neither sd nor PySide6, so .idea marks Designer's folders as source roots: interpreter paths alone
+    leave PySide6's names unresolved (README.md, Working in PyCharm). The roots hold what this install has, when it
+    is at the default location."""
+    roots = _iml_source_roots()
+    app = DESIGNER_APP['darwin']
+    assert app + '/Contents/Resources/python' in roots
+    assert app + '/Contents/plugins/pythonsdk/lib/python3.13/site-packages' in roots
+    assert not _dead_roots(roots, designer_packages(), app)
+
+
+def test_a_designer_update_that_moves_its_packages_is_noticed() -> None:
+    """REVIEW.md TST-123: a new Python folder in Designer leaves the .iml's root dead."""
+    app = DESIGNER_APP['darwin']
+    moved = app + '/Contents/plugins/pythonsdk/lib/python3.14/site-packages'
+    found = {
+        'sd': app + '/Contents/Resources/python/sd',
+        'PySide6': moved + '/PySide6',
+        'shiboken6': moved + '/shiboken6',
+    }
+    assert _dead_roots(_iml_source_roots(), found, app) == [moved]
+    assert not _dead_roots(_iml_source_roots(), {'PySide6': '/elsewhere/site-packages/PySide6'}, app)

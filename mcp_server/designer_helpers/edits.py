@@ -23,7 +23,7 @@ from .core import (
     os,
 )
 from .describe import _library_graph
-from .graph_inputs import _driving_graph, _plain_binding
+from .graph_inputs import _driver_text, _driving_graph, _refuse_no_input, _refuse_no_output
 
 
 def _target(g: SDSBSCompGraph, node_id: str | None) -> SDSBSCompNode | SDSBSCompGraph:
@@ -143,10 +143,11 @@ def set_params(graph_id: str | SDSBSCompGraph | None, node_id: str | None, param
         driven = _driving_graph(cast(SDNode, target), prop) if not is_graph else None
         if driven is not None:
             # setting it would cut the parameter loose from its graph input or function
-            source = _plain_binding(driven)
+            _refuse_no_output(driven, node_id, pid)
+            _refuse_no_input(g, driven, node_id, pid)
             raise RuntimeError(
                 "%s.%s is driven by %s; set that instead (a set op on node 'graph')"
-                % (node_id, pid, 'graph input %r' % source if source else 'a function')
+                % (node_id, pid, _driver_text(g, driven))
             )
         checked.append((pid, prop, _make_value(prop, value)))
     for pid, prop, new_value in checked:

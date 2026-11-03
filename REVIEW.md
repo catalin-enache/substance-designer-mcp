@@ -22,10 +22,10 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
 |---|---|---|
 | High | 0 | 1 |
 | Medium-high | 0 | 2 |
-| Medium | 0 | 20 |
-| Low-medium | 0 | 70 |
-| Low | 0 | 207 |
-| **Total** | **0** | **300** |
+| Medium | 0 | 22 |
+| Low-medium | 0 | 80 |
+| Low | 0 | 241 |
+| **Total** | **0** | **346** |
 
 ## Review log
 
@@ -1066,6 +1066,66 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
 - **Checked and found fine:** the `except` hides only a fallback to the first, which the note states truly; atomic, bitmap, svg and output nodes; one tag read per sweep value against a compute; `^no output given: ` can't match a user's name; a wrong `output` raises before any note; `preview_node` has no other caller; `connect`'s default changes only the intended `metal_003` in the self-test; `diff_graph` doesn't regress, as it starts with the same save on `main`; the refusal comes before `makedirs`, and `set_link_display` refuses before any snapshot; a single line reaches the agent whole; `render.py`'s custom block saves nothing; `test_selftest_safety.py`; the library counts reproduced.
 - **Longest chain still growing:** HLP-65 → HLP-66 → SRV-61, generation 3, a narrow defect in the tool's code.
 
+### 2026-11-03: function graphs on parameters, ROADMAP item 29, on branch `function-graph-findings`
+
+- **How:** not a review of the project: found while measuring every state of a function graph on a
+  parameter for ROADMAP item 29, and recorded here so the fixes have their evidence.
+- **Resolutions assessed:** HLP-13 and HLP-16 (an empty function graph drives nothing) hold. Their
+  "a graph with nodes drives the value" was only true with an output node (HLP-69).
+- **Findings:** 2: 1 low-medium (HLP-69), 1 low (HLP-70).
+- **Checked and found fine:** `getOutputNodes()` on library functions (see HLP-69); `newPropertyGraph` on a
+  parameter that has a function returns it, so `expose_param`'s reuse of an empty one is sound.
+
+### 2026-11-03: `68a56bc` against `9edc207`, the diff only: strings moved into scripts, `run_designer_script` args, PyCharm source roots
+
+- **How:** three read-only reviewers: the tool, docs and unit tests; and two comparing every moved or re-written snippet with its old string, split by module. No Designer run for the review; the self-test had passed 403/403 on this tree, so findings had to be ones a passing run can't exclude. Verified by hand: TST-117 (the traceback simulated with the plugin's `format_exc`, the token present for a real file and absent for `<execute_designer_code>`), TST-118 (`_library_loads` on a real-file load gives `(0, 0)`), TST-119, TST-121 (3.9 fails, 3.12 works), SRV-62, TST-122 and TST-124's locations.
+- **Resolutions assessed:** none has its fix in this diff. HLP-69 names a path this commit moved (a note under it).
+- **Findings:** 9: 2 low-medium (TST-117, TST-118), 7 low (TST-119, TST-120, TST-121, TST-122, TST-123, TST-124, SRV-62). No defect in what the server sends to Designer, and no moved snippet behaves differently on a passing path.
+- **Suggested order:** TST-117 (a real failure reported as a skip, one line), TST-118 (protects the user's Designer as scripts move to files), then TST-119 and TST-120 together, then the rest.
+- **Notes (not entries):** two weaknesses this commit carried over unchanged: `before == after` without a `NODES=` or `INHERIT=` guard at two `batch.py` checks and `measure.py`'s `$outputsize` restore check, so a script failing both times compares equal; and `params/graph_format.py` makes its temporary nodes before its `try`, so its docstring's "removed even if it fails" says more than the code, as the old comment did. The new source roots are the parent folders of `sd` and PySide6, not those folders as AGENTS.md and README say, and they bring `pip`, `shiboken6` and Adobe's `samples`, `tests` and `designer` into PyCharm's scope.
+- **Checked and found fine:** the strings in `core.py` and `lifecycle.py` are byte-identical; `args` over the real tool call (a dict, a JSON string, `{}`, `None`, refusal of `[1]` and `'not json'`), its JSON on one ASCII line, a fresh scope per run so `ARGS` can't leak, the script's own line numbers; `ARGS` read after a script ended (the plugin keeps the scope through `__globals__`); the 120 s timeout equal to `execute_designer_code`'s default; undo labels, which no check reads; `%` doubling and argument order in every moved snippet; `raising_loop`'s `.replace` target still matching after `dedent`; `from textwrap import dedent` re-exported by `server.py`, with no collision; `selftest_sources` walking the scripts, which made `test_cleanup_covers_every_graph...` stronger and weakened no older guard; the folder-grouping test.
+- **Longest chain still growing:** none; every finding is generation 1.
+
+### 2026-11-03: `9edc207` to the working tree, the diff only: `68a56bc` and the uncommitted fixes, second round
+
+- **How:** two read-only reviewers: one assessing the nine resolutions of the round above, with mutations on a scratch copy; one with a fresh look at the final state, moved-back snippets, failure paths, Windows. No Designer run, no live self-test. Verified by hand: TST-125 (`count_nodes` run with a stand-in whose `getNodes` raises: two identical tracebacks holding `NODES=`), TST-126 (32 keys of 36), TST-127's shapes, TST-128, TST-129, PLG-31's line.
+- **Resolutions assessed:** the nine. Hold: TST-122, TST-123, TST-124, SRV-62. Questioned: TST-117 (its "Also covered" said every token's check needs a value, which is false for two: TST-125), TST-118 (its wording: TST-128), TST-119 (TST-126), TST-120 (TST-127), TST-121 (PLG-31, a leftover only).
+- **Findings:** 6: 1 low-medium (TST-125), 5 low (TST-126, TST-127, TST-128, TST-129, PLG-31). None in what the server sends to Designer. Two reviewers found TST-126; they disagreed on TST-125, settled by the stand-in run above.
+- **Suggested order:** TST-126 (a guard that lost four modules through this round's fix), TST-125, then the rest.
+- **Notes (not entries):** `examples/build_dwarf_trimsheet.py` is a real file naming both library names, and the self-test runs it in the user's Designer too; an earlier review accepted that (it checks `getPackages()` first, and `restore_library_packages` undoes the load), and it isn't under `designer_scripts/`, so TST-118's guard doesn't read it, though AGENTS.md's "never goes in a script" reads wider. `pixels()` and `apart()` now exist in both `params/node_seed.py` and `params/graph_seed_effect.py`, which the user accepted when choosing separate scripts; a fix to one won't reach the other. `designer_scripts/` has six empty folders on disk (`bridge`, `graph_edit`, `layout`, `lookup`, `safeguards`, `save`), which git doesn't track. A real traceback from `run_designer_script` also prints the script's own line 4 for the wrapper's frame, as it printed line 3 before `ARGS`.
+- **Checked and found fine:** every `ARGS` key against its call sites, both ways, by a script; the 20 moved-back snippets against their old strings (`%` doubling, argument order, `sd` imported where used, each variable defined before use); no name left of what was removed (`.designer_stubs`, `FACTS`, `COUNT_NODES`, `SEED_OF`, `FORMAT_OF`, `RELATIVE_SIZE`); a missing script file gives `is_error`; `tests/unit/test_designer_scripts.py`: its mocks hide nothing under test, nothing stays in `sys.modules`; the new tests' paths on Windows, by reading and `ntpath`, not run there.
+- **Longest chain still growing:** TST-117 → TST-125 and TST-119 → TST-126, TST-120 → TST-127, generation 2.
+
+### 2026-11-03: branch `function-graph-findings` against `main`, the diff only, working tree included
+
+- **How:** two read-only reviewers: the function-graph code of `9edc207`, which had had no independent review, reading a 275-file sample of Designer's library `.sbs` files; and the rest of the branch with the latest resolutions, with mutations on a scratch copy and a fresh clone without Designer. No Designer run. Verified by hand: TST-131 (`SD_DESIGNER_APP` pointing nowhere: fails on this branch, passes on `main`), HLP-71's code path and `brick_1.sbs`'s FX-Map reading `Edge_Smoothness` and `Interstice_Width`, SRV-63's line, HLP-72, HLP-73, TST-132's cut.
+- **Resolutions assessed:** HLP-69 and HLP-70: fix and test hold, "Also covered" questioned (SRV-63, TST-130; HLP-71). ROADMAP item 29 holds as written, for the one float4 parameter measured (TST-130). TST-125, TST-126, TST-127, TST-128, PLG-31 hold. TST-125's fix prints too little (TST-132); TST-129's "the other 39 fit" doesn't hold by its own measure (TST-133).
+- **Findings:** 10: 1 medium (HLP-71), 3 low-medium (TST-131, SRV-63, HLP-72), 6 low (HLP-73, SRV-64, TST-130, TST-132, TST-133, TST-134).
+- **Suggested order:** TST-131 (the unit suite is red without Designer, one flag), HLP-71 (measure first: what removing an input an FX-Map reads does to the output), HLP-72, SRV-63, then the rest. TST-132 is two lines.
+- **Notes (not entries):** SRV-63 and HLP-73's wording predate this branch; they are here because this branch's table and HLP-69's "Also covered" bear on them. `tests/unit/test_designer_scripts.py` is untracked and must be added when this is committed. Fifteen resolutions say "uncommitted on `function-graph-findings`", to be replaced with the commit.
+- **Checked and found fine:** `_connected_nodes`: the connection side, cycles, cost linear per function; no function with nodes and without an output in the library sample, supporting HLP-69; no nested function on a function node, and none on a graph's own parameters; `set_params` and `sweep_param` test before any change, and batches test state at run time; AGENTS.md's table against `function_states.py`, cell by cell; `designer_script`'s failure check against the summary, coverage counts and clean-up; `run_designer_script`'s own deliberate `raise` records no failure; `is_our_plugin` compares the name, so the manifest's version affects no install; the status table by script count; the `.iml`.
+- **Longest chain still growing:** TST-117 → TST-125 → TST-132, generation 3, about how a failure is printed. HLP-70 → HLP-71 is generation 2 and a defect in the tools.
+
+### 2026-11-03: what the branch review left uncovered, at the user's request, working tree
+
+- **How:** not a review: the limits reported after the round above were measured in Designer and closed, on the user's question "can we cover what was not covered as well?". Measuring found HLP-74, which no reviewer had.
+- **Findings:** 4, all resolved in the same change: 1 medium (HLP-74), 3 low (HLP-75, SRV-65, TST-135).
+- **Still not measured:** a bool or string parameter; `$` parameters other than `$outputsize`, though `_delete_function` treats them all alike.
+
+### 2026-11-03: branch `function-graph-findings` against `main`, the diff only, working tree included, second round
+
+- **How:** two read-only reviewers: the tools' code, with `_graph_model` over the whole library (549 files) and mutations of real files on a scratch copy; tests and docs, with a clean copy without Designer. No Designer run. Verified by hand: SRV-66 (the first gradient key of `grunge_map_006.sbs` edited: the two models equal), HLP-76 (6 functions on graphs' own parameters in the whole library), HLP-77 (12 `valueprocessor.function` and 1 `pixelprocessor.perpixel` that are one `get` of an input), each one's code on `main`, and the quoted lines of TST-138, TST-140, HLP-80.
+- **Resolutions assessed:** hold: HLP-75, SRV-64, TST-130, TST-131, TST-132, TST-133, TST-134. Their own fix holds, with something missed around it: HLP-71 (HLP-76), HLP-72 (HLP-79, HLP-80), HLP-73 (HLP-77), HLP-74 (HLP-78, SRV-69), SRV-63 (SRV-70), SRV-65 (SRV-66, SRV-67, SRV-68), TST-135 (TST-136, TST-137, TST-138).
+- **Findings:** 15: 3 low-medium (SRV-66, HLP-76, HLP-77), 12 low. No regression from this branch in what the tools do: SRV-66, HLP-76, HLP-77, SRV-67 and SRV-69 are older gaps that this branch's fixes come close to and don't close (`impl.iter('parameter')`, the walk over `g.getNodes()` and `_plain_binding`'s test of shape are on `main` too).
+- **Suggested order:** HLP-77 (a processor's function can be deleted), SRV-66 (gradient edits missed by the safety net), TST-136, TST-137, TST-138 (docs that claim more than measured), then the rest. SRV-67, SRV-68, SRV-69 and SRV-70 want one design for `diff_graph`, so they could go together, or to ROADMAP.
+- **Notes (not entries):** three untracked files to add when committing: `tests/unit/test_designer_scripts.py`, `designer_scripts/inputs/fxmap_reads_input.py`, `designer_scripts/inputs/function_reads_missing_input.py`. `function_states.py` puts `get_float4` on an FX-Map's `opacity`, which the live run accepted. `layout.py`'s "a function nothing changed compares equal" would pass on an error reply. `inputs/fxmap_reads_input` leaves its FX-Map in the test graph if it fails after `newNode`, only in a run already failed. "What stays unmeasured" (bool and string parameters, other `$` parameters) is only in the log above; ROADMAP is where follow-ups go.
+- **Checked and found fine:** `_graph_model` over all 549 library files; `same_type` (expose-built pairs differ only for enums); `(FX-Map)` refs never reach `ref.split`; `getReferencedResource` being `None` is guarded; `node_kind`'s callers only print it; only `diff_graph` calls `_graph_model`, and old snapshots still compare; `ARGS` can't leak; `_with_undo` byte-identical; the 2-decimal rows can't flake within a step; clean-up in `function_states.py` and `inputs.py`; no skip turned into a failure by `designer_script`; no older REVIEW.md entry rewritten, counts right; `test_mcp_json` fails only without a venv, as on `main`.
+- **Longest chain still growing:** HLP-70 → HLP-71 → HLP-76 and HLP-69 → SRV-63 → SRV-70, generation 3, in the tools' code, so entries by the skill's rule. They are widening to older gaps rather than recurring.
+
+### 2026-11-03: `function-graph-findings` squashed into `main`
+
+- **Commit:** the whole branch is one commit on `main`, titled "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved". The resolutions above that name that title were made on the branch. The commits the branch's log entries name (`9edc207`, `68a56bc`) no longer exist on `main`; their scopes are all in that commit.
+
 ---
 
 ## High
@@ -1581,6 +1641,31 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
     focused" failed before the fix as measured, but would pass on the old code if the original's view came
     first.
   - Questioned by HLP-54 (2026-11-01).
+
+- [x] **HLP-71 · An input read inside an FX-Map shows `drives: -`, and `remove_graph_input` removes it without refusing · follows HLP-70, generation 2** · `mcp_server/designer_helpers/graph_inputs.py` (`_input_users`, reached from `list_graph_inputs` and `remove_graph_input`) · code path and library data confirmed, the effect on the output not measured · verified by hand · found 2026-11-03
+  - **Defect.** The walk covers `g.getNodes()` and their parameters' functions, and never enters an FX-Map's own graph, whose `paramset` nodes hold functions that read the parent graph's inputs: `for node in g.getNodes(): for prop in node.getProperties(SDPropertyCategory.Input): ... fg = node.getPropertyGraph(prop)`. Adobe's own code reaches that graph with `fxMapNode.getReferencedResource()`.
+  - **Scenario.** A graph whose FX-Map reads an input, as `brick_1.sbs` reads `Edge_Smoothness` and `Interstice_Width` (in a reviewer's 275-file sample of Designer's library, 76 graphs have 563 inputs read only this way). `list_graph_inputs` prints `drives: -`, and `remove_graph_input` removes it, though its docstring says it refuses while a function reads the input. By this branch's measured fact, removing an input a connected `get` reads changes the output with no error; for an FX-Map that still needs measuring.
+  - **Fix.** Measure first. Then, in `_input_users`, for a `sbs::compositing::fxmaps` node, walk `getReferencedResource().getNodes()` and their parameters' functions, reporting those under the refusal, never as plain, since the unbind path can't reach them. A live check.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** live checks in `inputs.py` (`designer_scripts/inputs/fxmap_reads_input.py`): `drives: -` and "removed graph input fx_in" before the fix.
+    - **Measured:** on a scratch copy of `brick_1.sbs`, by hand: changing `Interstice_Width`, which only its FX-Map reads, changes the output, and removing the input changes it again with no error. An FX-Map built from nothing rendered black, so the self-test checks the tools' answers, not the pixels.
+    - **Cause:** the walk stopped at the graph's own nodes, while an FX-Map's functions sit in the graph its node refers to.
+    - **Fix:** `_input_users` also walks `getReferencedResource()`'s nodes for an `sbs::compositing::fxmaps` node, as refs marked "(FX-Map)", never plain, so `remove_graph_input` refuses instead of unbinding them.
+    - **Also covered:** `drives:` and the refusal, by the same walk. A reviewer's library sample has no function nested on a function node, and none on a graph's own parameters. `describe_graph` still lists an FX-Map's node without its inner functions, and says nothing about them either way.
+  - Note (2026-11-03): `describe_graph` now lists an FX-Map's inner functions, and the self-test checks the output's pixels (HLP-75, TST-135).
+  - Questioned by HLP-76 (2026-11-03).
+
+- [x] **HLP-74 · Unbinding an exposed `$outputsize` silently changes the node's size** · `mcp_server/designer_helpers/graph_inputs.py` (`remove_graph_input`, `expose_param`'s rollback) · confirmed, measured · verified by hand · found 2026-11-03
+  - **Defect.** `deletePropertyGraph` on `$outputsize` also switches its inheritance to relative to input, from Absolute or relative to parent, and the tools then set the value on it.
+  - **Scenario.** A node at an Absolute size with `$outputsize` exposed, the input at 3,3: 8 px. `remove_graph_input` says "kept value (3, 3)", and the node is now relative to input: 128 px on a 16 px input. `expose`'s rollback after a failure did the same.
+  - **Fix.** Put the inheritance back, then set the value.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** live checks in `inputs.py`: `$outputsize keeps its inheritance and value when unbound` and `expose: a failure midway leaves $outputsize as it was` both failed with `INHERIT=RelativeToInput`. The measured rows are "designer facts" (`facts/function_states.py`).
+    - **Cause:** the table was measured on a float4 parameter, where deleting a function changes no inheritance, and the code assumed the same of every parameter.
+    - **Fix:** `_delete_function` keeps the inheritance of a `$` parameter; both callers use it. AGENTS.md states the fact.
+    - **Also covered:** every `deletePropertyGraph` in the helpers. Setting a value over an empty function keeps the inheritance (measured). Only `$outputsize` is measured; the helper treats every `$` parameter alike.
+  - Questioned by HLP-78, SRV-69 (2026-11-03).
+  - Note (2026-11-03): its "Only `$outputsize` is measured" is out of date: all six are, and the switch is to the node's default (HLP-78).
 
 ## Low-medium
 
@@ -2877,6 +2962,117 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
     - **Fix:** the closed case can't be saved by a tool, so it says so: delete the nodes using it, or the user saves it from Designer's dialog. Live checks, in a Designer the self-test started, since a closed package stays loaded: each of the four states.
     - **Also:** `getPackage()` returning `None` wasn't seen; it's handled as closed.
   - Note (2026-11-03), measured at the user's request: `getPackage()` is `None` for a dependency whose file is gone, with its path set: not refused, and `saveCopyOfPackageAs`, `savePackage` and `savePackageAs` all go through with no dialog (a live check for the first part, a unit test). A dependency hand-edited to an empty file name isn't listed at all. So no path with no package still wasn't seen; that branch stays, as closed, on fakes only.
+
+- [x] **HLP-69 · A function with nodes but no output node counts as driving the value, and `remove_graph_input` deletes it** · `mcp_server/designer_helpers/graph_inputs.py` (`_driving_graph`, `_plain_binding`) · confirmed · verified by hand · found 2026-11-03
+  - **Defect.** `_driving_graph` tested only `len(fg.getNodes())`, and `_plain_binding` only "one `get_*` node". Measured: without an output node the function has no effect and the output follows the stored value.
+  - **Scenario.** A function being written in Designer, one `get` node and no output yet. `remove_graph_input` treated it as a plain binding: it deleted the function and set the parameter to the input's value, which changed the output. `describe_graph` showed `<- graph input`, and `set`, `expose` and `sweep_param` called it driven.
+  - **Fix.** Tell the state apart with `getOutputNodes()`; keep refusing, since setting the value would delete the nodes, and say what it is.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** six live checks in `tests/test_all_tools/inputs.py` (the `stub` node) failed: `remove_graph_input` printed "unbound ... levelouthigh", the others reported it as driven.
+    - **Cause:** "has nodes" stood in for "drives the value"; the output node was never looked at.
+    - **Fix:** `_has_output` and `_refuse_no_output` in `graph_inputs.py`, used by the `set` op, `sweep_param` and `expose_param`; `_plain_binding` requires an output, so `remove_graph_input` refuses; `describe_graph` shows the value with a note. AGENTS.md states the measured table, re-measured by `designer_scripts/function_states.py` (also after a save and reload).
+    - **Also covered:** every caller of `_driving_graph` and `_plain_binding`, and the only other `getPropertyGraph` readers, `expose_param` and `_input_users`. A false "no output" on real functions was the risk: 2,034 library functions with nodes in 73 sampled files (of 549), Pixel Processor `perpixel` and `$outputsize` among them, all reported one output node (a one-off scan, not in the self-test).
+
+  - Note (2026-11-03): `designer_scripts/function_states.py` in this resolution is now `designer_scripts/facts/function_states.py` (moved in `68a56bc`).
+  - Questioned by SRV-63, TST-130 (2026-11-03).
+
+- [x] **TST-117 · A failure in the 3D grab now reports a skip, because the traceback shows the token** · `tests/test_all_tools/designer_scripts/facts/grab_3d_view.py:16`, `tests/test_all_tools/facts.py:244` · mechanism confirmed, trigger plausible · verified by hand · found 2026-11-03
+  - **Defect.** A script in a real file gets source lines in its traceback, and the failing line holds the token that means "no 3D view": `print('NO_3D_VIEW' if not vp else 'SAVED=%s' % vp[0].grab().save(ARGS['path']))`, read by `if 'NO_3D_VIEW' in t or not is_image(render):`. As a string under `<execute_designer_code>` the traceback had no source line.
+  - **Scenario.** `vp[0].grab()` raises, for example the stale wrapper error AGENTS.md describes. The plugin returns `traceback.format_exc()`, the token is in it, and the check is skipped as "no 3D View visible". Before the move the token was absent, `PILImage.open(grab_png)` raised and the run failed.
+  - **Fix.** Print the token from its own `if not vp:` branch, or match a whole output line (`re.search(r'^NO_3D_VIEW$', t, re.M)`). A reviewer found no other script with a token like this.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** `test_a_failing_3d_grab_does_not_read_as_no_3d_view` in the new `tests/unit/test_designer_scripts.py` runs the script as the plugin does, with a stand-in for `sd` and PySide6 and a `grab()` that raises; it failed with the token in the traceback. `test_no_3d_view_is_still_reported` guards the token itself.
+    - **Cause:** the token and the call that can fail shared one line, and a real file's traceback prints its failing line.
+    - **Fix:** `grab_3d_view.py` prints the token from its own branch.
+    - **Also covered:** every script's lines holding a literal token and another call (`PARENT=`, `FORMAT=`, `DOT_PROPS=`, `EMBED=`): their checks need a value after the token, so a traceback can't satisfy them. Inline strings have no source lines in a traceback. Of the self-test's `skip` calls, this is the only one that reads a script's output for a token.
+  - Questioned by TST-125 (2026-11-03).
+
+- [x] **TST-118 · The library-load guard can't see scripts in real files, though its source list now includes them** · `tests/unit/conftest.py:47`, `tests/unit/test_selftest_safety.py` (`_library_loads`) · confirmed · verified by hand · found 2026-11-03 (two reviewers)
+  - **Defect.** `selftest_sources()` walks `designer_scripts/`, with the comment "what designer_scripts/ runs inside Designer counts too", but `_library_loads` looks only at string constants holding both `loadUserPackage` and `DefaultResourcesDir`. In a real file those are code, and the `was_running` branch that protects a load is in another file.
+  - **Scenario.** AGENTS.md now sends snippets with real logic to these files. A script that loads a library package gives `(0, 0)` from the guard (measured) and runs in the user's Designer, the risk TST-111 guards against. Nothing does so today: no script names `DefaultResourcesDir`, and the one library load is still a guarded string in `safeguards.py`.
+  - **Fix.** For files under `designer_scripts/`, fail on the raw text holding both names, add the case to `test_the_guard_tells_the_cases_apart`, and state the limit in the module docstring. Also correct `selftest_sources`' docstring: its keys are relative paths now, and not all are modules.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved"). A rule, chosen by the user over closing it as won't fix.
+    - **Test:** `test_no_script_loads_a_library_package`; with a temporary script naming both names it failed on that file, and it passes on the tree. `test_the_script_guard_tells_the_cases_apart` shows what it does and doesn't count.
+    - **Cause:** the guard reads string constants, and in a real file a load is code; the `was_running` branch would be in another file, so it couldn't judge such a load even if it saw it.
+    - **Fix:** no script may name both `loadUserPackage` and `DefaultResourcesDir`; such a load stays inline behind `if was_running:`. AGENTS.md states the rule, and the module's docstring its limit: a library path through `ARGS` goes unseen, and a comment naming both fails it. `selftest_sources`' docstring is corrected.
+    - **Also covered:** every `loadUserPackage` in the self-test traced to its path: of 10 uses, only `safeguards.py:415` loads a library package, inline and protected; the 9 others load the test's own files.
+  - Questioned by TST-128 (2026-11-03).
+
+- [x] **TST-125 · A script that fails on both reads satisfies two "changes nothing" checks · follows TST-117, generation 2** · `tests/test_all_tools/graph_edit.py:86`, `tests/test_all_tools/params.py:168`, `designer_scripts/shared/count_nodes.py:13`, `designer_scripts/shared/node_size_inheritance.py:17` · mechanism confirmed, trigger plausible · verified by hand · found 2026-11-03
+  - **Defect.** `before == after and 'NODES=' in before` and `'INHERIT=' in before and before == after` read only a bare token, and a real file's traceback prints the failing line, `print('NODES=%d' % len(g.getNodes()))`. TST-117's "Also covered" said every token's check needs a value after it, and missed these two.
+  - **Scenario.** `g.getNodes()` raises on both reads (measured with a stand-in): the two tracebacks are identical and hold the token, so "a bad param leaves no node behind" passes having measured nothing. The old strings had no source lines, so their guards held.
+  - **Fix.** Match a value (`re.search(r'^NODES=\d+$', before, re.M)`, `r'^INHERIT=\w+ VALUE='`). Better, since it covers these two, the unguarded comparisons in the first round's notes and the setup scripts whose result is discarded: have `common.designer_script` record a failed check when `--- ERROR ---` is in the result, because `_bridge` returns a script's error as normal text.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** `test_a_script_that_raises_fails_the_run` in `tests/unit/test_selftest_summary.py`: a reply holding `--- ERROR ---` or `is_error` recorded no failed check before the fix. `test_a_script_that_runs_adds_no_check` guards the normal path. With the check in `designer_script` removed on a scratch copy, the test fails.
+    - **Cause:** `_bridge` returns a script's error as normal text, so every caller had to notice it, and a check reading a bare token couldn't: a real file's traceback prints that token.
+    - **Fix:** `common.designer_script` records a failed check when a script raises or the tool errors, whatever the caller reads. The two checks stay as they are, since the run now fails at the script.
+    - **Also covered:** by the same line: the `before == after` comparisons without a guard in the first round's notes (for scripts: `batch.py`, `measure.py`), TST-117's skip, and the setup and restore scripts whose result is discarded. None of the 403 live checks recorded a script failure, so no script raises on purpose. Inline strings have no source lines in a traceback, so they don't have this problem, and they aren't covered by this.
+  - Questioned by TST-132 (2026-11-03).
+
+- [x] **TST-131 · The unit suite fails on a machine without Designer** · `tests/unit/test_types.py` (`relaxed`), `designer_scripts/lifecycle/quit_ignores_close.py:13`, `quit_prompt_after_close.py:14`, `quit_slow_shutdown.py:22` · confirmed · verified by hand · found 2026-11-03
+  - **Defect.** The scripts subclass `QObject`. Without Designer, PySide6 is `Any`, and strict mode's `disallow_subclassing_any` isn't among the flags relaxed: `relaxed = [] if 'sd' in packages else ['--no-warn-unused-ignores', '--no-warn-return-any']`.
+  - **Scenario.** A fresh clone without Designer fails `test_mypy_strict_finds_nothing` with `Class cannot subclass "QObject" (has type "Any")`, 3 errors; `main` passes there. README and AGENTS.md say "no Designer needed". A `# type: ignore[misc]` isn't an option: it would be unused where Designer exists.
+  - **Fix.** Test first, with `SD_DESIGNER_APP` pointing nowhere. Add `--allow-subclassing-any` to `relaxed` (a reviewer ran it: clean), and correct the docstring's "those two warnings".
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** `test_mypy_finds_nothing_without_designer` runs mypy as a machine without Designer does; it failed with the three `QObject` errors. With `SD_DESIGNER_APP` pointing nowhere, `test_types.py` now passes (4 passed, 1 skipped).
+    - **Cause:** without Designer's packages `QObject` is `Any`, and the flags relaxed for that case left out subclassing one.
+    - **Fix:** `--allow-subclassing-any` in `relaxed`, and the docstring says three warnings.
+    - **Also covered:** a reviewer's fresh clone with no Designer had this as its only failure.
+
+- [x] **SRV-63 · `diff_graph` can't see a change inside a function, including the loss of its output node · follows HLP-69, generation 2** · `mcp_server/server_tools/snapshots.py:272` · confirmed by reading · verified by hand · found 2026-11-03
+  - **Defect.** `return 'function' if el.tag == 'dynamicValue' else (el.get('v') or '')` makes every function compare equal to every other. HLP-69's "Also covered" lists the API readers of function graphs and misses this reader of the file. It predates this branch.
+  - **Scenario.** A script rewires a function, retargets its `get`, or clears its output node, which by this branch's table changes the output. `diff_graph` reports no parameter change, though AGENTS.md makes a snapshot plus a diff the safety net for risky edits.
+  - **Fix.** `value_of` returns a digest of the function's nodes, connections, constants and output node, labelling one without an output. A check.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** `test_diff_values_tell_functions_apart` and `test_moving_a_function_node_is_no_change` in `test_sbs.py`, and live checks in `layout.py`: a function losing its output node showed no parameter change before the fix; a function nothing changed compares equal across a snapshot.
+    - **Cause:** every function was stored in the model as the one word `function`.
+    - **Fix:** `_function_value` gives `function <digest>` of the function's output node, nodes, connections and constants, leaving out where the nodes sit, and `function (no output) <digest>`. `test_graph_model`'s expected value changed with it.
+    - **Also covered:** the digest says that a function changed, not how. It covers every parameter `_graph_model` reads, not the functions inside an FX-Map's graph.
+  - Note (2026-11-03): its "Also covered" is wrong on FX-Maps: `impl.iter('parameter')` did read their inner parameters, only overwriting same-named ones (SRV-65). The value now also says what a function reads.
+  - Questioned by SRV-70 (2026-11-03).
+
+- [x] **HLP-72 · A binding to a name that is no graph input is reported as a graph input, with advice that can't work** · `mcp_server/designer_helpers/graph_inputs.py` (`_plain_binding`), `describe.py:90`, `edits.py:149-150`, `sweep.py` · confirmed by reading, how often a user's graph reaches it not measured · verified by hand · found 2026-11-03
+  - **Defect.** `_plain_binding` returns whatever `__constant__` holds, without checking that the input exists, and the set op says `"%s.%s is driven by %s; set that instead (a set op on node 'graph')"`. `function_states.py` measures this state (input removed, connected `get` left, output changes), but the table has no row for it.
+  - **Scenario.** The input was deleted by code, or the function reads a name like `#opacity`, as 131 single-`get` functions do in a reviewer's library sample. `describe_graph` shows `param <- graph input 'x'`, and the set op sends the agent to set `x` on node `graph`, which fails with no such parameter.
+  - **Fix.** Check `g.getPropertyFromId(source, Input)` at the reporting sites; if absent, say "a function reading 'x', which is not an input of this graph". A table row and a `stub` check.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** live checks in `inputs.py` (`designer_scripts/inputs/function_reads_missing_input.py`) for `describe_graph`, the `set` op and `sweep_param`, which failed.
+    - **Cause:** `_plain_binding` reports the name a `get` holds, and nothing asked whether the graph has that input.
+    - **Fix:** `_driver_text` says "a function reading 'x', which is not an input of this graph", and `_refuse_no_input` refuses with what can be done instead of pointing at the graph.
+    - **Also covered:** all of `_plain_binding`'s reporting callers. The table has no row for this state; AGENTS.md's sentence on removing an input covers it. `expose_param`'s refusal says "a function", which stays true.
+  - Questioned by HLP-79, HLP-80 (2026-11-03).
+
+- [x] **SRV-66 · `diff_graph` misses a change to a gradient's or curve's keys · follows SRV-65, generation 2** · `mcp_server/server_tools/snapshots.py` (`_graph_model`) · confirmed · verified by hand · found 2026-11-03
+  - **Defect.** `inner` keys only `paramsGraphData`, while `impl.iter('parameter')` also reaches `paramsArrayCell`, so same-named cells overwrite each other and only the last counts. The overwriting itself predates this branch.
+  - **Scenario.** The first key of a gradient in `grunge_map_006.sbs` is moved or deleted: the two models are equal, `0 changed line(s)`, though a snapshot and diff is AGENTS.md's safety net. About 576 library nodes have such duplicates.
+  - **Fix.** Key cells by array name and index, and add a count of cells. A unit test.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** `test_each_gradient_key_counts` in `test_sbs.py` failed; before the fix, editing `grunge_map_006.sbs`'s first key left the two models equal.
+    - **Measured:** cell order and uids are the same through two saves and reloads of 4 library files, so keying by position doesn't add noise.
+    - **Cause:** every `parameter` under a node went into one dict by name.
+    - **Fix:** `_node_params` walks the file's structure: `gradientrgba[0] position`, and `gradientrgba cells` for the count.
+    - **Also covered:** arrays inside an FX-Map's inner nodes, by the same walk. One run over the whole library: 76,544 parameters, all in the model, no error.
+
+- [x] **HLP-76 · Functions on a graph's own parameters read inputs too, and the tools can't see them · follows HLP-71, generation 3** · `mcp_server/designer_helpers/graph_inputs.py` (`_input_users`) · library data and stubs confirmed, effect on the output not measured · verified by hand · found 2026-11-03
+  - **Defect.** The walk covers `g.getNodes()`. HLP-71's "none on a graph's own parameters" came from a sample: the whole library has 6, such as `pattern_shape.sbs`'s `outputsize` reading `non_square`. `getPropertyGraph` is on `SDNode`, not `SDGraph`, so the API can't reach them. This predates the branch.
+  - **Scenario.** A graph whose size reads an input that no node reads: `list_graph_inputs` shows `drives: -`, and `remove_graph_input` removes it without refusing.
+  - **Fix.** Read `baseParameters` from a saved copy, as `_graph_model` does, or state the limit in both docstrings and in a note under HLP-71.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** live checks in `inputs.py` (`designer_scripts/inputs/graph_parameter_function.py`, whose `.sbs` is edited, since the API can't make such a function): `drives: -` and "removed graph input size_in" before the fix.
+    - **Measured:** the function drives the size: 8 px at 3,3, 32 px at 5,5 ("designer facts"), and by hand 256 px once the input is removed. `SDSBSCompGraph` has no `getPropertyGraph`.
+    - **Cause:** the walk has only the API, which doesn't reach these.
+    - **Fix:** `_graph_parameter_reads` reads `baseParameters` from the package's file, following the function's connections for `drives:`, and refs are `graph.<parameter>`. The docstrings say "as last saved".
+    - **Also covered:** a function added since the last save stays unseen, and a package never saved has no file; AGENTS.md and the docstrings say so. They are never plain, so nothing unbinds them.
+
+- [x] **HLP-77 · A Value or Pixel Processor whose function is one `get` counts as a plain binding, and can be deleted · follows HLP-73, generation 2** · `mcp_server/designer_helpers/graph_inputs.py` (`_plain_binding`, `remove_graph_input`) · library data confirmed, which path is taken not measured · verified by hand · found 2026-11-03
+  - **Defect.** `_plain_binding` tests shape only, while its docstring and the tool's say a Pixel Processor's function is refused. It predates the branch; HLP-73's new code handles this case too.
+  - **Scenario.** 12 `valueprocessor.function` and 1 `pixelprocessor.perpixel` in the library are one `get` of an input. `remove_graph_input` deletes the processor's function if the types match, gives impossible advice if they don't, or an `AttributeError` if `getType()` is `None`.
+  - **Fix.** Treat `function` and `perpixel` of those nodes as never plain, so they are refused. A live check.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** a live check in `inputs.py` (`designer_scripts/inputs/processors_read_input.py`) failed with `WARNING: <id>.function is at its default`: the processor's function really was deleted.
+    - **Cause:** "one `get` as its output" stood in for "a binding", and a processor's function is what the node computes.
+    - **Fix:** `_is_processor_program` keeps `function` and `perpixel` of those nodes out of the plain ones, so they are refused.
+    - **Also covered:** `_input_users` is the only caller that acts on plain; `describe_graph` still names the input such a function reads, which is true.
 
 ## Low
 
@@ -5459,3 +5655,310 @@ command-line client and example, **TST** tests and docs. A new area gets a new p
   - **Scenario.** Someone trusts the comment and runs the self-test in their own Designer with a save path unguarded.
   - **Fix.** Narrow the comment and the resolution (run pytest first); a clause in those five docstrings; `or` in the path.
   - **Resolution: done** (commit `1b06225`). (1) The comment says the gate guards a broken helper only, and to run the unit tests first; SRV-60's resolution has this note. (2) The five docstrings now say it. `or` in the folder's path. Wording, apart from that; no new check.
+
+- [x] **HLP-70 · `list_graph_inputs` says an input drives a parameter when its `get` node feeds nothing** · `mcp_server/designer_helpers/graph_inputs.py` (`_input_users`) · confirmed · verified by hand · found 2026-11-03
+  - **Defect.** `_input_users` lists every `get` node of a function, connected or not, and a parameter once per `get`.
+  - **Scenario.** A function with an output node and a leftover `get` of another input: `drives:` names a parameter that input has no effect on. Two `get` nodes of one input list the parameter twice.
+  - **Fix.** Follow the connections back from the output node for `drives:`.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** the live check "drives: a connected get node counts, an unconnected one does not" failed with the unconnected input listed as driving `leveloutlow`, and `leveloutlow` twice under the connected one.
+    - **Cause:** the function's nodes were scanned as a flat list, so its wiring was never read.
+    - **Fix:** `_connected_nodes` walks back from the output node; `_input_users(connected_only=True)` uses it for `drives:`, and a parameter is listed once.
+    - **Also covered:** `remove_graph_input` keeps counting every `get`, on purpose: its refusal for an unconnected one stays (a live check guards it), since the next edit could connect that node, and removing an input a connected `get` reads changes the output with no error (a "designer facts" check). Measured by hand, not in the self-test: such a graph still cooks.
+      The walk on real functions (a one-off scan, not in the self-test): 715 of 721 `get` nodes in 571 library functions of 27 sampled files are connected; a separate walk forward from the other 6, in `cross_section` and `noise_anisotropic_noise_v2`, doesn't reach the output either, so they are leftovers in Adobe's own graphs.
+  - Questioned by HLP-71 (2026-11-03).
+
+- [x] **TST-119 · The `dedent` guard covers 2 of the server's modules while its text says the server's snippets, and this diff's own line in a third would fail it** · `tests/unit/test_selftest_safety.py:108`, `mcp_server/server_tools/scripting.py:41`, `AGENTS.md` (Running the tests) · confirmed · verified by hand · found 2026-11-03
+  - **Defect.** The test loops `for name in ('core.py', 'lifecycle.py'):`, its docstring says "the self-test's and the server's snippets", and AGENTS.md says the test checks the rule. `'ARGS = __import__("json").loads(%r)\n%s'` in `scripting.py`, added by this diff, is the only hit when the same check runs over every module of `server_tools`.
+  - **Scenario.** A joined snippet added to `views.py` or `measure.py` passes. A reader of AGENTS.md assumes it wouldn't. AGENTS.md also doesn't say whether `tests/unit` is covered: `test_plugin.py` was converted by hand, and `test_server.py`'s new test uses a joined string.
+  - **Fix.** Loop over `server_tools.MODULES` and exempt or convert `scripting.py:41`, or narrow the docstring and AGENTS.md to what is scanned. Say whether `tests/unit` is in the rule.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** the guard now loops over `server_tools.MODULES`; it failed with `scripting.py:41`.
+    - **Cause:** a list of two file names stood in for "the server".
+    - **Fix:** `scripting.py` writes the `ARGS` line as one line plus `+ script`, sending the same text. AGENTS.md says the rule is checked in the self-test's modules and the server's, not in `tests/unit`.
+    - **Also covered:** the whole server, by the loop; no other hit.
+  - Questioned by TST-126 (2026-11-03).
+
+- [x] **TST-120 · `_is_several_lines_of_python` has no positive control, and misses ways of writing the joined form** · `tests/unit/test_selftest_safety.py` (`_is_several_lines_of_python`, `test_a_snippet_of_several_lines_is_written_with_dedent`) · confirmed · found 2026-11-03
+  - **Defect.** The guard ends in `assert not joined`, and nothing shows the predicate ever returns True; its sibling has `test_the_guard_tells_the_cases_apart`. Measured misses: `'import sd\n' + 'print(1)\n'` (one line per piece, the pattern itself), an f-string piece, `%f` and `%(v)r` placeholders, `'import %s\nprint(1)\n'`. Any argument of `dedent` is exempt, even a string with `\n` escapes. It also returns True for `'FILE=x\nGRAPH=g\nOPEN=0'`, which its docstring says it excludes.
+  - **Scenario.** A later edit breaks the regex so every string is a `SyntaxError`: the guard goes on passing and checks nothing.
+  - **Fix.** A table test with positive and negative cases, as the sibling has. Then either catch `+` joins with a `\n` piece, or state these limits in the docstring.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** `test_the_dedent_guard_tells_the_cases_apart`, a table of 14 cases: the reported misses and the false alarm, and what must stay allowed.
+    - **Cause:** the predicate had only ever been asked about clean code, and it looked at one string constant at a time.
+    - **Fix:** `_joined_snippets` also catches strings joined with `+` and a `dedent` of anything but a triple-quoted string; placeholders count as names; `NAME=value` lines of plain values are data. Writing the table showed that filter hiding `scripting.py:41` (`ARGS = ...` is a call), so only plain values count.
+    - **Also covered:** the docstring states what stays uncaught: an f-string, and code built at run time such as `'\n'.join(lines)`, which can't be told from building output.
+  - Questioned by TST-127 (2026-11-03).
+
+- [x] **TST-121 · `array.array[int]` annotations stop two scripts on a Designer older than Python 3.12** · `tests/test_all_tools/designer_scripts/params/graph_seed_effect.py`, `params/node_seed.py` · plausible · verified by hand in part · found 2026-11-03
+  - **Defect.** Annotations are evaluated when `def` runs (AGENTS.md), and `array.array` can't be subscripted before 3.12: on Python 3.9 it raises, on 3.12 it works, measured; 3.10 and 3.11 weren't available here. The old strings had no annotations. README says an older Designer "may work if its bundled Python is 3.10 or newer".
+  - **Scenario.** The self-test on a Designer bundling 3.11 (ROADMAP item 19): both scripts raise `TypeError` at their first `def`, and the two seed facts fail for a reason that has nothing to do with seeds.
+  - **Fix.** Annotate with `Any`, or quote the annotation.
+  - **Resolution: won't fix**, the user's decision (2026-11-03): no compatibility with Designers older than the current one.
+    - **Why not:** the scripts run on the supported Designer, whose Python 3.13 can subscript `array.array`. README no longer says an older Designer may work (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+  - Questioned by PLG-31 (2026-11-03).
+
+- [x] **TST-122 · `package_uid.py` turns a missing `<fileUID>` into an empty string where the old code raised** · `tests/test_all_tools/designer_scripts/facts/package_uid.py:19` · code path confirmed, scenario unlikely · verified by hand · found 2026-11-03
+  - **Defect.** `return found.group(1) if found else ''` replaces `re.search(...).group(1)`, which raised on no match.
+  - **Scenario.** A Designer update changes how the UID is stored. With `getUID()` also empty, `SAME_UID=True` and `COPY_KEEPS_UID=True` print and the fact passes. With only the file lacking it, the check fails later and elsewhere: the script goes on to write `S.sbs` and `D.sbs`, so `facts.py`'s missing-file branch is skipped and `own_uid` raises in the module.
+  - **Fix.** Keep the raise, as `own_uid` in `facts.py` does.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** `test_a_file_without_a_uid_fails_the_fact` in `tests/unit/test_designer_scripts.py`, with a stand-in package whose file has no `<fileUID>` and whose UID is empty: it failed with `SAME_UID=True`. `test_a_file_with_the_uid_passes_the_fact` guards the normal path.
+    - **Cause:** the move to a typed helper handled the `None` that `re.search` can return by returning `''`, a value that compares equal.
+    - **Fix:** `file_uid` raises, naming the file.
+    - **Also covered:** `own_uid` in `facts.py` already raises; no other script reads a file this way.
+
+- [x] **TST-123 · The PyCharm test compares the `.iml` with a copy of the same path, so it can't notice a dead root** · `tests/unit/test_types.py` (`test_pycharm_reads_designers_own_packages`) · confirmed by reasoning · found 2026-11-03
+  - **Defect.** `assert app + '/Contents/plugins/pythonsdk/lib/python3.13/site-packages' in roots` repeats the literal. Its docstring's point is that PyCharm reads Designer's packages; it only guards against the roots being removed.
+  - **Scenario.** A Designer update moves to `python3.14`. `designer_packages()` in the same file still finds the packages, so mypy is right, and this test passes while PyCharm's root is dead and the imports show as errors again.
+  - **Fix.** When `designer_packages()` finds an install at the default location, also assert that the parent folders of `found['sd']` and `found['PySide6']` are in `roots`.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** `test_a_designer_update_that_moves_its_packages_is_noticed` gives `_dead_roots` a `python3.14` install and expects the moved folder, and an install elsewhere and expects nothing. The old test had no way to fail on this: it compared two copies of one path.
+    - **Cause:** the test checked the `.iml` against a literal, not against where Designer's packages are.
+    - **Fix:** `test_pycharm_reads_designers_own_packages` also compares the roots with what `designer_packages()` finds, for an install at the default location.
+    - **Also covered:** the `sd` root as well as the PySide6 one.
+
+- [x] **TST-124 · Text the rewrite left wrong** · `tests/test_all_tools/params.py:151`, `tests/test_all_tools/graph_edit.py:68`, `tests/unit/test_plugin.py:494`, `tests/unit/test_lifecycle_env.py:235`, `tests/test_all_tools/common.py:273`, `tests/test_all_tools/inputs.py:303` · confirmed · verified by hand · found 2026-11-03
+  - **Defect.** `params.py:151` names `SEED_OF`, a constant that is gone. Three comments that sat beside a line now sit above the next statement: "it is SDGraph's: leave no copy behind" (above a `for`, describing the `del`), "before the fix: about 60 s" (above a `print`, describing the `deque` line), "where the tool looks it up" (above `sent = ...`, describing the `_bridge` line). `designer_script`'s docstring leaves out `shared/`. `count_nodes` in `inputs.py` is built inside a `for` and read after it, where it used to be defined once before.
+  - **Scenario.** A reader takes the wrong statement for the one explained, or puts a shared script in one module's folder and has the unit test refuse it. No effect on a run.
+  - **Fix.** Name `params/graph_seed_effect.py`; move each comment above its statement; add `shared/` to the docstring; define `count_nodes` before the loop.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved"). Text only, no behaviour.
+    - **Test:** none needed for comments; both suites pass.
+    - **Fix:** as suggested, in the six places listed.
+    - **Also covered:** the `# the copy is in the editor` and `# B is in the editor` comments moved at the same time still describe the right moment (a reviewer checked them). `selftest_sources`' docstring goes with TST-118.
+
+- [x] **SRV-62 · The docs don't say `ARGS` exists only through the MCP tool** · `mcp_server/server_tools/scripting.py:31`, `AGENTS.md` (Fallback without MCP), `client/sd_run.py:111-114` · confirmed from the code, not run · verified by hand · found 2026-11-03
+  - **Defect.** The docstring gives the recipe `ARGS: dict[str, Any] = globals()['ARGS']`, while `client/sd_run.py` sends the file as it is, with no `ARGS` line. AGENTS.md's fallback note says only "(no undo grouping)".
+  - **Scenario.** `python client/sd_run.py tests/test_all_tools/designer_scripts/facts/dot_properties.py` works, but one reading `ARGS`, such as `facts/reload_uid.py`, raises `KeyError: 'ARGS'`.
+  - **Fix.** Extend the note to "no undo grouping, no `ARGS`". Adding `--args` to `sd_run.py` isn't needed for a fallback.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** `test_the_fallback_client_sends_no_args` in `tests/unit/test_server.py`; it failed on the missing note.
+    - **Fix:** AGENTS.md's fallback note says "no undo grouping, no `ARGS`", and the tool's docstring says only this tool sets it.
+    - **Also covered:** `execute_designer_code` takes no `args`, and its docstring doesn't mention them.
+
+- [x] **TST-126 · The widened `dedent` guard stopped scanning four self-test modules · follows TST-119, generation 2** · `tests/unit/test_selftest_safety.py:218-219` · confirmed · verified by hand · found 2026-11-03 (two reviewers)
+  - **Defect.** Server modules are keyed by bare file name in the same dict as the self-test's: `sources[os.path.basename(cast(str, module.__file__))] = f.read()`, so `discovery.py`, `layout.py`, `lifecycle.py` and `measure.py` of the self-test are overwritten. `assert len(sources) > 30` doesn't notice: 32 keys of 36.
+  - **Scenario.** A joined snippet in `tests/test_all_tools/measure.py` passes (run on a scratch copy; the same line in `save.py` fails). AGENTS.md's "checks it in the self-test's modules and the server's" is untrue for those four. Scanned separately, none holds one today.
+  - **Fix.** Key server modules as `'server_tools/' + basename`, and assert the exact count, `len(selftest) + len(server_tools.MODULES)`.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** `test_the_dedent_rule_reads_every_module_of_both` failed on the 32 keys of 36. On a scratch copy, a joined snippet in the self-test's `measure.py`, `lifecycle.py`, `layout.py`, `discovery.py` or `save.py` now fails the rule's test.
+    - **Cause:** two folders' files went into one dict keyed by bare file name, and the `> 30` check was too loose to notice.
+    - **Fix:** server modules are keyed `server_tools/<name>`, and the test compares the exact count.
+    - **Also covered:** `selftest_sources` keeps paths relative to its folder, so it has no such collision.
+
+- [x] **TST-127 · The `dedent` guard misses a join with a variable in front, and an indented `dedent('...')` · follows TST-120, generation 2** · `tests/unit/test_selftest_safety.py` (`_joined_snippets`, `pieces`) · confirmed · verified by hand · found 2026-11-03
+  - **Defect.** `pieces` gives up on a `+` tree holding any piece that isn't a plain string, and an indented string fails to compile, so it counts as not Python. Not flagged: `helpers + 'import sd\n' + 'print(1)\n'`, `GRAPH_OF % G + 'import sd\n' + 'print(1)\n'`, `'y = %r\n' % v + 'print(y)\n'`, `dedent('    import sd\n    print(1)\n')`. The docstring's "Not caught" lists none of them, and TST-120's resolution says a `dedent` of anything but a triple-quoted string is caught.
+  - **Scenario.** The self-test has 8 `<variable> + dedent(...)` joins, so the natural slip is that shape with joined pieces in place of `dedent`, and it passes.
+  - **Fix.** Run the predicate on the plain-string leaves of a `+` tree, ignoring other pieces and taking the left side of `%`; a reviewer ran this over the self-test and the server with no hit. Dedent a `dedent` argument before parsing it. Or, smaller, add these shapes to "Not caught" and narrow the resolution.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** four new cases of `test_the_dedent_guard_tells_the_cases_apart` failed, the shapes in this entry; three more guard what must stay allowed (21 cases in all).
+    - **Cause:** `pieces` gave up on a whole `+` tree for one piece that wasn't a plain string, and an indented `dedent` argument was parsed before being dedented.
+    - **Fix:** `leaves` takes the plain strings of a `+` tree, whatever else it holds, and the left side of `%`; a `dedent` argument is dedented before parsing. No hit in the tree.
+    - **Also covered:** a replace fragment like `graph_edit.py`'s indented one, outside `dedent`, stays allowed. The docstring keeps its limits: an f-string, and code built at run time.
+
+- [x] **TST-128 · Two sentences say something other than the code** · `AGENTS.md:458`, `tests/unit/test_selftest_safety.py:91` (follows TST-118, generation 2), `tests/test_all_tools/common.py:273` · confirmed · verified by hand · found 2026-11-03
+  - **Defect.** "Behind `if was_running:`" names the branch the guard refuses: `assert _library_loads('if was_running:\n    c(%s)\n' % LOAD) == (1, 1)`. The real load is in the `else`, and `if not was_running:` is the other accepted form. `designer_script`'s docstring says "Python that runs there lives in real files", while AGENTS.md lists what stays a string.
+  - **Scenario.** Someone follows the sentence literally, puts a library load under `if was_running:`, which would run it in the user's Designer, and the guard refuses it with the docs saying otherwise.
+  - **Fix.** "Only where the self-test started Designer (the `else` of `if was_running:`, or `if not was_running:`)". "Python with real logic (AGENTS.md)" in the docstring.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved"). Text only.
+    - **Test:** none needed; `test_the_guard_tells_the_cases_apart` already pins which branches count.
+    - **Fix:** AGENTS.md and the test's docstring name the branch that runs only where the self-test started Designer (the `else` of `if was_running:`, or `if not was_running:`). `designer_script`'s docstring says "Python with real logic".
+    - **Also covered:** a search for the same wording elsewhere found these two only.
+
+- [x] **TST-129 · AGENTS.md's size rule doesn't describe three of the scripts** · `AGENTS.md:449-452`, `designer_scripts/shared/count_nodes.py`, `shared/unload_packages.py`, `lifecycle/modal_dialog.py` · confirmed · verified by hand · found 2026-11-03
+  - **Defect.** The rule is "more than about five statements, or Qt code that gains from type checks". `count_nodes` is one line of logic and `unload_packages` about five; they are files because several modules run them, which the rule doesn't say. `modal_dialog` is one `QTimer.singleShot` call, covered only by a generous reading.
+  - **Scenario.** Someone applying the rule moves `count_nodes` back inline, repeating it across modules, or can't tell why it's a file.
+  - **Fix.** Add "or that several modules run" to the criterion, and inline `modal_dialog`, or leave it under the Qt clause.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved"). Text only.
+    - **Test:** none needed; `test_designer_scripts_are_grouped_by_the_module_that_runs_them` already requires a `shared/` script to have several runners.
+    - **Fix:** AGENTS.md's criterion adds "or that several modules run". `modal_dialog` stays a file under the Qt clause: one call, but into Qt's typed API.
+    - **Also covered:** the other 39 scripts fit the rule, by a reviewer's count.
+  - Questioned by TST-133 (2026-11-03).
+
+- [x] **PLG-31 · The plugin's manifest still declares Designer 14.1 as its minimum · follows TST-121, generation 2** · `plugin/sd_claude_bridge_kve/pluginInfo.json:6` · line confirmed, effect on an older Designer not run · verified by hand · found 2026-11-03
+  - **Defect.** `"min_designer_version": "14.1.0"` contradicts README's "Older versions aren't supported", which TST-121's resolution relies on. Nothing in the repo reads or tests the value.
+  - **Scenario.** By that field the plugin claims to load on Designer 14.1 or 15.
+  - **Fix.** Raise it to `16.0.0`, re-run `install.py`, restart Designer and check that the plugin still loads, since how Designer parses the field hasn't been measured.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** `test_the_plugin_declares_the_supported_designer` fails on `14.1.0` and passes on `16.0.0`. Its first failure was a missing import, not the value, so it was run again against the old value.
+    - **Fix:** the manifest says `16.0.0`. `install.py` was re-run, the installed copy holds the new value, and Designer 16.0.7 loaded it: the live self-test passed 403/403 from a closed Designer.
+    - **Also covered:** nothing in the repo reads the field. How Designer treats it on an older version isn't measured, and isn't needed for the supported one.
+
+- [x] **HLP-73 · `remove_graph_input`'s warning says the parameter keeps its previous value, which the new table contradicts** · `mcp_server/designer_helpers/graph_inputs.py:274-282` · mechanism confirmed by reading, enums not measured · verified by hand · found 2026-11-03
+  - **Defect.** The function graph is deleted first, then `print('WARNING: %s keeps its previous value; could not set %r (%s)' ...)`. The table says the stored value stays reset after `deletePropertyGraph`, so if both sets fail the parameter is at its default, with the function and the input already gone.
+  - **Scenario.** An int input at 99 bound to an enum parameter, where `_make_value` raises: the tool prints "keeps its previous value" and "kept value <default>", and the output has changed. No live check exposes an enum, so this path is unexercised.
+  - **Fix.** Build every parameter's value before deleting anything, and refuse with nothing changed if one can't be built. An enum expose-and-remove check.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** live checks in `inputs.py` expose an enum for the first time: at 99, `remove_graph_input` went ahead and the parameter read `<SDValueEnum>`; at 5 it keeps the value.
+    - **Measured:** worse than this entry says, and now a "designer facts" check: `setPropertyValue` takes an int beyond an enum's values with no error, and the parameter then can't be read back (`get()` raises). So the old path didn't warn at all.
+    - **Cause:** the value was set after the function was deleted, trusting `setPropertyValue` to refuse what doesn't fit.
+    - **Fix:** every parameter's value is built before anything is deleted; one that can't be refuses with nothing changed. The warning that's left says "is at its default".
+    - **Also covered:** a type differing from the input's goes through `_make_value`; the same type is set as it is.
+  - Questioned by HLP-77 (2026-11-03).
+
+- [x] **SRV-64 · `drives: -` and the refusal disagree, and neither tool's docstring says why** · `mcp_server/server_tools/edits.py` (`list_graph_inputs`, `remove_graph_input`) · confirmed · found 2026-11-03
+  - **Defect.** For an input read only by an unconnected `get` or by a function with no output node, `list_graph_inputs` shows `drives: -` and `remove_graph_input` refuses with "is read inside the functions of X". The first docstring says only "which node parameters they drive"; the second's list omits the unconnected `get`. The rule is only in AGENTS.md, while the project makes docstrings the source for tool behaviour.
+  - **Scenario.** An agent sees nothing driven, tries to remove the input, and is refused with no way to tell why from the tools.
+  - **Fix.** State it in both docstrings, and say in the refusal when the read has no effect today.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** the live check on a function with no output node now also wants "no effect on the output today" in the refusal; it failed.
+    - **Fix:** both docstrings state the rule, FX-Maps included, and the refusal names which functions have no effect today.
+    - **Also covered:** `drives:` and the refusal stay different on purpose: a later edit could connect such a node.
+
+- [x] **TST-130 · The function-graph table is stated for "a parameter" and measures one float4 parameter of one atomic node · follows HLP-69, generation 2** · `AGENTS.md` (sd API gotchas), `designer_scripts/facts/function_states.py`, `_refuse_no_output` · what is measured confirmed, other types not known to be wrong · found 2026-11-03
+  - **Defect.** Nothing measures an int, enum, bool, instance-node or `$` parameter, and `_refuse_no_output` says "the stored value counts" for all of them.
+  - **Scenario.** A Pixel Processor's `perpixel` has no stored value that could count, yet the refusal says so. A reviewer's library sample has 242 functions on `$outputsize`, where AGENTS.md says an inherited value is ignored.
+  - **Fix.** Add an instance node, an enum and a `$` parameter to the probe, or say "measured on a float4 parameter of an atomic node". Soften the message.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved"), by narrowing.
+    - **Test:** none added. HLP-73's live checks and fact cover an enum parameter; `$` and instance-node parameters stay unmeasured.
+    - **Fix:** AGENTS.md says the table is measured on a levels node's float4 parameter, and `_refuse_no_output` no longer claims a stored value counts.
+    - **Also covered:** no other tool text makes that claim.
+  - Note (2026-11-03): the narrowing is widened: enum and instance-node parameters are measured, and `$outputsize` differs (TST-135, HLP-74).
+
+- [x] **TST-132 · A script failure records the failure but prints no error · follows TST-125, generation 3** · `tests/test_all_tools/common.py` (`designer_script`) · confirmed · verified by hand · found 2026-11-03
+  - **Defect.** `check('run_designer_script', 'script %s ran' % name, False, text(result))` passes the whole reply, and `check` cuts it to 150 characters, so the line stops inside the traceback's path and the exception never appears. Setup scripts discard their result, so nothing else shows it.
+  - **Scenario.** A setup script fails in a run: the summary says which, and the error has to be reproduced by hand.
+  - **Fix (adds no check).** `print(text(result))`, and pass the reply's last line as the detail, as the run's own `except` does (TST-67).
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** `test_a_failed_script_shows_its_error` failed: the exception wasn't in the line.
+    - **Fix:** `designer_script` prints the whole reply and gives the check its last line, as the run's own `except` does. No check added.
+
+- [x] **TST-133 · TST-129's "the other 39 scripts fit the rule" doesn't hold by its own measure · follows TST-129, generation 2** · `AGENTS.md` (Running the tests), `REVIEW.md` TST-129 · confirmed by an AST count · found 2026-11-03
+  - **Defect.** TST-129 counts logic statements. By that count, 11 scripts with one runner and no Qt have five or fewer, such as `editor/frame_bounds` and `inputs/function_add_node`. Counting the whole file they pass, but so does `count_nodes`.
+  - **Scenario.** Someone applying "more than about five statements" moves them inline, or can't tell why they are files.
+  - **Fix (narrow only).** Say the count includes imports and the graph lookup, or drop the number. Moving scripts isn't needed.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved"), by narrowing.
+    - **Test:** none, per this chain's rule for docs.
+    - **Fix:** AGENTS.md's rule says "more than a handful of lines, imports and the graph lookup included" instead of a statement count, which fits the scripts as they are. No script moved.
+
+- [x] **TST-134 · `test_selftest_safety.py`'s docstring describes part of it** · `tests/unit/test_selftest_safety.py:1-7` · confirmed · found 2026-11-03
+  - **Defect.** It opens "A guard for the live self-test (REVIEW.md TST-111, TST-27): a snippet that loads one of Designer's library packages...", while the file also holds the script grouping test, the `dedent` rule, which reads the server too, and the plugin manifest test.
+  - **Scenario.** Someone looking for the manifest test or the `dedent` rule doesn't look here.
+  - **Fix.** List them in the docstring, and move the manifest test to `test_plugin.py`. Adds no check.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** the moved test passes in `test_plugin.py`, and fails on `14.1.0`, as it did where it was.
+    - **Fix:** the module docstring lists what the file guards, and the manifest test moved to `test_plugin.py`.
+
+- [x] **HLP-75 · `describe_graph` doesn't list an FX-Map's functions, and names it a blank instance** · `mcp_server/designer_helpers/describe.py`, `core.py` (`node_kind`) · confirmed · found 2026-11-03
+  - **Defect.** `include_params` read only a node's own parameters, and `node_kind` took an FX-Map's graph, which has no identifier, for an instance: `instance: @(0,0)`.
+  - **Scenario.** An agent asks what reads an input, and gets nothing for the FX-Map that does.
+  - **Fix.** List them, and name the node by its definition.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** the live checks "an FX-Map's function shows" and "an FX-Map is named, not a blank instance" failed.
+    - **Fix:** `_fx_map_functions` serves `_input_users` and `describe_graph`, which prints `FX-Map <id> <param> <- <what drives it>`, or says a function has no output node. `node_kind` wants an identifier.
+    - **Also covered:** `drives:` and the refusal use the same helper. Other parameters of an FX-Map's inner nodes aren't listed.
+
+- [x] **SRV-65 · `diff_graph` says only that a function changed, and same-named parameters of an FX-Map's nodes overwrite each other** · `mcp_server/server_tools/snapshots.py` (`_graph_model`, `_function_value`) · confirmed · found 2026-11-03
+  - **Defect.** A value was `function <digest>`, and `impl.iter('parameter')` reaches an FX-Map's inner parameters, keyed by name alone.
+  - **Scenario.** Two paramsets each with `opacity`: a change in the first doesn't show, since the last one wins.
+  - **Fix.** Say what a function reads, and key inner parameters by their node.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** `test_a_diff_value_says_what_a_function_reads` and `test_each_paramset_of_an_fx_map_keeps_its_own_parameters` in `test_sbs.py` failed.
+    - **Fix:** `function (reads 'a') <digest>`, with `no output` in the brackets, and `paramset <uid> opacity` as the key.
+    - **Also covered:** the digest still only says that other nodes of a function changed, not how.
+  - Questioned by SRV-66, SRV-67, SRV-68 (2026-11-03).
+
+- [x] **TST-135 · Nothing measured the function-graph table beyond one parameter, or an FX-Map's output** · `designer_scripts/facts/function_states.py`, `tests/test_all_tools/facts.py`, `AGENTS.md` · confirmed · found 2026-11-03
+  - **Defect.** TST-130 narrowed the claim, and HLP-71's effect on the output had only been measured by hand, on a copy of `brick_1`.
+  - **Scenario.** A later Designer changes either, and no check notices.
+  - **Fix.** Measure them.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** 16 rows and one FX-Map check in "designer facts", on an enum, an instance node's parameter (a graph of the script's own package, so no library package is loaded), and `$outputsize` Absolute and relative to parent. A square FX-Map renders, so its pixels can be read: 0.25, 0.75, then 1.00 once the input is removed.
+    - **Fix:** AGENTS.md says what is measured, and states where `$outputsize` differs.
+    - **Also covered:** bool and string parameters stay unmeasured, and AGENTS.md's list doesn't claim them.
+  - Questioned by TST-136, TST-137, TST-138 (2026-11-03).
+
+- [x] **SRV-67 · An FX-Map's wiring and root are invisible to `diff_graph` · follows SRV-65, generation 2** · `mcp_server/server_tools/snapshots.py` (`_graph_model`) · confirmed · found 2026-11-03
+  - **Defect.** Only `parameter` elements are read, so `paramsGraphNodes` and the root never enter the model. SRV-65's "Also covered" doesn't say so. It predates the branch.
+  - **Scenario.** In `brick_1.sbs`, removing `paramsGraphNodes` and changing `rootnode` gives `0 changed line(s)`.
+  - **Fix.** Add a signature of `paramsGraphNodes` to the model, or state the limit in the docstring.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** `test_an_fx_map_wiring_change_shows` failed on a new link and on a moved root; moving a node doesn't count.
+    - **Fix:** `FX-Map wiring <digest>` in the node's parameters, of the root and each inner node without its position.
+
+- [x] **SRV-68 · The FX-Map key in `diff_graph` probably isn't the id `describe_graph` prints · follows SRV-65, generation 2** · `mcp_server/server_tools/snapshots.py`, `mcp_server/designer_helpers/describe.py` · file confirmed, `getIdentifier()` not measured · found 2026-11-03
+  - **Defect.** The key uses the `paramsGraphData` uid, and the file gives the node another (in `brick_1.sbs`, node `4089605144` has `data v="4089605145"`).
+  - **Scenario.** An agent can't match a `diff_graph` line to a `describe_graph` line.
+  - **Fix.** Map through `paramsGraphNode/data` to the node's uid.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** `test_an_fx_map_parameter_uses_the_id_describe_graph_prints` failed.
+    - **Measured:** in `brick_1.sbs`, the inner nodes' `getIdentifier()` are the file's `paramsGraphNode` uids, not their `data`.
+    - **Fix:** the key goes through `paramsGraphNode/data` to that uid, and keeps the data's uid if no node names it.
+
+- [x] **HLP-78 · `_delete_function`'s inheritance calls are unguarded · follows HLP-74, generation 2** · `mcp_server/designer_helpers/graph_inputs.py` (`_delete_function`) · plausible, needs measuring · found 2026-11-03
+  - **Defect.** The stubs say these calls work "for properties that support it" and can raise, and only `$outputsize` is measured.
+  - **Scenario.** If another `$` parameter raises, `remove_graph_input`'s loop stops with earlier parameters unbound and the input kept, unreported, and `expose_param`'s rollback leaves a function reading a deleted input.
+  - **Fix.** Guard the read, warn per parameter, and measure `$format`, `$tiling`, `$pixelratio`, `$pixelsize`, `$randomseed` in the facts.
+  - **Resolution: not reproduced** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Why not:** all six `$` parameters on a levels node, and `$outputsize` on an instance node, were measured with a function added and deleted, from Absolute and relative to parent: neither inheritance call raises. They are now "designer facts" rows. With no case that raises, a guard would be untested code, so none was added.
+    - **Measured beyond this entry:** the switch is back to the node's default, relative to input on a levels node and relative to parent on an instance node. `_delete_function` keeps what it read in both cases.
+
+- [x] **SRV-69 · `diff_graph` doesn't see a node parameter's inheritance · follows HLP-74, generation 2** · `mcp_server/server_tools/snapshots.py` (`value_of`) · confirmed · found 2026-11-03
+  - **Defect.** `relativeTo` is read for `baseParameters` only, so the flip HLP-74 measured stays invisible when a script makes it, and both refusals advise `deletePropertyGraph in code`, which causes it. It predates the branch.
+  - **Scenario.** A node's `outputsize`, same value, `relativeTo` 0 against none: `0 changed line(s)`, though it can be 8 px or 128 px.
+  - **Fix.** Append `relativeTo` for `$` parameters; check it adds no noise.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** `test_a_node_size_parameters_inheritance_shows` failed; `test_a_float_parameters_relative_to_is_no_noise` guards the rest.
+    - **Fix:** the six `$` parameters' values carry their `relativeTo`, with the labels the graph's own size uses.
+    - **Also covered:** a parameter with no `relativeTo` stays as it was, and old snapshots compare, since both sides are parsed at compare time.
+
+- [x] **SRV-70 · The function digest depends on file order, and stability is only checked within one session · follows SRV-63, generation 3** · `mcp_server/server_tools/snapshots.py` (`_function_value`) · plausible, needs measuring · found 2026-11-03
+  - **Defect.** `parts` follows file order, unlike the rest of the model, and `layout.py`'s check compares two saves in one session.
+  - **Scenario.** 887 of 16,528 library functions have nodes out of uid order. If Designer rewrites that order on saving, `diff_graph(against='saved')` reports functions as changed with no edit.
+  - **Fix.** Sort `parts` and connections, and add a load, save and diff fact.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved"), for another cause than this entry's.
+    - **Test:** the "designer facts" check "a graph's model is the same after a save and a reload" failed on the self-test's graph, on `bitmapresourcepath`, and `test_a_resource_paths_package_id_is_no_change` in `test_sbs.py` pins it.
+    - **Why not as written:** file order is stable: through two saves and reloads of 4 library files, among them one with functions out of uid order, node order, cell order and every model value stayed the same. So the digest isn't sorted.
+    - **Cause:** a resource's path ends in `?dependency=<id>`, an id that differs after a reload, so a diff against a saved file could report a bitmap as changed with no edit.
+    - **Fix:** the id is left out of the compared value, as it already was for an instance's path.
+
+- [x] **HLP-79 · `$` and `#` names are reported wrongly · follows HLP-72, generation 2** · `mcp_server/designer_helpers/graph_inputs.py` (`_driver_text`), `edits.py` · text confirmed, `#` names' meaning not measured · found 2026-11-03
+  - **Defect.** A `get` of a built-in `$` property reads as a graph input, and a working `$sizelog2` or `#opacity` read is described like a broken one, with "or delete it first".
+  - **Scenario.** `get_integer1('$tiling')` gives "graph input '$tiling'" and "set that instead", while `remove_graph_input` says there is no such input. A `$outputsize` read sends the agent to resize the whole graph. The library has 13 `$sizelog2` and 16 `#` names of this shape.
+  - **Fix.** Give `$` and `#` names their own text, and don't suggest deleting.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** live checks in `inputs.py` for `$sizelog2`, `$tiling` and `#opacity` across `describe_graph`, `set`, `sweep_param` and `expose` failed.
+    - **Fix:** `$` and `#` names read "a function reading '$size'", with no claim that they are broken and no advice to delete. What a `#` name means stays unmeasured, so the text doesn't say.
+    - **Also covered:** `no_such_input` keeps its own text, in the same loop.
+
+- [x] **HLP-80 · `expose`'s refusal gives advice that can't work · follows HLP-72, generation 2** · `mcp_server/designer_helpers/graph_inputs.py` (`expose_param`) · confirmed · verified by hand · found 2026-11-03
+  - **Defect.** `'Edit the function by hand, or remove its graph input first.'` is said of any function, and `expose_param` doesn't call `_refuse_no_input`.
+  - **Scenario.** For a function reading a name that is no input, there is none to remove; for a larger function, `remove_graph_input` refuses.
+  - **Fix.** Call `_refuse_no_input`, and say "remove its graph input" only for a plain binding to a real input.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** the same loop's `expose` case failed.
+    - **Fix:** `expose_param` calls `_refuse_no_input`, and "or remove its graph input first" is said only of a plain binding.
+
+- [x] **TST-136 · The table's scope sentence covers every column, and enum and instance parameters are measured for two · follows TST-135, generation 2** · `AGENTS.md` (sd API gotchas) · confirmed · found 2026-11-03
+  - **Defect.** `other_kinds` prints only the output and the output after a delete, while the `setPropertyValue` cell "deletes the graph and its nodes" is measured on float4 alone.
+  - **Scenario.** An agent reads it as measured for an enum or an instance parameter.
+  - **Fix.** Say the `setPropertyValue` column is float4 only, or add a `set:` cell to `other_kinds`.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** 8 "designer facts" rows now carry a `set:` cell, so the column is measured for those kinds, as the sentence says: the function is gone and the output follows the value.
+
+- [x] **TST-137 · The `$outputsize` sentence goes beyond its rows · follows TST-135, generation 2** · `AGENTS.md`, `designer_scripts/facts/function_states.py` · confirmed · found 2026-11-03
+  - **Defect.** The script reads neither the stored value nor the inheritance before a delete. At relative to parent, 16 px is also what a reset 0,0 gives, so only the Absolute row shows "not the stored value", and `newPropertyGraph` could equally be what switches an empty function's inheritance.
+  - **Scenario.** An agent relies on which call does the switch.
+  - **Fix.** Print both before the delete in those rows, or narrow the sentence to the Absolute row and the `output` state.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Test:** the 8 `$outputsize` rows print the inheritance and the stored value before the delete.
+    - **Fix:** the sentence says the switch is `deletePropertyGraph`'s (the rows show it unchanged before), and limits "not the stored value" to Absolute, the only row that can tell.
+
+- [x] **TST-138 · Two older statements now conflict with the measured rows · follows TST-135, generation 2** · `AGENTS.md:196`, `mcp_server/designer_helpers/graph_inputs.py` (`_driving_graph`) · confirmed · verified by hand · found 2026-11-03
+  - **Defect.** "A node's `$format` / `$outputsize` only take effect with inheritance set to Absolute", though `$outputsize RelativeToParent none | 512 px` shows 5,5 taking effect as an offset. `_driving_graph`'s docstring says an empty function means "the stored value counts", which TST-130 removed from the refusal and AGENTS.md now says doesn't hold for `$outputsize`.
+  - **Scenario.** Someone reasons wrongly about a relative or empty-function size.
+  - **Fix (narrowing only).** "An absolute size needs Absolute; relative to parent it is a log2 offset", and "(`$outputsize` differs: AGENTS.md)" in the docstring.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved"). Text only: both sentences narrowed as suggested.
+
+- [x] **TST-139 · The enum probe is 20 lines inline, against this branch's own rule** · `tests/test_all_tools/facts.py:129` · confirmed · found 2026-11-03
+  - **Defect.** It has a `try`/`except`, needs no helpers, and isn't about `execute_designer_code`, so AGENTS.md sends it to `designer_scripts/`, where mypy would check it. It also makes an unnamed graph.
+  - **Scenario.** A later edit breaks it unseen until a live run.
+  - **Fix.** Move it to `designer_scripts/facts/`. Adds no check.
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved").
+    - **Fix:** `designer_scripts/facts/enum_int_beyond_values.py`, in a named graph. Its check is unchanged and passes.
+
+- [x] **TST-140 · "Unit tests, a few seconds" is false** · `AGENTS.md:428` · confirmed · verified by hand · found 2026-11-03
+  - **Defect.** The suite takes about 44 s here, 37 s on `main`. It predates this branch.
+  - **Scenario.** An agent expects seconds and thinks a run has hung.
+  - **Fix.** "Under a minute".
+  - **Resolution: done** (commit "Function graphs measured on every kind of parameter; Designer scripts in real files; 46 findings resolved"). Text only: "under a minute".

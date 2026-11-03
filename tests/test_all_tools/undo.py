@@ -1,6 +1,7 @@
 """One tool call = one undo step (acts only while the self-test graph is in the editor)."""
 
 import re
+from textwrap import dedent
 
 from .common import NODE_EXISTS, TEST_GRAPH, UNDO_REDO, Ctx, added_id, check, skip, text
 
@@ -32,11 +33,14 @@ async def run(ctx: Ctx) -> None:
             {
                 'undo_label': 'self-test: two nodes',
                 'code': (
-                    'import sd\nfrom sd.api.sdbasetypes import float2\n'
-                    'g=[r for p in sd.getContext().getSDApplication().getPackageMgr().getUserPackages() '
-                    "for r in p.getChildrenResources(False) if r.getIdentifier()=='%s'][0]\nids=[]\n"
-                    "for i in range(2):\n    n=g.newNode('sbs::compositing::blur'); n.setPosition(float2(200*i, 500)); ids.append(n.getIdentifier())\n"
-                    "print('IDS=' + ','.join(ids))"
+                    dedent("""\
+                        import sd
+                        from sd.api.sdbasetypes import float2
+                        g=[r for p in sd.getContext().getSDApplication().getPackageMgr().getUserPackages() for r in p.getChildrenResources(False) if r.getIdentifier()=='%s'][0]
+                        ids=[]
+                        for i in range(2):
+                            n=g.newNode('sbs::compositing::blur'); n.setPosition(float2(200*i, 500)); ids.append(n.getIdentifier())
+                        print('IDS=' + ','.join(ids))""")
                 )
                 % TEST_GRAPH,
             },

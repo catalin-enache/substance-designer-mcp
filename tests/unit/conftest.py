@@ -42,12 +42,14 @@ SELFTEST_DIR = os.path.join(ROOT, 'tests', 'test_all_tools')  # the live self-te
 
 
 def selftest_sources() -> dict[str, str]:
-    """{file name: source} of every module of the live self-test."""
+    """{path from the self-test's folder: source} of its Python files, the scripts of designer_scripts/ included."""
     sources: dict[str, str] = {}
-    for name in sorted(os.listdir(SELFTEST_DIR)):
-        if name.endswith('.py'):
-            with open(os.path.join(SELFTEST_DIR, name), encoding='utf-8') as f:
-                sources[name] = f.read()
+    for folder, _, files in os.walk(SELFTEST_DIR):  # what designer_scripts/ runs inside Designer counts too
+        for name in sorted(files):
+            if name.endswith('.py'):
+                path = os.path.join(folder, name)
+                with open(path, encoding='utf-8') as f:
+                    sources[os.path.relpath(path, SELFTEST_DIR)] = f.read()
     return sources
 
 

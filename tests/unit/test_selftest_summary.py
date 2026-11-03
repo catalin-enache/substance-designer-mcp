@@ -1,11 +1,13 @@
 """The live self-test's summary (REVIEW.md TST-1): a tool counts as covered only when it had a
 check that ran; one whose checks were all skipped is listed, not counted."""
 
+import asyncio
 import importlib
 import os
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -155,3 +157,38 @@ def test_every_category_function_is_run() -> None:
     assert defined, 'no category functions found'
     missing = sorted('%s.%s' % (f.__module__.split('.')[-1], f.__name__) for f in defined - run)
     assert not missing, 'category functions not in CATEGORIES (never run): %s' % missing
+
+
+def _run_designer_script(reply: str, is_error: bool = False) -> list[bool]:
+    """The checks recorded under run_designer_script by one designer_script call with this reply."""
+    _selftest()
+    common = importlib.import_module('test_all_tools.common')
+    common.results.pop('run_designer_script', None)
+    result = SimpleNamespace(content=[SimpleNamespace(type='text', text=reply)], is_error=is_error)
+
+    async def call(name: str, args: dict[str, Any] | None = None) -> Any:
+        return result
+
+    assert asyncio.run(common.designer_script(call, 'facts/a_script', graph='g')) is result
+    return list(common.results.pop('run_designer_script', []))
+
+
+def test_a_script_that_raises_fails_the_run() -> None:
+    """A traceback shows the failing source line, and its output token with it, so a check reading that token can
+    pass having measured nothing (REVIEW.md TST-117, TST-125): the failure is recorded where it happens."""
+    assert _run_designer_script('NODES=3\n\n--- ERROR ---\nTraceback (most recent call last):\n') == [False]
+    assert _run_designer_script('no such file', is_error=True) == [False]
+
+
+def test_a_script_that_runs_adds_no_check() -> None:
+    assert _run_designer_script('NODES=3\n') == []
+
+
+def test_a_failed_script_shows_its_error(capsys: pytest.CaptureFixture[str]) -> None:
+    """Setup scripts discard their result, so this is the only place it shows (REVIEW.md TST-132)."""
+    trace = 'Traceback (most recent call last):\n  File "%s", line 3\nValueError: the real reason' % ('/long/path' * 30)
+    assert _run_designer_script('\n--- ERROR ---\n' + trace) == [False]
+    printed = capsys.readouterr().out
+    fail_line = next(l for l in printed.splitlines() if l.startswith('FAIL'))
+    assert 'ValueError: the real reason' in fail_line
+    assert trace in printed

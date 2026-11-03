@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Callable
+from textwrap import dedent
 from typing import Any, ParamSpec, TypedDict, TypeVar, cast
 
 from mcp.server.mcpserver import MCPServer
@@ -135,11 +136,11 @@ def _output_note_in(text: str) -> str | None:
 
 def _with_undo(code: str, label: str) -> str:
     # Group everything the script does into one undo step in Designer
-    return (
-        'from sd.api.sdhistoryutils import SDHistoryUtils as _SDH\n'
-        'with _SDH.UndoGroup(%r):\n'
-        '    exec(compile(%r, __file__, "exec"), globals())\n' % (label, code)
-    )
+    return dedent("""\
+        from sd.api.sdhistoryutils import SDHistoryUtils as _SDH
+        with _SDH.UndoGroup(%r):
+            exec(compile(%r, __file__, "exec"), globals())
+    """) % (label, code)
 
 
 def _helpers_call(call: str) -> str:

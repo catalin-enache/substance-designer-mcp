@@ -371,3 +371,46 @@ def test_the_self_test_passes_no_field_an_op_doesnt_take() -> None:
     wrong = {k: sorted(v - set(allowed[k])) for k, v in passed.items() if v - set(allowed[k])}
     # the one on purpose: batch.py's check that such a field is refused
     assert wrong == {'add': ['postion']}, 'op fields no op takes, in tests/test_all_tools/: %s' % wrong
+
+
+def _sent_by_script(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, source: str, args: dict[str, Any] | None
+) -> tuple[str, dict[str, Any]]:
+    """What run_designer_script sends for this script, and the ARGS that text defines."""
+    sent: list[str] = []
+
+    def bridge(code: str, path: str | None = None, timeout: float | None = None) -> str:
+        sent.append(code)
+        return 'ok'
+
+    patch_server(monkeypatch, '_bridge', bridge)
+    script = tmp_path / 'probe.py'
+    script.write_text(source, encoding='utf-8')
+    server.run_designer_script(str(script), args=args)
+    scope: dict[str, Any] = {}
+    exec(sent[0].split('\n', 1)[0], scope)
+    return sent[0], scope['ARGS']
+
+
+def test_run_designer_script_passes_args(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    args = {'name': 'it\'s "quoted" → é', 'ids': [1, 2.5, None, True], 'nested': {'a': 'b\nc'}}
+    _, received = _sent_by_script(monkeypatch, tmp_path, 'print(1)\n', args)
+    assert received == args
+
+
+def test_run_designer_script_args_default_to_empty(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _, received = _sent_by_script(monkeypatch, tmp_path, 'print(1)\n', None)
+    assert received == {}
+
+
+def test_run_designer_script_args_leave_the_script_text_alone(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The script is compiled on its own, so the line numbers in its tracebacks stay its own."""
+    source = 'first = 1\nraise ValueError("line 2")\n'
+    code, _ = _sent_by_script(monkeypatch, tmp_path, source, {'a': 1})
+    assert repr(source) in code
+
+
+def test_the_fallback_client_sends_no_args() -> None:
+    """AGENTS.md: a script reading ARGS runs through the MCP tool, not client/sd_run.py (REVIEW.md SRV-62)."""
+    assert 'ARGS' not in _read('client', 'sd_run.py')
+    assert 'no `ARGS`' in _read('AGENTS.md')

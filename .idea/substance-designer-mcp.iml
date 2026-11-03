@@ -8,6 +8,12 @@
       <sourceFolder url="file://$MODULE_DIR$/tests/unit" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/mcp_server/venv" />
     </content>
+    <content url="file:///Applications/Adobe Substance 3D Designer/Adobe Substance 3D Designer.app/Contents/plugins/pythonsdk/lib/python3.13/site-packages">
+      <sourceFolder url="file:///Applications/Adobe Substance 3D Designer/Adobe Substance 3D Designer.app/Contents/plugins/pythonsdk/lib/python3.13/site-packages" isTestSource="false" />
+    </content>
+    <content url="file:///Applications/Adobe Substance 3D Designer/Adobe Substance 3D Designer.app/Contents/Resources/python">
+      <sourceFolder url="file:///Applications/Adobe Substance 3D Designer/Adobe Substance 3D Designer.app/Contents/Resources/python" isTestSource="false" />
+    </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>

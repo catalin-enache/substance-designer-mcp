@@ -17,7 +17,8 @@ def describe_graph(
     incoming connections (`input<-sourceNodeId.output`). `graph` is the graph identifier
     (default: the graph open in Designer's UI). `include_params` adds every parameter that
     differs from its default, and each one driven by a graph input or a function
-    (`param <- graph input 'x'`, `param <- a function`). Use `node_ids` to focus on a few nodes (ids that
+    (`param <- graph input 'x'`, `param <- a function`); a function with no output node drives nothing
+    and is noted beside the parameter's value; an FX-Map's inner functions are listed too. Use `node_ids` to focus on a few nodes (ids that
     name no node are listed as not found); `limit` caps how many nodes are listed (the rest are
     counted)."""
     return _checked(

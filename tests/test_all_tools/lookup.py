@@ -1,6 +1,7 @@
 """Graph lookup (same-named graphs, library graphs) and a node with several outputs (bevel)."""
 
 import re
+from textwrap import dedent
 
 from .common import DUP_GRAPH, Ctx, added_id, check, image_size, is_image, libs, text
 
@@ -11,11 +12,12 @@ async def run(ctx: Ctx) -> None:
     await c(
         'execute_designer_code',
         {
-            'code': (
-                'import sd\nfrom sd.api.sbs.sdsbscompgraph import SDSBSCompGraph\n'
-                'pm=sd.getContext().getSDApplication().getPackageMgr()\n'
-                "for _ in range(2):\n    SDSBSCompGraph.sNew(pm.newUserPackage()).setIdentifier('%s')"
-            )
+            'code': dedent("""\
+                import sd
+                from sd.api.sbs.sdsbscompgraph import SDSBSCompGraph
+                pm = sd.getContext().getSDApplication().getPackageMgr()
+                for _ in range(2):
+                    SDSBSCompGraph.sNew(pm.newUserPackage()).setIdentifier(%r)""")
             % DUP_GRAPH
         },
     )
