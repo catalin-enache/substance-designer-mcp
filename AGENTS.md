@@ -378,8 +378,8 @@ one, its parameters, description, errors or results. Use it for tool design, des
 messages and evaluations; where it differs from this file (tests and docs follow the rules below), this
 file wins. Defaults of the skill this project doesn't follow: comprehensive API coverage and
 service-prefixed names (this project keeps few tools with unprefixed names: node edits are `apply_edits`
-ops, not tools of their own; a new capability is a parameter or op of an existing tool where one fits,
-a new tool only for a workflow none fits, ROADMAP.md "Fewer tools"); JSON next to Markdown results (the
+ops, not tools of their own; a new capability is a parameter or op of an existing tool where it fits;
+where it doesn't, it is a new tool, rather than an existing tool complicated with completely different logic, ROADMAP.md "Fewer tools"); JSON next to Markdown results (the
 results are compact text for agents); Pydantic input models (inputs are typed parameters). Its code is
 for mcp 1.x; this server runs mcp 2.x (the note at the top of its `SKILL.md`).
 
@@ -411,22 +411,30 @@ failure too, did the change weaken an older test, and does any comment, docstrin
 more than the code and tests show? Fix what you find, then look again the same way, and repeat
 until a fresh look finds nothing a reviewer could report. Only then say it is done.
 
-**Reviews go in REVIEW.md** (in the repo root, committed with the changes it records). Two skills:
+**Reviews go in REVIEW.md** (in the repo root, committed with the changes it records). Three skills:
 `project-code-review` (`.claude/skills/project-code-review/`) for reviewing, whose `TEMPLATE.md` is the
-format, and `address-review` (`.claude/skills/address-review/`) for fixing or answering findings
-test first and checking them off.
+format, `address-review` (`.claude/skills/address-review/`) for fixing or answering findings
+test first and checking them off, and `cleanup-review` (`.claude/skills/cleanup-review/`) for a cleanup the user asks for.
+REVIEW.md is the memory per branch: reviewers and the agents addressing findings talk through it, as in a PR review, and
+it can be cleaned up once the branch is merged, its history staying in git. DECISIONS.md is the memory for the whole project.
 The rules:
 - Five sections by severity, from high to low: High, Medium-high, Medium, Low-medium, Low.
 - Each finding is one entry starting with a checkbox: unchecked while open, checked once it is
-  fixed or answered (not a bug, not reproduced, won't fix), with a resolution line giving the
-  commit and the evidence.
+  fixed or answered (not a bug, not reproducible, won't fix), with a resolution line giving the
+  evidence, and no commit hash (branches are squashed into main).
 - A new review **appends** its findings to the sections they belong in, plus an entry in the
-  review log; it never replaces or rewrites what is already there.
+  review log; it never replaces or rewrites what is already there. A finding's number comes from the
+  **Last used** line in the header, updated in the same edit.
+- Only the user starts a cleanup of REVIEW.md, by asking for one explicitly; agents never truncate it on their own.
+  A removed finding stays findable in git: `python3 scripts/review_lookup.py <ID>`.
 The unit tests enforce part of this: they fail when a tool or a tool parameter is never exercised by
 the self-test, when an `apply_edits` op or an op's field is never passed in one (run or not), or when a
 tool is missing from README's Tools table.
 
-**Running the tests** (both must pass before a change is done):
+**Running the tests.** When code changes, both must pass before the change is done. A commit of docs alone (Markdown
+files, the skills included) runs only the tests that validate the docs:
+`mcp_server/venv/bin/python -m pytest tests/unit/test_constants.py tests/unit/test_guide.py tests/unit/test_review_lookup.py tests/unit/test_server.py`
+(`test_review_lookup.py` fails if a test that reads a doc is missing from this command).
 - `mcp_server/venv/bin/python -m pytest`: unit tests, no Designer needed, under a minute
   (`pip install -r mcp_server/requirements-dev.txt` once). They include `test_types.py`, which runs
   mypy strict (`mypy.ini`) over every Python file: everything you write is fully annotated. The
@@ -435,7 +443,7 @@ tool is missing from README's Tools table.
   annotations when a `def` runs, so every name in an annotation there must exist at runtime: import
   real types (`from sd.api.sdnode import SDNode`), never only under `if TYPE_CHECKING:`, and no
   `from __future__ import annotations` (the helpers are joined into one script, where it can't come first).
-  The standalone scripts (`install.py`, `uninstall.py`, `client/sd_run.py`) are the opposite: they run on
+  The standalone scripts (`install.py`, `uninstall.py`, `client/sd_run.py`, `scripts/review_lookup.py`) are the opposite: they run on
   the system Python, which can be 3.9, so they do start with `from __future__ import annotations` and
   evaluate no `X | None` at module level (`tests/unit/test_old_python.py` runs them on an older Python
   when one is installed).
@@ -471,7 +479,8 @@ tool is missing from README's Tools table.
 **Keeping the docs current.** README.md is for people, AGENTS.md is for agents. With every
 change (a tool, a fix, a workaround, a fact learned about Designer), add a short note where it
 belongs, in the same change. Keep each fact in **one** place and link to it instead of copying
-it; fix or delete notes that turn out to be wrong rather than adding a contradicting one.
+it; fix or delete notes that turn out to be wrong rather than adding a contradicting one. One repeat is deliberate: the
+sentence saying what REVIEW.md and DECISIONS.md each remember.
 
 | Kind of knowledge | Where it goes |
 |---|---|
@@ -481,6 +490,7 @@ it; fix or delete notes that turn out to be wrong rather than adding a contradic
 | Architecture: what the plugin, server, helpers and CLI tools each do | **README.md**, "How it works" |
 | How to deploy changes, diagnostics an **agent** needs | **AGENTS.md**, this section |
 | New or changed tool | Its entry and the tool count in README.md's Tools table, and checks in `tests/test_all_tools/` |
+| What is settled for the whole project: the user's won't fix, rule or choice; a not-a-bug or not-reproducible answer the user acknowledged at a cleanup | **DECISIONS.md** (read by the review skills; agents may update its names and paths, anything else takes the user) |
 | Work still to do, ideas, follow-ups | **ROADMAP.md** (check an item when done; checked items can be deleted later, git keeps the record) |
 
 Open work lives in [ROADMAP.md](ROADMAP.md): check it before proposing improvements and add

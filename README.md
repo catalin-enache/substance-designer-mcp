@@ -48,6 +48,7 @@ There are two programs, plus Designer's own command-line tools:
 | **Designer helpers** (`mcp_server/designer_helpers/`) | Sent to Designer with each request | The library of functions that actually do the work inside Designer: describing nodes, editing graphs, computing previews, layout, exposing inputs and so on. One file per area (`edits.py`, `editor.py`, `screenshots.py`...), joined into one script in the order of `PARTS` in its `__init__.py`, so they share one namespace. Each part imports what it uses from the others (`from .core import ...`) so editors see where names come from; those lines are dropped when the parts are joined. It's re-sent with every call, so updating it never needs a Designer restart. |
 | **sbscooker / sbsrender** | Separate processes | Designer's own tools for compiling a saved `.sbs` into `.sbsar` and rendering its outputs, independently of the open Designer. |
 | **CLI client** (`client/sd_run.py`) | Your terminal | The same connection to the plugin without MCP, for running scripts by hand. |
+| `scripts/review_lookup.py` | Your terminal | Finds a code review finding by its ID, in `REVIEW.md` or its git history. Used by the review skills. |
 | `install.py`, `uninstall.py`, `tests/` | Your terminal | Installation (including the Claude Code skill that tells sessions in other folders about the server), clean removal, the end-to-end self-test, and unit tests that need no Designer (`tests/unit`). |
 
 **One tool call, step by step** (`preview_node`, "show me this node's image"):

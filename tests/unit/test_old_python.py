@@ -40,6 +40,13 @@ def old_python() -> str:
     return exe
 
 
+def test_review_lookup_runs_on_an_old_python(old_python: str) -> None:
+    done = subprocess.run(
+        [old_python, os.path.join(ROOT, 'scripts', 'review_lookup.py'), '--help'], capture_output=True, text=True
+    )
+    assert done.returncode == 0 and '--last-used' in done.stdout, done.stderr
+
+
 def test_install_refuses_an_old_python_with_its_message(old_python: str, tmp_path: Path) -> None:
     plugins, skills = tmp_path / 'plugins', tmp_path / 'skills'
     result = subprocess.run(
