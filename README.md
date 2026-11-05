@@ -97,7 +97,7 @@ saved file (details: [AGENTS.md](AGENTS.md), Portals).
 Every change Claude makes through these tools is **one undo step** in Designer ("Claude: …"),
 so Ctrl+Z with that graph in focus reverts it. Undo history is per document. Two exceptions:
 `set_link_display` reloads the package, which clears its undo history (a snapshot is kept
-instead), and `quit_designer(discard_unsaved=True)` drops unsaved changes for good. Before bigger
+instead), and `quit_designer` ends only a Designer an agent started, dropping its unsaved changes; yours it refuses, and asks you to save, close and reopen it. Before bigger
 changes to your graphs, Claude can take a snapshot and afterwards show you exactly what changed.
 
 ## Requirements
@@ -187,7 +187,7 @@ context on it:
 
 ## Self-test
 
-Check every tool end to end against the real Designer (about two minutes). If Designer isn't
+Check every tool end to end against the real Designer (about ten minutes when it starts Designer itself). If Designer isn't
 running, the self-test starts it and closes it again at the end; if it is running, it's left open:
 
 ```bash
@@ -322,6 +322,8 @@ work), and is listed; older snapshots can't be told apart and are deleted. Pass
 | `No bridge token found` | The plugin has never run. Restart Designer and check its console. |
 | `Designer is not reachable` | Designer isn't running, or the plugin failed to load. Check the Designer log. |
 | Every call returns `invalid token` | The plugin and the server are different versions (for example after `git pull`): re-run `install.py` and restart Designer. |
+| `This Designer wasn't started by an agent` | The tools never close a Designer you opened. Save, close and reopen it yourself. |
+| `Designer ... did not answer` and it may be stuck closing | Its windows closed but the process stayed: end it in Activity Monitor, or with the `kill` command the message gives. On Windows, in Task Manager. Nothing is lost. |
 | Bridge accepts connections but never answers | The plugin code was replaced while running (for example by a hot reload). Restart Designer. |
 | `Address already in use` in the Designer log | The plugin was loaded twice, or another app uses port 9877. Restart Designer, or change `SD_BRIDGE_PORT`. |
 | `sbscooker/sbsrender not found` | Set `SD_DESIGNER_BIN_DIR`. |

@@ -13,9 +13,11 @@ work; right before the first Designer tool call, call `get_guide()` and confirm 
   in Designer.
 - **Never trigger Undo while one of the user's graphs is open in the editor.** Undo is per
   document and hits theirs (it happened once; an immediate Redo restored it). See Undo below.
-- **Ask before `quit_designer`** (it's the user's app); never pass `discard_unsaved=True` unless
-  the user said to drop those changes (or every package it lists is the self-test's own). Exception: while working on this project itself (see Working
-  on this project), restart Designer whenever the work needs it and the tools can, without asking.
+- **A Designer the user opened is theirs: never close it.** If a task needs it closed or restarted (a plugin change, the
+  self-test's quit checks), or needs Designer and it is closed, ask the user to save, close and reopen it, or to open it;
+  `quit_designer` refuses. Don't get around that with `kill` or a script, even when the user asks: tell them to close it, as Designer
+  then asks about unsaved work itself. A Designer an agent started is disposable: `quit_designer` ends it, force included, dropping unsaved
+  changes, and `designer_status` says which it is. Close yours when you finish with it, so the user doesn't start working in it.
 - **`snapshot_graph` before risky or large edits** to a user's graph, then `diff_graph` and
   report the diff. Prefer this over Undo.
 - **`set_link_display` saves and reloads the package** (undo history reset): tell the user.
@@ -28,8 +30,8 @@ work; right before the first Designer tool call, call `get_guide()` and confirm 
 
 Parameters are in each tool's description; this is when to reach for which.
 
-- **Start:** `designer_status`; `launch_designer` if Designer isn't running; `quit_designer`
-  (see the rules).
+- **Start:** `designer_status`; if Designer isn't running, ask the user to open it (`launch_designer` is for tests and
+  work on this project); `quit_designer` (see the rules).
 - **Find and understand nodes:** `search_nodes` (the atomic nodes and Designer's **whole** library of
   compositing graphs, not its function graphs: its ready-made materials included, such as
   `materials/pbr/bricks_001`, and those Designer hides on
@@ -279,8 +281,7 @@ save, edit and reload it in a single call (the example script does, for its port
   synthetic left click on a node selected it and switched the Parameters panel to it (seen twice);
   `setSelected(True)` on the node's scene item selects it too (the API reports it) but left the
   panel as it was (seen by hand). The API itself can't select nodes in the view (`focusGraphNode` only centres one).
-  After such experiments, restart Designer before real work (the user's Designer: ask first, as for
-  `quit_designer`): once, with the Parameters panel still
+  After such experiments, restart Designer before real work (the user's Designer: ask them to): once, with the Parameters panel still
   showing a Dot of a package unloaded since, the next edit in another graph crashed Designer.
 - Current graph: `getQtForPythonUIMgr().getCurrentGraph()`; editor control via
   **`app.getUIMgr()`**: `openResourceInEditor(graph)`, `focusGraphNode(graphViewID, node)` (ids
@@ -293,13 +294,13 @@ save, edit and reload it in a single call (the example script does, for its port
   Qt 6's `QApplication.quit()` gives up too. `QApplication.exit(0)` stops the event loops, but
   Designer's teardown then races its own background threads: twice Adobe's licence check
   (`Alg::BinaryHardeningService`, on a `QtConcurrent` thread) crashed reading a destroyed
-  profile, and the process hung for over 30 s. So `quit_designer`'s fallback after 5 s is
-  `os._exit(0)`: no teardown, no race (Designer doesn't save its window layout then). A window that
-  refuses to close is forced at 5 s. Once every window has closed, or while a close handler is still
-  running, the shutdown is left to finish; about 35 s after the quit, a window still visible (a stuck
-  handler), or a Designer still running with every window closed, is forced then. Designer quits once its main window has closed, even with another
-  top-level window showing (measured: a window shown during the close; gone in 2 s). (`aboutToQuit` can't serve as the
-  signal: its slots run in connection order, after any connected earlier.) A modal
+  profile, and the process hung for over 30 s. So `quit_designer` only closes the windows, and past its wait the
+  server ends the process from outside: SIGTERM, then SIGKILL, for a Designer an agent started. The shutdown can also hang at the
+  very end, in `~QCoreApplication` waiting for the thread pool (seen once with the licence check; a Python task held in
+  `QThreadPool.globalInstance()` does it on demand). `launch_designer` records the process it started, with its start time, in
+  `agent_designer_file()` (`project_constants.py`), so a `/mcp` reconnect keeps it and a reused ID doesn't count; on Windows nothing is
+  recorded, so every Designer counts as the user's. Designer quits once its main window has closed, even with another
+  top-level window showing (measured: a window shown during the close). A modal
   dialog doesn't stop a programmatic close. Crash dumps: Designer's `Sentry-Crashpad/completed`.
 - That stack has two pages: the main window and the **Home screen** (current after a fresh
   start). While Home shows, no panel reports itself visible (`launch_designer` prints the count before and
@@ -465,8 +466,8 @@ files, the skills included) runs only the tests that validate the docs:
   mypy then reports it, so put it back on the right line. Tests that read source text match
   whitespace-tolerantly (`c\(\s*'tool'`): formatting may split a call over lines.
 - `mcp_server/venv/bin/python tests/test_all_tools`: every tool over MCP against the real
-  Designer, about two minutes. It starts Designer if it isn't running and closes it again; a
-  Designer that was already running stays open. Its "designer facts" checks re-measure the
+  Designer, about ten minutes when it starts Designer itself. It starts Designer if it isn't running and closes it again; a
+  Designer that was already running stays open, and the checks that quit Designer are skipped. Its "designer facts" checks re-measure the
   Designer behaviour this file states, so add one with each new fact.
   The folder holds one module per category (`bridge.py`, `params.py`, `render.py`...), shared
   helpers and snippets in `common.py`, and the index `__main__.py`, which runs the categories in
@@ -530,14 +531,9 @@ new ideas there.
   the MCP server restarts (helpers are re-sent with every call; the user reconnects in `/mcp`,
   or test with a fresh MCP client such as the self-test). **Plugin** changes must be copied into
   Designer's plugin folder (re-run `install.py`; paths in README.md, Install) and need a
-  **Designer restart** (`quit_designer`, then `launch_designer`). **When working on this project,
-  restart Designer whenever the work needs it (a plugin change, a crashed Designer that
-  `launch_designer` can start again, a run of the self-test from a closed Designer) without asking
-  first;** just say that you did. That covers what `quit_designer` and `launch_designer` can do: a
-  bridge that accepts connections but never answers still needs the user (When tools fail, below).
-  The rest still holds: `quit_designer` refuses unsaved changes, and `discard_unsaved=True` drops
-  every unsaved package, so pass it only when the user said so or every package it lists is the
-  self-test's own (`mcp_selftest...`).
+  **Designer restart**: `quit_designer`, then `launch_designer`, for a Designer an agent started, without asking; just say that you
+  did. For the user's, ask them to save, close and reopen it. A bridge that accepts connections but never answers still needs the user
+  (When tools fail, below).
 - **The plugin's name** (`sd_claude_bridge_kve`, also its folder names and the token file
   `~/.sd_claude_bridge_kve_token`) is defined once, in `project_constants.py`; the plugin itself
   takes it from its own folder. To rename: change `PLUGIN` there, rename both `plugin/<name>`

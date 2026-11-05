@@ -65,9 +65,8 @@ already said to go ahead without one.
    something else (a change to docs alone runs less: AGENTS.md, Running the tests):
     - `mcp_server/venv/bin/python -m pytest` (unit tests);
     - `mcp_server/venv/bin/python tests/test_all_tools` (live self-test).
-      Plugin changes only reach Designer after `install.py` and a Designer restart (`quit_designer`, `launch_designer`);
-      on this project, restart without asking when those tools
-      can do it (AGENTS.md, Working on this project) and say that you did.
+      Plugin changes only reach Designer after `install.py` and a Designer restart: `quit_designer`, `launch_designer` for one an
+      agent started, and say that you did; ask the user to save, close and reopen their own (AGENTS.md, the rules).
 5. **Update the docs** the change touches, as AGENTS.md's "Keeping the docs current" table says:
    tool docstrings, AGENTS.md facts, README.md. Add a new sentence only when an agent or a user
    needs it to act, and make it say exactly what its check measures, no more. Every claim is

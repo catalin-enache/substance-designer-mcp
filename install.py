@@ -90,7 +90,7 @@ Otherwise:
 2. New MCP servers load when a session starts: ask the user to exit and run `claude --continue`
    in this folder to come back to this conversation with the tools.
 3. In the new session, follow the server's instructions (call `get_guide()` before the first
-   Designer tool). `launch_designer` starts Designer if it isn't running.
+   Designer tool). If Designer isn't running, ask the user to open it.
 
 To disable it here again: `claude mcp remove %(name)s -s local`. To remove everything (plugin,
 token, this skill, every folder's registration): `%(uninstall)s`.

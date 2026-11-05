@@ -6,7 +6,7 @@ import re
 import time
 from textwrap import dedent
 
-from .common import SAVED_GRAPH, TEST_GRAPH, Ctx, added_id, check, designer_script, is_image, skip, text
+from .common import SAVED_GRAPH, TEST_GRAPH, Ctx, added_id, check, designer_script, is_image, text
 
 
 async def create(ctx: Ctx) -> None:
@@ -302,7 +302,7 @@ async def output_fields(ctx: Ctx) -> None:
 
 async def wire(ctx: Ctx) -> None:
     """Connects the nodes and checks the other one-off edit tools on them."""
-    c, was_running, G, clouds, slope, lv, out = ctx.c, ctx.was_running, ctx.G, ctx.clouds, ctx.slope, ctx.lv, ctx.out
+    c, G, clouds, slope, lv, out = ctx.c, ctx.G, ctx.clouds, ctx.slope, ctx.lv, ctx.out
     linked = []
     for a, b, port in [
         (clouds, slope, 'Source'),
@@ -420,32 +420,6 @@ async def wire(ctx: Ctx) -> None:
         'ScriptAborted: timed out' in t and 'CLEANUP DONE 199990000' in t,
         t[-200:],
     )
-    t = text(
-        await c(
-            'execute_designer_code',
-            {
-                'code': dedent("""\
-                    import sd
-                    pm = sd.getContext().getSDApplication().getPackageMgr()
-                    print('MODIFIED=%%s' %% any(p.isModified() for p in pm.getUserPackages() if any(r.getIdentifier() == %r for r in p.getChildrenResources(False))))""")
-                % TEST_GRAPH
-            },
-        )
-    )
-    if was_running:
-        # a regression here would close the user's Designer: only on our own instance
-        skip('quit_designer', 'refuses with unsaved changes', 'Designer was already running (yours)')
-    elif 'MODIFIED=True' in t:  # otherwise quit_designer could really close Designer
-        r_ = await c('quit_designer')
-        still = not (await c('designer_status')).is_error
-        check(
-            'quit_designer',
-            'refuses with unsaved changes',
-            r_.is_error and 'unsaved changes' in text(r_) and '[%s]' % TEST_GRAPH in text(r_) and still,
-            text(r_),
-        )
-    else:
-        skip('quit_designer', 'refuses with unsaved changes', 'self-test package not reported as modified')
     t = text(
         await c(
             'apply_edits',

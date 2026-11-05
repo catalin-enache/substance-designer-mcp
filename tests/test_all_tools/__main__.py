@@ -76,6 +76,7 @@ from test_all_tools.common import (  # noqa: E402
     crash_dumps,
     designer_alive,
     editor_graph,
+    end_own_designer,
     helpers_source,
     library_packages,
     new_crash_dumps,
@@ -144,7 +145,8 @@ async def run(scratch: str) -> list[str]:
         t = text(await c('list_snapshots', {'graph': 'no_such_graph'}))
         check('get_guide', 'no reminder afterwards', t == 'No snapshots for no_such_graph.', t)
         helper_source = helpers_source()  # sent ahead of snippets that call the helpers
-        was_running = STATE['was_running'] = not (await c('designer_status')).is_error
+        # a Designer still starting counts too: it is the user's
+        was_running = STATE['was_running'] = designer_alive() or not (await c('designer_status')).is_error
         t = text(await c('launch_designer', {'wait_s': 240}))
         check(
             'launch_designer',
@@ -204,7 +206,13 @@ async def run(scratch: str) -> list[str]:
             if user_graph and user_graph != TEST_GRAPH:
                 t = text(await c('execute_designer_code', {'code': SAME_GRAPH_BACK}))
                 check('open_graph', 'the self-test puts your graph back in the editor', 'SAME=True' in t, t.strip())
-            if was_running:
+            if sys.platform == 'win32':
+                skip(
+                    'quit_designer',
+                    'closes Designer',
+                    "no Designer counts as an agent's on Windows yet (ROADMAP item 18)",
+                )
+            elif was_running:
                 skip('quit_designer', 'closes Designer', 'Designer was already running, so it is left open')
             else:
                 await lifecycle.run(ctx)
@@ -217,6 +225,8 @@ def main() -> None:
         tools = asyncio.run(run(scratch))
     finally:
         dumps_before = crash_dumps()  # just before the clean-up it is about (REVIEW.md TST-21)
+        if not STATE['was_running'] and designer_alive() and sys.platform != 'win32':
+            end_own_designer()
         if designer_alive():
             # deleting it while Designer ran crashed Designer twice, in its own file watcher, and
             # couldn't be reproduced on demand (REVIEW.md PLG-9, PLG-18): leave it to the OS

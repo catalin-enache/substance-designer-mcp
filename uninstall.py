@@ -30,7 +30,7 @@ from typing import Any, cast
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import install  # noqa: E402  (shares paths, names and the skill marker with the installer)
-from project_constants import PLUGIN, TOKEN_FILE  # noqa: E402
+from project_constants import PLUGIN, TOKEN_FILE, agent_designer_file  # noqa: E402
 
 SERVER = os.path.join(HERE, 'mcp_server', 'server.py')
 VENV = os.path.join(HERE, 'mcp_server', 'venv')
@@ -186,6 +186,13 @@ def plan(args: argparse.Namespace) -> list[tuple[str, Action | None]]:
             items.append(
                 ('bridge token: %s' % token, cast(Action, lambda t=token: os.remove(t) if os.path.exists(t) else None))
             )
+    if os.path.exists(agent_designer_file()):
+        items.append(
+            (
+                'record of the Designer an agent started: %s' % agent_designer_file(),
+                lambda: os.remove(agent_designer_file()),
+            )
+        )
     skill = os.path.join(args.skills_dir, install.SERVER_NAME)
     if os.path.isdir(skill):
         if install.is_our_skill(skill):

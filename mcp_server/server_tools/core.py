@@ -71,7 +71,7 @@ INSTRUCTIONS = (
     'Designer tool call in this session, call get_guide() and read the whole result: it is the full '
     "guide (AGENTS.md), with the rules that protect the user's work (Undo, the bridge token, "
     'quitting Designer, snapshots) and the sd API pitfalls. Then tell the user in one line that you '
-    'have read the Designer guide, and continue (launch_designer starts Designer if it is not running).'
+    'have read the Designer guide, and continue (if Designer is not running, ask the user to open it).'
 )
 GUIDE_NOT_READ = (
     'NOTE: the Designer guide has not been read in this session. Call get_guide() and '

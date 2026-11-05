@@ -63,3 +63,10 @@ def guide_read(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def sbs_path() -> str:
     return os.path.join(FIXTURES, 'two_graphs.sbs')
+
+
+@pytest.fixture(autouse=True)
+def no_real_designer_process(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    """No unit test looks at, or ends, a Designer really running here, or reads the real record of who started it."""
+    patch_server(monkeypatch, '_designer_pids', list)
+    patch_server(monkeypatch, 'agent_designer_file', lambda: str(tmp_path / 'agent_designer.json'))

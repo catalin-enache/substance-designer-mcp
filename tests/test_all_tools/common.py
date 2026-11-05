@@ -8,6 +8,7 @@ import hmac
 import json
 import os
 import re
+import signal
 import socket
 import subprocess
 import sys
@@ -26,6 +27,7 @@ from project_constants import (  # noqa: E402 (after the sys.path entry; `X as X
     PLUGIN as PLUGIN,
     PLUGIN_PACKAGE_DIR as PLUGIN_PACKAGE_DIR,
     TOKEN_FILE as TOKEN_FILE,
+    agent_designer_file,
 )
 
 sys.path.insert(0, os.path.join(BUNDLE, 'mcp_server'))
@@ -244,6 +246,23 @@ def new_crash_dumps(before: set[str], wait_s: float = 10) -> set[str]:
         if new or time.time() >= deadline:
             return new
         time.sleep(0.5)
+
+
+def end_own_designer() -> None:
+    """After a run that failed before its quit checks: the Designer the self-test started is disposable."""
+    try:
+        with open(agent_designer_file(), encoding='utf-8') as f:
+            record = json.load(f)
+        pid, start = int(record['pid']), record['start']
+        now = subprocess.run(['ps', '-o', 'lstart=', '-p', str(pid)], capture_output=True, text=True).stdout.strip()
+        if now == start:
+            os.kill(pid, signal.SIGTERM)
+            time.sleep(5)
+            if designer_alive():
+                os.kill(pid, signal.SIGKILL)
+            print('ended the Designer this run started and left open:', pid)
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        print('could not end a Designer this run left open:', e)
 
 
 def designer_alive() -> bool:

@@ -19,3 +19,9 @@ TOKEN_FILE = os.path.join(os.path.expanduser('~'), '.%s_token' % PLUGIN)  # the 
 # import from here; tests/unit/test_queue_wait.py checks they match). A client waits at least
 # this long plus the script's time, so a job it gave up on can't start later.
 QUEUE_WAIT = 900
+
+
+def agent_designer_file() -> str:
+    """Which Designer an agent started (server_tools/lifecycle.py), in a file so a /mcp reconnect doesn't lose it. In the
+    home folder, as the temp folder depends on how the server was started, and the MCP client doesn't pass TMPDIR on."""
+    return os.path.join(os.path.expanduser('~'), '.%s_agent_designer.json' % PLUGIN)

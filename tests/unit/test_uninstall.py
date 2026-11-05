@@ -38,6 +38,7 @@ def env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> types.SimpleNamespac
         module=module,
     )
     monkeypatch.setitem(vars(module), 'TOKEN_FILE', str(home.token))
+    monkeypatch.setitem(vars(module), 'agent_designer_file', lambda: str(tmp_path / 'agent_designer.json'))
     monkeypatch.setitem(vars(module.install), 'OLD_TOKEN', str(home.old_token))
     monkeypatch.setitem(vars(module), 'VENV', str(home.venv))
     monkeypatch.setenv('SD_SNAPSHOT_DIR', str(home.snapshots))
@@ -97,6 +98,15 @@ def test_removes_everything_install_left(
     ]
     assert env.snapshots.exists()  # the user's graph backups stay unless asked
     assert 'delete this folder' in capsys.readouterr().out
+
+
+def test_removes_the_record_of_the_designer_an_agent_started(
+    env: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    record = tmp_path / 'agent_designer.json'
+    record.write_text('{}')
+    run(env, monkeypatch, '--yes')
+    assert not record.exists()
 
 
 def test_dry_run_and_no_answer_remove_nothing(

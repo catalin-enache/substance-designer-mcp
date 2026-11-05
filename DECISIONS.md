@@ -24,6 +24,12 @@ may update the names and paths an entry points at; changing what was decided, or
   manifest asks for 16.0.0, so code needn't work on an older Designer or its older Python.
   Reopen if: the user wants older versions supported. (The user's decision, 2026-11-03.)
 
+- **A Designer the user opened is theirs; one an agent started is disposable.** The tools never end the user's: `quit_designer`
+  refuses, and the agent asks them to save, close and reopen it, or to open it if a task needs it. A user wanting a material already
+  has Designer open, so an agent only starts one for tests or work on this project, and ends it however works, force included,
+  dropping what is unsaved (`server_tools/lifecycle.py`). The user's decision, 2026-11-05.
+  Reopen if: the user changes the rule.
+
 ## Security
 
 - **Only the client is authenticated, not the plugin.** A program running as the same user could read
@@ -61,8 +67,8 @@ may update the names and paths an entry points at; changing what was decided, or
   user's session.
   Reopen if: that check runs in the user's Designer again, or an unload is seen to lose work.
 - **`preview_node` and `node_stats` count as reads on a library graph.** Their temporary output node can leave the package
-  marked modified, with its content unchanged, so `quit_designer` may list it. Saving is refused for library packages,
-  so the way out is `discard_unsaved=True`, after the user has saved what they want to keep. The user's decision, 2026-11-04.
+  marked modified, with its content unchanged, so closing Designer may ask about it. Saving is refused for library packages,
+  so the way out is for the user to close Designer without saving it, after saving what they want to keep. The user's decision, 2026-11-04.
   Reopen if: a read is seen to change a library graph's content.
 
 ## Snapshots and saving
@@ -89,11 +95,6 @@ may update the names and paths an entry points at; changing what was decided, or
 
 ## Bridge and quitting
 
-- **Forcing a Designer still running with every window closed is only a defence, with no on-demand test.** Seen
-  once, in a self-test run that quit with a modal dialog open and a slow close handler, and not reproduced since.
-  The self-test now runs those two in separate Designers. The fallback in `designer_helpers/quit.py` forces it
-  at the give-up time (`AGENTS.md`, Designer UI).
-  Reopen if: it is reproduced on demand, or a quit is seen to leave Designer running again.
 - **`stop()`'s `shutdown()` before `close()` is only a defence.** Not reproduced as a bound port: on macOS, with
   that line removed, `close()` alone woke the blocked `accept()` and the port could be bound at once. The line is
   for platforms where `close()` doesn't do that; none was measured.

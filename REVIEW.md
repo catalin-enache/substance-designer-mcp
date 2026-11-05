@@ -40,10 +40,10 @@ of the repo. If it can't, it says why: the ID never existed, a squash lost it, o
 |---|---|---|
 | High | 0 | 0 |
 | Medium-high | 0 | 0 |
-| Medium | 1 | 1 |
+| Medium | 0 | 2 |
 | Low-medium | 0 | 4 |
 | Low | 0 | 3 |
-| **Total** | **1** | **8** |
+| **Total** | **0** | **9** |
 
 ## Review log
 
@@ -69,10 +69,11 @@ of the repo. If it can't, it says why: the ID never existed, a squash lost it, o
   - **Fix.** Set all three fields; assert the new values before Undo and the old ones after, reading after a `processEvents`; Redo if Undo hit another step. Found by the tests reviewer; the second reviewer found the `identifier`-only part.
   - **Resolution: done.** Test: a check of a check, so no failing run came first; the live run now passes with each state read. Cause: the check only looked for the new name being absent. Fix: `tests/test_all_tools/undo.py` sets all three fields, confirms them before Undo and confirms the old name with no tag after it, reading after a `processEvents`, and calls Redo if Undo hit another step. Also covered: the other Undo checks in that file already read the state on both sides.
 
-- [ ] **HLP-82 · `quit_designer`'s fallback can't force a Designer stuck in its final teardown, and blames a dialog** · `mcp_server/designer_helpers/quit.py`, `mcp_server/server_tools/lifecycle.py` · confirmed · verified by hand · found 2026-11-04
+- [x] **HLP-82 · `quit_designer`'s fallback can't force a Designer stuck in its final teardown, and blames a dialog** · `mcp_server/designer_helpers/quit.py`, `mcp_server/server_tools/lifecycle.py` · confirmed · verified by hand · found 2026-11-04
   - **Defect.** The fallback is a `QTimer.singleShot`, which needs Designer's event loop, and in this state the loop and Python have already gone. So "about 35 s after the quit, a Designer still running with every window closed is forced" doesn't hold here. This reopens the decision "Forcing a Designer still running with every window closed is only a defence, with no on-demand test", whose **Reopen if** includes "a quit is seen to leave Designer running again". The error also says "it may be showing a dialog", when none was open.
   - **Scenario.** Seen once on 2026-11-04, in a Designer running only scratch packages, no self-test running. The log got as far as `Destroy Application`. `sample` showed the main thread in `QCoreApplication::~QCoreApplication` -> `QThreadPool::waitForDone`, and a pooled thread in `Alg::BinaryHardeningService::runInThread` -> `_runBinaryHardeningChecks` (Adobe's licence check), at about 300% CPU. `quit_designer` failed after 60 s, and the process was still running over two minutes later, with no windows and the bridge gone, until it was killed by hand. The quits before it this session and those in the self-test run after it worked. The 60 s and the rest of the timing are this one run's; not reproduced on demand.
   - **Fix.** A guard outside Qt's event loop, for example a daemon thread started with the quit that calls `os._exit(0)` at the give-up time, if Python threads still run that late; measure that first. Otherwise `quit_designer`'s server side, which sees the process from outside, could end it after its wait, for a Designer it asked to quit with nothing unsaved. Change the message to say which it saw. Belongs with ROADMAP item 23.
+  - **Resolution: done**, the user's rule (2026-11-05): a Designer an agent started is disposable, and one the user opened is never ended. Test: reproduced on demand before any fix by a Python task held in Qt's global thread pool, with the same stack, so the hang has a live check (`designer_scripts/lifecycle/hold_thread_pool.py`); unit tests in `test_lifecycle_env.py`. Cause: the fallback ran on Qt's event loop in Python, gone by then. Fix: `launch_designer` records the process it started, with its start time, in a file next to the bridge token (the temp folder depends on how the server was started, a live run showed); `quit_designer` closes that one and past its wait force-ends it from the server, and refuses any other; `designer_status` says which it is. The fallback in `designer_helpers/quit.py` and `test_quit_fallback.py` are deleted, and with them ROADMAP item 23. An earlier fix that judged from Designer's log whether a process was stuck was dropped before committing: a review showed it could end the wrong Designer. Also covered: `launch_designer` ends an agent's Designer not answering, and for the user's gives the process ID and the command; ROADMAP item 25's state table. Not covered: Windows, where every Designer counts as the user's.
 
 ## Low-medium
 
