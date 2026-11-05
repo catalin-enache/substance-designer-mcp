@@ -320,6 +320,27 @@ def _node_params(impl: ET.Element, value_of: Callable[[ET.Element], str]) -> dic
     return params
 
 
+def _output_tags(output: ET.Element | None) -> dict[str, str]:
+    """An output node's name, label and usage tags, kept in the graph's <graphoutput>: the set op can change them."""
+    if output is None:
+        return {}
+    tags = {}
+    if output.find('identifier') is not None:
+        tags['identifier'] = _v(output, 'identifier')
+    label = output.find('attributes/label')
+    if label is not None:
+        tags['label'] = label.get('v', '')
+    usages = []
+    for usage in output.findall('usages/usage'):
+        if usage.find('name') is not None:
+            details = [usage.find(key) for key in ('components', 'colorspace')]
+            kept = [d.get('v', '') for d in details if d is not None]
+            usages.append(_v(usage, 'name') + (' (%s)' % ', '.join(kept) if kept else ''))
+    if usages:
+        tags['usage'] = '; '.join(usages)
+    return tags
+
+
 def _graph_model(sbs_path: str, graph_id: str) -> _GraphModel:
     """Parse one graph of a .sbs into comparable dicts."""
     root = ET.parse(sbs_path).getroot()
@@ -336,6 +357,7 @@ def _graph_model(sbs_path: str, graph_id: str) -> _GraphModel:
         return re.sub(r'\?dependency=\d+$', '', el.get('v') or '')
 
     output_names = {_v(b, 'uid'): _v(b, 'identifier') for b in g.iter('outputBridging')}
+    graph_outputs = {_v(o, 'uid'): o for o in g.iter('graphoutput') if o.find('uid') is not None}
     nodes: dict[str, _NodeModel] = {}
     for n in _found(g, 'compNodes') if g.find('compNodes') is not None else []:
         uid = _v(n, 'uid')
@@ -354,6 +376,9 @@ def _graph_model(sbs_path: str, graph_id: str) -> _GraphModel:
                 kind = 'input'
         # atomic and library (instance) nodes store parameters the same way
         params = _node_params(impl, value_of) if impl is not None else {}
+        if kind == 'output' and impl is not None:
+            bridge = impl[0].find('output')
+            params.update(_output_tags(graph_outputs.get(bridge.get('v', '')) if bridge is not None else None))
         links: set[tuple[str, str]] = set()
         display: dict[tuple[str, str], str] = {}
         conns = n.find('connections')
@@ -449,8 +474,8 @@ def _diff_models(old: _GraphModel, new: _GraphModel, show_positions: bool) -> tu
 
 @_tool()
 def diff_graph(graph: str | None = None, against: str = 'saved', show_positions: bool = False) -> str:
-    """Show what changed in a graph: nodes added/removed, parameter changes, links
-    added/removed, exposed inputs and size. against: 'saved' (the package's file on disk),
+    """Show what changed in a graph: nodes added/removed, parameter changes, an output's identifier, label
+    and usage, links added/removed, exposed inputs and size. against: 'saved' (the package's file on disk),
     'latest' (this package's newest snapshot), a snapshot label (this package's), or a .sbs path (any
     snapshot: after a Save As, the earlier file's snapshots count as another package's). The live graph is read
     without modifying it, so a package using a graph of a never-saved package is refused, as in save_package.

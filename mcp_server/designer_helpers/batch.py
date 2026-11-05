@@ -1,8 +1,20 @@
 """apply_edits: several edits in one call."""
 
-from .core import Any, APIException, SDSBSCompGraph, _graph_to_edit, _position
+import re
+
+from .core import Any, APIException, SDNode, SDSBSCompGraph, _graph_to_edit, _position, cast
 from .editor import move_nodes
-from .edits import add_node, connect, delete_nodes, disconnect, import_bitmap, set_params
+from .edits import (
+    _OUTPUT_DEFINITION,
+    _check_output_name,
+    add_node,
+    connect,
+    delete_nodes,
+    disconnect,
+    import_bitmap,
+    set_output_tags,
+    set_params,
+)
 from .graph_inputs import expose_param
 
 # the fields of each op kind that name a node: a ref, a node id, or 'graph' where listed in _GRAPH_OK
@@ -20,9 +32,9 @@ _GRAPH_OK = {'set'}  # the graph's own parameters, as _target allows
 # every field each op kind takes; another refuses the batch: a typo was ignored and the op reported as applied
 # (REVIEW.md HLP-62). test_server.py compares this with what the ops below read
 _OP_FIELDS: dict[str, tuple[str, ...]] = {
-    'add': ('definition', 'ref', 'position', 'params'),
+    'add': ('definition', 'ref', 'position', 'params', 'identifier', 'label', 'usage'),
     'bitmap': ('path', 'ref', 'embed', 'position', 'name'),
-    'set': ('node', 'params'),
+    'set': ('node', 'params', 'identifier', 'label', 'usage'),
     'connect': ('from', 'to', 'input', 'output'),
     'disconnect': ('node', 'input'),
     'move': ('node', 'position'),
@@ -31,12 +43,35 @@ _OP_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 
+def _check_output_fields(i: int, kind: str, op: dict[str, Any], is_output: bool) -> None:
+    """An op's identifier, label and usage: on an output node, and values Designer would otherwise rewrite or take
+    as they are."""
+    given = [field for field in ('identifier', 'label', 'usage') if op.get(field) is not None]
+    if not given:
+        return
+    problem = None
+    identifier, label, usage = op.get('identifier'), op.get('label'), op.get('usage')
+    if not is_output:
+        problem = '%s: only an output node has these' % ', '.join(given)
+    elif kind == 'set' and op.get('params') is not None:
+        problem = 'give params or %s, not both' % ', '.join(given)
+    elif identifier is not None and not (isinstance(identifier, str) and re.fullmatch(r'[A-Za-z0-9_-]+', identifier)):
+        problem = 'identifier %r: only letters, digits, _ and -, since it becomes a file name' % (identifier,)
+    elif label is not None and not isinstance(label, str):
+        problem = 'label must be text, not %r' % (label,)
+    elif usage is not None and not (isinstance(usage, str) and re.fullmatch(r'\$?[A-Za-z0-9_]+', usage)):
+        problem = "usage %r: one name, such as 'baseColor' or 'normal'" % (usage,)
+    if problem:
+        raise RuntimeError('op %d (%s): %s; nothing was applied' % (i, kind, problem))
+
+
 def _check_batch(g: SDSBSCompGraph, ops: list[dict[str, Any]]) -> None:
     """Refuse the batch before any op runs when an op's kind or a field is unknown, a ref isn't text, or a node
     it names is neither a ref defined by an earlier add/bitmap op, 'graph' (set only), nor a node of
-    g; a node an earlier delete op removes counts as gone."""
+    g; a node an earlier delete op removes counts as gone; or an output's fields are wrong (_check_output_fields)."""
     refs: dict[str, str] = {}  # ref -> what it stands for while checking ('ref:<name>', unique)
     deleted: dict[str, int] = {}  # node id or 'ref:<name>' -> the op that deletes it
+    output_refs: set[str] = set()  # those of refs' values that stand for an output node
     for i, op in enumerate(ops):
         kind = op.get('op') if isinstance(op, dict) else None
         if not isinstance(kind, str) or kind not in _NODE_FIELDS:
@@ -71,6 +106,20 @@ def _check_batch(g: SDSBSCompGraph, ops: list[dict[str, Any]]) -> None:
                 _position(op.get('position'))
             except RuntimeError as e:
                 raise RuntimeError('op %d (%s): %s; nothing was applied' % (i, kind, e)) from e
+        adds_output = kind == 'add' and op.get('definition') in ('output', _OUTPUT_DEFINITION)
+        if kind == 'set' and any(op.get(field) is not None for field in ('identifier', 'label', 'usage')):
+            target = op.get('node')
+            if isinstance(target, str) and target in refs:
+                is_output = refs[target] in output_refs
+            elif target == 'graph':
+                is_output = False
+            else:
+                found = g.getNodeFromId(str(target))
+                definition = found.getDefinition() if found is not None else None
+                is_output = definition is not None and definition.getId() == _OUTPUT_DEFINITION
+            _check_output_fields(i, kind, op, is_output)
+        elif kind == 'add':
+            _check_output_fields(i, kind, op, adds_output)
         ref = op.get('ref')
         if kind in ('add', 'bitmap') and ref not in (None, ''):
             if not isinstance(ref, str):
@@ -78,6 +127,8 @@ def _check_batch(g: SDSBSCompGraph, ops: list[dict[str, Any]]) -> None:
             if ref == 'graph':  # it names the graph in a set op; the run would read it as the node
                 raise RuntimeError("op %d (%s): ref 'graph' is reserved; nothing was applied" % (i, kind))
             refs[ref] = 'ref:%s:%d' % (ref, i)  # a ref reused later names the newer node
+            if adds_output:
+                output_refs.add(refs[ref])
 
 
 def apply_edits(identifier: str | SDSBSCompGraph | None, ops: list[dict[str, Any]]) -> None:
@@ -98,11 +149,16 @@ def apply_edits(identifier: str | SDSBSCompGraph | None, ops: list[dict[str, Any
         nodes_before = g.getNodes().getSize()
         try:
             if kind == 'add':
+                tags = (op.get('identifier'), op.get('label'), op.get('usage'))
+                if tags[0] is not None:
+                    _check_output_name(g, None, tags[0])  # before the node exists, so a refusal leaves none
                 new_id = add_node(gid, op['definition'], op.get('position'), op.get('params'))
                 made.append(new_id + (' (ref %r)' % op['ref'] if op.get('ref') else ''))
                 if op.get('ref'):
                     refs[op['ref']] = new_id
                     print('  ref %r = %s' % (op['ref'], new_id))
+                if any(tag is not None for tag in tags):
+                    set_output_tags(g, cast(SDNode, g.getNodeFromId(new_id)), *tags)
             elif kind == 'bitmap':
                 new_id = import_bitmap(gid, op['path'], op.get('embed', 'link'), op.get('position'), op.get('name'))
                 made.append(new_id + (' (ref %r)' % op['ref'] if op.get('ref') else ''))
@@ -110,7 +166,15 @@ def apply_edits(identifier: str | SDSBSCompGraph | None, ops: list[dict[str, Any
                     refs[op['ref']] = new_id
                     print('  ref %r = %s' % (op['ref'], new_id))
             elif kind == 'set':
-                set_params(gid, node(op['node']), op['params'])
+                tags = (op.get('identifier'), op.get('label'), op.get('usage'))
+                if any(tag is not None for tag in tags):
+                    target = str(node(op['node']))
+                    added_here = {m.split()[0] for m in made}  # nothing can be using an output this batch made
+                    set_output_tags(
+                        g, cast(SDNode, g.getNodeFromId(target)), *tags, warn_rename=target not in added_here
+                    )
+                else:
+                    set_params(gid, node(op['node']), op['params'])
             elif kind == 'connect':
                 connect(gid, node(op['from']), node(op['to']), op['input'], op.get('output'))
             elif kind == 'disconnect':

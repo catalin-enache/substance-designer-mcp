@@ -56,6 +56,49 @@ async def run(ctx: Ctx) -> None:
     check(F, '29 atomic nodes', 'ATOMIC=29' in t, t)
     check(F, 'APIException is not an Exception', 'APIEXC_BASE_ONLY=True' in t, t)
     check(F, 'connections reported from queried side', 'QUERIED_SIDE=True' in t, t)
+    t = text(await designer_script(c, 'facts/output_annotations'))
+    check(F, 'a new output gets a name of its own', 'DEFAULTS=output,output_1' in t, t)
+    check(F, 'two outputs can be given one identifier', 'DUPLICATES_KEPT=True' in t, t)
+    check(F, "an identifier's other characters are rewritten", 'REWRITTEN=___a_b_c' in t, t)
+    check(
+        F, 'the characters apply_edits allows in an identifier are kept', t.count('KEPT ') == 3 and '=False' not in t, t
+    )
+    check(F, 'a usage tag is taken unchecked', 'USAGE_UNCHECKED=True' in t, t)
+    check(F, 'only an output node has an identifier', 'OTHER_NODE_RAISES=True' in t, t)
+    # what a rename reaches (AGENTS.md, Output nodes). A pixel, not only the link: a closed graph's looks untouched
+    t = text(
+        await designer_script(c, 'facts/rename_output_instance', folder=os.path.join(ctx.scratch, 'rename_output'))
+    )
+    fine = re.search(r'BEFORE connectors=base link=base pixel=(\w+)', t)
+    pixel = fine.group(1) if fine else '?'
+    check(
+        F,
+        'an output renamed: an open graph using it follows, also reloaded',
+        all(
+            '%s connectors=albedo link=albedo pixel=%s' % (case, pixel) in t
+            for case in ('SAME_PACKAGE', 'OTHER_PACKAGE', 'RELOADED')
+        )
+        and pixel not in ('?', '00000000'),
+        t,
+    )
+    check(
+        F,
+        'an output renamed: a closed graph using it keeps the old connector and computes black, unmarked',
+        'CLOSED connectors=base link=base pixel=00000000' in t and 'CLOSED_MARKED_MODIFIED=False' in t,
+        t,
+    )
+    check(
+        F,
+        'an output renamed: a new instance repairs a closed graph that broke',
+        'REPAIRED_BY_NEW_INSTANCE connectors=albedo link=albedo pixel=%s' % pixel in t,
+        t,
+    )
+    check(
+        F,
+        'an output renamed: renaming back, that graph open, loses the connector and link',
+        'REPAIRED_BY_OLD_NAME connectors= link= pixel=00000000' in t,
+        t,
+    )
     # the table in AGENTS.md: what a function graph on a parameter does, per state. The stored value
     # is 0.5 before any function graph, the function reads an input at 0.25, expose adds a second at 0.75
     t = text(await designer_script(c, 'facts/function_states'))

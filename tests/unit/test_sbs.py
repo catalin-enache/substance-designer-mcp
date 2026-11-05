@@ -345,3 +345,47 @@ def test_a_resource_paths_package_id_is_no_change(tmp_path: Path) -> None:
     assert (
         _levels_with(tmp_path, 'a.sbs', value % '1') == _levels_with(tmp_path, 'b.sbs', value % '2') == 'pkg:///bitmap'
     )
+
+
+_OUTPUT_GRAPH = """<package><content><graph><identifier v="g"/><graphOutputs><graphoutput><identifier v="%s"/>
+<uid v="7"/>%s%s</graphoutput></graphOutputs><compNodes><compNode><uid v="5"/><compImplementation><compOutputBridge>
+<output v="7"/></compOutputBridge></compImplementation></compNode></compNodes></graph></content></package>"""
+
+
+def _label(text: str) -> str:
+    return '<attributes><label v="%s"/></attributes>' % text
+
+
+def _usage(name: str, components: str = 'RGBA', space: str = '') -> str:
+    colour = '<colorspace v="%s"/>' % space if space else ''
+    return '<usages><usage><components v="%s"/><name v="%s"/>%s</usage></usages>' % (components, name, colour)
+
+
+@pytest.mark.parametrize(
+    ('before', 'after', 'said'),
+    [
+        (('a', _label('L'), _usage('normal')), ('b', _label('L'), _usage('normal')), 'identifier a -> b'),
+        (('a', _label('L'), _usage('normal')), ('a', _label('M'), _usage('normal')), 'label L -> M'),
+        (('a', '', _usage('normal')), ('a', '', _usage('height')), 'usage normal (RGBA) -> height (RGBA)'),
+        # the common flow: an output with no label or tag gets them
+        (('a', '', ''), ('a', _label('L'), ''), 'label (default) -> L'),
+        (('a', '', ''), ('a', '', _usage('normal', space='Linear')), 'usage (default) -> normal (RGBA, Linear)'),
+        # one name, another format: the set op's usage rewrites these too (REVIEW.md SRV-72)
+        (
+            ('a', '', _usage('roughness', 'R', 'Linear')),
+            ('a', '', _usage('roughness', 'RGBA', 'Linear')),
+            'usage roughness (R, Linear) -> roughness (RGBA, Linear)',
+        ),
+    ],
+)
+def test_a_diff_shows_an_output_renamed_or_retagged(
+    tmp_path: Path, before: tuple[str, str, str], after: tuple[str, str, str], said: str
+) -> None:
+    # the set op can change these, so a diff of the graph has to say so (ROADMAP item 47)
+    models = []
+    for name, values in (('old.sbs', before), ('new.sbs', after)):
+        path = tmp_path / name
+        path.write_text(_OUTPUT_GRAPH % values)
+        models.append(server._graph_model(str(path), 'g'))
+    _, lines = server._diff_models(models[0], models[1], False)
+    assert lines == ['~ node 5 output: ' + said]

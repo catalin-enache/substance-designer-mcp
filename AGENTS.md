@@ -19,6 +19,8 @@ work; right before the first Designer tool call, call `get_guide()` and confirm 
 - **`snapshot_graph` before risky or large edits** to a user's graph, then `diff_graph` and
   report the diff. Prefer this over Undo.
 - **`set_link_display` saves and reloads the package** (undo history reset): tell the user.
+- **Renaming an output that already existed can break a closed graph using it:** when `apply_edits`' result says
+  "Tell the user", tell the user, in those terms (Output nodes, below).
 - Commit or push only when the user asks; the repository is public. **There is no CI and none
   is planned**: don't add GitHub Actions or other CI.
 
@@ -154,7 +156,15 @@ Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `-c COD
   `BinaryEmbedded` raises `NotSupported`. The node's `$outputsize` is the image's own size (log2).
 - Output nodes: annotation `usages` = `SDValueArray` of
   `SDValueUsage.sNew(SDUsage.sNew('baseColor', 'RGBA', 'sRGB'))`; annotations `identifier` /
-  `label` via `SDValueString`. The identifier becomes the exported/rendered file name.
+  `label` via `SDValueString`. The identifier becomes the exported/rendered file name; `apply_edits` sets all three.
+  In your own code, Designer checks little: a new output gets a name of its own (`output`, `output_1`), but two can be
+  given the same one, other characters in a name are rewritten (`../a b.c` gives `___a_b_c`; `1abc` and `a-b` stay), a
+  usage's name, components and colour space are taken as they are, and another node raises.
+  **Renaming an output reaches only what is open.** A graph using it through an instance, open during the rename, follows: its
+  connector and link take the new name, also after saving and reloading. One that was closed keeps the old connector
+  and computes black, with no error and not marked as modified (measured, same pixel before: `407fbfff`, then `00000000`).
+  A new instance wired from the new name computes right again, with default parameters. Renaming back, that graph open,
+  doesn't: the connector and the link go too.
 - **Connections are reported from the queried node's side:** for `c` in
   `node.getPropertyConnections(prop)`, `getOutputPropertyNode()` / `getOutputProperty()` is
   `node`/`prop` itself and `getInputPropertyNode()` is the **other** node, whatever direction

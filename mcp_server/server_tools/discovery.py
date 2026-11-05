@@ -13,8 +13,8 @@ from .core import _bridge, _checked, _helpers_call, _tool
 def describe_graph(
     graph: str | None = None, node_ids: list[str] | None = None, include_params: bool = False, limit: int = 400
 ) -> str:
-    """List a graph's nodes: id, type (atomic name or instance:<library graph>), position and
-    incoming connections (`input<-sourceNodeId.output`). `graph` is the graph identifier
+    """List a graph's nodes: id, type (atomic name or instance:<library graph>), position,
+    an output node's identifier, label and usage, and incoming connections (`input<-sourceNodeId.output`). `graph` is the graph identifier
     (default: the graph open in Designer's UI). `include_params` adds every parameter that
     differs from its default, and each one driven by a graph input or a function
     (`param <- graph input 'x'`, `param <- a function`); a function with no output node drives nothing

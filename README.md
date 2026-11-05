@@ -89,7 +89,7 @@ saved file (details: [AGENTS.md](AGENTS.md), Portals).
 | Safety | `snapshot_graph`, `list_snapshots`, `diff_graph` (what changed vs the saved file or a snapshot) |
 | Readability | `arrange_graph` (tidy layout by data flow), `add_frame`, `add_comment`, `set_link_display` (show wires as portals to hide clutter; saves and reloads the package after a snapshot) |
 | Viewing | `screenshot_designer` (window, graph, 2D view, 3D view, panels; only Designer is captured, never other apps), `open_graph` (open a graph, fitted whole, zoomed to a frame, nodes or rectangle, or centred on a node) |
-| Editing | `apply_edits` (add nodes and image files, set parameters, connect, disconnect, move, delete, expose parameters as graph inputs: one or many edits per call, one undo step; a typo'd node id changes nothing), `create_graph`, `set_graph_size` |
+| Editing | `apply_edits` (add nodes and image files, set parameters, name and tag output nodes, connect, disconnect, move, delete, expose parameters as graph inputs: one or many edits per call, one undo step; a typo'd node id changes nothing), `create_graph`, `set_graph_size` |
 | Controls | `remove_graph_input` (exposing a parameter is `apply_edits`' `expose` op) |
 | Scripting | `execute_designer_code`, `run_designer_script` (with timeout and `args`) |
 | Output | `save_package`, `export_outputs` (straight from Designer), `sbsar_info`, `render_sbs` (parameters, size, PNG/EXR…), `preview_maps` |

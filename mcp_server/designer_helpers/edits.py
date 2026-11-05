@@ -191,6 +191,84 @@ def _place(node: SDNode, position: Sequence[float] | None, existing: list[SDNode
     return position
 
 
+_OUTPUT_DEFINITION = 'sbs::compositing::output'
+# the usual names, so 'basecolor' still gives the tag Designer's own graphs use; any other name is kept as given
+_USAGES = {
+    name.lower(): name
+    for name in (
+        'ambientOcclusion',
+        'anisotropyAngle',
+        'anisotropyLevel',
+        'baseColor',
+        'curvature',
+        'diffuse',
+        'emissive',
+        'glossiness',
+        'height',
+        'mask',
+        'metallic',
+        'normal',
+        'opacity',
+        'roughness',
+        'specular',
+        'specularLevel',
+    )
+}
+_SRGB_USAGES = {'baseColor', 'diffuse', 'emissive', 'specular'}  # colour maps; the rest hold data
+
+
+def _check_output_name(g: SDSBSCompGraph, node_id: str | None, identifier: str) -> None:
+    """Designer lets two outputs share an identifier (measured), and export_outputs then refuses them. By case too:
+    those file names are one file on a Mac or on Windows."""
+    for other in g.getOutputNodes():
+        name: Any = other.getAnnotationPropertyValueFromId('identifier')  # an SDValueString
+        if other.getIdentifier() != node_id and name is not None and name.get().lower() == identifier.lower():
+            raise RuntimeError('output node %s already has the identifier %r' % (other.getIdentifier(), name.get()))
+
+
+def set_output_tags(
+    g: SDSBSCompGraph,
+    node: SDNode,
+    identifier: str | None,
+    label: str | None,
+    usage: str | None,
+    warn_rename: bool = False,
+) -> None:
+    """Set what was given of an output node's annotations; a usage replaces the tags it had. The values were checked
+    in _check_batch, since Designer takes any: it rewrites an identifier's other characters and never checks a usage.
+    warn_rename: the output existed before this batch, so another graph may be using it."""
+    from sd.api.sdtypeusage import SDTypeUsage
+    from sd.api.sdusage import SDUsage
+    from sd.api.sdvaluearray import SDValueArray
+    from sd.api.sdvaluestring import SDValueString
+    from sd.api.sdvalueusage import SDValueUsage
+
+    said = []
+    if identifier is not None:
+        _check_output_name(g, node.getIdentifier(), identifier)
+        before: Any = node.getAnnotationPropertyValueFromId('identifier')  # an SDValueString
+        old = before.get() if before is not None else None
+        node.setAnnotationPropertyValueFromId('identifier', SDValueString.sNew(identifier))
+        said.append('identifier %r' % identifier)
+    if label is not None:
+        node.setAnnotationPropertyValueFromId('label', SDValueString.sNew(label))
+        said.append('label %r' % label)
+    if usage is not None:
+        name = _USAGES.get(usage.lower(), usage)
+        tags: Any = SDValueArray.sNew(SDTypeUsage.sNew(), 0)
+        # RGBA as in nearly every tag of Designer's own graphs, whatever the map holds
+        tags.pushBack(SDValueUsage.sNew(SDUsage.sNew(name, 'RGBA', 'sRGB' if name in _SRGB_USAGES else 'Linear')))
+        node.setAnnotationPropertyValueFromId('usages', tags)
+        said.append('usage %s' % name)
+    print('output %s: %s' % (node.getIdentifier(), ', '.join(said)))
+    if warn_rename and identifier is not None and old != identifier:
+        print(
+            'Tell the user: output %r was renamed %r. A graph using it that is open follows, but one that is closed keeps '
+            'the old connector and computes black, with no error. To repair one: a new instance of this graph, wired from '
+            '%r, with its parameters set again; renaming back does not repair it.' % (old, identifier, identifier)
+        )
+
+
 def add_node(
     graph_id: str | SDSBSCompGraph | None,
     definition: str,

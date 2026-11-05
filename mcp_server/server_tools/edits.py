@@ -45,10 +45,12 @@ def set_graph_size(size_log2: int, graph: str | None = None, overridable: bool =
 @_tool()
 def apply_edits(ops: list[dict[str, Any]], graph: str | None = None) -> str:
     """Edit a graph: one or more ops in one call and one undo step. Each op is a dict:
-    {"op": "add", "definition": "levels", "ref": "lv", "position"?: [x, y], "params"?: {...}}
+    {"op": "add", "definition": "levels", "ref": "lv", "position"?: [x, y], "identifier"?: "...", "label"?: "...",
+     "usage"?: "...", "params"?: {...}}
     {"op": "bitmap", "path": "/abs/image.png", "ref": "img", "embed"?: "link", "position"?: [x, y],
      "name"?: "..."}
-    {"op": "set", "node": "lv", "params": {...}}            (node: a ref, a node id, or "graph")
+    {"op": "set", "node": "lv", "identifier"?: "...", "label"?: "...", "usage"?: "...", "params"?: {...}}
+                                                            (node: a ref, a node id, or "graph")
     {"op": "connect", "from": "a", "to": "lv", "input": "input1", "output"?: "..."}
     {"op": "disconnect", "node": "lv", "input": "input1"}
     {"op": "move", "node": "lv", "position": [x, y]}
@@ -58,13 +60,20 @@ def apply_edits(ops: list[dict[str, Any]], graph: str | None = None) -> str:
     Refs let later ops use nodes added earlier in the batch ("ref" is optional, a string other than "graph";
     the result prints each new node's id). Every field's name, every node an op names, and every position, is
     checked before any op runs: a field the op doesn't take, an unknown id, a ref not added by an earlier op, a node an
-    earlier delete op removes, "graph" anywhere but a set op, or a position that isn't [x, y] refuses the whole
-    batch, nothing changed. Other mistakes (a missing field, a wrong connector or parameter id, a bad value) show only when their op
+    earlier delete op removes, "graph" anywhere but a set op, a position that isn't [x, y], or a wrong identifier, label or
+    usage (below) refuses the whole batch, nothing changed. Other mistakes (a missing field, a wrong connector or parameter id, a bad value) show only when their op
     runs: ops run in order and stop at the first failing one (earlier ops stay applied, and the error
     lists the nodes already added, with their refs; Ctrl+Z on the graph reverts the whole batch).
     add: definition is atomic ('levels', 'blend') or library ('tile_generator', 'hbao.sbs/hbao', 'materials/pbr/bricks_001');
       position defaults to the right of the existing nodes; params as in set, and a bad one
       refuses the whole add, so no node is left.
+    identifier, label, usage: an output node's, on add or set; a set op gives these or params. identifier is the exported
+      file's name (letters, digits, _ and -), label its display name, usage its tag, such as baseColor, normal, roughness,
+      metallic, height or ambientOcclusion, which replaces any tag it had (RGBA; sRGB for baseColor, diffuse, emissive and
+      specular, otherwise Linear). On another node, with params on a set op, or badly formed, they refuse the whole batch; an
+      identifier another output has, in any case, is refused when its op runs, since export_outputs refuses two such outputs.
+      Renaming an output that existed before this call can break a closed graph using it: the result says so, tell the user.
+      describe_graph shows them.
     bitmap: an image file (png, jpg, tga, exr, tif, psd...) as a Bitmap node (output connector
       `unique_filter_output`), for references, masks and hand-painted maps. embed: "link"
       references the file where it is (an existing link to the same file is reused); "copy" copies
@@ -81,7 +90,7 @@ def apply_edits(ops: list[dict[str, Any]], graph: str | None = None) -> str:
       while inherited); except $randomseed, on a node or the graph, whose inheritance is left as it
       is: inherited, its value counts (added to the parent's seed), and only an inherited seed
       follows the graph's seed and the cooked .sbsar's Random Seed. To fix a seed on purpose,
-      change its inheritance with execute_designer_code. Prints old -> new.
+      change its inheritance with execute_designer_code. Prints old -> new for params.
     connect: from's output (default: the one tagged base colour, else its first; the result says which) to to's input connector; replaces an existing
       link on that input.
     disconnect: removes the connection(s) going into the node's input connector.

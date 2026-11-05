@@ -22,6 +22,12 @@ and agents that address findings talk through it, as in a PR review.
 - Read each entry, and the code at its location, before writing anything. The location may have
   moved since the review; find it by the quoted code.
 
+## Show the plan first
+
+Before changing anything, show the user the plan, one finding at a time: the finding in plain words, then how you plan
+to fix or answer it. Say where a measurement could change the plan. Then wait for the user's answer, unless they have
+already said to go ahead without one.
+
 ## For each finding
 
 1. **Reproduce it with a test that fails.**

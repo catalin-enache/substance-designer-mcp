@@ -93,6 +93,7 @@ CATEGORIES: list[Callable[[Ctx], Awaitable[None]]] = [
     discovery.run,  # search_nodes, describe_node
     graph_edit.create,  # create_graph, add ops: the self-test graph and its nodes
     params.run,  # set ops, inheritance and seed facts
+    graph_edit.output_fields,  # naming and tagging output nodes, on a graph of their own
     graph_edit.wire,  # connect/move/disconnect/delete ops, execute_designer_code, describe_graph, preview_node
     bitmaps.run,  # bitmap ops, compare_to_reference
     measure.run,  # node_stats, sweep_param, check_tiling, read_designer_log

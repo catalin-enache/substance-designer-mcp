@@ -32,6 +32,22 @@ from .graph_inputs import _driver_text, _driving_graph, _fx_map_functions, _has_
 from .layout import graph_objects_summary
 
 
+def _output_tags_text(node: SDNode) -> str:
+    """What names an output node and what it is for, as the add and set ops set them."""
+    try:
+        identifier: Any = node.getAnnotationPropertyValueFromId('identifier')  # SDValueStrings
+        label: Any = node.getAnnotationPropertyValueFromId('label')
+        tags: Any = node.getAnnotationPropertyValueFromId('usages')
+        array = tags.get() if tags is not None else None  # an SDValueArray of SDValueUsage
+        names = [array.getItem(i).get().getName() for i in range(array.getSize())] if array is not None else []
+        text = ' identifier=%r' % (identifier.get() if identifier is not None else '')
+        if label is not None and label.get():
+            text += ' label=%r' % label.get()
+        return text + ' usage=%s' % (','.join(names) or 'none')
+    except (Exception, APIException):  # one node's annotations mustn't cost the whole description
+        return ''
+
+
 def describe_graph(
     identifier: str | SDSBSCompGraph | None = None,
     node_ids: list[str] | None = None,
@@ -63,6 +79,8 @@ def describe_graph(
     for n in nodes[:limit]:
         pos = n.getPosition()
         line = '%s %s @(%d,%d)' % (n.getIdentifier(), node_kind(n), pos.x, pos.y)
+        if node_kind(n) == 'output':
+            line += _output_tags_text(n)
         links = []
         for prop in n.getProperties(SDPropertyCategory.Input):
             if not prop.isConnectable():

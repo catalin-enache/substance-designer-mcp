@@ -27,6 +27,33 @@ async def run(ctx: Ctx) -> None:
             back = 'EXISTS=True' in text(await c('execute_designer_code', {'code': NODE_EXISTS % (TEST_GRAPH, ub)}))
             check('apply_edits', 'add: Redo restores it', back, '')
     await c('apply_edits', {'ops': [{'op': 'delete', 'node': ub}], **G})
+    # an output's annotations too: not parameters, so nothing else shows that Undo reaches them. Each state is read, so
+    # a refused set can't pass here by Undo reverting something else
+    changed = "identifier='undo_me' label='Undo' usage=roughness"
+    await c(
+        'apply_edits',
+        {'ops': [{'op': 'set', 'node': ctx.out, 'identifier': 'undo_me', 'label': 'Undo', 'usage': 'roughness'}], **G},
+    )
+    was_set = changed in text(await c('describe_graph', G))
+    check('apply_edits', "set: an output's fields, before the Undo", was_set, '')
+    t = text(await c('execute_designer_code', {'code': UNDO_REDO % (TEST_GRAPH, 'Undo')})) if was_set else ''
+    if 'SCHEDULED' not in t:
+        skip(
+            'apply_edits',
+            "set: one Undo puts an output's fields back",
+            'not applied, self-test graph not in focus or Undo unavailable (%s)' % t,
+        )
+    else:
+        await c(
+            'execute_designer_code',
+            {'code': 'from PySide6.QtWidgets import QApplication; QApplication.processEvents()'},
+        )
+        after = text(await c('describe_graph', G))
+        back = "identifier='height' usage=none" in after and 'undo_me' not in after
+        if not back:  # Undo hit some other step: put it back at once
+            await c('execute_designer_code', {'code': UNDO_REDO % (TEST_GRAPH, 'Redo')})
+        check('apply_edits', "set: one Undo puts an output's fields back", back, after)
+    await c('apply_edits', {'ops': [{'op': 'set', 'node': ctx.out, 'identifier': 'height'}], **G})
     t = text(
         await c(
             'execute_designer_code',
