@@ -16,8 +16,7 @@ _PANEL_AREAS = {
 }
 
 
-# Qt widgets are Any in signatures: annotations are evaluated when the helpers load, and a unit test
-# (test_quit_fallback) loads them with a stand-in PySide6 that has no widget classes
+# Qt widgets are Any in signatures: annotations are evaluated when the helpers load
 def _visible_dock(mw: Any, prefix: str) -> Any:
     from PySide6 import QtWidgets
 

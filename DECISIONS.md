@@ -99,6 +99,11 @@ may update the names and paths an entry points at; changing what was decided, or
   that line removed, `close()` alone woke the blocked `accept()` and the port could be bound at once. The line is
   for platforms where `close()` doesn't do that; none was measured.
   Reopen if: `test_stop_answers_queued_clients_and_frees_the_port` fails, or a port stays bound on another platform.
+- **A Designer the user opens during `launch_designer`'s wait can be recorded as the agent's.** It takes a Designer that
+  crashes while starting and the user opening their own within the same wait, and limiting the record to a process started
+  within seconds of the launch isn't worth it for that (`_remember_started`, `server_tools/lifecycle.py`). The user's
+  decision, 2026-11-05.
+  Reopen if: it is seen to happen, or `launch_designer` starts being used for the user's own work.
 
 ## Output, pixels, screenshots, the graph view, example
 
@@ -124,3 +129,8 @@ may update the names and paths an entry points at; changing what was decided, or
   reproduced: five re-runs with the previous build open in a tab caused no crash. The recorded crash needed a
   new graph view being created while old ones were torn down, and this reload creates none.
   Reopen if: a crash dump points at this reload.
+- **Renaming an existing output warns; it isn't refused.** Designer updates only the graphs open during the rename. One that
+  was closed computes black, with no error, and the tools can't see it. So `apply_edits`' result tells the agent to tell the
+  user, naming the repair (`set_output_tags`; `AGENTS.md`, Output nodes). The user chose this over refusing a rename or only
+  documenting it, 2026-11-04.
+  Reopen if: the user changes the choice, or the tools become able to see the graphs a rename would break.

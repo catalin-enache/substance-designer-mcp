@@ -185,7 +185,10 @@ def _send(request: dict[str, Any], wait: float) -> Reply:
         with socket.create_connection(('127.0.0.1', PORT), timeout=wait) as s:
             data = _exchange(s, token, request)
     except ConnectionRefusedError as e:
-        raise ToolError('Designer is not reachable. Start Designer (the %s plugin loads on startup).' % PLUGIN) from e
+        raise ToolError(
+            'Designer is not reachable: if it is closed, ask the user to open it (the %s plugin loads on startup).'
+            % PLUGIN
+        ) from e
     except TimeoutError as e:
         raise ToolError(
             'No reply from Designer after %ds. It may be busy with a long call; '
@@ -214,13 +217,14 @@ def _control(cmd: str, wait: float) -> str:
     return reply.get('output', '')
 
 
-def _bridge(code: str, path: str | None = None, timeout: float | None = None) -> str:
+def _bridge(code: str, path: str | None = None, timeout: float | None = None, wait: float | None = None) -> str:
     # timeout: seconds before the plugin aborts the script (None = no limit)
+    # wait: seconds to wait for a reply, for a job that may start late or not at all (None = as long as it may take)
     request: dict[str, Any] = {'code': code, 'path': path}
     if timeout:
         request['timeout'] = timeout
     # wait for the plugin's queue and the script itself, or a job we gave up on could start later
-    reply = _send(request, wait=QUEUE_WAIT + (timeout or 900) + 60)
+    reply = _send(request, wait=QUEUE_WAIT + (timeout or 900) + 60 if wait is None else wait)
     text = reply['output']
     if not reply['ok']:
         text += '\n--- ERROR ---\n' + reply['error']

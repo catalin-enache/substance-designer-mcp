@@ -299,7 +299,9 @@ save, edit and reload it in a single call (the example script does, for its port
   very end, in `~QCoreApplication` waiting for the thread pool (seen once with the licence check; a Python task held in
   `QThreadPool.globalInstance()` does it on demand). `launch_designer` records the process it started, with its start time, in
   `agent_designer_file()` (`project_constants.py`), so a `/mcp` reconnect keeps it and a reused ID doesn't count; on Windows nothing is
-  recorded, so every Designer counts as the user's. Designer quits once its main window has closed, even with another
+  recorded, so every Designer counts as the user's. A close goes to whichever Designer holds the port, so it names the
+  recorded process and any other refuses (`os.getpid()` inside Designer is that process, checked live). The plugin answers
+  status from another thread, so a main thread frozen outside a job reads as idle (measured with a timer slot sleeping in a loop). Designer quits once its main window has closed, even with another
   top-level window showing (measured: a window shown during the close). A modal
   dialog doesn't stop a programmatic close. Crash dumps: Designer's `Sentry-Crashpad/completed`.
 - That stack has two pages: the main window and the **Home screen** (current after a fresh
@@ -553,7 +555,8 @@ new ideas there.
 - Environment variables `SD_DESIGNER_BIN_DIR`, `SD_DESIGNER_APP`, `SD_DESIGNER_LOG`,
   `SD_SNAPSHOT_DIR`, `SD_BRIDGE_PORT`: README.md, Configuration. A port change must reach the
   plugin (Designer's environment) and the server alike.
-- **When tools fail:** match the symptom in README.md, Troubleshooting. First try
-  `launch_designer`, then `read_designer_log`. If the bridge accepts connections but never
+- **When tools fail:** match the symptom in README.md, Troubleshooting, and try `read_designer_log`. If Designer isn't
+  running or isn't answering, ask the user to open it, or to save, close and reopen it; in tests and work on this project,
+  `launch_designer`. If the bridge accepts connections but never
   answers, or a tool is missing in Claude Code, only the user can fix it (restart Designer /
   reconnect `/mcp`), so tell them.

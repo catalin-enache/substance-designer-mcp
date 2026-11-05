@@ -1,4 +1,4 @@
-"""Runs inside Designer: its windows ignore Close, as under a blocking dialog, for quit_designer's forced fallback
+"""Runs inside Designer: its windows ignore Close, as under a blocking dialog, for quit_designer's force-end
 (lifecycle.py). ARGS: marker, a file written if the application emits aboutToQuit."""
 
 import sys

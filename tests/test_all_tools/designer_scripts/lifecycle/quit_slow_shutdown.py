@@ -1,5 +1,5 @@
 """Runs inside Designer: 7 s of work in the main window's close handler, then 7 s in an aboutToQuit handler that shows
-a window, for quit_designer's fallback, which must leave both to finish (lifecycle.py). ARGS: slow_close and
+a window, for quit_designer, which must leave both to finish within its wait (lifecycle.py). ARGS: slow_close and
 slow_marker, files written when each one finishes."""
 
 import sys

@@ -82,7 +82,7 @@ saved file (details: [AGENTS.md](AGENTS.md), Portals).
 
 | Area | Tools |
 |---|---|
-| Connection | `get_guide` (the full agent guide; Claude reads it before its first Designer tool call and confirms), `designer_status`, `launch_designer` (starts Designer and waits for it), `quit_designer` (closes it; refuses while there are unsaved changes), `cancel_designer_job`, `read_designer_log` |
+| Connection | `get_guide` (the full agent guide; Claude reads it before its first Designer tool call and confirms), `designer_status`, `launch_designer` (starts Designer and waits for it), `quit_designer` (closes one an agent started, dropping unsaved changes; refuses one you opened), `cancel_designer_job`, `read_designer_log` |
 | Finding nodes | `search_nodes` (built-in nodes and Designer's library of compositing graphs, its ready-made materials included, the ones it hides on request), `describe_node` (parameters, types, ranges, descriptions, dropdown values) |
 | Inspecting | `describe_graph`, `list_graph_inputs`, `preview_node` (image of any node), `node_stats` (exact pixel numbers), `check_tiling` (does it tile seamlessly?), `compare_to_reference` (how far a node's tones are from a reference image, in numbers) |
 | Tuning | `sweep_param` (try several values of a parameter side by side; the original value is restored) |
@@ -323,7 +323,7 @@ work), and is listed; older snapshots can't be told apart and are deleted. Pass
 | `Designer is not reachable` | Designer isn't running, or the plugin failed to load. Check the Designer log. |
 | Every call returns `invalid token` | The plugin and the server are different versions (for example after `git pull`): re-run `install.py` and restart Designer. |
 | `This Designer wasn't started by an agent` | The tools never close a Designer you opened. Save, close and reopen it yourself. |
-| `Designer ... did not answer` and it may be stuck closing | Its windows closed but the process stayed: end it in Activity Monitor, or with the `kill` command the message gives. On Windows, in Task Manager. Nothing is lost. |
+| `Designer ... did not answer` and it may be stuck closing | If its windows closed but the process stayed, end it in Activity Monitor, or with the `kill` command the message gives. On Windows, in Task Manager. Nothing is lost then. If its windows are open, save and close it as usual: ending it would lose unsaved work. |
 | Bridge accepts connections but never answers | The plugin code was replaced while running (for example by a hot reload). Restart Designer. |
 | `Address already in use` in the Designer log | The plugin was loaded twice, or another app uses port 9877. Restart Designer, or change `SD_BRIDGE_PORT`. |
 | `sbscooker/sbsrender not found` | Set `SD_DESIGNER_BIN_DIR`. |

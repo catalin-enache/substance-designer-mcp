@@ -21,6 +21,10 @@ TOKEN_FILE = os.path.join(os.path.expanduser('~'), '.%s_token' % PLUGIN)  # the 
 QUEUE_WAIT = 900
 
 
+# Seconds launch_designer gives a Designer an agent started before it counts as stuck: its default wait
+STARTUP_LIMIT = 180
+
+
 def agent_designer_file() -> str:
     """Which Designer an agent started (server_tools/lifecycle.py), in a file so a /mcp reconnect doesn't lose it. In the
     home folder, as the temp folder depends on how the server was started, and the MCP client doesn't pass TMPDIR on."""

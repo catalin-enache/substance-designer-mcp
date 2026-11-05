@@ -5,6 +5,7 @@ import json
 import os
 import re
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -49,9 +50,11 @@ def test_launch_times_out_when_the_bridge_never_answers(
     monkeypatch.setattr(os, 'startfile', lambda p: started.append(p), raising=False)
     clock = iter(range(0, 1000, 10))
     monkeypatch.setattr(time, 'time', lambda: next(clock))
-    with pytest.raises(server.ToolError, match='did not answer within 30s'):
+    with pytest.raises(server.ToolError, match='did not answer within 30s') as raised:
         server.launch_designer(wait_s=30)
     assert started, 'Designer was never started'
+    # REVIEW.md SRV-80: a retry with the same wait may never finish, and a larger one works
+    assert 'If it needs longer, call this with a larger wait_s' in str(raised.value)
 
 
 def test_launch_waits_for_a_running_designer_instead_of_starting_another(
@@ -91,6 +94,23 @@ def test_launch_waits_for_a_running_designer_instead_of_starting_another(
     monkeypatch.setattr(time, 'time', lambda: 0)
     assert server.launch_designer(wait_s=30).startswith('Designer already running')
     assert not started and not home
+
+
+def test_a_closed_designer_is_left_for_the_user_to_open(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # REVIEW.md SRV-81: it told agents to start Designer, and one an agent starts is disposable, whoever then works in it
+    token = tmp_path / 'token'
+    token.write_text('not the real one')
+    patch_server(monkeypatch, 'TOKEN_FILE', str(token))
+
+    def refused(address: tuple[str, int], timeout: float) -> NoReturn:
+        raise ConnectionRefusedError
+
+    monkeypatch.setattr(socket, 'create_connection', refused)
+    with pytest.raises(server.ToolError) as raised:
+        server._send({'cmd': 'status'}, wait=1)
+    message = str(raised.value)
+    assert 'Designer is not reachable: if it is closed, ask the user to open it' in message
+    assert 'Start Designer' not in message
 
 
 def test_quit_when_not_running(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -338,7 +358,11 @@ def test_designer_status_answers_while_a_job_runs(monkeypatch: pytest.MonkeyPatc
 # | the user's | never answers | ends nothing, gives the ID and the command | test_launch_state_users_not_answering |
 # | exits during the wait | - | starts one, with the whole wait | test_launch_starts_designer_when_the_running_one_exits_during_the_wait, test_a_restarted_designer_gets_the_whole_wait |
 # | two of the user's | never answers | ends neither, gives both IDs | test_launch_state_second_instance |
-# | an agent's | not answering | ends it, starts one | test_launch_state_agents_not_answering |
+# | an agent's, past the startup limit | not answering | ends it, starts one | test_launch_state_agents_not_answering |
+# | an agent's, younger | answers later | waits, ends nothing | test_launch_state_agents_still_starting |
+# | an agent's, younger | never answers | ends nothing, says a later call will | test_launch_state_agents_too_slow_for_this_wait |
+# | an agent's, passing the limit during the wait | not answering | ends it, starts one | test_launch_ends_an_agents_passing_the_limit |
+# | an agent's, past the limit, can't be ended | not answering | stops, gives the command | test_launch_stops_at_an_agents_it_cant_end |
 #
 # Who started it, and closing it: the tests after those.
 
@@ -361,8 +385,11 @@ class _Processes:
             self.pids.remove(pid)
 
 
-def _an_agent_started(pid: int, start: str | None = None) -> None:
-    Path(server.agent_designer_file()).write_text(json.dumps({'pid': pid, 'start': start or 'started %d' % pid}))
+def _an_agent_started(pid: int, start: str | None = None, age: float = 0) -> None:
+    """Recorded `age` seconds ago: launch_designer waits for one younger than STARTUP_LIMIT."""
+    record = server.agent_designer_file()
+    Path(record).write_text(json.dumps({'pid': pid, 'start': start or 'started %d' % pid}))
+    os.utime(record, (time.time() - age, time.time() - age))
 
 
 def _launch_fakes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[Any]:
@@ -439,6 +466,9 @@ def test_launch_state_users_not_answering(monkeypatch: pytest.MonkeyPatch, tmp_p
     message = str(raised.value)
     assert 'did not answer within 30s' in message and 'kill 11' in message and 'kill -9 11' in message
     assert 'Activity Monitor' in message and not processes.signals and not started
+    # REVIEW.md SRV-76: it may be working normally, with unsaved work
+    assert message.index('If its windows have closed') < message.index('kill 11')
+    assert 'If they are open, ask the user to save and close it' in message
 
 
 def test_launch_state_second_instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None) -> None:
@@ -457,7 +487,7 @@ def test_launch_state_agents_not_answering(monkeypatch: pytest.MonkeyPatch, tmp_
     # REVIEW.md HLP-82: an agent's Designer is disposable, so it isn't waited for
     started = _launch_fakes(monkeypatch, tmp_path)
     processes = _Processes(monkeypatch, 11)
-    _an_agent_started(11)
+    _an_agent_started(11, age=server.STARTUP_LIMIT + 1)
 
     def begin(cmd: list[str]) -> None:
         started.append(cmd)
@@ -470,12 +500,80 @@ def test_launch_state_agents_not_answering(monkeypatch: pytest.MonkeyPatch, tmp_
     assert 'Ended' in text and 'Designer started in' in text and server._agent_designer() == 77
 
 
+def test_launch_state_agents_still_starting(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None) -> None:
+    # REVIEW.md SRV-75: a retry, or a second session, mustn't kill a Designer that is only slow to start
+    started = _launch_fakes(monkeypatch, tmp_path)
+    processes = _Processes(monkeypatch, 11)
+    _an_agent_started(11)
+    calls: list[int] = []
+
+    def answers_on_the_third(request: dict[str, Any], wait: float) -> Reply:
+        calls.append(1)
+        if len(calls) < 3:
+            raise server.ToolError('Designer is not reachable.')
+        return {'ok': True, 'output': 'idle'}
+
+    patch_server(monkeypatch, '_send', answers_on_the_third)
+    assert server.launch_designer(wait_s=30).startswith('Designer already running')
+    assert not processes.signals and not started and server._agent_designer() == 11
+    assert '%d s after it started' % server.STARTUP_LIMIT in server.launch_designer.__doc__
+
+
+def test_launch_state_agents_too_slow_for_this_wait(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
+) -> None:
+    started = _launch_fakes(monkeypatch, tmp_path)
+    processes = _Processes(monkeypatch, 11)
+    _an_agent_started(11)
+    patch_server(monkeypatch, '_send', _no_bridge)
+    now = time.time()
+    clock = iter(range(0, 1000, 10))
+    monkeypatch.setattr(time, 'time', lambda: now + next(clock))
+    with pytest.raises(server.ToolError) as raised:
+        server.launch_designer(wait_s=30)
+    message = str(raised.value)
+    assert 'calling this again' in message and 'kill' not in message and 'Activity Monitor' not in message
+    assert not processes.signals and not started
+
+
+def test_launch_ends_an_agents_passing_the_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
+) -> None:
+    started = _launch_fakes(monkeypatch, tmp_path)
+    processes = _Processes(monkeypatch, 11)
+    _an_agent_started(11, age=server.STARTUP_LIMIT - 20)
+
+    def begin(cmd: list[str]) -> None:
+        started.append(cmd)
+        processes.pids.append(77)
+
+    monkeypatch.setattr(subprocess, 'Popen', begin)
+    patch_server(monkeypatch, '_send', _answers_once_started(started))
+    now = time.time()
+    clock = iter(range(0, 10000, 10))
+    monkeypatch.setattr(time, 'time', lambda: now + next(clock))
+    text = server.launch_designer(wait_s=1000)
+    assert processes.signals == [(11, signal.SIGTERM)] and len(started) == 1
+    assert 'Ended' in text and 'Designer started in' in text and server._agent_designer() == 77
+
+
+def test_launch_stops_at_an_agents_it_cant_end(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None) -> None:
+    # REVIEW.md SRV-79: it said a later call would end it, right after failing to, and tried again at every poll
+    started = _launch_fakes(monkeypatch, tmp_path)
+    processes = _Processes(monkeypatch, 11, ends_on=-1)
+    _an_agent_started(11, age=server.STARTUP_LIMIT + 1)
+    patch_server(monkeypatch, '_send', _no_bridge)
+    with pytest.raises(server.ToolError, match=r'could not be ended; ask the user to run `kill -9 11`'):
+        server.launch_designer(wait_s=30)
+    assert processes.signals == [(11, signal.SIGTERM), (11, signal.SIGKILL)] and not started
+
+
 def test_launch_says_it_ended_one_even_if_the_new_one_fails(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
 ) -> None:
     _launch_fakes(monkeypatch, tmp_path)
     _Processes(monkeypatch, 11)
-    _an_agent_started(11)
+    _an_agent_started(11, age=server.STARTUP_LIMIT + 1)
     patch_server(monkeypatch, '_send', _no_bridge)
     monkeypatch.setenv('SD_DESIGNER_APP', '/no/such/Designer.app')
     with pytest.raises(server.ToolError, match=r'(?s)Ended .*Designer not found'):
@@ -559,9 +657,29 @@ def test_windows_never_lists_a_process_to_end(monkeypatch: pytest.MonkeyPatch) -
 def test_designer_status_says_who_started_it(monkeypatch: pytest.MonkeyPatch) -> None:
     _Processes(monkeypatch, 11)
     patch_server(monkeypatch, '_send', lambda request, wait: {'ok': True, 'output': 'idle, 0 queued'})
-    patch_server(monkeypatch, '_bridge', lambda code, path=None, timeout=None: '')
+    patch_server(monkeypatch, '_bridge', lambda code, path=None, timeout=None: 'process 11')
     assert 'Not started by an agent' in server.designer_status()
     _an_agent_started(11)
+    assert 'Started by an agent' in server.designer_status()
+
+
+def test_designer_status_goes_by_the_designer_answering(monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md SRV-73: the record names one process, the package list comes from whichever holds the port
+    _Processes(monkeypatch, 11, 12)
+    _an_agent_started(12)
+    patch_server(monkeypatch, '_send', lambda request, wait: {'ok': True, 'output': 'idle, 0 queued'})
+    patch_server(monkeypatch, '_bridge', lambda code, path=None, timeout=None: 'process 11')
+    assert 'Not started by an agent' in server.designer_status()
+    patch_server(monkeypatch, '_bridge', lambda code, path=None, timeout=None: 'process 12')
+    assert 'Started by an agent' in server.designer_status()
+
+
+def test_designer_status_while_a_job_runs_cant_tell_two_apart(monkeypatch: pytest.MonkeyPatch) -> None:
+    processes = _Processes(monkeypatch, 11, 12)
+    _an_agent_started(12)
+    patch_server(monkeypatch, '_send', lambda request, wait: {'ok': True, 'output': 'running for 4.0s, 0 queued'})
+    assert 'Not started by an agent' in server.designer_status(), "unclear counts as the user's"
+    processes.pids.remove(11)
     assert 'Started by an agent' in server.designer_status()
 
 
@@ -571,11 +689,12 @@ def test_designer_status_says_who_started_it(monkeypatch: pytest.MonkeyPatch) ->
 def _closes(monkeypatch: pytest.MonkeyPatch, said: str = 'closing Designer') -> list[str]:
     asked: list[str] = []
 
-    def bridge(code: str, path: str | None = None, timeout: float | None = None) -> str:
+    def bridge(code: str, path: str | None = None, timeout: float | None = None, wait: float | None = None) -> str:
         asked.append(code)
         return said
 
     patch_server(monkeypatch, '_bridge', bridge)
+    patch_server(monkeypatch, '_send', lambda request, wait: {'ok': True, 'output': 'idle, 0 queued'})
     return asked
 
 
@@ -639,11 +758,68 @@ def test_quit_forces_an_agents_with_no_bridge(monkeypatch: pytest.MonkeyPatch, n
     processes = _Processes(monkeypatch, 11)
     _an_agent_started(11)
 
-    def dead(code: str, path: str | None = None, timeout: float | None = None) -> str:
+    def dead(code: str, path: str | None = None, timeout: float | None = None, wait: float | None = None) -> str:
         raise server.ToolError('Designer is not reachable.')
 
     patch_server(monkeypatch, '_bridge', dead)
-    assert 'forced' in server.quit_designer(wait_s=1) and processes.signals
+    patch_server(monkeypatch, '_send', _no_bridge)
+    text = server.quit_designer(wait_s=1)
+    assert 'forced' in text and processes.signals and 'did not reply: Designer is not reachable' in text
+
+
+def test_quit_names_the_process_it_means(monkeypatch: pytest.MonkeyPatch, no_sleep: None) -> None:
+    # REVIEW.md SRV-73: the close goes to whichever Designer holds the port, and the helper refuses any other
+    _Processes(monkeypatch, 11)
+    _an_agent_started(11)
+    asked = _closes(monkeypatch)
+    server.quit_designer(wait_s=1)
+    assert asked[0].rstrip().endswith('quit_designer(11)')
+
+
+def test_quit_with_another_designer_on_the_port_only_ends_its_own(
+    monkeypatch: pytest.MonkeyPatch, no_sleep: None
+) -> None:
+    processes = _Processes(monkeypatch, 11, 12)
+    _an_agent_started(12)
+    _closes(monkeypatch, 'x\n--- ERROR ---\nRuntimeError: this is Designer 11, not 12: nothing closed')
+    text = server.quit_designer(wait_s=1)
+    assert processes.signals == [(12, signal.SIGTERM)] and processes.pids == [11]
+    assert 'not asked to close' in text and 'this is Designer 11' in text and 'forced' in text
+
+
+@pytest.mark.parametrize(('wait_s', 'limit'), [(1, 10), (30, 30)])
+def test_the_close_has_a_limit_of_its_own(
+    monkeypatch: pytest.MonkeyPatch, no_sleep: None, wait_s: int, limit: int
+) -> None:
+    # REVIEW.md SRV-78: a main thread frozen outside a job reads as idle, and the close then waited about 15 minutes
+    processes = _Processes(monkeypatch, 11)
+    _an_agent_started(11)
+    waits: list[float] = []
+
+    def frozen(request: dict[str, Any], wait: float) -> Reply:
+        if request.get('cmd'):
+            return {'ok': True, 'output': 'idle, 0 queued', 'error': ''}
+        waits.append(wait)
+        raise server.ToolError('No reply from Designer after %ds.' % wait)
+
+    patch_server(monkeypatch, '_send', frozen)
+    clock = iter(range(0, 1000, 10))
+    monkeypatch.setattr(time, 'time', lambda: next(clock))
+    text = server.quit_designer(wait_s=wait_s)
+    assert waits == [limit] and processes.signals == [(11, signal.SIGTERM)]
+    assert 'did not reply: No reply from Designer' in text and 'forced' in text
+
+
+@pytest.mark.parametrize('state', ['running for 412.0s, 0 queued', 'idle, 2 queued'])
+def test_quit_doesnt_queue_behind_a_job(monkeypatch: pytest.MonkeyPatch, no_sleep: None, state: str) -> None:
+    # REVIEW.md SRV-74: the close would wait about 15 minutes in the queue before wait_s even started
+    processes = _Processes(monkeypatch, 11)
+    _an_agent_started(11)
+    asked = _closes(monkeypatch)
+    patch_server(monkeypatch, '_send', lambda request, wait: {'ok': True, 'output': state})
+    text = server.quit_designer(wait_s=1)
+    assert not asked and processes.signals == [(11, signal.SIGTERM)]
+    assert 'not asked to close' in text and state in text and 'forced' in text
 
 
 def test_a_process_gone_or_not_ours_to_signal_doesnt_raise(monkeypatch: pytest.MonkeyPatch, no_sleep: None) -> None:
