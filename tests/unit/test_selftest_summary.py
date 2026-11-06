@@ -4,6 +4,7 @@ check that ran; one whose checks were all skipped is listed, not counted."""
 import asyncio
 import importlib
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -148,11 +149,18 @@ def test_every_category_function_is_run() -> None:
     run = set(selftest.CATEGORIES) | {selftest.lifecycle.run}  # lifecycle: from the finally, own Designer only
     defined: set[Any] = set()
     for info in pkgutil.iter_modules(package.__path__):
-        if info.name in ('common', '__main__'):  # helpers and the index itself
+        if info.name in ('common', '__main__', 'alone'):  # helpers, the index itself, and the runner of single checks
             continue
         module = importlib.import_module('test_all_tools.' + info.name)
+        source = inspect.getsource(module)
         defined |= {
-            f for f in vars(module).values() if inspect.iscoroutinefunction(f) and f.__module__ == module.__name__
+            f
+            for f in vars(module).values()
+            if inspect.iscoroutinefunction(f)
+            and f.__module__ == module.__name__
+            # a check of its own, check_<what>(ctx), runs when a category function of its module awaits it
+            # (AGENTS.md, the self-test); alone.py runs it on its own too
+            and not (f.__name__.startswith('check_') and re.search(r'await\s+%s\(' % f.__name__, source))
         }
     assert defined, 'no category functions found'
     missing = sorted('%s.%s' % (f.__module__.split('.')[-1], f.__name__) for f in defined - run)

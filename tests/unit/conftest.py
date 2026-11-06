@@ -53,6 +53,16 @@ def selftest_sources() -> dict[str, str]:
     return sources
 
 
+# what runs the suite's checks rather than being one: its own tool calls (launch_designer, quit_designer...) mustn't
+# count as the suite exercising a tool
+SELFTEST_RUNNERS = ('alone.py',)
+
+
+def selftest_check_sources() -> dict[str, str]:
+    """selftest_sources() without SELFTEST_RUNNERS: what the coverage checks read."""
+    return {name: source for name, source in selftest_sources().items() if name not in SELFTEST_RUNNERS}
+
+
 @pytest.fixture(autouse=True)
 def guide_read(monkeypatch: pytest.MonkeyPatch) -> None:
     """Tool results start with a reminder until get_guide() was called; tests compare exact

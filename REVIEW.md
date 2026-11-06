@@ -15,9 +15,9 @@ with one of these wordings: done, not a bug, not reproducible, won't fix. Format
 
 **Confidence.**
 
-- *Confirmed*: the defect is visible in the code as quoted.
-- *Plausible*: the code path exists, but whether it bites depends on Designer, the OS or timing.
-- *Verified by hand*: checked against the code after the review, not only by the reviewer.
+- *Confirmed*: the lead agent read the code and the defect is visible in it, as quoted.
+- *Measured*: reading couldn't settle it, and the lead agent's scratch probe in Designer showed it (the entry gives
+  the probe and what it measured; the `project-code-review` skill). A finding is one or the other, never a guess.
 
 **IDs.** One prefix per area, numbered on: **PLG** plugin and bridge protocol, **SRV**
 `mcp_server/server.py` and `server_tools/`, **HLP** `mcp_server/designer_helpers/`, **INS** installer, uninstaller,

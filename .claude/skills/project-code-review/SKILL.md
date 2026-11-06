@@ -13,6 +13,44 @@ review of code that isn't a diff, and whenever findings are to be recorded in `R
 `REVIEW.md` is the **memory per branch**: reviewers and the agents addressing findings talk through it, as in a PR
 review, so it usually lasts as long as a branch. `DECISIONS.md` is the memory for the whole project.
 
+**A review runs no tests,** neither the unit tests nor the live self-test: reviewers read the code and the tests and
+assess them. Tests are run only by the agent that changes the code, at the points AGENTS.md (Running the tests) sets. A review
+through the built-in `/code-review` runs none either, and when its findings are to be recorded, suspicions it can't
+settle by reading are settled as in step 4 before anything goes in `REVIEW.md`.
+Whether a test fails without its fix and passes with it is judged by reading it, or, where reading can't settle it,
+with a scratch probe (below); never by running the test.
+
+**Every finding is settled before it is written, none recorded as a guess.** Reviewer subagents only report
+suspicions: they read, quote the code and say what would settle each one, and they don't probe Designer. The lead agent
+(the one running this skill) assesses every report and settles each suspicion as right or wrong, by reading the code,
+or, where reading can't settle it (whether a defect bites in Designer, whether a test or a fix holds up there), with a
+**scratch probe**: temporary code of its own, run in Designer. Only suspicions settled as right go in `REVIEW.md`.
+Reviewers don't probe for now (ROADMAP item 48 will give each one a Designer of its own) because the tools reach a single Designer (one `SD_BRIDGE_PORT` per session), and probes
+sharing it get in each other's way: a cancel drops every queued job, graphs with the same name are refused as
+ambiguous, one probe's leftovers change what another measures, and a crash or a quit ends everyone's work.
+- **Where it runs:** one Designer an agent started (`launch_designer`), never the user's, with the probes run one at a
+  time. If the user's Designer is open, ask them to close it: a probe's leftovers or crash would land in their work.
+  Close the agent's
+  Designer when the review is done (AGENTS.md, the rules).
+- **What it touches:** a new package of its own, with a graph name no other probe uses, unloaded at the end, never the
+  user's packages; AGENTS.md's rules apply (no Undo, no hot reload of the plugin).
+- **Where the code lives:** outside the repo (the session's scratchpad or a temp folder), run with
+  `run_designer_script`, `execute_designer_code` or `client/sd_run.py`, and deleted afterwards. The session's own tools
+  run the server and helpers as they were when the session connected: a probe of the branch's changes to
+  `server_tools/` or the helpers goes through a fresh server (an MCP session of its own, as `alone.py` opens) or after
+  `/mcp` reconnects. `client/sd_run.py` sends only the probe's own code.
+- **Outside Designer:** a suspicion about pure-Python code that reading can't settle gets a scratch probe too, plain
+  Python run from the scratchpad, with the same rules (not a test, never committed). It is not a test and is
+  never committed: the agent addressing the finding writes the real test.
+- **What goes in the entry:** the probe in short and what it measured, in the scenario, so the agent addressing the
+  finding can start its test from it.
+
+**Not verified is only for what can't be checked here,** never a way around a probe. If a scratch probe could check a
+suspicion, the lead agent writes it and runs it: the suspicion becomes a finding or is dropped. Only when a limitation makes that
+impossible (another OS, a race that won't reproduce on demand, hardware or a Designer version that isn't here) does it
+go in the review log's entry under **Not verified**, not in a section of findings: the suspicion, what was tried, the
+limitation, and what would check it. Code that is long or tedious to probe is not a limitation.
+
 ## Scope
 
 - **"This branch against main"** (or any branch against another) means **only the diff**:
@@ -87,14 +125,17 @@ line of the review log, with the decision's title. An answer in `REVIEW.md` can 
      names the old ID and what brought it back.
    - **Not a bug / not reproducible** finding: don't raise the same finding again. Questioning its answer,
      with a reason or new evidence, is step 2.
-2. **Assess the resolved entries in scope** (all of them for a whole-project review; for a branch, those whose fix is in the diff): does each resolution hold up?
+2. **Assess the resolved entries in scope** (yourself, by reading, and with a scratch probe where reading can't settle
+   it, as in step 4) (all of them for a whole-project review; for a branch, those whose fix is in the diff): does each resolution hold up?
    - **Done:** does the fix address the cause it names, or only the symptom? Read the code at the
-     fix and check that the test it names exists, would fail without the fix, and passes now. Is
+     fix and check, by reading it, that the test it names exists, would fail without the fix, and would pass with it. A live
+     check is seen failing and passing in the addressing agent's scratch run, which the resolution reports; don't report
+     it as not yet run in the whole suite, which runs only when the user asks (DECISIONS.md, Project rules). Is
      the fix reasonable in scope (not too broad, nothing it should also have covered left out)?
      Check its **Also covered** list (address-review, step 3): a place with the same pattern that
      the list misses is the follow-up finding; one the list explains needs no new entry.
    - **Not a bug / not reproducible:** is the "why not" convincing, and is its evidence still true
-     of the current code (the guard test still there and passing, the behaviour it relies on
+     of the current code (the guard test still there and still testing it, read as above, the behaviour it relies on
      unchanged)?
    - **Won't fix:** does the reason still apply? An answer also in `DECISIONS.md` follows the next point instead.
    - **Decisions** whose code is in scope: does the entry's **Reopen if** hold now, and do the code and
@@ -105,20 +146,24 @@ line of the review log, with the decision's title. An answer in `REVIEW.md` can 
    the resolution, and add one line under the old entry, if it is still in the file: "Questioned by <new ID> (<date>)". Give
    the reviewers these assessments too, so they look at the questioned fixes. Follow-up findings
    have their own rules: see **Follow-up chains** below.
-3. **Split the work by area** and give each reviewer (a subagent, read-only) one area: the files
+3. **Split the work by area** and give each reviewer (a subagent, changing nothing in the repo) one area: the files
    to read in full, AGENTS.md as context, what to look for (correctness, data safety, security,
-   misreported results, docs that contradict the code), and the report format: severity, file and
-   line, one-sentence defect, concrete scenario, suggested fix, confidence. Reviewers must quote
-   the code for every finding and drop what they can't support. A defect that recurs (the same
+   misreported results, docs that contradict the code), that they run no tests and don't probe Designer (above), and the report format: severity, file and
+   line, one-sentence defect, concrete scenario, suggested fix, and whether reading settles it or what would (a
+   probe's outline: what to build, what to measure, what result would prove it). Reviewers must quote
+   the code for every finding, and drop only what reading disproves: a suspicion reading can't settle is reported,
+   with its probe's outline, never dropped for lack of proof (the lead agent settles it, step 4). A defect that recurs (the same
    pattern in several places) is **one** finding listing every location, not one finding per round:
    reviewers search for the other instances before reporting. Give each reviewer the notes from
    steps 1 and 2 for its area (known findings with their status and resolution, and what was found
    fine), with the same rules, so they don't report them again. Tell each reviewer to read
    `DECISIONS.md` and apply the rule above, and that an ID missing from `REVIEW.md` isn't a finding in
    itself (**Findings no longer in REVIEW.md**).
-4. **Verify** at least the most severe finding of each area against the code yourself, and mark
-   those "verified by hand". Merge duplicates (one entry; mention that two reviewers found it),
-   and check every finding against `DECISIONS.md` and the notes from steps 1 and 2 once more before
+4. **Settle every suspicion yourself** (**Every finding is settled before it is written**, above): read the
+   code at each one; probe in Designer, one at a time, those reading can't settle. Mark each finding *confirmed* or
+   *measured*, drop the ones settled as wrong (the review log's entry says which, and why), and put the ones a
+   limitation keeps from being checked under **Not verified**. Merge duplicates (one entry; mention that two reviewers
+   found it), and check every finding against `DECISIONS.md` and the notes from steps 1 and 2 once more before
    writing it.
 5. **Write** each new finding as one entry in its severity section, after the entries already
    there, using the next free ID for its area (**Numbering a new finding**). Five severities, from high to low: **High,
@@ -128,7 +173,9 @@ line of the review log, with the decision's title. An answer in `REVIEW.md` can 
    assessed and which were questioned, findings added, suggested order, simplifications, what was
    checked and found fine), and update the
    status table.
-7. Report the totals and the most severe new findings to the user; the file has the rest.
+7. Report the totals and the most severe new findings to the user; the file has the rest. A review that finds
+   nothing new says so: the work is then ready for the final check (both suites in full), which runs only when the user
+   asks for it (AGENTS.md, Running the tests).
 
 ## Follow-up chains
 

@@ -20,6 +20,28 @@ may update the names and paths an entry points at; changing what was decided, or
 
 ## Project rules
 
+- **The full suites run only when the user asks; while working, only the tests added or modified run, always with lint
+  and types, a live check in a scratch run.** The full suites took about 12 minutes (PLAN.md, measured), longer than
+  the work they checked. No agent starts a whole run of either suite on its own, not for TDD, not after a fix, not
+  between reviews: when a review finds nothing, it says the work is ready, and the user asks for the final check (both
+  suites in full, before merging into `main`) when they say the work is done. Lint and types (`test_lint.py`,
+  `test_types.py`) run with every test run, whichever tests it has. TDD stays: a new or changed live self-test check, which lives in
+  the suite as a function its category's `run(ctx)` calls, is seen failing and then passing by calling that same
+  function from a scratch script (`tests/test_all_tools/alone.py`, or one written from zero where it falls short), in
+  an environment built for it, with a fresh MCP server, in a Designer an
+  agent started; the few checks a scratch run can't prove wait for the full run (AGENTS.md lists them). A check proven
+  that way can still pass or fail in the suite because of state earlier categories
+  left; the user accepts that the full run is what shows it. When the final check fails, the failing tests run on
+  their own until they pass (a live check in a scratch run), and then the user asks for the suites that failed again.
+  When only unit tests failed, the live self-test runs again only if the fixes touch code it reaches (AGENTS.md lists
+  it); its pass is for the code as it was. (The user's choice, 2026-11-06.) Docs changed alone run the doc tests instead (AGENTS.md, Running the tests).
+  Only the agent changing the code runs tests; a review runs none, and judges the tests by reading them, its lead
+  agent checking in Designer with scratch probes what reading can't settle.
+  A change not having run the full suites, before the user asks for them, is not a finding; a branch merged without
+  them passing is.
+  Reopen if: the full suites become fast enough to run after every change, or a break found only in the full run cost
+  more than the time saved. (The user's decision, 2026-11-06.)
+
 - **Only the current and next versions of Designer are supported.** README says older versions aren't, and the plugin's
   manifest asks for 16.0.0, so code needn't work on an older Designer or its older Python.
   Reopen if: the user wants older versions supported. (The user's decision, 2026-11-03.)

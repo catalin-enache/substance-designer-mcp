@@ -187,7 +187,7 @@ context on it:
 
 ## Self-test
 
-Check every tool end to end against the real Designer (about ten minutes when it starts Designer itself). If Designer isn't
+Check every tool end to end against the real Designer (about 11 minutes when it starts Designer itself). If Designer isn't
 running, the self-test starts it and closes it again at the end; if it is running, it's left open:
 
 ```bash
@@ -210,7 +210,8 @@ copy, so a trim sheet you have open is never touched). The 3D screenshot check i
 on macOS only. Exit code 0 means everything that ran passed; the summary lists tools whose checks
 were all skipped (`quit_designer` when your own Designer is running) instead of counting them as
 covered. Run it after installing, after updates, and
-after a Designer update.
+after a Designer update. To run chosen checks on their own, in an environment built for them (how agents see a check
+fail and then pass while changing it), see `tests/test_all_tools/alone.py` (AGENTS.md, Running the tests).
 
 **Unit tests (no Designer needed).** `tests/unit` tests everything that can run outside
 Designer: the plugin's server and authentication (with Qt replaced), both clients' protocol
@@ -221,12 +222,15 @@ environment variables and log reading. It also checks that this README lists eve
 the self-test exercises every tool and parameter and passes every `apply_edits` op, runs mypy (strict,
 `mypy.ini`) over every Python file, checking the code that runs inside Designer against
 Designer's own `sd` API and PySide6 stubs when Designer is installed, and runs Ruff
-(`ruff.toml`): lint rules, and every file formatted. Run them after any change:
+(`ruff.toml`): lint rules, and every file formatted. While working, run the tests you added or changed, always with
+the lint and type checks; run them all as the final check, before merging into `main`, except for a change of docs
+alone, which runs the docs tests (AGENTS.md, Running the tests):
 
 ```bash
 mcp_server/venv/bin/pip install -r mcp_server/requirements-dev.txt   # pytest, mypy and ruff
 mcp_server/venv/bin/ruff check --fix . && mcp_server/venv/bin/ruff format .   # lint and format
-mcp_server/venv/bin/python -m pytest
+mcp_server/venv/bin/python -m pytest tests/unit/test_x.py::test_name tests/unit/test_lint.py tests/unit/test_types.py   # while working
+mcp_server/venv/bin/python -m pytest   # all of them, before merging
 ```
 
 **Working in PyCharm.** The repo's `.idea` marks the source roots, excludes `mcp_server/venv`,

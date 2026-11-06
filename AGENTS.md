@@ -405,13 +405,23 @@ documented behaviour gets a check in the live self-test (`tests/test_all_tools/`
 real Designer); pure-Python logic gets a unit test in `tests/unit`. A claim in these docs
 without a test is a guess: test it or remove it.
 
+**Start with the tests, always (TDD).** Before implementing anything (a tool, a parameter, an op, a
+helper, a script, a change in behaviour), write the tests that describe what it must do and run them to watch
+them fail; only then write the code, until they pass. A test written after the code tends to check what the code
+happens to do, and one never seen failing may not test anything. A live self-test check is seen failing and then passing in a
+scratch run, an environment the agent builds for that check, never in a run of the whole suite, which runs only when
+the user asks (Running the tests, below). Code that changes no behaviour (a rename, a move) needs no new failing test:
+run the existing tests of the code it touches, unit tests by name and live checks in a scratch run, before and after the
+change; they must pass both times.
+
 **Fix issues test first (TDD).** Reproduce the issue with a test and watch it fail; then fix
-the code until the test passes. Before a fix that depends on Designer's behaviour, measure every
+the code until the test passes (a live check: in a scratch run, Running the tests). Before a fix that depends on Designer's behaviour, measure every
 case the code distinguishes, and fix the pattern everywhere it occurs, not just the reported
-instance (the `address-review` skill, step 3: skipping these made findings recur round after round). If the test passes before any fix, the issue isn't real (or
-the test doesn't reproduce it): say so rather than "fixing" it. For anything that depends on
-Designer, reproduce it in the live self-test too, since a unit test may take a path Designer
-never does. Two review findings were disproved this way: an abort raised again during cleanup
+instance (the `address-review` skill, step 3: skipping these made findings recur round after round). If the test passes before any fix, either the issue isn't
+real or the test can't see it: read the test against the issue to tell which. A test that can't see it gets fixed and
+run again, before any fix; an issue that isn't real is said so rather than "fixed". For anything that depends on
+Designer, reproduce it with a check in the live self-test too, seen failing in a scratch run, since a unit test may take
+a path Designer never does. Two review findings were disproved this way: an abort raised again during cleanup
 (Python unsets a trace function that raises) and a job starting inside the running one (Qt
 doesn't re-fire a timer whose slot is running; only a direct call in a unit test did).
 
@@ -444,11 +454,103 @@ The unit tests enforce part of this: they fail when a tool or a tool parameter i
 the self-test, when an `apply_edits` op or an op's field is never passed in one (run or not), or when a
 tool is missing from README's Tools table.
 
-**Running the tests.** When code changes, both must pass before the change is done. A commit of docs alone (Markdown
-files, the skills included) runs only the tests that validate the docs:
+**Running the tests.** **Only the agent that changes the code runs tests.** A review runs none, unit or live, whether
+it uses the `project-code-review` skill or the built-in `/code-review`: reviewers read the code and the tests, and
+report what reading can't settle as a suspicion, with what would settle it. The agent leading the review settles each
+one before anything is recorded, with scratch probes of its own, one at a time in one Designer an agent started (the
+`project-code-review` skill).
+
+**The full suites run only when the user asks:** the whole unit suite (`pytest` with no test ids) and a whole run of
+the live self-test (`tests/test_all_tools`). An agent never starts one on its own, not for TDD, not after a fix, not
+between reviews. When a review finds nothing, tell the user the work is ready for the final check. The final check is
+the run the user asks for when they say the work is done: both suites in full, just before merging into `main`, and
+both must pass (DECISIONS.md, Project rules); for docs changed alone, the docs tests (below).
+
+**Unit tests while working:** only the ones added or modified for the change (for a refactor, the existing tests of
+the code it touches: Start with the tests, above), as often as useful. **Lint and types
+always run too,** whichever tests run (`test_lint.py` and `test_types.py`, about 10 s):
+`mcp_server/venv/bin/python -m pytest <test ids> tests/unit/test_lint.py tests/unit/test_types.py`, where the test ids
+are files or single tests (`tests/unit/test_x.py::test_name`).
+
+**Live checks while working: a scratch run, test first.** A new or changed check of the live self-test is seen failing
+and then passing on its own, in an environment built for it, never through a run of the whole suite. **The check lives
+in the suite:** a function of its category's module, `async def check_<what>(ctx: Ctx)`, which the category's `run(ctx)`
+awaits (the self-test, below). A scratch run calls that same function, never a copy, so the check seen failing is the
+one committed.
+
+**Try `alone.run` first** (`tests/test_all_tools/alone.py`; its docstring has the details). A scratch script of a
+few lines, in the session's scratchpad, deleted afterwards and never committed:
+
+```python
+import sys
+
+sys.path.insert(0, '<repo>/tests')
+from test_all_tools import alone, params
+
+# the check being worked on, params.check_<what>; a whole category (params.run) works too
+raise SystemExit(alone.run(params.run, needs=['graph']))
+```
+
+It opens a fresh MCP server (the session's own tools run the server as it was when the session connected, so they
+don't see a change to `server_tools/` or the helpers until `/mcp` reconnects), uses a Designer an agent started or
+starts one, and refuses the user's (ask them to close it). It builds the environment with the suite's own setup steps
+(`needs`: `graph`, `params`, `wired`, `png`, `sbs`, each with the ones it relies on), then a `setup(ctx)` of yours if
+the check needs more (graphs named starting `mcp_selftest`: the clean-up unloads every package holding one), calls the checks, and cleans up.
+It keeps that Designer open for the next runs: `alone.close()` ends it when you are done. Exit code: 0 every check
+passed, 1 a check failed, 2 no environment (the user's Designer, a launch or a setup that failed) or no clean-up. A
+plugin change needs `install.py` and a restart of that Designer first (`alone.close()`, then the next run starts one).
+
+**If `alone.run` can't do what the check needs, ask the user to improve it,** saying what is missing (a need, a kind of
+check it can't run), and meanwhile write the scratch script from zero, keeping to what `alone.run` does: the check
+function itself, not a copy; a fresh MCP session, `stdio_client(common.PARAMS)` as `__main__.py` does; `get_guide`
+first; a Designer an agent started, never the user's; the environment built with the tools, its graphs named starting
+`mcp_selftest`, and removed in a `finally`: `common.CLEAN`, then the library packages put back as they were
+(`common.library_packages` before, `common.restore_library_packages` after), then the snapshots of the self-test graph
+deleted, as `alone.run` does.
+
+**The order:** run it before the code. The check must fail for the reason it is about. A failure that only says the
+tool or parameter doesn't exist yet shows the code is missing, not that the assertions catch anything; it is the
+expected failure for something new, so such a check gets the closest reading. A check that passes, or fails for another
+reason, was written wrong, unless it shows a review finding is false (the `address-review` skill, step 2): fix it and
+run again. Then write the code, and run it again until the check passes.
+
+Several checks worked on together (a feature in several parts, the findings addressed together) run in one scratch
+script. A "designer facts" check for Designer behaviour the code relies on is written and run the same way. A scratch
+run proves a check in its own environment, not in the suite's, where earlier categories have already changed the
+graph: a check can pass or fail there for that reason, and only the full run the user asks for shows it. A refactor of
+code the self-test checks (the helpers, the plugin, the Designer scripts) gets a scratch run of the checks of the code
+it touches, before and after; they must pass both times.
+
+**A new check in a setup step's category** (`graph_edit.create`, `params`, `graph_edit.wire`, `bitmaps`, `save`)
+runs inside every need built on that step: while it still fails, those needs fail to build (exit code 2), so the other
+checks run on them aren't seen failing for their own reason. Run such a check on the needs before its category, and the
+rest of the group in a script of its own.
+
+**What a scratch run can't prove** (these run only in the full suite the user asks for; an agent changing one says so,
+rather than claiming it was seen failing and passing):
+- **`lifecycle.py`, the whole category:** it quits and relaunches Designer (a normal quit, a forced one, a stuck
+  shutdown, a frozen main thread, a slow quit), checks for crash dumps after each, and checks the record of the
+  Designer an agent started. A quit ends the session the scratch run keeps open.
+- **`__main__.py`'s checks at the start of the run:** the four `get_guide` checks (instructions' length, the reminder
+  before and after it is called, the whole guide returned), whether Designer was started or was already running, and the
+  Home screen check (no panel visible while it shows), which can only be measured right after a fresh start, since
+  Home can't be shown again once closed.
+- **`__main__.py`'s checks at the end of the run:** the summary that every tool was exercised (and which were all
+  skipped), that the self-test puts the user's graph back in the editor, and, in a Designer that was already running, that it is still running with no new crash dump after the run.
+
+**When the final check fails,** the next runs are of the failing tests, until they pass: the failing unit tests by
+name (the run's summary lists them), with lint and types as always; a failing live check in a scratch run (when it
+fails only in the suite, build the state the earlier categories left into its environment). Then tell the user which
+suites failed, and they ask for those again. **When only unit tests failed, the live self-test runs again only if the
+fixes touch code it reaches:** `mcp_server/`, `plugin/`, `client/`, `examples/`, `tests/test_all_tools/` and
+`project_constants.py`. Its pass is for the code as it was, so tell the user it must run again too. Fixes only in code it
+doesn't reach (`tests/unit/`, `install.py`, `uninstall.py`, `scripts/`, the tool configs) need the unit suite again,
+not the self-test.
+Docs changed alone (Markdown files, the skills included), in a commit or a whole branch, run only the tests that
+validate the docs, the final check included, with `tests/unit/test_lint.py tests/unit/test_types.py` added as always:
 `mcp_server/venv/bin/python -m pytest tests/unit/test_constants.py tests/unit/test_guide.py tests/unit/test_review_lookup.py tests/unit/test_server.py`
 (`test_review_lookup.py` fails if a test that reads a doc is missing from this command).
-- `mcp_server/venv/bin/python -m pytest`: unit tests, no Designer needed, under a minute
+- `mcp_server/venv/bin/python -m pytest`: unit tests, no Designer needed, about a minute
   (`pip install -r mcp_server/requirements-dev.txt` once). They include `test_types.py`, which runs
   mypy strict (`mypy.ini`) over every Python file: everything you write is fully annotated. The
   helpers, the plugin and the example are checked against Designer's own `sd` package and PySide6
@@ -468,14 +570,17 @@ files, the skills included) runs only the tests that validate the docs:
   mypy then reports it, so put it back on the right line. Tests that read source text match
   whitespace-tolerantly (`c\(\s*'tool'`): formatting may split a call over lines.
 - `mcp_server/venv/bin/python tests/test_all_tools`: every tool over MCP against the real
-  Designer, about ten minutes when it starts Designer itself. It starts Designer if it isn't running and closes it again; a
+  Designer, about 11 minutes when it starts Designer itself (PLAN.md, measured). A whole run happens only when the user
+  asks; while working, a check runs in a scratch run (above). It starts Designer if it isn't running and closes it again; a
   Designer that was already running stays open, and the checks that quit Designer are skipped. Its "designer facts" checks re-measure the
   Designer behaviour this file states, so add one with each new fact.
   The folder holds one module per category (`bridge.py`, `params.py`, `render.py`...), shared
   helpers and snippets in `common.py`, and the index `__main__.py`, which runs the categories in
   the order of its `CATEGORIES` list. They share one graph and run only in that order; what an
   earlier category made (the graph `G`, node ids, the saved `.sbs`) reaches later ones through
-  `ctx`. Add a check to the category it belongs to; a new category is a module with an
+  `ctx`. Add a check to the category it belongs to, as a function `async def check_<what>(ctx: Ctx)` that `run(ctx)`
+  awaits, so a scratch run can call it too; a check being changed moves into such a function first
+  (`tests/unit/test_selftest_summary.py` fails on a `check_` function its module never awaits). A new category is a module with an
   `async def run(ctx)` added to `CATEGORIES`. **Python with real logic that runs inside Designer (more than a handful of
   lines, imports and the graph lookup included, or Qt code that gains from type checks), or that several modules run, goes in `designer_scripts/<module>/`, the folder named after the
   module that runs it (`shared/` for one that several run), as a real file, run with `common.designer_script`

@@ -13,7 +13,7 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.types import CallToolResult
 
 import designer_helpers
-from conftest import ROOT, patch_server, selftest_sources, server, server_source
+from conftest import ROOT, patch_server, selftest_check_sources, selftest_sources, server, server_source
 
 SERVER = os.path.join(ROOT, 'mcp_server', 'server.py')
 
@@ -63,7 +63,7 @@ def test_readme_tool_count_and_table() -> None:
 
 def test_designer_self_test_covers_every_tool() -> None:
     _, tools = _tools()
-    selftest = '\n'.join(selftest_sources().values())
+    selftest = '\n'.join(selftest_check_sources().values())
     called = set(re.findall(r"c\(\s*'(\w+)'", selftest))
     missing = sorted(set(tools) - called)
     assert not missing, 'tools without a check in tests/test_all_tools/: %s' % missing
@@ -80,7 +80,7 @@ def _selftest_calls() -> dict[str, set[str]]:
     import ast
 
     calls: dict[str, set[str]] = {}
-    nodes = [n for source in selftest_sources().values() for n in ast.walk(ast.parse(source))]
+    nodes = [n for source in selftest_check_sources().values() for n in ast.walk(ast.parse(source))]
     for node in nodes:
         if (
             isinstance(node, ast.Call)

@@ -14,9 +14,9 @@ with one of these wordings: done, not a bug, not reproducible, won't fix. Format
 `.claude/skills/project-code-review/` (SKILL.md, this template).
 
 **Confidence.**
-- *Confirmed*: the defect is visible in the code as quoted.
-- *Plausible*: the code path exists, but whether it bites depends on Designer, the OS or timing.
-- *Verified by hand*: checked against the code after the review, not only by the reviewer.
+- *Confirmed*: the lead agent read the code and the defect is visible in it, as quoted.
+- *Measured*: reading couldn't settle it, and the lead agent's scratch probe in Designer showed it (the entry gives
+  the probe and what it measured; the `project-code-review` skill). A finding is one or the other, never a guess.
 
 **IDs.** One prefix per area, numbered on: **PLG** plugin and bridge protocol, **SRV**
 `mcp_server/server.py` and `server_tools/`, **HLP** `mcp_server/designer_helpers/`, **INS** installer, uninstaller,
@@ -50,7 +50,10 @@ of the repo. If it can't, it says why: the ID never existed, a squash lost it, o
 
 ### YYYY-MM-DD: <scope, e.g. whole project, or a branch's diff>
 
-- **How:** <who reviewed which areas; read-only; test results at the time>.
+- **How:** <who reviewed which areas; no tests run; the lead agent's scratch probes in Designer, and what they measured;
+  the suspicions settled as wrong, and why>.
+- **Not verified:** <only suspicions a limitation kept from being checked here (not ones a scratch probe could check):
+  the suspicion, what was tried, the limitation, what would check it; none, if none>.
 - **Resolutions assessed:** <earlier resolved entries checked; which hold up, and which were
   questioned (by which new ID)>.
 - **Findings:** <IDs added, with counts per severity; duplicates merged>.
@@ -64,7 +67,7 @@ of the repo. If it can't, it says why: the ID never existed, a squash lost it, o
 
 <!-- Each finding is one list item starting with a checkbox. Unchecked = open. -->
 
-- [ ] **ID · One-line title of the defect** · `path/to/file.py:line-line` · confirmed | plausible (· verified by hand) · found YYYY-MM-DD
+- [ ] **ID · One-line title of the defect** · `path/to/file.py:line-line` · confirmed | measured · found YYYY-MM-DD
   - **Defect.** What is wrong, in one or two sentences, quoting the code where it helps.
   - **Scenario.** Concrete inputs or state, and what goes wrong for the user or the agent.
   - **Fix.** The suggested fix.
@@ -77,7 +80,8 @@ of the repo. If it can't, it says why: the ID never existed, a squash lost it, o
     <!-- A finding that questions an earlier resolution adds "· follows ID, generation N" to its
          title line (SKILL.md, Follow-up chains). -->
 
-    - **Test:** the test that reproduced it, and how it failed (or showed it doesn't happen).
+    - **Test:** the test that reproduced it, and how it failed (or showed it doesn't happen); a live self-test check, in
+      its scratch run.
     - **Cause:** why the code failed: the root cause, not the symptom. (When fixed.)
     - **Fix:** how it was fixed: what changed, and where. (When fixed.)
     - **Also covered:** the same pattern searched for elsewhere, and what was found. (When fixed.)

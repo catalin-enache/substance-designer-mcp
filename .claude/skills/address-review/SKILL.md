@@ -1,6 +1,6 @@
 ---
 name: address-review
-description: 'Use when asked to fix, address or work through findings in REVIEW.md (one entry, a group, or "the next items"), or when the user decides on a finding. Each finding is handled test first: a test that fails and so confirms the bug, then the fix, then the test passing; a finding whose test passes without a fix is answered as false. Either way the entry is checked off in REVIEW.md with a resolution line; what the user decides, if a reviewer could raise it again, goes in DECISIONS.md.'
+description: 'Use when asked to fix, address or work through findings in REVIEW.md (one entry, a group, or "the next items"), or when the user decides on a finding. Each finding is handled test first: a test that fails and so confirms the bug (a live self-test check in a scratch run, never the whole suite), then the fix, then the test passing; a finding whose test passes without a fix is answered as false. Either way the entry is checked off in REVIEW.md with a resolution line; what the user decides, if a reviewer could raise it again, goes in DECISIONS.md.'
 ---
 
 # Addressing review findings
@@ -18,7 +18,8 @@ and agents that address findings talk through it, as in a PR review.
 - An ID cited somewhere but missing from `REVIEW.md` was usually removed by a cleanup;
   `python3 scripts/review_lookup.py <ID>` gets the entry from git.
 - Take the entries the user names, or the open ones in the review log's suggested order, most
-  severe first. Group related entries (same file, same cause) and handle them one by one.
+  severe first. Group related entries (same file, same cause). The findings worked on together share their test runs
+  (**All the findings' tests first, run together**, below): each finding gets its own test and its own fix, but not runs of its own.
 - Read each entry, and the code at its location, before writing anything. The location may have
   moved since the review; find it by the quoted code.
 
@@ -28,6 +29,26 @@ Before changing anything, show the user the plan, one finding at a time: the fin
 to fix or answer it. Say where a measurement could change the plan. Then wait for the user's answer, unless they have
 already said to go ahead without one.
 
+## All the findings' tests first, run together
+
+The full suites never run while findings are addressed: they run only when the user asks (AGENTS.md, Running the
+tests). Each finding's tests run on their own instead: unit tests by name, live checks in a scratch run, an
+environment you build for them (AGENTS.md, Running the tests, "Live checks while working"). All the findings being
+addressed in one go (the ones the user named, or the batch in the plan) are handled together:
+
+1. **Write every finding's test first** (step 1 below, for each finding), and no fix yet.
+2. **Review the tests before running them,** as a reviewer would (step 6's list applies to tests too): would each one
+   fail on the bug, or would it pass on state an earlier check left, a value already there, a comparison any rule
+   satisfies? Does it clean up when a step fails?
+3. **One failing run for all of them:** every finding's unit tests in one command, with lint and types, and every
+   finding's live checks in one scratch script (`alone.run` first, AGENTS.md, Running the tests). Read each failure (steps 1 and 2). A test that passes, or fails for
+   another reason, was written wrong, unless the finding is false (step 2): fix it and run again, before any fix.
+4. **Measure with a scratch probe** what a fix needs measured in Designer first (step 3): temporary code of your own,
+   in the same Designer, the way the `project-code-review` skill's lead agent probes. What it measures goes in
+   AGENTS.md, with a "designer facts" check, run in the scratch run like the others.
+5. **Fix everything** (step 3 for each finding), then run the same unit tests and scratch script again (step 4), until
+   every test passes.
+
 ## For each finding
 
 1. **Reproduce it with a test that fails.**
@@ -35,12 +56,13 @@ already said to go ahead without one.
     - Anything that depends on Designer (helpers, plugin behaviour inside Designer, sd API facts):
       a check in the live self-test (`tests/test_all_tools/`, in its category's module), even when a unit test also
       covers it. A unit test can take a path Designer never does.
-    - Run it and **read the failure**. It must fail *because of the bug*: compare the failure with
-      the entry's scenario. A test that fails for another reason (a typo, a broken query, a wrong
-      fixture) proves nothing. Fix the test, run it again, and if in doubt run it against the old
-      code once more (`git stash push <file>`, run, `git stash pop`).
-2. **If the test passes before any change, the finding is false** (not a bug, or not
-   reproducible). Don't change the code to "fix" it:
+    - Run it, in the group's failing run (a live check in its scratch run), and **read the failure**. It must fail
+      *because of the bug*: compare the failure with the entry's scenario. A test that fails for another reason (a typo,
+      a broken query, a wrong fixture) proves nothing. Fix the test and run it again, still before the fix
+      (**All the findings' tests first, run together**, point 3).
+2. **If the test passes before any change, and it would see the bug, the finding is false** (not a bug, or not
+   reproducible). First read the test against the entry's scenario: one that can't see the bug is a wrong test, not a
+   false finding (**All the findings' tests first, run together**, point 3). Don't change the code to "fix" it:
     - keep the test as a guard;
     - write down why it doesn't happen, with the evidence (the passing test, the docs or
       behaviour that explain it);
@@ -52,21 +74,26 @@ already said to go ahead without one.
    REVIEW.md: the seed chain HLP-22 → … ran 18 findings deep, one case per round):
     - **Measure before fixing on Designer's behaviour.** When the fix depends on how Designer
       behaves (inheritance, seeds, function graphs, shutdown, the UI), first measure every case the
-      code distinguishes in one "designer facts" probe (the node and the graph, each inheritance
-      mode, with and without a render override...), record the measured table in AGENTS.md, then
-      write the fix for that table. Never fix the one case in the finding and leave the next case
+      code distinguishes (the node and the graph, each inheritance mode, with and without a render override...) in one
+      scratch probe (**All the findings' tests first, run together**, point 4), record the measured table in
+      AGENTS.md with its "designer facts" check, then write the fix for that table. Never fix the one case in the finding and leave the next case
       for the next review.
     - **Fix the pattern, not the instance.** Search for every other place with the same pattern:
       the other callers of the helper, the same check or message elsewhere, the sibling tool or
       parameter (HLP-31 fixed `'graph'` in two tools; HLP-41 later found eight more). Fix each one
       that has the defect, with its test, and list what you searched and what you found under **Also covered** in the
       resolution, so the next reviewer can see the scope.
-4. **Run the test again: it must pass.** Then run both suites in full, since a fix can break
-   something else (a change to docs alone runs less: AGENTS.md, Running the tests):
-    - `mcp_server/venv/bin/python -m pytest` (unit tests);
-    - `mcp_server/venv/bin/python tests/test_all_tools` (live self-test).
-      Plugin changes only reach Designer after `install.py` and a Designer restart: `quit_designer`, `launch_designer` for one an
-      agent started, and say that you did; ask the user to save, close and reopen their own (AGENTS.md, the rules).
+4. **Run the tests again: they must pass.** Only the tests added or modified for the group's findings, never the whole
+   suites, which run only when the user asks (AGENTS.md, Running the tests):
+    - the unit tests by name, always with lint and types:
+      `mcp_server/venv/bin/python -m pytest tests/unit/test_x.py::test_name tests/unit/test_lint.py tests/unit/test_types.py`;
+    - the live checks in the group's scratch script. Plugin changes only reach Designer after `install.py` and a
+      restart of the Designer the scratch runs use, which an agent started: `alone.close()`, and the next run starts
+      one (AGENTS.md, Running the tests); say that you did.
+
+   A scratch run proves a check in its own environment; if the full run the user asks for later shows it failing
+   there, the finding is open again: uncheck it, add a note under its resolution saying what failed (the entry's
+   earlier text stays), fix it, and add the new resolution below the note.
 5. **Update the docs** the change touches, as AGENTS.md's "Keeping the docs current" table says:
    tool docstrings, AGENTS.md facts, README.md. Add a new sentence only when an agent or a user
    needs it to act, and make it say exactly what its check measures, no more. Every claim is
@@ -93,7 +120,8 @@ already said to go ahead without one.
     - check its box: `- [ ]` becomes `- [x]`;
     - add a resolution under it: **Resolution: done**, *not a bug*, *not reproducible* or *won't
       fix*. It starts with one of these wordings, and details can follow. Don't record a commit: branches are squashed into main, so a hash stops resolving. It answers:
-        - **Test:** which test reproduced it (or showed it doesn't happen), and how it failed;
+        - **Test:** which test reproduced it (or showed it doesn't happen), and how it failed (a live check: in its
+          scratch run);
         - **Cause** (when fixed): why the code failed, the root cause rather than the symptom (for
           example "each value was set right after it was checked, so a bad later value left the
           earlier ones changed");
@@ -131,8 +159,8 @@ For what goes in:
 
 ## After a group
 
-- Report to the user per finding: the test, how it failed, the fix, and the result; say plainly
-  which findings were false and why.
+- Report to the user per finding: the test, how it failed, the fix, and the result (a live check: in its scratch
+  run); say plainly which findings were false and why.
 - Commit only when the user asks (AGENTS.md), with `REVIEW.md` and any `DECISIONS.md` change in the same
   commit as the fixes they record.
 - New problems found along the way go into `REVIEW.md` as new entries (the `project-code-review`
