@@ -1,18 +1,24 @@
 """
 Local script runner for Substance 3D Designer.
 
-Listens on 127.0.0.1:PORT. On connect the plugin sends one line, {"nonce": "<hex>"}. The client
-replies with one JSON request carrying "auth" = HMAC-SHA256(token, nonce) in hex, where the
-token is the secret in TOKEN_FILE (mode 0600), and closes its sending side. The plugin answers
-with one JSON reply. The token itself never crosses the socket, so a process squatting on the
-port while Designer is closed can't collect it.
+Listens on 127.0.0.1:PORT. On connect the plugin sends one line, {"nonce": "<32 hex digits>", "protocol": 2}.
+The client replies with one line, the answer: HMAC-SHA256 in hex, keyed with the secret in
+TOKEN_FILE (mode 0600), over the nonce, "\n", the port it connected to in decimal, "\n" and the
+request's bytes; then the request, one JSON object in UTF-8, those bytes exactly; then it closes
+its sending side. The plugin answers with one JSON reply. The token itself never crosses the
+socket, so a process squatting on the port while Designer is closed can't collect it. The answer
+holds for that nonce, port and request only: a program on another port that a client is pointed
+at can't pass it on to run anything here, and one on this port can't send a request of its own
+with it (REVIEW.md SRV-82, TST-163). The plugin checks the answer over the bytes as received,
+before parsing them, so a request without the right answer is never parsed (REVIEW.md PLG-32).
+The server and client/sd_run.py send nothing to a greeting of another protocol.
 
-  run:    {"auth", "code", "path"?, "timeout"?}  -> {"ok", "output", "error"}
+  run:    {"code", "path"?, "timeout"?}  -> {"ok", "output", "error"}
           Code runs on Designer's main thread. With "timeout" (seconds) the script is
           aborted once it exceeds that time.
-  cancel: {"auth", "cmd": "cancel"}              -> {"ok", "output"}
+  cancel: {"cmd": "cancel"}              -> {"ok", "output"}
           Aborts the running script (and drops queued ones).
-  status: {"auth", "cmd": "status"}              -> {"ok", "output"}
+  status: {"cmd": "status"}              -> {"ok", "output"}
 
 Aborting works by a trace hook checked while Python code runs, so a single long call
 into Designer's C++ (e.g. one graph.compute()) finishes before the abort takes effect.
@@ -47,7 +53,9 @@ READ_TIMEOUT = 30  # seconds to receive a whole request
 MAX_REQUEST = 64 << 20  # bytes
 MAX_CLIENTS = 16  # connections not yet authenticated; more are closed straight away
 MAX_OUTPUT = 8 << 20  # characters of a script's output sent back (the last ones)
-VERSION = 3
+VERSION = 4
+PROTOCOL = 2  # the greeting and the answer above; the clients check it before answering
+ANSWER_LENGTH = 64  # characters of the answer: an HMAC-SHA256 in hex
 
 
 class Reply(TypedDict, total=False):
@@ -97,8 +105,12 @@ def _load_token() -> str:
     return token
 
 
-def expected_auth(token: str, nonce: str) -> str:
-    return hmac.new(token.encode('utf-8'), nonce.encode('utf-8'), hashlib.sha256).hexdigest()
+def expected_auth(token: str, nonce: str, port: int, body: bytes | memoryview) -> bytes:
+    """The answer a client must send for these request bytes (module docstring), in hex. The body is hashed where it
+    lies: hashing copies nothing more of a request not yet known to be signed (REVIEW.md PLG-32)."""
+    mac = hmac.new(token.encode('utf-8'), b'%s\n%d\n' % (nonce.encode('ascii'), port), hashlib.sha256)
+    mac.update(body)
+    return mac.hexdigest().encode('ascii')
 
 
 def _make_tracer(deadline: float | None, cancel: threading.Event, pending: list[bool]) -> _TraceFunc:
@@ -271,6 +283,7 @@ class _Server:
         else:
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(('127.0.0.1', PORT))
+        self.port: int = self.sock.getsockname()[1]  # what clients sign (module docstring)
         self.sock.listen(4)
         self.running = True
         self.thread = threading.Thread(target=self._accept_loop, daemon=True)
@@ -363,15 +376,13 @@ class _Server:
         with conn:
             try:
                 nonce = secrets.token_hex(16)
-                conn.sendall(json.dumps({'nonce': nonce}).encode('utf-8') + b'\n')
+                conn.sendall(json.dumps({'nonce': nonce, 'protocol': PROTOCOL}).encode('utf-8') + b'\n')
                 try:
-                    req = json.loads(_read_request(conn).decode('utf-8'))
-                    if not isinstance(req, dict):
-                        raise ValueError
-                except (ValueError, UnicodeDecodeError, OSError):
+                    data = _read_request(conn)
+                except (ValueError, OSError):
                     reply = _fail('bad request')  # no details before authentication
                 else:
-                    reply = self._authorised(req, nonce, release)
+                    reply = self._authorised(data, nonce, release)
             except Exception:
                 reply = _fail('bad request')
             try:
@@ -379,10 +390,20 @@ class _Server:
             except OSError:
                 pass
 
-    def _authorised(self, req: dict[str, Any], nonce: str, release: Callable[[], None] = lambda: None) -> Reply:
-        if not hmac.compare_digest(str(req.get('auth', '')), expected_auth(self.token, nonce)):
+    def _authorised(self, data: bytes, nonce: str, release: Callable[[], None] = lambda: None) -> Reply:
+        """The answer checked over the bytes as received, and only then the request parsed (module docstring)."""
+        end = data.find(b'\n', 0, ANSWER_LENGTH + 1)  # looked for where an answer ends, not through the whole request
+        body = memoryview(data)[end + 1 :] if end >= 0 else memoryview(b'')
+        answer = data[:end] if end >= 0 else b''
+        if not hmac.compare_digest(answer, expected_auth(self.token, nonce, self.port, body)):
             return _fail('invalid token')
         release()
+        try:
+            req = json.loads(body.tobytes().decode('utf-8'))
+            if not isinstance(req, dict):
+                raise ValueError
+        except (ValueError, UnicodeDecodeError):
+            return _fail('bad request')
         if req.get('cmd'):
             # Control commands are answered from this thread, even while a script runs
             return self._control(req['cmd'])

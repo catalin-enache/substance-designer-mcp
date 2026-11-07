@@ -62,8 +62,9 @@ Three Designers started at once, each from the binary inside the app
 (`.../Adobe Substance 3D Designer.app/Contents/MacOS/Adobe Substance 3D Designer`) with its own `SD_BRIDGE_PORT`
 (9901, 9902, 9903). Each answered on its own port from its own process within 7.5 s.
 
-`launch_designer` can't do this: it uses `open -a`, which brings an already running Designer to the front
-instead of starting another.
+They were started at the same moment. Started one after another, a Designer hands over to the last one started and
+exits, unless it has a temp folder of its own: on macOS, `launch_designer(port=...)` (ROADMAP item 49) starts each
+that way (AGENTS.md, Several Designers).
 
 | 5 computes of a 40-blur graph at 2048 | Each | All three |
 |---|---:|---:|
@@ -201,14 +202,15 @@ when the user asks, and `alone.run` rerunning failing checks on their own, `--on
 - **A serial stage after the shards:** first the workers are closed (asked to close through the bridge, then
   SIGTERM to their own recorded process IDs only, as `end_own_designer` does). Then, with no other Designer
   running:
-  - `lifecycle`: its checks look for any Designer process (`pgrep`), and `launch_designer` uses `open -a`.
-  - The checks that count lines in Designer's log (`read_designer_log`, the harmless-messages fact). The log is
-    shared, so another instance can throw the counts off.
+  - `lifecycle`: the hand-over check needs the run's Designer to be the last one started (AGENTS.md, Running the
+    tests), so it runs once the workers are closed.
+  - No longer the checks that count lines in Designer's log (`read_designer_log`, the harmless-messages fact): each
+    worker started by `launch_designer` writes a log of its own (ROADMAP item 49), on macOS.
 - **Workers count as started by the test**, per worker, so the checks that load library packages and the Home screen
   check run.
 - **The unit tests run at the same time as the live shards:** they don't use Designer.
 - **When the user's Designer is open,** the self-test keeps today's behaviour: one run, in that Designer, nothing
-  quit. Running workers next to the user's Designer hasn't been tried (the port, the shared settings files).
+  quit: `launch_designer` starts none next to it (they share the preferences plist: AGENTS.md, Several Designers).
 
 **Why:**
 - **No check is lost:** unlike selection, every check still runs, so no bug can slip through.
@@ -228,9 +230,8 @@ pass, against 12 today (*estimate*).
 **Docs:**
 - **AGENTS.md, "Running the tests":** the new options, what runs in the serial stage and why.
 - **README.md, How it works:** the workers.
-- **AGENTS.md, Environment facts:** that several Designers run side by side with their own `SD_BRIDGE_PORT`, but
-  share the log, the crash dump folder, the temp folder and the settings files. Backed by a "designer facts" check,
-  as with every fact there.
+- **AGENTS.md, Environment facts:** done with ROADMAP item 49 (Several Designers): each has its own `SD_BRIDGE_PORT` and,
+  on macOS, a temp folder and home, so its own log, crash dumps and settings; they still share the preferences plist.
 
 ### Step 3: remove fixed waits (S–M)
 

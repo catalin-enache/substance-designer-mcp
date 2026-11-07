@@ -82,7 +82,7 @@ saved file (details: [AGENTS.md](AGENTS.md), Portals).
 
 | Area | Tools |
 |---|---|
-| Connection | `get_guide` (the full agent guide; Claude reads it before its first Designer tool call and confirms), `designer_status`, `launch_designer` (starts Designer and waits for it), `quit_designer` (closes one an agent started, dropping unsaved changes; refuses one you opened), `cancel_designer_job`, `read_designer_log` |
+| Connection | `get_guide` (the full agent guide; Claude reads it before its first Designer tool call and confirms), `designer_status`, `launch_designer` (starts Designer and waits for it; with `port`, another one side by side on macOS, which `designer_status` and `quit_designer` reach by the same `port`), `quit_designer` (closes one an agent started, dropping unsaved changes; refuses one you opened), `cancel_designer_job`, `read_designer_log` (with `port`, the log of that Designer: each one an agent starts on macOS writes its own) |
 | Finding nodes | `search_nodes` (built-in nodes and Designer's library of compositing graphs, its ready-made materials included, the ones it hides on request), `describe_node` (parameters, types, ranges, descriptions, dropdown values) |
 | Inspecting | `describe_graph`, `list_graph_inputs`, `preview_node` (image of any node), `node_stats` (exact pixel numbers), `check_tiling` (does it tile seamlessly?), `compare_to_reference` (how far a node's tones are from a reference image, in numbers) |
 | Tuning | `sweep_param` (try several values of a parameter side by side; the original value is restored) |
@@ -141,14 +141,14 @@ The installer:
    wrote yourself is left alone.
 
 **After updating this folder** (`git pull`), re-run the installer and restart Designer: the
-plugin and the server must be the same version (an older plugin answers every request with
-"invalid token").
+plugin and the server must be the same version. A server newer than the plugin says the two speak
+different bridge protocols and sends nothing; an older one gets "invalid token" for every request.
 
 Then:
 
 1. **Restart Substance Designer** (the plugin loads at startup). Don't also load it from
    Tools > Plugin Manager; a second copy can't open the port and stays inactive.
-2. Check Designer's console (Windows > Console) for `[sd_claude_bridge_kve] v3 listening on 127.0.0.1:9877`.
+2. Check Designer's console (Windows > Console) for `[sd_claude_bridge_kve] v4 listening on 127.0.0.1:9877`.
 3. **Start `claude` in this folder** and approve `substance-designer` when asked (once). Then
    `claude mcp list` here shows `substance-designer: … ✔ Connected`.
 
@@ -256,10 +256,10 @@ a quick fix (⌥⏎), or apply them all with `ruff check --fix .`.
 | Variable | Default | Used for |
 |---|---|---|
 | `SD_DESIGNER_BIN_DIR` | macOS: `/Applications/Adobe Substance 3D Designer/Adobe Substance 3D Designer.app/Contents/MacOS`; Windows: `C:\Program Files\Adobe\Adobe Substance 3D Designer` | finding `sbscooker` / `sbsrender` |
-| `SD_DESIGNER_APP` | macOS: `/Applications/Adobe Substance 3D Designer/Adobe Substance 3D Designer.app`; Windows: `C:\Program Files\Adobe\Adobe Substance 3D Designer\Adobe Substance 3D Designer.exe` | `launch_designer` |
+| `SD_DESIGNER_APP` | macOS: `/Applications/Adobe Substance 3D Designer/Adobe Substance 3D Designer.app`; Windows: `C:\Program Files\Adobe\Adobe Substance 3D Designer\Adobe Substance 3D Designer.exe` | `launch_designer` (on macOS the .app, whose own binary it starts) |
 | `SD_DESIGNER_LOG` | newest `log.txt` in Designer's settings folder (see Troubleshooting) | `read_designer_log` |
 | `SD_SNAPSHOT_DIR` | `~/.sd_mcp/snapshots` | where `snapshot_graph` keeps snapshots (one folder per graph, each snapshot noting its package; safe to delete, except a snapshot you opened and saved in place, which may hold your work: `list_snapshots` marks those taken by this version) |
-| `SD_BRIDGE_PORT` | `9877` | plugin, MCP server and CLI client (set the same value for all three; the plugin reads it from Designer's environment, so start Designer from a shell where it is set, or set it system-wide) |
+| `SD_BRIDGE_PORT` | `9877` | plugin, MCP server and CLI client (set the same value for all three; the plugin reads it from Designer's environment, so start Designer from a shell where it is set, or set it system-wide; `launch_designer` sets it for the Designer it starts, and on macOS a temp folder and home of its own) |
 
 Set them in your shell before starting `claude`, add an `"env": {...}` block to your own copy of
 the `.mcp.json` entry, or pass them when registering a folder:
@@ -280,11 +280,12 @@ python client/sd_run.py --cancel              # abort the running script
 - The plugin only listens on `127.0.0.1`, so other machines can't reach it.
 - Every request must be signed with the secret in `~/.sd_claude_bridge_kve_token` (Windows:
   `%USERPROFILE%\.sd_claude_bridge_kve_token`): the plugin sends a random challenge and the client answers
-  with an HMAC of it, so the secret itself never crosses the connection, and a program posing as
-  the plugin while Designer is closed learns nothing it can reuse.
-- Only the client proves it knows the secret, not the plugin. So while Designer is closed, a
-  program that takes over port 9877 would receive the next script and could send back a made-up
-  reply. This is accepted: a program running as you could read the token file anyway, so only
+  with an HMAC of it, the port it connected to and the request itself. So the secret never crosses the
+  connection, and a program posing as the plugin (while Designer is closed, or on another port a tool is
+  pointed at) can't pass the answer on to a real plugin to run code of its own.
+- Only the client proves it knows the secret, not the plugin. So a program listening where a tool
+  connects (port 9877 while Designer is closed, or another port given to a tool) would receive the
+  next script and could send back a made-up reply. This is accepted: a program running as you could read the token file anyway, so only
   another user account on the same machine gains anything, and scripts carry no secrets.
 - The plugin creates the token on first run, owner-only on macOS (it also tightens an existing
   file's permissions), and replaces an empty or truncated one. Anything that can read that file
@@ -293,7 +294,8 @@ python client/sd_run.py --cancel              # abort the running script
   connections that haven't authenticated yet are served at once, which bounds the memory and
   threads they can take; `status` and `cancel` still get through behind queued jobs). That cap is
   not a lock against other local programs: one holding 16 idle connections turns other clients away
-  until it stops. Malformed requests get no details back, only the last 8 million characters of a
+  until it stops. A request is checked against its signature before it is even parsed, so an
+  unsigned one costs Designer only its bytes. Malformed requests get no details back, only the last 8 million characters of a
   script's output come back, and on Windows the port is bound exclusively so a second program can't share it.
 - Screenshots only ever capture Designer's own panels. The 3D view uses Designer's own render
   through the clipboard and puts back whatever was on your clipboard.
@@ -316,7 +318,12 @@ registration with the same name that isn't this project's is reported and left a
 snapshots (`~/.sd_mcp/snapshots`) stay unless you pass `--remove-snapshots`; even then, a
 snapshot taken by this version that you opened in Designer and saved in place stays (it may hold your
 work), and is listed; older snapshots can't be told apart and are deleted. Pass
-`--plugins-dir` if you installed with it. Then restart Designer and delete this folder.
+`--plugins-dir` if you installed with it. It also removes what `launch_designer` left for the
+Designers an agent started: their records (`~/.sd_claude_bridge_kve_agent_designer_<port>.json`) and
+their folders (`/tmp/sd_mcp_<user ID>_<port>/`, each one's settings, log and crash dumps).
+While any Designer runs, or when that can't be told (its processes couldn't be listed, or not on
+macOS), those folders are kept and listed instead, since one an agent started uses its own. Then
+restart Designer and delete this folder.
 
 ## Troubleshooting
 
@@ -325,7 +332,7 @@ work), and is listed; older snapshots can't be told apart and are deleted. Pass
 | `substance-designer` fails to connect in `/mcp`; its log says "no Python environment" | The venv is missing (a fresh clone, or it was deleted): run `python3 install.py`, then reconnect in `/mcp`. |
 | `No bridge token found` | The plugin has never run. Restart Designer and check its console. |
 | `Designer is not reachable` | Designer isn't running, or the plugin failed to load. Check the Designer log. |
-| Every call returns `invalid token` | The plugin and the server are different versions (for example after `git pull`): re-run `install.py` and restart Designer. |
+| Every call returns `invalid token`, or says the plugin `speaks another bridge protocol` | The plugin and the server are different versions (for example after `git pull`): re-run `install.py`, restart Designer and reconnect `/mcp`. |
 | `This Designer wasn't started by an agent` | The tools never close a Designer you opened. Save, close and reopen it yourself. |
 | `Designer ... did not answer` and it may be stuck closing | If its windows closed but the process stayed, end it in Activity Monitor, or with the `kill` command the message gives. On Windows, in Task Manager. Nothing is lost then. If its windows are open, save and close it as usual: ending it would lose unsaved work. |
 | Bridge accepts connections but never answers | The plugin code was replaced while running (for example by a hot reload). Restart Designer. |
@@ -335,7 +342,9 @@ work), and is listed; older snapshots can't be told apart and are deleted. Pass
 | New tools don't show up in Claude Code | Reconnect `substance-designer` in `/mcp`, or restart Claude Code. |
 
 Designer log (every plugin traceback ends up here; Claude can read it with `read_designer_log`):
-- macOS: `~/Library/Application Support/Adobe/Adobe Substance 3D Designer/<version>/log.txt`
+- macOS: `~/Library/Application Support/Adobe/Adobe Substance 3D Designer/<version>/log.txt`; a Designer an agent
+  started (`launch_designer`) writes its own, under `/tmp/sd_mcp_<user ID>_<port>/home/Library/Application Support/...`,
+  with its crash dumps and settings
 - Windows: under `%LOCALAPPDATA%\Adobe\Adobe Substance 3D Designer\` (version subfolder).
   The same messages appear in Designer's Console window.
 

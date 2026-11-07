@@ -1,38 +1,94 @@
 """read_designer_log."""
 
 import os
+import re
 import sys
 
 from mcp.server.mcpserver.exceptions import ToolError
 
-from .core import _tool
+from project_constants import (
+    PLUGIN,
+    agent_designer_file,
+)  # on sys.path: the package's __init__ imports .core, which puts it there
+
+from .core import _designer_data_dir, _tool
+from .lifecycle import _agent_designer, _agent_home, _checked_folder, _own_home_path, _port, _running_on
 
 
-def _designer_log_path() -> str | None:
-    if os.environ.get('SD_DESIGNER_LOG'):
-        return os.environ['SD_DESIGNER_LOG']
-    if sys.platform == 'darwin':
-        base = os.path.expanduser('~/Library/Application Support/Adobe/Adobe Substance 3D Designer')
-    elif sys.platform == 'win32':
-        base = os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Adobe', 'Adobe Substance 3D Designer')
-    else:
-        base = os.path.expanduser('~/.local/share/Adobe/Adobe Substance 3D Designer')
+def _newest_log(base: str) -> str | None:
+    """The most recently written log.txt under base (one folder per Designer version). Not one that is a link: Designer
+    writes a file, and a link could lead anywhere, the bridge token included (REVIEW.md SRV-96)."""
     logs: list[str] = []
     for root, _dirs, files in os.walk(base):
-        if 'log.txt' in files:
+        if 'log.txt' in files and not os.path.islink(os.path.join(root, 'log.txt')):
             logs.append(os.path.join(root, 'log.txt'))
     return max(logs, key=os.path.getmtime) if logs else None
 
 
+def _designer_log_path() -> str | None:
+    """The log Designers write that no agent started with a home of its own: the user's."""
+    if os.environ.get('SD_DESIGNER_LOG'):
+        return os.environ['SD_DESIGNER_LOG']
+    return _newest_log(_designer_data_dir())
+
+
+def _last_port(log: str) -> int | None:
+    """The bridge port of the last Designer started that wrote this log: what our plugin logs as it starts listening,
+    after the start-up line. None if its plugin didn't say (it didn't load, or the log is from elsewhere)."""
+    with open(log, encoding='utf-8', errors='replace') as f:
+        lines = f.read().splitlines()
+    for line in lines[_last_start(lines) :]:
+        found = re.search(r'\[%s\] v\d+ listening on 127\.0\.0\.1:(\d+)' % re.escape(PLUGIN), line)
+        if found:
+            return int(found.group(1))
+    return None
+
+
+def _log_for(port: int) -> str | None:
+    """The log of the Designer on `port`: its own if an agent started it (macOS: in its home), and the shared one if
+    the user's is there. With none running, its own, what it wrote before it ended, unless the user's Designer last
+    started was on this port too: then the newer of the two (REVIEW.md SRV-84)."""
+    shared = _designer_log_path()
+    if _agent_designer(port) is not None:  # its record says where it writes
+        home = _agent_home(port)
+        if not home:  # older code started it, or not macOS: it writes the shared log
+            return shared
+        if _checked_folder(port) is None:  # its record names a home there (REVIEW.md SRV-96)
+            raise ToolError(
+                "%s is not a folder of this user: the log of the Designer on port %d isn't read from it"
+                % (os.path.dirname(home), port)
+            )
+        own = _newest_log(_designer_data_dir(home))
+        # older than its record, it is an earlier run's on this port: the folder outlives a quit (REVIEW.md SRV-99)
+        if own is None or os.path.getmtime(own) < os.path.getmtime(agent_designer_file(port)):  # not the shared log
+            raise ToolError('The Designer on port %d has no log yet: it is still starting. Try again shortly.' % port)
+        return own
+    # only from this user's own folder: another account may have made it first (REVIEW.md SRV-96)
+    ours = sys.platform == 'darwin' and _checked_folder(port) is not None
+    own = _newest_log(_designer_data_dir(_own_home_path(port))) if ours else None
+    if not own or _running_on(port):
+        return shared
+    if shared is None or not os.path.exists(shared) or _last_port(shared) not in (port, None):
+        return own  # the shared log's last Designer was on another port: it isn't this port's
+    return own if os.path.getmtime(own) >= os.path.getmtime(shared) else shared
+
+
 @_tool()
 def read_designer_log(
-    lines: int = 60, contains: str | None = None, errors_only: bool = False, since_last_start: bool = True
+    lines: int = 60,
+    contains: str | None = None,
+    errors_only: bool = False,
+    since_last_start: bool = True,
+    port: int | None = None,
 ) -> str:
     """Read the end of Designer's log, where every plugin/Python traceback lands. contains:
     case-insensitive text to filter on (e.g. 'listening on', 'Traceback'). errors_only: only
     [ERROR]/[WARNING] lines. since_last_start: ignore lines from before Designer's last start.
-    Override the location with SD_DESIGNER_LOG."""
-    path = _designer_log_path()
+    port: the log of the Designer on that bridge port (launch_designer's port); this server's when omitted. One an agent
+    started on macOS writes a log of its own, also read after it has ended (unless a Designer of the user's started
+    since, on that port or without the plugin saying which); just started, it has none yet, and this says so. The user's write one log together, their lines not
+    told apart. The first line names the file read. Override the shared log's location with SD_DESIGNER_LOG."""
+    path = _log_for(_port(port))
     if not path or not os.path.exists(path):
         raise ToolError('Designer log not found; set SD_DESIGNER_LOG to its path')
     with open(path, encoding='utf-8', errors='replace') as f:

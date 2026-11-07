@@ -22,7 +22,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 PORT = int(os.environ.get('SD_BRIDGE_PORT', '9877'))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from project_constants import PLUGIN, QUEUE_WAIT, TOKEN_FILE  # noqa: E402  (the plugin's name lives there)
+from project_constants import BRIDGE_PROTOCOL, DESIGNER_PROCESS, NONCE, PLUGIN, QUEUE_WAIT, TOKEN_FILE  # noqa: E402  (the plugin's name lives there)
 
 # Folder holding sbscooker / sbsrender. Override with SD_DESIGNER_BIN_DIR.
 DEFAULT_BIN_DIRS = {
@@ -79,6 +79,18 @@ GUIDE_NOT_READ = (
 )
 
 
+def _designer_data_dir(home: str | None = None) -> str:
+    """Where Designer keeps its log, settings and crash dumps: in the user's home, or, given `home`, in that one: the
+    home of its own launch_designer gives a Designer it starts on macOS."""
+    if sys.platform == 'darwin':
+        base = os.path.join(home or os.path.expanduser('~'), 'Library', 'Application Support')
+    elif sys.platform == 'win32':
+        base = os.environ.get('LOCALAPPDATA', '')
+    else:
+        base = os.path.expanduser('~/.local/share')
+    return os.path.join(base, 'Adobe', 'Adobe Substance 3D Designer')
+
+
 def _designer_running() -> bool:
     """True while a Designer process exists (the bridge port closes before the process exits)."""
     if sys.platform == 'win32':
@@ -89,9 +101,7 @@ def _designer_running() -> bool:
             text=True,
         ).stdout
         return '"Adobe Substance 3D Designer.exe"' in out
-    return (
-        subprocess.run(['pgrep', '-f', 'MacOS/Adobe Substance 3D Designer( |$)'], capture_output=True).returncode == 0
-    )
+    return subprocess.run(['pgrep', '-f', DESIGNER_PROCESS], capture_output=True).returncode == 0
 
 
 server = MCPServer(name='substance-designer', instructions=INSTRUCTIONS)
@@ -147,18 +157,50 @@ def _helpers_call(call: str) -> str:
     return HELPERS + '\n\n' + call + '\n'
 
 
-def _exchange(sock: socket.socket, token: str, request: dict[str, Any]) -> bytes:
-    """The bridge protocol (plugin docstring): read the nonce line, answer with
-    HMAC(token, nonce) instead of the token itself, return the raw reply bytes."""
+OTHER_PROTOCOL = (
+    'The %s plugin in Designer speaks another bridge protocol than this server (they are different versions); '
+    'nothing was sent. Re-run install.py, then restart Designer: quit_designer and launch_designer for one an agent '
+    "started; the user's, ask them to save, close and reopen it. If the server is the older one, the user reconnects "
+    '/mcp.' % PLUGIN
+)
+
+
+class _Refused(ToolError):
+    """A Designer's plugin answered, but refused the request (its reply's ok is false, e.g. 'invalid token') or speaks
+    another bridge protocol: starting or waiting for another Designer wouldn't help."""
+
+
+def bridge_answer(token: str, nonce: str, port: int, body: bytes) -> bytes:
+    """The answer to the plugin's greeting (plugin docstring): HMAC(token) over the nonce, the port connected to and
+    the request's bytes as sent, so it can't be passed on to a plugin on another port or with another request
+    (REVIEW.md SRV-82, PLG-32)."""
+    message = b'%s\n%d\n' % (nonce.encode('ascii'), port) + body
+    return hmac.new(token.encode('utf-8'), message, hashlib.sha256).hexdigest().encode('ascii')
+
+
+def _exchange(sock: socket.socket, token: str, request: dict[str, Any], port: int) -> bytes:
+    """The bridge protocol (plugin docstring): read the greeting, send the answer (an HMAC of the nonce, the port and
+    the request's bytes) on a line before those bytes, instead of the token itself, and return the raw reply bytes. A
+    greeting of another protocol gets nothing."""
     hello = b''
     while not hello.endswith(b'\n'):
         chunk = sock.recv(1024)
         if not chunk:
             raise ConnectionResetError('closed before the greeting')
         hello += chunk
-    nonce: str = json.loads(hello.decode('utf-8'))['nonce']
-    auth = hmac.new(token.encode('utf-8'), nonce.encode('utf-8'), hashlib.sha256).hexdigest()
-    sock.sendall(json.dumps({**request, 'auth': auth}).encode('utf-8'))
+    greeting = json.loads(hello.decode('utf-8'))
+    if not isinstance(greeting, dict):
+        raise ValueError("not the bridge's greeting")
+    # the protocol first: another one's greeting may hold no nonce (REVIEW.md SRV-88)
+    if greeting.get('protocol') != BRIDGE_PROTOCOL:
+        if 'protocol' not in greeting and 'nonce' not in greeting:  # no bridge's, of any version (REVIEW.md SRV-95)
+            raise ValueError("not the bridge's greeting")
+        raise _Refused(OTHER_PROTOCOL)  # a Designer answering (REVIEW.md SRV-85)
+    nonce = greeting['nonce']
+    if not isinstance(nonce, str) or not NONCE.fullmatch(nonce):  # nothing signed with it (REVIEW.md SRV-94)
+        raise ValueError("not the bridge's greeting")
+    body = json.dumps({key: value for key, value in request.items() if key != 'auth'}).encode('utf-8')
+    sock.sendall(bridge_answer(token, nonce, port, body) + b'\n' + body)
     sock.shutdown(socket.SHUT_WR)
     data = b''
     while chunk := sock.recv(65536):
@@ -174,16 +216,17 @@ class Reply(TypedDict, total=False):
     error: str
 
 
-def _send(request: dict[str, Any], wait: float) -> Reply:
-    """Send one JSON request to the plugin and return its reply dict."""
+def _send(request: dict[str, Any], wait: float, port: int | None = None) -> Reply:
+    """Send one JSON request to the plugin on `port` (this server's PORT by default) and return its reply dict."""
     try:
         with open(TOKEN_FILE) as f:
             token = f.read().strip()
     except FileNotFoundError as e:
         raise ToolError('No bridge token found. Is the %s plugin loaded in Designer?' % PLUGIN) from e
     try:
-        with socket.create_connection(('127.0.0.1', PORT), timeout=wait) as s:
-            data = _exchange(s, token, request)
+        port = PORT if port is None else port
+        with socket.create_connection(('127.0.0.1', port), timeout=wait) as s:
+            data = _exchange(s, token, request, port)
     except ConnectionRefusedError as e:
         raise ToolError(
             'Designer is not reachable: if it is closed, ask the user to open it (the %s plugin loads on startup).'
@@ -204,27 +247,26 @@ def _send(request: dict[str, Any], wait: float) -> Reply:
         raise ToolError('Designer closed the connection without a reply (it may be starting or quitting).') from e
 
 
-class _Refused(ToolError):
-    """The plugin answered but refused the request (its reply's ok is false), e.g. 'invalid token'."""
-
-
-def _control(cmd: str, wait: float) -> str:
+def _control(cmd: str, wait: float, port: int | None = None) -> str:
     """A control request ('status', 'cancel') and its output; a refusal raises _Refused with the
     plugin's error instead of reading as an answer (REVIEW.md SRV-33)."""
-    reply = _send({'cmd': cmd}, wait=wait)
+    reply = _send({'cmd': cmd}, wait=wait, port=port)
     if not reply.get('ok'):
         raise _Refused('Designer refused the %r request: %s' % (cmd, reply.get('error') or 'no reason given'))
     return reply.get('output', '')
 
 
-def _bridge(code: str, path: str | None = None, timeout: float | None = None, wait: float | None = None) -> str:
+def _bridge(
+    code: str, path: str | None = None, timeout: float | None = None, wait: float | None = None, port: int | None = None
+) -> str:
     # timeout: seconds before the plugin aborts the script (None = no limit)
     # wait: seconds to wait for a reply, for a job that may start late or not at all (None = as long as it may take)
+    # port: the plugin's port (None = this server's PORT; launch_designer, designer_status and quit_designer take one)
     request: dict[str, Any] = {'code': code, 'path': path}
     if timeout:
         request['timeout'] = timeout
     # wait for the plugin's queue and the script itself, or a job we gave up on could start later
-    reply = _send(request, wait=QUEUE_WAIT + (timeout or 900) + 60 if wait is None else wait)
+    reply = _send(request, wait=QUEUE_WAIT + (timeout or 900) + 60 if wait is None else wait, port=port)
     text = reply['output']
     if not reply['ok']:
         text += '\n--- ERROR ---\n' + reply['error']

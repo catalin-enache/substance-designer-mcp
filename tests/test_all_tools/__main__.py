@@ -72,9 +72,10 @@ from test_all_tools.common import (  # noqa: E402
     TEST_GRAPH,
     Call,
     Ctx,
+    NoListing,
     check,
     crash_dumps,
-    designer_alive,
+    designer_here,
     editor_graph,
     end_own_designer,
     helpers_source,
@@ -86,6 +87,7 @@ from test_all_tools.common import (  # noqa: E402
     skipped,
     summarize,
     text,
+    users_designer_running,
 )
 
 # In the order they run; each one may rely on what the ones before it left in the graph and in ctx
@@ -145,8 +147,7 @@ async def run(scratch: str) -> list[str]:
         t = text(await c('list_snapshots', {'graph': 'no_such_graph'}))
         check('get_guide', 'no reminder afterwards', t == 'No snapshots for no_such_graph.', t)
         helper_source = helpers_source()  # sent ahead of snippets that call the helpers
-        # a Designer still starting counts too: it is the user's
-        was_running = STATE['was_running'] = designer_alive() or not (await c('designer_status')).is_error
+        was_running = STATE['was_running'] = await already_running(c)
         t = text(await c('launch_designer', {'wait_s': 240}))
         check(
             'launch_designer',
@@ -182,14 +183,7 @@ async def run(scratch: str) -> list[str]:
         await c('execute_designer_code', {'code': CLEAN})
         ctx = Ctx(c=c, s=s, scratch=scratch, helper_source=helper_source, was_running=was_running)
         try:
-            for category in CATEGORIES:
-                await category(ctx)
-        except Exception:
-            # an unexpected answer (a parse that found nothing) skips the checks after it, but the
-            # clean-up still runs and the run ends with its summary, this as a failure (REVIEW.md TST-63);
-            # the whole traceback printed, and its last line in the check (TST-67)
-            print(traceback.format_exc())
-            check('self-test', 'the run reaches its end', False, traceback.format_exc().strip().splitlines()[-1])
+            await run_steps(ctx, CATEGORIES)
         finally:
             print('\ncleanup:', text(await c('execute_designer_code', {'code': CLEAN})).strip())
             # the library packages the run loaded, in a separate call (graph views from the test
@@ -215,8 +209,36 @@ async def run(scratch: str) -> list[str]:
             elif was_running:
                 skip('quit_designer', 'closes Designer', 'Designer was already running, so it is left open')
             else:
-                await lifecycle.run(ctx)
+                await run_steps(ctx, [lifecycle.run])  # in the finally: one raising ends no more (REVIEW.md TST-152)
     return tools
+
+
+async def already_running(c: Call) -> bool:
+    """Whether a Designer was running before the run: the user's (a Designer still starting counts too: it is the
+    user's), or one answering on PORT. Not another run's, on its own port (REVIEW.md TST-170)."""
+    return users_designer_running() or not (await c('designer_status')).is_error
+
+
+async def run_steps(ctx: Ctx, steps: list[Callable[[Ctx], Awaitable[None]]]) -> None:
+    """Await each step(ctx). An unexpected answer (a parse that found nothing) skips the steps after it, but the
+    clean-up still runs and the run ends with its summary, this as a failure (REVIEW.md TST-63, TST-152); the whole
+    traceback printed, and its last line in the check (TST-67)."""
+    try:
+        for step in steps:
+            await step(ctx)
+    except Exception:
+        print(traceback.format_exc())
+        check('self-test', 'the run reaches its end', False, traceback.format_exc().strip().splitlines()[-1])
+
+
+def designer_here_or_unknown() -> bool:
+    """designer_here(), or True when Designer's processes can't be listed: what may still run is left alone
+    (REVIEW.md INS-27)."""
+    try:
+        return designer_here()
+    except NoListing as e:
+        print('%s: taken as running' % e)
+        return True
 
 
 def main() -> None:
@@ -225,9 +247,11 @@ def main() -> None:
         tools = asyncio.run(run(scratch))
     finally:
         dumps_before = crash_dumps()  # just before the clean-up it is about (REVIEW.md TST-21)
-        if not STATE['was_running'] and designer_alive() and sys.platform != 'win32':
+        if not STATE['was_running'] and designer_here_or_unknown() and sys.platform != 'win32':
             end_own_designer()
-        if designer_alive():
+        # asked after the end: the run's own, just ended, no longer keeps it (REVIEW.md TST-192); another run's
+        # Designer never opened it (REVIEW.md TST-170)
+        if designer_here_or_unknown():
             # deleting it while Designer ran crashed Designer twice, in its own file watcher, and
             # couldn't be reproduced on demand (REVIEW.md PLG-9, PLG-18): leave it to the OS
             print('scratch folder left for the OS to clear, since Designer is running:', scratch)
@@ -237,12 +261,15 @@ def main() -> None:
         # and the user's Designer must still be running, with no new crash dump, a little after the
         # run's end (REVIEW.md PLG-9, TST-16; the scratch folder is no longer deleted then, TST-43)
         new_dumps = new_crash_dumps(dumps_before)
-        alive = designer_alive()
+        try:
+            alive, why = designer_here(), ''
+        except NoListing as e:  # can't tell: not passed (REVIEW.md INS-27)
+            alive, why = False, ' (%s)' % e
         check(
             'self-test',
             'your Designer is still running after the run, with no crash dump',
             alive and not new_dumps,
-            'running=%s, new crash dumps: %s' % (alive, sorted(new_dumps)),
+            'running=%s%s, new crash dumps: %s' % (alive, why, sorted(new_dumps)),
         )
     summary, ok = summarize(tools, results, skipped)
     print('\n' + summary)

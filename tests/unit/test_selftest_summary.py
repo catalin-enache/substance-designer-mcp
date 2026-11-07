@@ -99,7 +99,7 @@ def test_the_scratch_folder_is_only_deleted_once_designer_is_closed(
         return []
 
     monkeypatch.setitem(vars(selftest), 'run', run)
-    monkeypatch.setitem(vars(selftest), 'designer_alive', lambda: designer_running)
+    monkeypatch.setitem(vars(selftest), 'designer_here', lambda: designer_running)
     monkeypatch.setitem(vars(selftest), 'new_crash_dumps', lambda before, wait_s=10: set())
     with pytest.raises(SystemExit):
         selftest.main()
@@ -200,3 +200,118 @@ def test_a_failed_script_shows_its_error(capsys: pytest.CaptureFixture[str]) -> 
     fail_line = next(l for l in printed.splitlines() if l.startswith('FAIL'))
     assert 'ValueError: the real reason' in fail_line
     assert trace in printed
+
+
+def test_a_raising_lifecycle_check_is_a_failed_check_not_the_end_of_the_run(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # REVIEW.md TST-152: lifecycle.run was awaited bare in run()'s finally, so an unexpected answer (one more line to
+    # unpack, a record that isn't JSON) ended the run with a traceback and no summary; it goes through run_steps, as
+    # the categories do
+    selftest = _selftest()
+    source = Path(SELFTEST_DIR, '__main__.py').read_text(encoding='utf-8')
+    assert not re.search(r'await\s+lifecycle\.run\(', source), 'awaited outside run_steps'
+    assert re.search(r'run_steps\(\s*ctx,\s*\[lifecycle\.run\]\s*\)', source)
+
+    async def raises(ctx: Any) -> None:
+        raise ValueError('too many values to unpack (expected 2)')
+
+    asyncio.run(selftest.run_steps(SimpleNamespace(), [raises]))
+    assert selftest.results['self-test'] == [False]
+    assert 'too many values to unpack' in capsys.readouterr().out
+
+
+def test_another_runs_designer_isnt_taken_for_the_users(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    # REVIEW.md TST-170: with another run's Designer open on its own port (any Designer on the machine counted), the
+    # run took itself for one in the user's Designer, and at its end kept its folder for a Designer that never opened it
+    selftest = _selftest()
+    common = sys.modules['test_all_tools.common']
+    monkeypatch.setitem(vars(common), 'designer_pids', lambda: [12])
+    monkeypatch.setitem(vars(common), 'agents_designers', lambda: {9902: 12})
+    monkeypatch.setitem(vars(common), 'PORT', 9877)
+    monkeypatch.setitem(vars(common), 'designer_alive', lambda: True)  # any Designer: another run's is up
+
+    scratch = tmp_path / 'sd_mcp_selftest_x'
+    scratch.mkdir()
+    monkeypatch.setattr(tempfile, 'mkdtemp', lambda prefix: str(scratch))
+    ended: list[bool] = []
+
+    async def run(scratch: str) -> list[str]:
+        selftest.STATE['was_running'] = False
+        return []
+
+    monkeypatch.setitem(vars(selftest), 'run', run)
+    monkeypatch.setitem(vars(selftest), 'end_own_designer', lambda: ended.append(True))
+    monkeypatch.setitem(vars(selftest), 'new_crash_dumps', lambda before, wait_s=10, ports=(): set())
+    monkeypatch.setitem(vars(selftest), 'crash_dumps', lambda ports=(): set())
+    with pytest.raises(SystemExit):
+        selftest.main()
+    assert not scratch.exists(), 'kept for a Designer that never opened it'
+    assert not ended, 'none of its own left to end'
+
+    async def no_designer_here(name: str, args: dict[str, Any] | None = None) -> SimpleNamespace:
+        return SimpleNamespace(is_error=True, content=[SimpleNamespace(type='text', text='Designer is not reachable')])
+
+    assert asyncio.run(selftest.already_running(no_designer_here)) is False
+    source = Path(SELFTEST_DIR, '__main__.py').read_text(encoding='utf-8')
+    assert 'designer_alive' not in source and re.search(r'already_running\(c\)', source)
+
+
+@pytest.mark.parametrize('was_running', [False, True])
+def test_a_failing_process_listing_at_the_end_keeps_the_folder_and_the_summary(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path, was_running: bool
+) -> None:
+    # REVIEW.md INS-27: with pgrep failing, "no Designer" let the scratch folder go while one ran; now it can't tell,
+    # so the folder stays, and the run still ends with its summary (the user's Designer: a failed check, with why)
+    selftest = _selftest()
+    common = sys.modules['test_all_tools.common']
+
+    def fails() -> list[int]:
+        raise common.NoListing("Designer's processes couldn't be listed (pgrep exit code 2)")
+
+    monkeypatch.setitem(vars(common), 'designer_pids', fails)
+    scratch = tmp_path / 'sd_mcp_selftest_x'
+    scratch.mkdir()
+    monkeypatch.setattr(tempfile, 'mkdtemp', lambda prefix: str(scratch))
+
+    async def run(scratch: str) -> list[str]:
+        selftest.STATE['was_running'] = was_running
+        return []
+
+    monkeypatch.setitem(vars(selftest), 'run', run)
+    monkeypatch.setitem(vars(selftest), 'end_own_designer', lambda: None)
+    monkeypatch.setitem(vars(selftest), 'new_crash_dumps', lambda before, wait_s=10, ports=(): set())
+    monkeypatch.setitem(vars(selftest), 'crash_dumps', lambda ports=(): set())
+    with pytest.raises(SystemExit):
+        selftest.main()
+    out = capsys.readouterr().out
+    assert scratch.exists() and 'checks passed' in out, out
+    if was_running:
+        assert selftest.results['self-test'] == [False] and 'pgrep exit code 2' in out, out
+
+
+def test_the_scratch_folder_goes_once_the_runs_own_designer_is_ended(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # REVIEW.md TST-192: whether a Designer ran was asked before end_own_designer() ended the run's own, and that
+    # answer kept the folder "since Designer is running"
+    selftest = _selftest()
+    scratch = tmp_path / 'sd_mcp_selftest_x'
+    scratch.mkdir()
+    monkeypatch.setattr(tempfile, 'mkdtemp', lambda prefix: str(scratch))
+    up = [True]  # the run's own, left open by a failed check
+
+    async def run(scratch: str) -> list[str]:
+        selftest.STATE['was_running'] = False
+        return []
+
+    monkeypatch.setitem(vars(selftest), 'run', run)
+    monkeypatch.setitem(vars(selftest), 'designer_here', lambda: up[0])
+    monkeypatch.setitem(vars(selftest), 'end_own_designer', lambda: up.__setitem__(0, False))
+    monkeypatch.setitem(vars(selftest), 'crash_dumps', lambda ports=(): set())
+    monkeypatch.setitem(vars(selftest), 'new_crash_dumps', lambda before, wait_s=10, ports=(): set())
+    with pytest.raises(SystemExit):
+        selftest.main()
+    assert not up[0] and not scratch.exists(), 'kept for the Designer just ended'

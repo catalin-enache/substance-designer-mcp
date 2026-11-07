@@ -12,12 +12,20 @@ FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixtures')
 sys.path.insert(0, os.path.join(ROOT, 'mcp_server'))
 sys.path.insert(0, ROOT)
 
+import project_constants  # noqa: E402
 import server as _server_module  # noqa: E402  (importing doesn't start the server or contact Designer)
 import server_tools  # noqa: E402  (server.py's code, one module per area)
 
 # server.py copies every name of server_tools/ into itself at import time, which mypy can't follow:
 # as a plain module its attributes (server.describe_graph, server._bridge...) are Any to the checker.
 server: types.ModuleType = _server_module
+REAL_OWN_TEMP = server._own_temp  # the autouse fixture below replaces them
+REAL_OWN_HOME = server._own_home
+REAL_SHORT_TEMP = server.SHORT_TEMP
+REAL_BIND_ERROR = server._bind_error  # binds a real socket: a Designer listening here would count
+REAL_DESIGNER_PIDS = server._designer_pids  # runs pgrep
+REAL_DESIGNER_RUNNING = server._designer_running  # runs pgrep (tasklist on Windows)
+REAL_PROCESS_START = server._process_start  # runs ps
 
 
 def patch_server(monkeypatch: pytest.MonkeyPatch, name: str, value: Any) -> None:
@@ -76,7 +84,27 @@ def sbs_path() -> str:
 
 
 @pytest.fixture(autouse=True)
-def no_real_designer_process(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
-    """No unit test looks at, or ends, a Designer really running here, or reads the real record of who started it."""
+def no_real_designer_process(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """No unit test looks at, or ends, a Designer really running here, or reads the real record of who started it or
+    the real bridge token."""
     patch_server(monkeypatch, '_designer_pids', list)
-    patch_server(monkeypatch, 'agent_designer_file', lambda: str(tmp_path / 'agent_designer.json'))
+    # follows whatever _designer_pids gives now (REVIEW.md TST-147: it ran the real pgrep)
+    patch_server(monkeypatch, '_designer_running', lambda: bool(server._designer_pids()))
+    patch_server(monkeypatch, '_process_start', lambda pid: None)
+    patch_server(monkeypatch, '_own_temp', lambda port: str(tmp_path / ('T_%d' % port)) + os.sep)
+    patch_server(monkeypatch, '_own_home', lambda port: None)
+    # beside tmp_path, not in it: tests list what they put there (test_install.py)
+    own = tmp_path_factory.mktemp('no_real_designer')
+    (own / 'short').mkdir()  # exists, as /tmp does
+    patch_server(monkeypatch, 'SHORT_TEMP', str(own / 'short'))  # not the real /tmp/sd_mcp_* folders
+    patch_server(monkeypatch, '_listening_ports', lambda pid: set())  # listening nowhere yet: it may be on any port
+    patch_server(monkeypatch, '_bind_error', lambda port: None)  # the user's Designer may hold the server's port
+    monkeypatch.setitem(vars(project_constants), 'AGENT_RECORD_DIR', str(tmp_path))
+    # a token of its own: the real one gives code execution in Designer, and a fresh clone has none (REVIEW.md
+    # TST-165); sd_run.py, loaded by the tests that use it, takes it from project_constants
+    token = own / 'clients_token'  # not test_plugin.py's tmp_path/'token', which its token tests start without
+    token.write_text('t' * 64)
+    patch_server(monkeypatch, 'TOKEN_FILE', str(token))
+    monkeypatch.setitem(vars(project_constants), 'TOKEN_FILE', str(token))

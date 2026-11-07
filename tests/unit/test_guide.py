@@ -58,8 +58,9 @@ def test_reminder_leaves_non_text_results_alone(monkeypatch: pytest.MonkeyPatch,
     assert not isinstance(result, str) and result.data
 
 
-# the instructions limit; the atomic node count (not a ROADMAP item number `| 29 |` or an ID like HLP-29)
-@pytest.mark.parametrize('fact', [r'4,096', r'(?<!\| )(?<!-)\b29\b(?! \|)'])
+# the instructions limit; the atomic node count (not a ROADMAP item number `| 29 |` or an ID like HLP-29); where the
+# record of a Designer an agent started is kept (REVIEW.md TST-159)
+@pytest.mark.parametrize('fact', [r'4,096', r'(?<!\| )(?<!-)\b29\b(?! \|)', r'agent_designer_file\(port\)'])
 def test_facts_are_stated_once_in_the_docs(fact: str) -> None:
     # AGENTS.md, Keeping the docs current: each fact in one place, linked from elsewhere (REVIEW.md TST-10,
     # TST-18)
@@ -68,3 +69,25 @@ def test_facts_are_stated_once_in_the_docs(fact: str) -> None:
         for name in ('AGENTS.md', 'README.md', 'ROADMAP.md')
     )
     assert count <= 1, '%r appears %d times in AGENTS.md, README.md and ROADMAP.md' % (fact, count)
+
+
+def test_the_lifecycle_checks_that_run_alone_are_the_ones_agents_md_names() -> None:
+    # REVIEW.md TST-168: AGENTS.md (What a scratch run can't prove) names the lifecycle checks that do run alone; a
+    # check saying so in its docstring and missing there, or named there without saying so, is a list gone stale
+    import ast
+
+    tree = ast.parse(Path(ROOT, 'tests', 'test_all_tools', 'lifecycle.py').read_text(encoding='utf-8'))
+    say_so = {
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.AsyncFunctionDef)
+        and node.name.startswith('check_')
+        and 'runs in a scratch run too' in ' '.join((ast.get_docstring(node) or '').split())
+    }
+    bullet = re.search(r'^- \*\*`lifecycle\.py`, the whole category:\*\*(.*?)(?=^- \*\*)', _agents_md(), re.M | re.S)
+    assert bullet, "AGENTS.md's lifecycle bullet under What a scratch run can't prove"
+    named = set(re.findall(r'`(check_\w+)`', bullet.group(1)))
+    assert say_so and named == say_so, 'named in AGENTS.md: %s; saying so in their docstring: %s' % (
+        sorted(named),
+        sorted(say_so),
+    )

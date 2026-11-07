@@ -3,7 +3,6 @@
 import base64
 import os
 import re
-import tempfile
 from textwrap import dedent
 from typing import cast
 
@@ -18,6 +17,39 @@ from .common import (
     skip,
     text,
 )
+
+
+async def check_unsaved_bitmap_copies(ctx: Ctx) -> None:
+    c, png = ctx.c, ctx.png
+    F = 'designer facts'
+    # two unsaved packages copy the same file, one after the other: AGENTS.md says the copy
+    # goes to <Designer's temp folder>/Adobe/Adobe Substance 3D Designer/ with an XXXXXX- prefix, stays
+    # after its package closes, and so the next copy of that name gets 1- in front
+    # (REVIEW.md TST-15: the check used to test only "under the temp folder"). Designer's temp folder, not this
+    # process's: launch_designer gives each Designer it starts one of its own
+    t = text(await designer_script(c, 'facts/unsaved_bitmap_copies', png=png))
+    copies = re.findall(r'COPY=(.*) STAYS=(\w+)', t)
+    names = [os.path.basename(p) for p, _ in copies]
+    folders = {os.path.normcase(os.path.realpath(os.path.dirname(p))) for p, _ in copies}
+    temp = re.search(r'^TEMP=(.+)$', t, re.M)
+    expected_folder = os.path.normcase(
+        os.path.realpath(os.path.join(temp.group(1) if temp else '?', 'Adobe', 'Adobe Substance 3D Designer'))
+    )
+    check(
+        F,
+        "CopiedAndLinked before the first save: XXXXXX- copy in <Designer's temp folder>/Adobe/Adobe Substance 3D "
+        'Designer/, kept after closing, the next one numbered',
+        len(copies) == 2
+        and all(stays == 'True' for _, stays in copies)
+        and folders == {expected_folder}
+        and names[0].endswith('XXXXXX-' + os.path.basename(png))
+        and names[1] != names[0]
+        and re.match(r'^\d+-%s$' % re.escape(re.sub(r'^\d+-', '', names[0])), names[1]) is not None,
+        t.strip(),
+    )
+    for copy_path, _ in copies:
+        if os.path.isfile(copy_path) and 'XXXXXX-' in os.path.basename(copy_path):
+            os.remove(copy_path)  # Designer leaves them there
 
 
 async def run(ctx: Ctx) -> None:
@@ -229,32 +261,7 @@ async def run(ctx: Ctx) -> None:
         )
     )
     check(F, 'API inheritance: RelativeToInput 0, RelativeToParent 1, Absolute 2', 'API_INHERIT=0,1,2' in t, t)
-    # two unsaved packages copy the same file, one after the other: AGENTS.md says the copy
-    # goes to <OS temp>/Adobe/Adobe Substance 3D Designer/ with an XXXXXX- prefix, stays
-    # after its package closes, and so the next copy of that name gets 1- in front
-    # (REVIEW.md TST-15: the check used to test only "under the temp folder")
-    t = text(await designer_script(c, 'facts/unsaved_bitmap_copies', png=png))
-    copies = re.findall(r'COPY=(.*) STAYS=(\w+)', t)
-    names = [os.path.basename(p) for p, _ in copies]
-    folders = {os.path.normcase(os.path.realpath(os.path.dirname(p))) for p, _ in copies}
-    expected_folder = os.path.normcase(
-        os.path.realpath(os.path.join(tempfile.gettempdir(), 'Adobe', 'Adobe Substance 3D Designer'))
-    )
-    check(
-        F,
-        'CopiedAndLinked before the first save: XXXXXX- copy in <OS temp>/Adobe/Adobe Substance 3D '
-        'Designer/, kept after closing, the next one numbered',
-        len(copies) == 2
-        and all(stays == 'True' for _, stays in copies)
-        and folders == {expected_folder}
-        and names[0].endswith('XXXXXX-' + os.path.basename(png))
-        and names[1] != names[0]
-        and re.match(r'^\d+-%s$' % re.escape(re.sub(r'^\d+-', '', names[0])), names[1]) is not None,
-        t.strip(),
-    )
-    for copy_path, _ in copies:
-        if os.path.isfile(copy_path) and 'XXXXXX-' in os.path.basename(copy_path):
-            os.remove(copy_path)  # Designer leaves them there
+    await check_unsaved_bitmap_copies(ctx)
     t = text(await c('describe_node', {'definition': 'tile_generator'}))
     ids_ok = all(
         re.search(r'^\s+%s\s' % re.escape(i), t, re.M)

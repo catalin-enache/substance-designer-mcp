@@ -5,6 +5,8 @@ replaced by a fake that answers each tool by name."""
 import asyncio
 import importlib
 import os
+import shutil
+import subprocess
 import sys
 from types import SimpleNamespace
 from typing import Any
@@ -23,6 +25,10 @@ def _alone() -> Any:  # a module imported by name: PyCharm can't see its names
         del sys.modules[name]
     alone = importlib.import_module('test_all_tools.alone')
     vars(alone)['PAUSE_S'] = 0  # no Designer to wait for
+    # not the real pgrep: as if one of the user's ran, so close_with never removes the real SCRATCH_ROOT (REVIEW.md
+    # TST-147) and a run with no bridge is refused; a test about none running says so itself
+    vars(alone)['designer_here'] = lambda: True
+    vars(alone)['users_designer_running'] = lambda: True
     return alone
 
 
@@ -103,14 +109,14 @@ def test_the_users_designer_is_refused_and_nothing_runs() -> None:
 def test_a_designer_still_starting_is_refused_too(monkeypatch: pytest.MonkeyPatch) -> None:
     # a process with no bridge yet: whose it is can't be told, so it counts as the user's, as in the suite
     alone = _alone()
-    monkeypatch.setitem(vars(alone), 'designer_alive', lambda: True)
+    monkeypatch.setitem(vars(alone), 'users_designer_running', lambda: True)
     c = FakeDesigner(None)
     assert _run(alone, c) == 2 and 'launch_designer' not in c.names()
 
 
 def test_a_designer_is_started_when_none_runs(monkeypatch: pytest.MonkeyPatch) -> None:
     alone = _alone()
-    monkeypatch.setitem(vars(alone), 'designer_alive', lambda: False)
+    monkeypatch.setitem(vars(alone), 'users_designer_running', lambda: False)
     ran: list[str] = []
 
     async def a_check(ctx: Any) -> None:
@@ -123,7 +129,7 @@ def test_a_designer_is_started_when_none_runs(monkeypatch: pytest.MonkeyPatch) -
 
 def test_a_launch_that_fails_runs_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     alone = _alone()
-    monkeypatch.setitem(vars(alone), 'designer_alive', lambda: False)
+    monkeypatch.setitem(vars(alone), 'users_designer_running', lambda: False)
     ran: list[str] = []
 
     async def a_check(ctx: Any) -> None:
@@ -242,7 +248,8 @@ def test_each_run_gets_a_fresh_folder_inside_one_root(tmp_path: Any, monkeypatch
     alone = _alone()
     monkeypatch.setitem(vars(alone), 'SCRATCH_ROOT', str(tmp_path / 'root'))
     first, second = alone.new_scratch(), alone.new_scratch()
-    assert first != second and os.path.dirname(first) == os.path.dirname(second) == str(tmp_path / 'root')
+    assert first != second and os.path.dirname(first) == os.path.dirname(second) == alone.scratch_root()
+    assert alone.scratch_root().startswith(str(tmp_path / 'root') + os.sep)  # a folder per port in the root
     assert os.path.isdir(first) and os.path.isdir(second)
 
 
@@ -252,12 +259,12 @@ def test_close_quits_and_removes_the_folders_once_designer_has_ended(
     alone = _alone()
     monkeypatch.setitem(vars(alone), 'SCRATCH_ROOT', str(tmp_path / 'root'))
     alone.new_scratch()
-    monkeypatch.setitem(vars(alone), 'designer_alive', lambda: True)
+    monkeypatch.setitem(vars(alone), 'designer_here', lambda: True)
     c = FakeDesigner(AGENTS)
     asyncio.run(alone.close_with(c))
     assert 'quit_designer' in c.names() and os.path.isdir(tmp_path / 'root')  # still running: kept
     assert c.names()[0] == 'get_guide'  # no reminder in front of what it prints
-    monkeypatch.setitem(vars(alone), 'designer_alive', lambda: False)
+    monkeypatch.setitem(vars(alone), 'designer_here', lambda: False)
     asyncio.run(alone.close_with(FakeDesigner(AGENTS)))
     assert not os.path.exists(tmp_path / 'root')
 
@@ -288,3 +295,132 @@ def test_each_check_is_announced_with_its_module(capsys: pytest.CaptureFixture[s
     alone = _alone()
     _run(alone, FakeDesigner(AGENTS), named_check)
     assert 'alone: test_selftest_alone.named_check\n' in capsys.readouterr().out
+
+
+def test_a_port_goes_to_the_fresh_server_and_to_the_checks(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    # ROADMAP item 49: the server, the requests the checks send themselves (raw_request, sd_run) and the snapshots go
+    # with the port, so runs on their own ports, in Designers of their own, don't meet
+    alone = _alone()
+    from test_all_tools import common
+
+    monkeypatch.delenv('SD_BRIDGE_PORT', raising=False)
+    monkeypatch.delenv('SD_SNAPSHOT_DIR', raising=False)
+    monkeypatch.setenv('SD_MCP_TEST_MARKER', 'here')
+    port_before, params_before = common.PORT, common.PARAMS
+    assert alone.server_params(None) is common.PARAMS
+    with alone.on_port(9901, str(tmp_path)):
+        # a second client's server too (common.cancel_from_second_client)
+        assert common.PARAMS.env is not None and common.PARAMS.env['SD_BRIDGE_PORT'] == '9901'
+        params = alone.server_params(9901)
+        assert (params.command, params.args) == (common.PARAMS.command, common.PARAMS.args)
+        assert params.env is not None and params.env['SD_BRIDGE_PORT'] == '9901'
+        assert params.env['SD_SNAPSHOT_DIR'] == os.path.join(str(tmp_path), 'snapshots')
+        # a variable stdio_client's minimal environment lacks (REVIEW.md TST-157: HOME is in it)
+        assert params.env['SD_MCP_TEST_MARKER'] == 'here', 'not the minimal environment stdio_client gives otherwise'
+        assert common.PORT == 9901 and os.environ['SD_BRIDGE_PORT'] == '9901'
+    assert port_before == common.PORT
+    assert common.PARAMS is params_before
+    assert 'SD_BRIDGE_PORT' not in os.environ and 'SD_SNAPSHOT_DIR' not in os.environ
+
+
+@pytest.mark.parametrize('port', [80, 65536])
+def test_a_port_out_of_range_is_refused_before_anything_starts(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch, port: int
+) -> None:
+    alone = _alone()
+    monkeypatch.setitem(vars(alone), 'SCRATCH_ROOT', str(tmp_path / 'root'))
+    with pytest.raises(ValueError, match='port must be a number from 1024 to 65535'):
+        alone.run(port=port)
+    with pytest.raises(ValueError, match='port must be a number from 1024 to 65535'):
+        alone.close(port=port)
+    assert not os.path.exists(tmp_path / 'root')
+
+
+def test_with_a_port_a_designer_running_elsewhere_doesnt_stop_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    # it may be on a port of its own: launch_designer, on the run's port, tells them apart (and refuses the user's)
+    alone = _alone()
+    monkeypatch.setitem(vars(alone), 'users_designer_running', lambda: True)
+    c = FakeDesigner(None)
+    assert int(asyncio.run(alone.run_with(c, [], (), None, 'scratch', port=9901))) == 0
+    assert 'launch_designer' in c.names()
+    refused = FakeDesigner(None, launch='ERROR: a Designer no agent started is running (process 11, on port 9877)')
+    assert int(asyncio.run(alone.run_with(refused, [], (), None, 'scratch', port=9901))) == 2
+
+
+def test_close_asks_quit_designer_when_the_status_fails() -> None:
+    # REVIEW.md SRV-82: a Designer still running a plugin of the older bridge protocol fails designer_status, but
+    # quit_designer ends one an agent started from its record alone (and refuses any other by itself)
+    alone = _alone()
+    c = FakeDesigner(None)
+    asyncio.run(alone.close_with(c))
+    assert 'quit_designer' in c.names()
+
+
+def test_the_close_tests_never_remove_the_real_scratch_folder(monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md TST-147, the same pattern: close_with asks designer_here (the real pgrep) and, with none running,
+    # removes SCRATCH_ROOT, the real folder of the scratch runs; a test that sets neither reached it
+    alone = _alone()
+    removed: list[str] = []
+    monkeypatch.setattr(shutil, 'rmtree', lambda path, **kw: removed.append(path))
+    monkeypatch.setattr(subprocess, 'run', lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, '', ''))  # none runs
+    asyncio.run(alone.close_with(FakeDesigner(USERS)))
+    assert not [path for path in removed if str(path).startswith(alone.SCRATCH_ROOT)], removed
+
+
+def test_the_suites_server_listens_for_the_suites_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md TST-153: with SD_BRIDGE_PORT exported, common.PORT followed it but the server, started with
+    # stdio_client's minimal environment, took 9877, so the checks read another port's record
+    monkeypatch.setenv('SD_BRIDGE_PORT', '9900')
+    try:
+        _alone()  # the self-test's modules imported afresh, with the variable set
+        from test_all_tools import common
+
+        assert common.PORT == 9900
+        assert common.PARAMS.env is not None and common.PARAMS.env['SD_BRIDGE_PORT'] == '9900'
+    finally:  # no later test imports them with this port
+        for name in [m for m in sys.modules if m == 'test_all_tools' or m.startswith('test_all_tools.')]:
+            del sys.modules[name]
+
+
+def test_another_runs_designer_doesnt_stop_a_run_on_the_servers_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md TST-170: a Designer an agent started on another port (alone.run(port=...) leaves it open) was refused
+    # as "running but not answering yet", which never resolves
+    alone = _alone()
+    monkeypatch.setitem(vars(alone), 'users_designer_running', lambda: False)  # it is another run's
+    c = FakeDesigner(None)
+    assert _run(alone, c) == 0 and 'launch_designer' in c.names()
+
+
+def test_closing_a_port_removes_only_that_ports_folders(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md TST-170: close_with removed the root of every run's folder, another port's run's included
+    alone = _alone()
+    root = tmp_path / 'root'
+    monkeypatch.setitem(vars(alone), 'SCRATCH_ROOT', str(root))
+    mine, theirs = root / 'port_9901' / 'run_a', root / 'port_9902' / 'run_b'
+    mine.mkdir(parents=True)
+    theirs.mkdir(parents=True)
+    monkeypatch.setitem(vars(alone), 'designer_here', lambda: False)  # none on 9901 any more
+    with alone.on_port(9901, str(tmp_path)):
+        asyncio.run(alone.close_with(FakeDesigner(AGENTS)))
+    assert not mine.exists() and theirs.is_dir()
+
+
+def test_a_failing_process_listing_keeps_the_folders_and_starts_nothing(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # REVIEW.md INS-27: Designer's processes that can't be listed are not "none running"
+    alone = _alone()
+    from test_all_tools import common
+
+    def fails() -> bool:
+        raise common.NoListing("Designer's processes couldn't be listed (pgrep exit code 2)")
+
+    root = tmp_path / 'root'
+    monkeypatch.setitem(vars(alone), 'SCRATCH_ROOT', str(root))
+    alone.new_scratch()
+    for name in ('designer_here', 'users_designer_running'):
+        monkeypatch.setitem(vars(alone), name, fails)
+    asyncio.run(alone.close_with(FakeDesigner(AGENTS)))
+    assert os.path.isdir(alone.scratch_root())
+    c = FakeDesigner(None)
+    assert _run(alone, c) == 2 and 'launch_designer' not in c.names()

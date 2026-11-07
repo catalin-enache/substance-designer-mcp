@@ -13,7 +13,7 @@ import socket
 import subprocess
 import sys
 import time
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Sequence
 from textwrap import dedent
 from typing import Any, Protocol
 
@@ -24,10 +24,13 @@ from mcp.types import CallToolResult
 BUNDLE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, BUNDLE)
 from project_constants import (  # noqa: E402 (after the sys.path entry; `X as X` re-exports them)
+    DESIGNER_PROCESS,
     PLUGIN as PLUGIN,
     PLUGIN_PACKAGE_DIR as PLUGIN_PACKAGE_DIR,
+    SHORT_TEMP as SHORT_TEMP,  # where launch_designer makes the folders of a Designer it starts
     TOKEN_FILE as TOKEN_FILE,
     agent_designer_file,
+    agent_folder_name,
 )
 
 sys.path.insert(0, os.path.join(BUNDLE, 'mcp_server'))
@@ -40,7 +43,9 @@ SAVED_GRAPH = 'mcp_selftest_saved'  # create_graph(save_path=...)
 DUP_GRAPH = 'mcp_selftest_dup'  # two open graphs with the same identifier
 EXAMPLE_GRAPH = 'mcp_selftest_trimsheet'  # examples/build_dwarf_trimsheet.py, renamed
 PORT = int(os.environ.get('SD_BRIDGE_PORT', '9877'))
-PARAMS = StdioServerParameters(command=sys.executable, args=[SERVER])
+# this process's whole environment: stdio_client passes a minimal one otherwise, without SD_BRIDGE_PORT, and the
+# server would listen for another port than PORT (REVIEW.md TST-153)
+PARAMS = StdioServerParameters(command=sys.executable, args=[SERVER], env=dict(os.environ))
 
 results: dict[str, list[bool]] = {}
 skipped: list[tuple[str, str]] = []
@@ -87,17 +92,31 @@ def pixel_values(t: str) -> dict[tuple[int, int], list[float]]:
     }
 
 
-def raw_request(request: dict[str, Any], token: str | None = None) -> Any:
-    """One request straight to the bridge, bypassing the MCP server. With token, it answers the
-    plugin's challenge properly (HMAC of the nonce); without, the request is sent as given."""
+def read_greeting(sock: socket.socket) -> bytes:
+    """The bridge's greeting line, as it came; ConnectionResetError when the connection closes before its end, where
+    adding recv()'s b'' forever would spin (REVIEW.md TST-176). The one loop for the tests' greetings."""
+    hello = b''
+    while not hello.endswith(b'\n'):
+        chunk = sock.recv(1024)
+        if not chunk:
+            raise ConnectionResetError('closed before the greeting')
+        hello += chunk
+    return hello
+
+
+def raw_request(request: dict[str, Any] | bytes, token: str | None = None, signed: bytes | None = None) -> Any:
+    """One request straight to the bridge, bypassing the MCP server: a dict as JSON, bytes as they are. With token,
+    it answers the plugin's challenge properly (the plugin's docstring: an HMAC of the nonce, the port and the bytes
+    sent, on a line before them), over `signed` instead of the bytes sent when given (a request changed after
+    signing); without, the request is sent alone, as clients of the older protocols sent it."""
+    body = request if isinstance(request, bytes) else json.dumps(request).encode('utf-8')
     with socket.create_connection(('127.0.0.1', PORT), timeout=10) as sock:
-        hello = b''
-        while not hello.endswith(b'\n'):
-            hello += sock.recv(1024)
+        hello = read_greeting(sock)
         nonce = json.loads(hello)['nonce']
         if token:
-            request = {**request, 'auth': hmac.new(token.encode(), nonce.encode(), hashlib.sha256).hexdigest()}
-        sock.sendall(json.dumps(request).encode('utf-8'))
+            message = b'%s\n%d\n' % (nonce.encode(), PORT) + (body if signed is None else signed)
+            body = hmac.new(token.encode(), message, hashlib.sha256).hexdigest().encode() + b'\n' + body
+        sock.sendall(body)
         sock.shutdown(socket.SHUT_WR)
         data = b''
         while chunk := sock.recv(65536):
@@ -226,23 +245,38 @@ SAME_GRAPH_BACK = dedent("""\
     print('SAME=%s current=%s' % (same, cur.getIdentifier() if cur else None))""")
 
 
-def crash_dumps() -> set[str]:
+def agent_folder(port: int) -> str:
+    """The folder launch_designer makes for the Designer it starts on `port` (its temp folder and home inside)."""
+    return os.path.join(SHORT_TEMP, agent_folder_name(port))
+
+
+def crash_dumps(ports: Sequence[int] = ()) -> set[str]:
     """Designer's crash dumps (Crashpad's completed reports), as a set of paths; empty where none
-    are found."""
+    are found. On macOS also those in the homes of this run's Designers (agent_folder(port)/home, where they write
+    theirs): on PORT and on `ports`, never another run's beside it (REVIEW.md TST-155)."""
     if sys.platform == 'darwin':
-        base = os.path.expanduser('~/Library/Application Support/Adobe/Adobe Substance 3D Designer')
+        bases = [os.path.expanduser('~/Library/Application Support/Adobe/Adobe Substance 3D Designer')]
+        homes = [os.path.join(agent_folder(port), 'home') for port in (PORT, *ports)]
+        bases += [
+            os.path.join(home, 'Library', 'Application Support', 'Adobe', 'Adobe Substance 3D Designer')
+            for home in homes
+        ]
     else:
-        base = os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Adobe', 'Adobe Substance 3D Designer')
-    folder = os.path.join(base, 'Sentry-Crashpad', 'completed')
-    return {os.path.join(folder, f) for f in os.listdir(folder)} if os.path.isdir(folder) else set()
+        bases = [os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Adobe', 'Adobe Substance 3D Designer')]
+    dumps: set[str] = set()
+    for base in bases:
+        folder = os.path.join(base, 'Sentry-Crashpad', 'completed')
+        if os.path.isdir(folder):
+            dumps |= {os.path.join(folder, f) for f in os.listdir(folder)}
+    return dumps
 
 
-def new_crash_dumps(before: set[str], wait_s: float = 10) -> set[str]:
-    """Crash dumps that appear within wait_s seconds (Designer writes one a few seconds after it
+def new_crash_dumps(before: set[str], wait_s: float = 10, ports: Sequence[int] = ()) -> set[str]:
+    """Crash dumps (crash_dumps(ports)) that appear within wait_s seconds (Designer writes one a few seconds after it
     goes down), compared with `before`."""
     deadline = time.time() + wait_s
     while True:
-        new = crash_dumps() - before
+        new = crash_dumps(ports) - before
         if new or time.time() >= deadline:
             return new
         time.sleep(0.5)
@@ -251,22 +285,84 @@ def new_crash_dumps(before: set[str], wait_s: float = 10) -> set[str]:
 def end_own_designer() -> None:
     """After a run that failed before its quit checks: the Designer the self-test started is disposable."""
     try:
-        with open(agent_designer_file(), encoding='utf-8') as f:
+        with open(agent_designer_file(PORT), encoding='utf-8') as f:
             record = json.load(f)
         pid, start = int(record['pid']), record['start']
-        now = subprocess.run(['ps', '-o', 'lstart=', '-p', str(pid)], capture_output=True, text=True).stdout.strip()
-        if now == start:
+        from server_tools.lifecycle import (
+            _process_start,
+        )  # the server's reading, which wrote the record (REVIEW.md SRV-92)
+
+        if _process_start(pid) == start:
             os.kill(pid, signal.SIGTERM)
             time.sleep(5)
-            if designer_alive():
+            if pid in designer_pids():  # its own, not any Designer: another run's may be up (REVIEW.md TST-170)
                 os.kill(pid, signal.SIGKILL)
             print('ended the Designer this run started and left open:', pid)
-    except (OSError, ValueError, KeyError, TypeError) as e:
+    except Exception as e:  # a clean-up in main()'s finally: a line, not a traceback (the server's ToolError too)
         print('could not end a Designer this run left open:', e)
 
 
+class NoListing(OSError):
+    """Designer's processes couldn't be listed (pgrep failing or missing): not the same as none running (REVIEW.md
+    INS-27; the server's _NoListing)."""
+
+
+def _pgrep() -> 'subprocess.CompletedProcess[str]':
+    """pgrep for Designer's process, as the server looks for it (project_constants.DESIGNER_PROCESS); NoListing when
+    it fails (exit code 2 or 3; 1 is nothing found)."""
+    try:
+        done = subprocess.run(['pgrep', '-f', DESIGNER_PROCESS], capture_output=True, text=True)
+    except OSError as e:
+        raise NoListing("Designer's processes couldn't be listed: %s" % e) from e
+    if done.returncode not in (0, 1):
+        raise NoListing(
+            "Designer's processes couldn't be listed (pgrep exit code %d: %s)" % (done.returncode, done.stderr.strip())
+        )
+    return done
+
+
+def designer_pids() -> list[int]:
+    """Designer's processes (as the server's own list; none on Windows). NoListing when they can't be listed."""
+    if sys.platform == 'win32':
+        return []
+    return [int(pid) for pid in _pgrep().stdout.split()]
+
+
+def free_port() -> int:
+    """A TCP port nothing on this machine listens on now."""
+    with socket.socket() as s:
+        s.bind(('127.0.0.1', 0))
+        port: int = s.getsockname()[1]
+    return port
+
+
+def agents_designers() -> dict[int, int]:
+    """{port: process ID} of the Designers an agent started that still run, as the server sees them (its records)."""
+    from server_tools.lifecycle import _agents
+
+    return _agents()
+
+
+def users_designer_running() -> bool:
+    """Whether a Designer runs that no agent's record names, on any port: the user's, or one still starting. Another
+    run's, on its own port, isn't one (REVIEW.md TST-170). On Windows nothing is recorded: any Designer counts."""
+    if sys.platform == 'win32':
+        return designer_alive()
+    agents = set(agents_designers().values())
+    return any(pid not in agents for pid in designer_pids())
+
+
+def designer_here() -> bool:
+    """Whether a Designer runs that may be on this run's port (PORT): this run's, the user's, or one still starting;
+    not another run's, recorded on its own port (REVIEW.md TST-170). On Windows, any Designer."""
+    if sys.platform == 'win32':
+        return designer_alive()
+    elsewhere = {pid for port, pid in agents_designers().items() if port != PORT}
+    return any(pid not in elsewhere for pid in designer_pids())
+
+
 def designer_alive() -> bool:
-    """True while a Designer process exists (as the server's own check)."""
+    """True while a Designer process exists, on any port (as the server's own check). NoListing when pgrep fails."""
     if sys.platform == 'win32':
         out = subprocess.run(
             ['tasklist', '/FI', 'IMAGENAME eq Adobe Substance 3D Designer.exe', '/FO', 'CSV', '/NH'],
@@ -274,9 +370,7 @@ def designer_alive() -> bool:
             text=True,
         ).stdout
         return '"Adobe Substance 3D Designer.exe"' in out
-    return (
-        subprocess.run(['pgrep', '-f', 'MacOS/Adobe Substance 3D Designer( |$)'], capture_output=True).returncode == 0
-    )
+    return _pgrep().returncode == 0
 
 
 STATE: dict[str, bool] = {'was_running': False}  # set by run(): the run used the user's own, already open Designer

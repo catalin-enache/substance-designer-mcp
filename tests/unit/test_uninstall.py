@@ -38,9 +38,13 @@ def env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> types.SimpleNamespac
         module=module,
     )
     monkeypatch.setitem(vars(module), 'TOKEN_FILE', str(home.token))
-    monkeypatch.setitem(vars(module), 'agent_designer_file', lambda: str(tmp_path / 'agent_designer.json'))
+    monkeypatch.setitem(vars(module.project_constants), 'AGENT_RECORD_DIR', str(tmp_path))
     monkeypatch.setitem(vars(module.install), 'OLD_TOKEN', str(home.old_token))
     monkeypatch.setitem(vars(module), 'VENV', str(home.venv))
+    # the folders launch_designer makes for a Designer it starts (REVIEW.md TST-162), and no Designer running
+    monkeypatch.setitem(vars(module.project_constants), 'SHORT_TEMP', str(tmp_path / 'tmp'))
+    home.real_folders_in_use = vars(module)['folders_in_use']
+    monkeypatch.setitem(vars(module), 'folders_in_use', lambda: None)
     monkeypatch.setenv('SD_SNAPSHOT_DIR', str(home.snapshots))
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(home.config))
     monkeypatch.setattr(shutil, 'which', lambda name: '/usr/local/bin/claude')
@@ -103,10 +107,15 @@ def test_removes_everything_install_left(
 def test_removes_the_record_of_the_designer_an_agent_started(
     env: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    record = tmp_path / 'agent_designer.json'
-    record.write_text('{}')
+    # one per port (ROADMAP item 49), and the single one of earlier versions
+    records = [Path(env.module.project_constants.agent_designer_file(port)) for port in (9877, 9901)]
+    records.append(tmp_path / ('.%s_agent_designer.json' % PLUGIN))
+    for record in records:
+        record.write_text('{}')
+    other = tmp_path / ('.%s_agent_designer_notes.json' % PLUGIN)  # not a record
+    other.write_text('{}')
     run(env, monkeypatch, '--yes')
-    assert not record.exists()
+    assert not any(record.exists() for record in records) and other.exists()
 
 
 def test_dry_run_and_no_answer_remove_nothing(
@@ -346,3 +355,130 @@ def test_remove_snapshots_keeps_one_saved_over_since(
     run(env, monkeypatch, '--yes', '--remove-snapshots')
     assert sorted(p.name for p in graph.iterdir()) == [saved_over.name, saved_over.name + '.json']
     assert str(saved_over) in capsys.readouterr().out
+
+
+def _agents_folders(root: Path) -> list[Path]:
+    """The folders of two Designers an agent started, on ports 9877 and 9901, as launch_designer makes them."""
+    ours = [root / ('sd_mcp_%d_%d' % (os.getuid(), port)) for port in (9877, 9901)]
+    for folder in ours:
+        (folder / 'home' / 'Library').mkdir(parents=True)
+        (folder / 'temp').mkdir()
+    return ours
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='launch_designer makes these folders on macOS and Linux only')
+def test_removes_the_folders_of_the_designers_an_agent_started(
+    env: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # REVIEW.md TST-162: their homes (settings, logs, crash dumps) stayed in /tmp after uninstalling
+    root = tmp_path / 'tmp'
+    ours = _agents_folders(root)
+    someone = root / ('sd_mcp_%d_9877' % (os.getuid() + 1))  # another account's
+    someone.mkdir()
+    near = root / ('sd_mcp_%d_notes' % os.getuid())  # not a port
+    near.mkdir()
+    elsewhere = tmp_path / 'elsewhere'
+    elsewhere.mkdir()
+    (elsewhere / 'keep').write_text('x')
+    (root / ('sd_mcp_%d_9902' % os.getuid())).symlink_to(elsewhere)  # a link isn't a folder launch_designer made
+    run(env, monkeypatch, '--dry-run')
+    out = capsys.readouterr().out
+    assert all(str(folder) in out for folder in ours), out
+    run(env, monkeypatch, '--yes')
+    assert not any(folder.exists() for folder in ours)
+    assert someone.exists() and near.exists() and (elsewhere / 'keep').exists()
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='launch_designer makes these folders on macOS and Linux only')
+def test_keeps_those_folders_while_a_designer_runs(
+    env: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # one an agent started uses its folder as its home, and its crash dumps may be wanted
+    ours = _agents_folders(tmp_path / 'tmp')
+    monkeypatch.setitem(vars(env.module), 'folders_in_use', lambda: 'Designer runs')
+    run(env, monkeypatch, '--yes')
+    out = capsys.readouterr().out
+    assert all(folder.exists() for folder in ours)
+    assert 'while Designer runs' in out and all(str(folder) in out for folder in ours), out
+
+
+def test_a_running_designer_is_found_as_the_server_finds_it(
+    env: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # one pattern for Designer's process, in project_constants.py (the fixture's subprocess.run answers 0: found)
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    found = env.real_folders_in_use() == 'Designer runs'
+    pattern = env.module.project_constants.DESIGNER_PROCESS
+    assert found and (['pgrep', '-f', pattern], None) in env.calls, env.calls
+
+
+def _real_process_check(env: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real check for a Designer running, in place of the fixture's (none running)."""
+    monkeypatch.setitem(vars(env.module), 'folders_in_use', env.real_folders_in_use)
+
+
+def _pgrep(monkeypatch: pytest.MonkeyPatch, outcome: int | Exception) -> None:
+    """subprocess.run as the fixture's, but pgrep exits with `outcome`, or raises it."""
+    real = subprocess.run
+
+    def run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        if cmd[0] != 'pgrep':
+            return real(cmd, **kw)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return subprocess.CompletedProcess(cmd, outcome, '', 'pgrep: cannot allocate memory' if outcome > 1 else '')
+
+    monkeypatch.setattr(subprocess, 'run', run)
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='launch_designer makes these folders on macOS and Linux only')
+@pytest.mark.parametrize(
+    'platform, outcome',
+    [('darwin', 2), ('darwin', 3), ('darwin', FileNotFoundError(2, 'No such file', 'pgrep')), ('linux', 1)],
+    ids=['pgrep fails', 'pgrep fails otherwise', 'no pgrep', 'not macOS'],
+)
+def test_keeps_those_folders_when_it_cant_tell_whether_a_designer_runs(
+    env: types.SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    platform: str,
+    outcome: int | Exception,
+) -> None:
+    # REVIEW.md INS-27: a failing pgrep read as "none running", and the folders of a running Designer went; a missing
+    # one crashed uninstall before it printed anything; on Linux the pattern, macOS's, never finds one
+    ours = _agents_folders(tmp_path / 'tmp')
+    _real_process_check(env, monkeypatch)
+    monkeypatch.setattr(sys, 'platform', platform)
+    _pgrep(monkeypatch, outcome)
+    run(env, monkeypatch, '--yes')
+    out = capsys.readouterr().out
+    assert all(folder.exists() for folder in ours), out
+    assert all(str(folder) in out for folder in ours) and 'kept' in out, out
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='launch_designer makes these folders on macOS and Linux only')
+def test_removes_those_folders_when_pgrep_finds_no_designer(
+    env: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ours = _agents_folders(tmp_path / 'tmp')
+    _real_process_check(env, monkeypatch)
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    _pgrep(monkeypatch, 1)  # nothing found
+    run(env, monkeypatch, '--yes')
+    assert not any(folder.exists() for folder in ours)
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='launch_designer makes these folders on macOS and Linux only')
+def test_keeps_a_folder_another_account_owns_though_named_for_this_one(
+    env: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # REVIEW.md TST-171: the "another account's" folder above is named for another user ID, so the name already left
+    # it out; one named for this user but owned by another reaches the owner check alone (here this user is someone
+    # else, and the folder is the real user's)
+    someone_else = os.getuid() + 1
+    monkeypatch.setattr(os, 'getuid', lambda: someone_else)
+    theirs = tmp_path / 'tmp' / ('sd_mcp_%d_9877' % someone_else)
+    (theirs / 'home').mkdir(parents=True)
+    run(env, monkeypatch, '--yes')
+    assert theirs.is_dir() and 'not a folder launch_designer made' in capsys.readouterr().out

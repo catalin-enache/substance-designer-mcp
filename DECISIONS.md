@@ -46,6 +46,20 @@ may update the names and paths an entry points at; changing what was decided, or
   manifest asks for 16.0.0, so code needn't work on an older Designer or its older Python.
   Reopen if: the user wants older versions supported. (The user's decision, 2026-11-03.)
 
+- **Linux is not a target: nothing is fixed, tested or reviewed for it.** The project will never run on Linux, so a
+  review raises nothing about it: no finding about code paths, platform guards, tests or docs that would only matter
+  there. Where the code or docs name Linux, it is no promise that anything works there.
+  Reopen if: the user wants Linux supported. (The user's decision, 2026-11-07.)
+
+- **Low-value findings about the tests and docs are not raised.** A review doesn't report: a defect in the test
+  infrastructure that shows only after two failures at once, or after a failure no run here has seen (the process
+  listing failing as a run starts), when the worst it does is end or leave a Designer an agent started (disposable)
+  or a temporary folder; a live check that only repeats a guard a unit test already gives; a follow-up at generation 3
+  or later on the docs that changes nothing anyone does (two places that agree, a figure in a plan). Still raised: any
+  defect in the tools' code, anything that can touch the user's work, and a doc that says something false.
+  Reopen if: such a finding turns out to have hidden a real break, or the user changes the rule. (The user's decision,
+  2026-11-07.)
+
 - **A Designer the user opened is theirs; one an agent started is disposable.** The tools never end the user's: `quit_designer`
   refuses, and the agent asks them to save, close and reopen it, or to open it if a task needs it. A user wanting a material already
   has Designer open, so an agent only starts one for tests or work on this project, and ends it however works, force included,
@@ -60,11 +74,16 @@ may update the names and paths an entry points at; changing what was decided, or
   plugin, the server, `sd_run.py` and the self-test together (README, Security;
   `test_clients_never_send_the_token`). Agreed with the user, 2026-10-29.
   Reopen if: scripts start carrying secrets, or the bridge becomes reachable from another machine.
-- **The plugin reads a whole request before checking its signature.** The signature is inside the request, and code
-  runs only after it checks out. Anything reaching the bridge is already on the user's machine (it listens on
-  `127.0.0.1`), so the worst a program without the token can do is make Designer hold about 1 GiB for up to 30 s
-  (16 connections, 64 MiB each). Checking first would change the protocol in the plugin, the server, `sd_run.py` and the
-  self-test together. The user's decision, 2026-11-04.
+- **A client's answer is bound to the port and the request; `port=` takes any port.** Restricting `port=` to ports this
+  server launched or recorded was the alternative; the binding (plugin docstring) closes the relay for every port. The
+  user's choice, 2026-11-07.
+  Reopen if: a client can reach the plugin through a port other than the one it listens on (a port forward, a proxy),
+  so the port signed and the port checked differ.
+- **The plugin reads a whole request before checking its signature.** The signature covers the bytes as received and
+  code runs only after it checks out. Anything reaching the bridge is already on the user's machine (it listens on
+  `127.0.0.1`), so the worst a program without the token can do is make Designer hold about 1 GiB for up to 30 s (16
+  connections, 64 MiB each). Checking before the whole request has arrived would change the protocol in the plugin, the
+  server, `sd_run.py` and the self-test together. The user's decision, 2026-11-04.
   Reopen if: the bridge becomes reachable from another machine.
 
 ## Library packages
@@ -121,11 +140,12 @@ may update the names and paths an entry points at; changing what was decided, or
   that line removed, `close()` alone woke the blocked `accept()` and the port could be bound at once. The line is
   for platforms where `close()` doesn't do that; none was measured.
   Reopen if: `test_stop_answers_queued_clients_and_frees_the_port` fails, or a port stays bound on another platform.
-- **A Designer the user opens during `launch_designer`'s wait can be recorded as the agent's.** It takes a Designer that
-  crashes while starting and the user opening their own within the same wait, and limiting the record to a process started
-  within seconds of the launch isn't worth it for that (`_remember_started`, `server_tools/lifecycle.py`). The user's
-  decision, 2026-11-05.
-  Reopen if: it is seen to happen, or `launch_designer` starts being used for the user's own work.
+- **`quit_designer` repeats the whole protocol-mismatch message when it ends an agent's Designer whose plugin is
+  another version.** Its advice ("quit_designer and launch_designer for one an agent started") then names the call that
+  has just ended it; what it does is right (`server_tools/lifecycle.py`, `OTHER_PROTOCOL` in `server_tools/core.py`).
+  Such a plugin runs only between an update and the next restart of that Designer: older plugins aren't used, as
+  `install.py` installs the plugin with the server. The user's decision, 2026-11-07.
+  Reopen if: plugins of other versions come to be used next to the server.
 
 ## Output, pixels, screenshots, the graph view, example
 

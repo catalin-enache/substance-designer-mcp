@@ -15,16 +15,17 @@ from typing import Any, cast
 
 from mcp.types import TextResourceContents
 
+from . import common
 from .common import (
     PLUGIN,
     PLUGIN_PACKAGE_DIR,
-    PORT,
     TOKEN_FILE,
     Ctx,
     cancel_from_second_client,
     check,
     lan_address,
     raw_request,
+    read_greeting,
     sd_run,
     skip,
     text,
@@ -56,53 +57,10 @@ async def run(ctx: Ctx) -> None:
         'cancel_designer_job', 'running job', 'running: True' in cancel_text and 'cancelled by client' in t, cancel_text
     )
 
-    # --- security (README, Security): token required, loopback only, private token file
-    B = 'bridge security'
-    token_file = TOKEN_FILE
-    with open(token_file) as f:
+    await check_bridge_security(ctx)
+    await check_a_relayed_answer_is_refused(ctx)
+    with open(TOKEN_FILE) as f:
         token = f.read().strip()  # used, never printed
-    # the old protocol (the token itself) can only be told apart from a wrong answer with the
-    # real token, which never crosses the socket: unit test
-    # test_the_old_protocol_sending_the_token_is_refused (REVIEW.md TST-34)
-    for name, req in (
-        ('a wrong answer', {'auth': 'x' * 64, 'cmd': 'status'}),
-        ('no answer', {'cmd': 'status'}),
-        ('code with a wrong answer', {'auth': 'nope', 'code': "print('SHOULD NOT RUN')"}),
-    ):
-        reply = raw_request(req)
-        check(
-            B,
-            'refuses ' + name,
-            not reply['ok']
-            and reply.get('error') == 'invalid token'
-            and 'SHOULD NOT RUN' not in reply.get('output', ''),
-            str(reply),
-        )
-    reply = raw_request({'cmd': 'status'}, token)
-    check(B, 'accepts the right answer', reply['ok'] and '%s v3' % PLUGIN in reply['output'], reply['output'])
-    with socket.create_connection(('127.0.0.1', PORT), timeout=10) as sock:
-        sock.recv(1024)
-        sock.sendall(b'{not json')
-        sock.shutdown(socket.SHUT_WR)
-        garbage = json.loads(sock.recv(65536))
-    check(
-        B, 'bad request gets no details', garbage == {'ok': False, 'output': '', 'error': 'bad request'}, str(garbage)
-    )
-    ip = lan_address()
-    if ip is None:
-        skip(B, 'not reachable from the network', 'no non-loopback address on this machine')
-    else:
-        try:
-            socket.create_connection((ip, PORT), timeout=3).close()
-            reachable = True
-        except OSError:
-            reachable = False
-        check(B, 'not reachable from the network', not reachable, 'tried %s:%d' % (ip, PORT))
-    if sys.platform == 'win32':
-        skip(B, 'token file owner-only', 'POSIX permissions only')
-    else:
-        mode = os.stat(token_file).st_mode & 0o777
-        check(B, 'token file owner-only', mode & 0o077 == 0, oct(mode))
 
     # --- cancel aborts the running job and drops queued ones (two raw clients + sd_run.py --cancel)
     replies: dict[str, Any] = {}
@@ -248,3 +206,144 @@ async def run(ctx: Ctx) -> None:
         )
     else:
         check('install.py', 'installed plugin matches the repo', False, t)
+
+
+async def check_bridge_security(ctx: Ctx) -> None:
+    """README, Security: a request needs the right answer, the bridge listens on loopback only, the token file is
+    private."""
+    # --- security (README, Security): token required, loopback only, private token file
+    B = 'bridge security'
+    token_file = TOKEN_FILE
+    with open(token_file) as f:
+        token = f.read().strip()  # used, never printed
+    # the old protocol (the token itself) can only be told apart from a wrong answer with the
+    # real token, which never crosses the socket: unit test
+    # test_the_old_protocol_sending_the_token_is_refused (REVIEW.md TST-34)
+    # on the plugin's own port, only the request in the signature stops a request swapped in (REVIEW.md TST-163)
+    reply = raw_request({'code': "print('SHOULD NOT RUN')"}, token, signed=json.dumps({'cmd': 'status'}).encode())
+    check(
+        B,
+        'refuses a request changed after signing',
+        reply == {'ok': False, 'output': '', 'error': 'invalid token'},
+        str(reply),
+    )
+    code = {'code': "print('SHOULD NOT RUN')"}
+
+    def wrong_answer() -> Any:
+        return raw_request(b'0' * 64 + b'\n' + json.dumps(code).encode())
+
+    def another_key() -> Any:
+        return raw_request(code, 'x' * 64)
+
+    def no_answer() -> Any:
+        return raw_request({'cmd': 'status'})
+
+    def no_answer_an_auth_key() -> Any:
+        return raw_request({'auth': 'nope', **code})
+
+    # a wrong answer on its own line, and one made with another key, in the protocol's framing; and none, as clients
+    # of the older protocols sent requests (REVIEW.md TST-175: the "wrong answer" cases sent none)
+    for name, send in (
+        ('a wrong answer', wrong_answer),
+        ('an answer made with another key', another_key),
+        ('no answer', no_answer),
+        ('no answer, with an auth key', no_answer_an_auth_key),
+    ):
+        reply = send()
+        check(
+            B,
+            'refuses ' + name,
+            not reply['ok']
+            and reply.get('error') == 'invalid token'
+            and 'SHOULD NOT RUN' not in reply.get('output', ''),
+            str(reply),
+        )
+    reply = raw_request({'cmd': 'status'}, token)
+    with open(os.path.join(PLUGIN_PACKAGE_DIR, '__init__.py'), encoding='utf-8') as f:
+        version = cast(re.Match[str], re.search(r'^VERSION = (\d+)', f.read(), re.M)).group(1)
+    check(
+        B, 'accepts the right answer', reply['ok'] and '%s v%s' % (PLUGIN, version) in reply['output'], reply['output']
+    )
+    # unsigned, bytes that aren't JSON aren't even parsed (REVIEW.md PLG-32); signed, they are, and get no details
+    garbage = raw_request(b'{not json')
+    check(
+        B, 'refuses bad bytes unsigned', garbage == {'ok': False, 'output': '', 'error': 'invalid token'}, str(garbage)
+    )
+    garbage = raw_request(b'{not json', token)
+    check(
+        B, 'bad request gets no details', garbage == {'ok': False, 'output': '', 'error': 'bad request'}, str(garbage)
+    )
+    ip = lan_address()
+    if ip is None:
+        skip(B, 'not reachable from the network', 'no non-loopback address on this machine')
+    else:
+        try:
+            socket.create_connection((ip, common.PORT), timeout=3).close()
+            reachable = True
+        except OSError:
+            reachable = False
+        check(B, 'not reachable from the network', not reachable, 'tried %s:%d' % (ip, common.PORT))
+    if sys.platform == 'win32':
+        skip(B, 'token file owner-only', 'POSIX permissions only')
+    else:
+        mode = os.stat(token_file).st_mode & 0o777
+        check(B, 'token file owner-only', mode & 0o077 == 0, oct(mode))
+
+
+def _relay_to_the_plugin() -> tuple[int, list[Any], threading.Event, threading.Thread]:
+    """A listener on a free port passing each connection on to the plugin on common.PORT: the plugin's greeting to
+    the client, then, with the client's answer, code of its own to the plugin. Returns its port, the plugin's
+    replies, a stop event and its thread (REVIEW.md SRV-82)."""
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(4)
+    listener.settimeout(0.2)
+    replies: list[Any] = []
+    stop = threading.Event()
+
+    def serve() -> None:
+        with listener:
+            while not stop.is_set():
+                try:
+                    conn, _ = listener.accept()
+                except OSError:  # the timeout, to look at stop again
+                    continue
+                try:
+                    with conn, socket.create_connection(('127.0.0.1', common.PORT), timeout=10) as up:
+                        conn.settimeout(10)
+                        hello = read_greeting(up)
+                        conn.sendall(hello)
+                        data = b''
+                        while chunk := conn.recv(65536):
+                            data += chunk
+                        answer = data.partition(b'\n')[0]  # the client's, with a request of its own
+                        up.sendall(answer + b'\n' + json.dumps({'code': "print('RELAYED')"}).encode())
+                        up.shutdown(socket.SHUT_WR)
+                        reply = b''
+                        while chunk := up.recv(65536):
+                            reply += chunk
+                        replies.append(json.loads(reply))
+                        conn.sendall(reply)
+                except (OSError, ValueError) as e:
+                    replies.append('relay failed: %s' % e)
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    return listener.getsockname()[1], replies, stop, thread
+
+
+async def check_a_relayed_answer_is_refused(ctx: Ctx) -> None:
+    """REVIEW.md SRV-82: designer_status pointed at a port where another program listens answers that program's
+    greeting; passed on to the plugin with code of its own, the answer must run nothing in Designer."""
+    port, replies, stop, thread = _relay_to_the_plugin()
+    try:
+        await ctx.c('designer_status', {'port': port})
+    finally:
+        stop.set()
+        thread.join(5)
+    check(
+        'bridge security',
+        'refuses an answer relayed from another port',
+        bool(replies) and all(isinstance(r, dict) and r.get('error') == 'invalid token' for r in replies),
+        str(replies),
+    )

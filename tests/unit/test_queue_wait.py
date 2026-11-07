@@ -2,10 +2,12 @@
 script's own time, or a job it gave up on can still start later with nobody waiting."""
 
 import importlib.util
+import json
 import os
 import re
 import socket
 import sys
+import time
 import types
 from pathlib import Path
 from typing import Any, cast
@@ -13,7 +15,7 @@ from typing import Any, cast
 import pytest
 
 from conftest import ROOT, patch_server, server
-from project_constants import PLUGIN, PLUGIN_PACKAGE_DIR
+from project_constants import BRIDGE_PROTOCOL, PLUGIN, PLUGIN_PACKAGE_DIR
 
 
 def _plugin_queue_wait() -> int:
@@ -39,7 +41,7 @@ def test_the_clients_know_the_plugins_queue_wait() -> None:
 def test_server_waits_for_the_queue_and_the_script(monkeypatch: pytest.MonkeyPatch, timeout: int | None) -> None:
     waits: list[float] = []
 
-    def send(request: dict[str, Any], wait: float) -> dict[str, Any]:
+    def send(request: dict[str, Any], wait: float, port: int | None = None) -> dict[str, Any]:
         waits.append(wait)
         return {'ok': True, 'output': 'x'}
 
@@ -55,7 +57,7 @@ def test_sd_run_waits_for_the_queue_and_the_script(
     sd_run = _sd_run()
     waits: list[float] = []
 
-    def send(request: dict[str, Any], wait: float) -> dict[str, Any]:
+    def send(request: dict[str, Any], wait: float, port: int | None = None) -> dict[str, Any]:
         waits.append(wait)
         return {'ok': True, 'output': '', 'error': ''}
 
@@ -110,9 +112,9 @@ def test_sd_run_explains_a_closed_designer_or_a_missing_token(
         assert stop.value.code == 1 and hint in capsys.readouterr().err
 
 
-def _fake_bridge(greeting: bytes, reply: bytes) -> int:
-    """A listener on a free port that sends `greeting`, reads the request and answers `reply`
-    (bytes), once; returns its port."""
+def _fake_bridge(greeting: bytes, reply: bytes, received: list[bytes] | None = None) -> int:
+    """A listener on a free port that sends `greeting`, reads the request (into `received`, when given) and answers
+    `reply` (bytes), once; returns its port."""
     import threading
 
     srv = socket.socket()
@@ -124,8 +126,9 @@ def _fake_bridge(greeting: bytes, reply: bytes) -> int:
         with conn:
             conn.sendall(greeting)
             try:
-                while conn.recv(65536):
-                    pass
+                while chunk := conn.recv(65536):
+                    if received is not None:
+                        received.append(chunk)
                 conn.sendall(reply)
             except OSError:
                 pass
@@ -137,32 +140,74 @@ def _fake_bridge(greeting: bytes, reply: bytes) -> int:
 
 
 # no reply (Designer quit mid-script), a greeting without a nonce or not an object (another program
-# on the port): one line, not a traceback (REVIEW.md PLG-23)
-BAD_BRIDGES = [(b'{"nonce": "abc"}\n', b''), (b'{"hello": 1}\n', b''), (b'[1, 2]\n', b'')]
+# on the port): one line, not a traceback (REVIEW.md PLG-23). Each case names the message it must get from sd_run and
+# from the server: greetings of this protocol (BRIDGE_PROTOCOL's) reach those paths, where ones without it stopped at
+# the protocol check and any error passed (REVIEW.md TST-164)
+NO_REPLY = 'closed the connection without a reply'
+GREETING = {'protocol': BRIDGE_PROTOCOL}
+NONCE = 'ab' * 16  # as the plugin makes them: 32 hex digits
+NOT_THE_BRIDGE = r"not reachable \(ValueError: not the bridge's greeting"
+BAD_BRIDGES = [
+    (json.dumps({**GREETING, 'nonce': NONCE}).encode() + b'\n', b'', NO_REPLY, NO_REPLY),
+    # a nonce the plugin never makes: nothing signed with it (REVIEW.md SRV-94)
+    (
+        json.dumps({**GREETING, 'nonce': NONCE[:-1] + '\n'}).encode() + b'\n',
+        b'',
+        'something else answers',
+        NOT_THE_BRIDGE,
+    ),
+    (json.dumps({**GREETING, 'nonce': 1}).encode() + b'\n', b'', 'something else answers', NOT_THE_BRIDGE),
+    (json.dumps({**GREETING, 'nonce': 'abc'}).encode() + b'\n', b'', 'something else answers', NOT_THE_BRIDGE),
+    (json.dumps({**GREETING, 'hello': 1}).encode() + b'\n', b'', 'something else answers', r'not reachable \(KeyError'),
+    (b'[1, 2]\n', b'', 'something else answers', r'not reachable \(ValueError'),
+    # no protocol, no nonce: another program, not the bridge of any version (REVIEW.md SRV-95)
+    (b'{"hello": 1}\n', b'', 'something else answers', NOT_THE_BRIDGE),
+    # its own case: a plugin of another protocol gets nothing
+    (
+        b'{"nonce": "abc"}\n',
+        b'',
+        'another bridge protocol than this client',
+        'another bridge protocol than this server',
+    ),
+]
 
 
-@pytest.mark.parametrize('greeting, reply', BAD_BRIDGES)
+@pytest.mark.parametrize('greeting, reply, error, _', BAD_BRIDGES)
 def test_sd_run_explains_a_bridge_that_answers_nothing_useful(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path, greeting: bytes, reply: bytes
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    greeting: bytes,
+    reply: bytes,
+    error: str,
+    _: str,
 ) -> None:
     sd_run = _sd_run()
     token = tmp_path / 'token'
     token.write_text('t' * 40)
     monkeypatch.setitem(vars(sd_run), 'TOKEN_FILE', str(token))
-    monkeypatch.setitem(vars(sd_run), 'PORT', _fake_bridge(greeting, reply))
+    received: list[bytes] = []
+    monkeypatch.setitem(vars(sd_run), 'PORT', _fake_bridge(greeting, reply, received))
     monkeypatch.setattr(sys, 'argv', ['sd_run.py', '--status'])
     with pytest.raises(SystemExit) as stop:
         sd_run.main()
-    assert stop.value.code == 1 and 'Designer' in capsys.readouterr().err
+    assert stop.value.code == 1 and error in capsys.readouterr().err
+    # sd_run's line is the same for no reply and for a greeting refused: what tells them apart is whether the request
+    # was sent (REVIEW.md SRV-94, TST-191)
+    time.sleep(0.2)  # the fake's thread reads after the client has closed
+    if _ == NOT_THE_BRIDGE:
+        assert received == [], received
+    elif error == NO_REPLY:
+        assert received, 'the request never reached the bridge'
 
 
-@pytest.mark.parametrize('greeting, reply', BAD_BRIDGES)
+@pytest.mark.parametrize('greeting, reply, _, error', BAD_BRIDGES)
 def test_the_server_explains_a_bridge_that_answers_nothing_useful(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, greeting: bytes, reply: bytes
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, greeting: bytes, reply: bytes, _: str, error: str
 ) -> None:
     token = tmp_path / 'token'
     token.write_text('t' * 40)
     patch_server(monkeypatch, 'TOKEN_FILE', str(token))
     patch_server(monkeypatch, 'PORT', _fake_bridge(greeting, reply))
-    with pytest.raises(server.ToolError):
+    with pytest.raises(server.ToolError, match=error):
         server._send({'cmd': 'status'}, 5)

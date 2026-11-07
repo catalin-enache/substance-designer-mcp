@@ -20,8 +20,9 @@ from typing import Any, cast
 
 import pytest
 
+import project_constants
 from conftest import ROOT, patch_server, server
-from project_constants import PLUGIN_PACKAGE_DIR
+from project_constants import NONCE, PLUGIN_PACKAGE_DIR
 
 PLUGIN = os.path.join(PLUGIN_PACKAGE_DIR, '__init__.py')
 Bridge = tuple[types.ModuleType, Any, dict[str, bool]]  # the bridge fixture: the plugin, its _Server, the drain switch
@@ -36,6 +37,17 @@ class _FakeTimer:
 
     def stop(self) -> None:
         pass
+
+
+def read_greeting(sock: socket.socket) -> bytes:
+    """The self-test's (tests/test_all_tools/common.py): one loop for every test's greeting, ending at EOF (REVIEW.md
+    TST-176)."""
+    tests_dir = os.path.join(ROOT, 'tests')
+    if tests_dir not in sys.path:
+        sys.path.insert(0, tests_dir)
+    from test_all_tools.common import read_greeting as read
+
+    return read(sock)
 
 
 @pytest.fixture
@@ -73,28 +85,41 @@ def bridge(plugin: types.ModuleType) -> Iterator[Bridge]:
     srv.stop()
 
 
+PROTOCOL = 2  # the bridge protocol the clients and the plugin speak (plugin docstring)
+
+
+def _sign(token: str, nonce: str, port: int, body: bytes) -> str:
+    """The client's answer, written from the plugin's docstring (not taken from its code): HMAC-SHA256 with the token
+    over the nonce, a newline, the port connected to, a newline and the request's bytes as sent (REVIEW.md PLG-32)."""
+    return hmac.new(token.encode(), b'%s\n%d\n' % (nonce.encode(), port) + body, hashlib.sha256).hexdigest()
+
+
+def _signed(token: str, nonce: str, port: int, body: bytes) -> bytes:
+    """What a client sends: the answer on a line of its own, then the request's bytes."""
+    return _sign(token, nonce, port, body).encode() + b'\n' + body
+
+
 def _call(
     plugin: types.ModuleType,
     request: dict[str, Any] | None,
     token: str | None = None,
     raw: bytes | None = None,
     sign_empty: bool = False,
+    sign_raw: bool = False,
 ) -> Any:
-    """One request; token=None uses the real token, raw sends these bytes instead of JSON;
-    sign_empty signs with an empty token over the nonce sent (a client guessing one)."""
+    """One request; token=None uses the real token, raw sends these bytes instead of JSON (signed with the real
+    token when sign_raw); sign_empty signs with an empty token over the nonce sent (a client guessing one). Without
+    a token the request goes as JSON alone, as clients of the older protocols sent it."""
     with socket.create_connection(('127.0.0.1', plugin.PORT), timeout=10) as s:
-        hello = b''
-        while not hello.endswith(b'\n'):
-            hello += s.recv(1024)
+        hello = read_greeting(s)
         nonce = json.loads(hello)['nonce']
+        secret = token if token is not None else Path(plugin.TOKEN_FILE).read_text().strip()
         if raw is None:
-            secret = token if token is not None else Path(plugin.TOKEN_FILE).read_text().strip()
-            if secret or sign_empty:
-                request = {
-                    **cast(dict[str, Any], request),  # raw=None: the caller passed a request
-                    'auth': hmac.new(secret.encode(), nonce.encode(), hashlib.sha256).hexdigest(),
-                }
             raw = json.dumps(request).encode()
+            if secret or sign_empty:
+                raw = _signed(secret, nonce, plugin.PORT, raw)
+        elif sign_raw:
+            raw = _signed(secret, nonce, plugin.PORT, raw)
         s.sendall(raw)
         s.shutdown(socket.SHUT_WR)
         data = b''
@@ -135,18 +160,86 @@ def test_runs_code_with_the_right_answer(bridge: Bridge) -> None:
     assert reply == {'ok': True, 'output': '42\n', 'error': ''}
 
 
-@pytest.mark.parametrize(
-    'request_', [{'code': "print('RAN')"}, {'code': "print('RAN')", 'auth': 'x' * 64}, {'cmd': 'status', 'auth': ''}]
-)
-def test_refuses_without_the_right_answer(bridge: Bridge, request_: dict[str, str]) -> None:
+CODE = {'code': "print('RAN')"}
+# a wrong answer on its own line, and one made with another key, in the protocol's framing (REVIEW.md TST-175: none of
+# these sent one); and none, as clients of the older protocols sent requests
+NO_RIGHT_ANSWER: dict[str, Callable[[types.ModuleType], Any]] = {
+    'a wrong answer': lambda plugin: _call(plugin, None, raw=b'0' * 64 + b'\n' + json.dumps(CODE).encode()),
+    'an answer made with another key': lambda plugin: _call(plugin, CODE, token='x' * 64),
+    'no answer': lambda plugin: _call(plugin, CODE, token=''),
+    'no answer, an auth key': lambda plugin: _call(plugin, {**CODE, 'auth': 'x' * 64}, token=''),
+    'no answer, an empty auth key': lambda plugin: _call(plugin, {'cmd': 'status', 'auth': ''}, token=''),
+}
+
+
+@pytest.mark.parametrize('case', NO_RIGHT_ANSWER)
+def test_refuses_without_the_right_answer(bridge: Bridge, case: str) -> None:
     plugin, _, _ = bridge
-    assert _call(plugin, request_, token='') == {'ok': False, 'output': '', 'error': 'invalid token'}
+    assert NO_RIGHT_ANSWER[case](plugin) == {'ok': False, 'output': '', 'error': 'invalid token'}
+
+
+def test_nothing_is_parsed_before_the_signature_checks_out(bridge: Bridge, monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md PLG-32: parsing and re-serialising an unsigned request made Designer hold several times its size
+    # for a program without the token; checked over the bytes as sent, it is neither parsed nor serialised
+    plugin, _, _ = bridge
+    seen: list[str] = []
+    real_loads, real_dumps = json.loads, json.dumps
+
+    def loads(text: Any, *args: Any, **kwargs: Any) -> Any:
+        if b'UNSIGNED' in (text if isinstance(text, (bytes, bytearray)) else str(text).encode()):
+            seen.append('loads')
+        return real_loads(text, *args, **kwargs)
+
+    def dumps(obj: Any, *args: Any, **kwargs: Any) -> str:
+        out = real_dumps(obj, *args, **kwargs)
+        if 'UNSIGNED' in out:
+            seen.append('dumps')
+        return out
+
+    monkeypatch.setattr(json, 'loads', loads)
+    monkeypatch.setattr(json, 'dumps', dumps)
+    body = real_dumps({'code': "print('UNSIGNED')"}).encode()
+    reply = _call(plugin, None, raw=b'0' * 64 + b'\n' + body)
+    assert seen == [], 'the unsigned request was %s before its signature was checked' % ' and '.join(seen)
+    assert reply == {'ok': False, 'output': '', 'error': 'invalid token'}
+
+
+def test_a_request_changed_after_signing_is_refused(bridge: Bridge) -> None:
+    # REVIEW.md TST-163: on the plugin's own port (a program holding the client's connection from before Designer
+    # bound it), only the request in the signature stops a request of its own with the client's answer
+    plugin, _, _ = bridge
+    token = Path(plugin.TOKEN_FILE).read_text().strip()
+    with socket.create_connection(('127.0.0.1', plugin.PORT), timeout=10) as s:
+        hello = read_greeting(s)
+        nonce = json.loads(hello)['nonce']
+        answer = _sign(token, nonce, plugin.PORT, json.dumps({'code': "print('MINE')"}).encode())
+        s.sendall(answer.encode() + b'\n' + json.dumps({'code': "print('THEIRS')"}).encode())
+        s.shutdown(socket.SHUT_WR)
+        data = b''
+        while chunk := s.recv(65536):
+            data += chunk
+    assert json.loads(data) == {'ok': False, 'output': '', 'error': 'invalid token'}
 
 
 def test_the_old_protocol_sending_the_token_is_refused(bridge: Bridge) -> None:
     plugin, _, _ = bridge
     token = Path(plugin.TOKEN_FILE).read_text().strip()
     assert _call(plugin, {'cmd': 'status', 'token': token}, token='')['error'] == 'invalid token'
+
+
+def test_the_answer_of_the_older_protocol_is_refused(bridge: Bridge) -> None:
+    # README: a server older than the plugin gets "invalid token" (its answer was HMAC(token, nonce) alone)
+    plugin, _, _ = bridge
+    token = Path(plugin.TOKEN_FILE).read_text().strip()
+    with socket.create_connection(('127.0.0.1', plugin.PORT), timeout=10) as s:
+        hello = read_greeting(s)
+        old = hmac.new(token.encode(), json.loads(hello)['nonce'].encode(), hashlib.sha256).hexdigest()
+        s.sendall(json.dumps({'code': "print('RAN')", 'auth': old}).encode())
+        s.shutdown(socket.SHUT_WR)
+        data = b''
+        while chunk := s.recv(65536):
+            data += chunk
+    assert json.loads(data) == {'ok': False, 'output': '', 'error': 'invalid token'}
 
 
 def test_an_empty_token_file_does_not_open_the_bridge(plugin: types.ModuleType) -> None:
@@ -161,7 +254,7 @@ def test_an_empty_token_file_does_not_open_the_bridge(plugin: types.ModuleType) 
 
 
 def test_clients_never_send_the_token(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    # a squatter on the port only ever sees HMAC(token, its own nonce)
+    # a squatter on the port only ever sees an HMAC (with the token) of its own nonce, the port and the request
     token_file = tmp_path / 'token'
     token_file.write_text('s' * 64)
     patch_server(monkeypatch, 'TOKEN_FILE', str(token_file))
@@ -174,7 +267,7 @@ def test_clients_never_send_the_token(monkeypatch: pytest.MonkeyPatch, tmp_path:
     def squat() -> None:
         conn, _ = listener.accept()
         with conn:
-            conn.sendall(b'{"nonce": "n1"}\n')
+            conn.sendall(b'{"nonce": "%s", "protocol": %d}\n' % (b'ab' * 16, PROTOCOL))  # a nonce of the plugin's form
             data = b''
             while chunk := conn.recv(65536):
                 data += chunk
@@ -187,34 +280,243 @@ def test_clients_never_send_the_token(monkeypatch: pytest.MonkeyPatch, tmp_path:
     thread.join(5)
     listener.close()
     assert b's' * 64 not in seen['request']
-    assert json.loads(seen['request'])['auth'] == hmac.new(b's' * 64, b'n1', hashlib.sha256).hexdigest()
+    auth, _, body = seen['request'].partition(b'\n')
+    assert auth.decode() == _sign('s' * 64, 'ab' * 16, server.PORT, body) and json.loads(body) == {'cmd': 'status'}
 
 
-@pytest.mark.parametrize('client', ['sd_run', 'server'])
-def test_both_clients_speak_the_plugins_protocol(bridge: Bridge, monkeypatch: pytest.MonkeyPatch, client: str) -> None:
-    # README says the unit tests cover the clients' protocol: each client against the real plugin
-    # server (REVIEW.md TST-8; sd_run.py was only exercised by the live self-test)
-    plugin, _, _ = bridge
+def _client(monkeypatch: pytest.MonkeyPatch, client: str, token_file: str, port: int) -> Callable[..., Any]:
+    """The send function of one of the clients (the server, client/sd_run.py, the self-test's raw_request), set to
+    use this token file and port."""
     if client == 'sd_run':
         monkeypatch.syspath_prepend(os.path.join(ROOT, 'client'))
         import sd_run
 
-        monkeypatch.setitem(vars(sd_run), 'TOKEN_FILE', plugin.TOKEN_FILE)
-        monkeypatch.setitem(vars(sd_run), 'PORT', plugin.PORT)
-        send = sd_run.send
-    else:
-        patch_server(monkeypatch, 'TOKEN_FILE', plugin.TOKEN_FILE)
-        patch_server(monkeypatch, 'PORT', plugin.PORT)
-        send = server._send
+        monkeypatch.setitem(vars(sd_run), 'TOKEN_FILE', token_file)
+        monkeypatch.setitem(vars(sd_run), 'PORT', port)
+        return cast(Callable[..., Any], sd_run.send)
+    if client == 'raw_request':
+        monkeypatch.syspath_prepend(os.path.join(ROOT, 'tests'))
+        from test_all_tools import common
+
+        monkeypatch.setitem(vars(common), 'PORT', port)
+        token = Path(token_file).read_text().strip()
+        return lambda request, wait: common.raw_request(request, token)
+    patch_server(monkeypatch, 'TOKEN_FILE', token_file)
+    patch_server(monkeypatch, 'PORT', port)
+    return cast(Callable[..., Any], server._send)
+
+
+@pytest.mark.parametrize('client', ['sd_run', 'server', 'raw_request'])
+def test_every_client_speaks_the_plugins_protocol(bridge: Bridge, monkeypatch: pytest.MonkeyPatch, client: str) -> None:
+    # README says the unit tests cover the clients' protocol: each client against the real plugin
+    # server (REVIEW.md TST-8; sd_run.py was only exercised by the live self-test), with non-ASCII code and a
+    # fractional timeout
+    plugin, _, _ = bridge
+    send = _client(monkeypatch, client, plugin.TOKEN_FILE, plugin.PORT)
     assert send({'code': 'print(6 * 7)'}, 10) == {'ok': True, 'output': '42\n', 'error': ''}
+    assert send({'code': "print('\u00e9\u4e2d')", 'timeout': 30.5}, 10)['output'] == '\u00e9\u4e2d\n'
     assert send({'cmd': 'status'}, 10)['ok']
+
+
+def test_the_clients_know_the_plugins_protocol(plugin: types.ModuleType) -> None:
+    # the plugin can't import project_constants (it is installed on its own): the two numbers must match
+    assert plugin.PROTOCOL == PROTOCOL == project_constants.BRIDGE_PROTOCOL
+
+
+def test_raw_request_signs_a_stray_auth_key_with_the_rest(bridge: Bridge, monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md TST-167: an "auth" key in the request was signed and then refused; the answer now travels on a line of
+    # its own over the bytes sent (PLG-32), so the key is one more field, signed with the others and not read
+    plugin, _, _ = bridge
+    send = _client(monkeypatch, 'raw_request', plugin.TOKEN_FILE, plugin.PORT)
+    assert send({'cmd': 'status', 'auth': 'stale'}, 10)['ok']
+
+
+def test_the_greeting_names_the_protocol(bridge: Bridge) -> None:
+    plugin, _, _ = bridge
+    with socket.create_connection(('127.0.0.1', plugin.PORT), timeout=10) as s:
+        hello = read_greeting(s)
+    greeting = json.loads(hello)
+    # the form the clients accept, and nothing else (REVIEW.md SRV-94)
+    assert greeting['protocol'] == PROTOCOL and NONCE.fullmatch(greeting['nonce'])
+
+
+def _relay(plugin_port: int, swap: bool) -> tuple[int, list[Any], Callable[[], None]]:
+    """A listener on a port of its own that passes every connection on to the plugin (REVIEW.md SRV-82): the
+    plugin's greeting to the client, the client's request to the plugin (with "code" swapped for its own when swap),
+    and the plugin's reply back. Returns its port, the plugin's replies and a stop function."""
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(4)
+    listener.settimeout(0.2)
+    replies: list[Any] = []
+    stopped = threading.Event()
+
+    def pass_on(conn: socket.socket) -> None:
+        with conn, socket.create_connection(('127.0.0.1', plugin_port), timeout=10) as up:
+            hello = read_greeting(up)
+            conn.sendall(hello)
+            data = b''
+            while chunk := conn.recv(65536):
+                data += chunk
+            if swap:  # the client's answer, with a request of its own
+                data = data.partition(b'\n')[0] + b'\n' + json.dumps({'code': "print('RELAYED')"}).encode()
+            up.sendall(data)
+            up.shutdown(socket.SHUT_WR)
+            reply = b''
+            while chunk := up.recv(65536):
+                reply += chunk
+            replies.append(json.loads(reply))
+            conn.sendall(reply)
+
+    def serve() -> None:
+        while not stopped.is_set():
+            try:
+                conn, _ = listener.accept()
+            except OSError:  # the timeout, to look at stopped again
+                continue
+            conn.settimeout(10)
+            pass_on(conn)
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+
+    def stop() -> None:
+        stopped.set()
+        thread.join(5)
+        listener.close()
+
+    return listener.getsockname()[1], replies, stop
+
+
+@pytest.mark.parametrize('swap', [False, True], ids=['as sent', 'code swapped'])
+@pytest.mark.parametrize('client', ['sd_run', 'server'])
+def test_an_answer_relayed_from_another_port_is_refused(
+    bridge: Bridge, monkeypatch: pytest.MonkeyPatch, client: str, swap: bool
+) -> None:
+    # REVIEW.md SRV-82: a client pointed at a port where another program listens (designer_status(port=...), an
+    # SD_BRIDGE_PORT set to it) answers that program's greeting; passed on to the real plugin, the answer must not
+    # run anything there, neither the client's request nor the program's own code
+    plugin, _, _ = bridge
+    relay_port, replies, stop = _relay(plugin.PORT, swap)
+    try:
+        _client(monkeypatch, client, plugin.TOKEN_FILE, relay_port)({'code': "print('MINE')"}, 10)
+    finally:
+        stop()
+    assert replies == [{'ok': False, 'output': '', 'error': 'invalid token'}]
+
+
+@pytest.mark.parametrize('swap', [False, True], ids=['as sent', 'code swapped'])
+def test_an_answer_relayed_from_the_port_a_tool_was_given_is_refused(
+    bridge: Bridge, monkeypatch: pytest.MonkeyPatch, swap: bool
+) -> None:
+    # REVIEW.md TST-174: as above, but the way the tools reach another port, `port=` on the call, with the server's own
+    # PORT left at the real plugin: what is signed is the port connected to, not PORT
+    plugin, _, _ = bridge
+    patch_server(monkeypatch, 'TOKEN_FILE', plugin.TOKEN_FILE)
+    patch_server(monkeypatch, 'PORT', plugin.PORT)
+    relay_port, replies, stop = _relay(plugin.PORT, swap)
+    try:
+        server._send({'code': "print('MINE')"}, 10, port=relay_port)
+    finally:
+        stop()
+    assert replies == [{'ok': False, 'output': '', 'error': 'invalid token'}]
+
+
+@pytest.mark.parametrize(
+    'greeting',
+    # older: no protocol named; newer: a greeting of its own, here without a nonce (REVIEW.md SRV-88: the nonce was
+    # read first, so a KeyError hid the protocol)
+    [b'{"nonce": "n1"}\n', b'{"protocol": 3}\n'],
+    ids=['older', 'newer, no nonce'],
+)
+@pytest.mark.parametrize('client', ['sd_run', 'server'])
+def test_clients_send_nothing_to_a_plugin_of_another_protocol(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, client: str, greeting: bytes
+) -> None:
+    # a plugin of another protocol, older or newer, would refuse the answer anyway (it is over this protocol's
+    # message), so the check is for a clear error: nothing is sent, and the message says to re-run install.py
+    token_file = tmp_path / 'token'
+    token_file.write_text('s' * 64)
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(1)
+    seen: dict[str, bytes] = {}
+
+    def old_plugin() -> None:
+        conn, _ = listener.accept()
+        with conn:
+            conn.settimeout(5)
+            conn.sendall(greeting)
+            data = b''
+            try:
+                while chunk := conn.recv(65536):
+                    data += chunk
+            except OSError:
+                pass
+            seen['request'] = data
+
+    thread = threading.Thread(target=old_plugin)
+    thread.start()
+    send = _client(monkeypatch, client, str(token_file), listener.getsockname()[1])
+    try:
+        with pytest.raises(Exception, match=r'install\.py'):
+            send({'cmd': 'status'}, 5)
+    finally:
+        thread.join(10)
+        listener.close()
+    assert seen['request'] == b''
+
+
+@pytest.mark.parametrize('address', ['127.0.0.1', '0.0.0.0'])
+@pytest.mark.parametrize('reuse', [False, True], ids=['plain', 'SO_REUSEADDR'])
+def test_the_servers_port_check_agrees_with_the_plugins_bind(
+    plugin: types.ModuleType, address: str, reuse: bool
+) -> None:
+    # REVIEW.md SRV-85: launch_designer refuses a port the plugin couldn't listen on. Measured on macOS: a program on
+    # 127.0.0.1 stops it, one on every address (*:5000, AirPlay's) doesn't, and 127.0.0.1 then reaches the plugin
+    from conftest import REAL_BIND_ERROR
+
+    holder = socket.socket()
+    if reuse:
+        holder.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    holder.bind((address, 0))
+    holder.listen(1)
+    port = holder.getsockname()[1]
+    vars(plugin)['PORT'] = port
+    greeting: Any = None
+    try:
+        taken = REAL_BIND_ERROR(port) is not None
+        try:
+            srv = plugin._Server()
+        except OSError:
+            bound = False
+        else:
+            bound = True
+            try:  # who answers on 127.0.0.1 now: the plugin greets, the holder never accepts
+                with socket.create_connection(('127.0.0.1', port), timeout=2) as conn:
+                    hello = read_greeting(conn)
+                greeting = json.loads(hello)
+            except OSError:
+                pass
+            finally:
+                srv.stop()
+    finally:
+        holder.close()
+    assert taken == (not bound), (address, reuse, taken, bound)
+    assert REAL_BIND_ERROR(port) is None, 'free once the holder is gone'
+    if sys.platform == 'darwin':  # the outcomes _bind_error's docstring states, measured on macOS (REVIEW.md TST-169)
+        assert taken == (address == '127.0.0.1'), (address, reuse, taken)
+        if address == '0.0.0.0':
+            assert isinstance(greeting, dict) and greeting.get('protocol') == PROTOCOL, greeting
 
 
 # ---- robustness
 def test_bad_requests_get_no_details(bridge: Bridge) -> None:
+    # unsigned, a request isn't even read as JSON (REVIEW.md PLG-32); signed, it is, and still gets no details
     plugin, _, _ = bridge
     for raw in (b'not json', b'[1, 2]', b'\xff\xfe'):
-        assert _call(plugin, None, raw=raw) == {'ok': False, 'output': '', 'error': 'bad request'}
+        assert _call(plugin, None, raw=raw) == {'ok': False, 'output': '', 'error': 'invalid token'}
+        assert _call(plugin, None, raw=raw, sign_raw=True) == {'ok': False, 'output': '', 'error': 'bad request'}
 
 
 def test_oversized_request_refused(bridge: Bridge) -> None:
@@ -693,7 +995,8 @@ def test_a_job_arriving_after_stop_is_answered_at_once(bridge: Bridge) -> None:
     srv.stop()
     nonce = 'n' * 32
     started = time.monotonic()
-    reply = srv._authorised({'code': "print('late')", 'auth': plugin.expected_auth(srv.token, nonce)}, nonce)
+    late = json.dumps({'code': "print('late')"}).encode()
+    reply = srv._authorised(_signed(srv.token, nonce, plugin.PORT, late), nonce)
     assert not reply['ok'] and 'closing' in reply['error'] and time.monotonic() - started < 1
 
 

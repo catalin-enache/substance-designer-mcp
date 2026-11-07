@@ -8,7 +8,8 @@ Uninstaller: undoes what install.py set up (macOS and Windows).
 
 Removes: the Designer plugin and its token, the Claude Code skill, every folder's
 `claude mcp add --scope local` registration of this server (and a user-scope one, if someone
-added it), and mcp_server/venv. Only things that are this project's are touched: a plugin, skill
+added it), mcp_server/venv, and what launch_designer left for the Designers it started: their
+records and their folders in /tmp (kept while a Designer runs). Only things that are this project's are touched: a plugin, skill
 or registration with the same name that points elsewhere is reported and left alone. This folder
 itself is left for you to delete.
 """
@@ -22,6 +23,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 from collections.abc import Callable
@@ -30,7 +32,8 @@ from typing import Any, cast
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import install  # noqa: E402  (shares paths, names and the skill marker with the installer)
-from project_constants import PLUGIN, TOKEN_FILE, agent_designer_file  # noqa: E402
+import project_constants  # noqa: E402  (AGENT_RECORD_DIR, read when called)
+from project_constants import PLUGIN, TOKEN_FILE, agent_designer_file, agent_designer_folders, agent_designer_ports  # noqa: E402
 
 SERVER = os.path.join(HERE, 'mcp_server', 'server.py')
 VENV = os.path.join(HERE, 'mcp_server', 'venv')
@@ -153,6 +156,25 @@ def changed_since(snapshot: str) -> bool:
 Action = Callable[[], 'str | None']  # quoted: a module-level alias is evaluated even so (INS-25)
 
 
+def folders_in_use() -> str | None:
+    """Why the folders launch_designer made must be kept now, or None when they can go: a Designer runs (found as the
+    server finds it), or that can't be told: pgrep failing or missing, or not macOS, where the pattern was made and
+    tried (REVIEW.md INS-27). On Windows launch_designer makes no folders."""
+    if sys.platform == 'win32':
+        return None
+    if sys.platform != 'darwin':
+        return "Designer's processes can't be told apart here (only tried on macOS)"
+    try:
+        done = subprocess.run(['pgrep', '-f', project_constants.DESIGNER_PROCESS], capture_output=True, text=True)
+    except OSError as e:
+        return "Designer's processes couldn't be listed (%s)" % e
+    if done.returncode == 0:
+        return 'Designer runs'
+    if done.returncode == 1:  # nothing found
+        return None
+    return "Designer's processes couldn't be listed (pgrep exit code %d: %s)" % (done.returncode, done.stderr.strip())
+
+
 def plan(args: argparse.Namespace) -> list[tuple[str, Action | None]]:
     """[(description, action or None)]; an action of None is only reported. An action returns
     None when done, or an error text."""
@@ -186,13 +208,37 @@ def plan(args: argparse.Namespace) -> list[tuple[str, Action | None]]:
             items.append(
                 ('bridge token: %s' % token, cast(Action, lambda t=token: os.remove(t) if os.path.exists(t) else None))
             )
-    if os.path.exists(agent_designer_file()):
-        items.append(
-            (
-                'record of the Designer an agent started: %s' % agent_designer_file(),
-                lambda: os.remove(agent_designer_file()),
+    # one per bridge port, and the single one of earlier versions
+    records = [agent_designer_file(port) for port in agent_designer_ports()]
+    records.append(os.path.join(project_constants.AGENT_RECORD_DIR, '.%s_agent_designer.json' % PLUGIN))
+    for record in records:
+        if os.path.exists(record):
+            items.append(
+                (
+                    'record of a Designer an agent started: %s' % record,
+                    cast(Action, lambda r=record: os.remove(r) if os.path.exists(r) else None),
+                )
             )
-        )
+    # the folders launch_designer made for Designers it started: their homes (settings, logs, crash dumps)
+    agent_folders: list[str] = []
+    for agent_folder in agent_designer_folders():
+        info = os.lstat(agent_folder)
+        if stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid():
+            agent_folders.append(agent_folder)
+        else:  # a link, or not this user's: not one launch_designer made
+            items.append(('%s is not a folder launch_designer made; left as it is' % agent_folder, None))
+    in_use = folders_in_use() if agent_folders else None  # one an agent started uses its folder as its home
+    if in_use:
+        why = 'while Designer runs' if in_use == 'Designer runs' else 'since %s' % in_use
+        items.append(('folders of Designers an agent started, kept %s: %s' % (why, ', '.join(agent_folders)), None))
+    else:
+        for agent_folder in agent_folders:
+            items.append(
+                (
+                    'folder of a Designer an agent started (its settings, log, crash dumps): %s' % agent_folder,
+                    cast(Action, lambda f=agent_folder: shutil.rmtree(f)),
+                )
+            )
     skill = os.path.join(args.skills_dir, install.SERVER_NAME)
     if os.path.isdir(skill):
         if install.is_our_skill(skill):
