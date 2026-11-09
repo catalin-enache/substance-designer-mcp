@@ -217,7 +217,7 @@ async def panels_and_fit(ctx: Ctx) -> None:
             f.getPosition().x + f.getSize().x, f.getPosition().y + f.getSize().y) for f in frames]
         print('SELECTED=%%d INSIDE=%%d/%%d FRAMES=%%d/%%d' %% (len(view.scene().selectedItems()), sum(inside), len(inside),
               sum(framed), len(framed)))""")
-    # first the fact behind it (AGENTS.md, Designer UI): F fits the selection, or everything
+    # first the fact behind it (GUIDE.md, Designer UI): F fits the selection, or everything
     # when nothing is selected
     f_sel = text(
         await c(
@@ -253,7 +253,7 @@ async def panels_and_fit(ctx: Ctx) -> None:
     m_none = re.search(r'SELECTED=(\d+) INSIDE=(\d+)/(\d+)', f_none)
     check(
         'designer facts',
-        '"Fit in view (selection)" fits the selection, or everything when none (AGENTS.md)',
+        '"Fit in view (selection)" fits the selection, or everything when none (GUIDE.md)',
         m_sel is not None
         and m_none is not None
         and m_sel.group(1) != '0'

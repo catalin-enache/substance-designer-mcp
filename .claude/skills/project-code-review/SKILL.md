@@ -31,9 +31,9 @@ ambiguous, one probe's leftovers change what another measures, and a crash or a 
 - **Where it runs:** one Designer an agent started (`launch_designer`), never the user's, with the probes run one at a
   time. If the user's Designer is open, ask them to close it: a probe's leftovers or crash would land in their work.
   Close the agent's
-  Designer when the review is done (AGENTS.md, the rules).
+  Designer when the review is done (GUIDE.md, the rules).
 - **What it touches:** a new package of its own, with a graph name no other probe uses, unloaded at the end, never the
-  user's packages; AGENTS.md's rules apply (no Undo, no hot reload of the plugin).
+  user's packages; GUIDE.md's rules apply (no Undo, no hot reload of the plugin).
 - **Where the code lives:** outside the repo (the session's scratchpad or a temp folder), run with
   `run_designer_script`, `execute_designer_code` or `client/sd_run.py`, and deleted afterwards. The session's own tools
   run the server and helpers as they were when the session connected: a probe of the branch's changes to
@@ -147,7 +147,7 @@ line of the review log, with the decision's title. An answer in `REVIEW.md` can 
    the reviewers these assessments too, so they look at the questioned fixes. Follow-up findings
    have their own rules: see **Follow-up chains** below.
 3. **Split the work by area** and give each reviewer (a subagent, changing nothing in the repo) one area: the files
-   to read in full, AGENTS.md as context, what to look for (correctness, data safety, security,
+   to read in full, AGENTS.md and `mcp_server/GUIDE.md` as context, what to look for (correctness, data safety, security,
    misreported results, docs that contradict the code), that they run no tests and don't probe Designer (above), and the report format: severity, file and
    line, one-sentence defect, concrete scenario, suggested fix, and whether reading settles it or what would (a
    probe's outline: what to build, what to measure, what result would prove it). Reviewers must quote

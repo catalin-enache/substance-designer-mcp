@@ -1,5 +1,5 @@
 """Runs inside Designer: changing a parameter's inheritance doesn't keep its value, each switch on its own, on a node
-and on the graph (AGENTS.md; measure.py). Everything is put back. ARGS: graph, node."""
+and on the graph (GUIDE.md; measure.py). Everything is put back. ARGS: graph, node."""
 
 from collections.abc import Callable
 from typing import Any

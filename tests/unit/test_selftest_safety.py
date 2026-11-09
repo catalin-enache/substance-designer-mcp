@@ -94,7 +94,7 @@ def test_the_script_guard_tells_the_cases_apart(text: str, named: bool) -> None:
 
 def test_no_script_loads_a_library_package() -> None:
     """Such a load stays inline in a module, in a branch that runs only where the self-test started Designer, where the
-    guard above can see both (AGENTS.md; REVIEW.md TST-118)."""
+    guard above can see both (the live-check skill; REVIEW.md TST-118)."""
     scripts = {
         name: source for name, source in selftest_sources().items() if name.startswith('designer_scripts' + os.sep)
     }
@@ -246,7 +246,7 @@ def test_the_dedent_rule_reads_every_module_of_both() -> None:
 
 
 def test_a_snippet_of_several_lines_is_written_with_dedent() -> None:
-    """dedent(\"\"\"...\"\"\"), not joined pieces with \\n (AGENTS.md): the self-test's modules and every module
+    """dedent(\"\"\"...\"\"\"), not joined pieces with \\n (AGENTS.md, Running the tests): the self-test's modules and every module
     of the server. The scripts in designer_scripts/ are real files, and tests/unit isn't in the rule."""
     sources = _dedent_rule_sources()
     joined = ['%s:%d' % (name, line) for name, source in sources.items() for line in _joined_snippets(source)]

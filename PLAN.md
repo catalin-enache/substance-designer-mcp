@@ -64,7 +64,7 @@ Three Designers started at once, each from the binary inside the app
 
 They were started at the same moment. Started one after another, a Designer hands over to the last one started and
 exits, unless it has a temp folder of its own: on macOS, `launch_designer(port=...)` (ROADMAP item 49) starts each
-that way (AGENTS.md, Several Designers).
+that way (GUIDE.md, Several Designers).
 
 | 5 computes of a 40-blur graph at 2048 | Each | All three |
 |---|---:|---:|
@@ -202,15 +202,14 @@ when the user asks, and `alone.run` rerunning failing checks on their own, `--on
 - **A serial stage after the shards:** first the workers are closed (asked to close through the bridge, then
   SIGTERM to their own recorded process IDs only, as `end_own_designer` does). Then, with no other Designer
   running:
-  - `lifecycle`: the hand-over check needs the run's Designer to be the last one started (AGENTS.md, Running the
-    tests), so it runs once the workers are closed.
+  - `lifecycle`: the hand-over check needs the run's Designer to be the last one started (the `live-check` skill), so it runs once the workers are closed.
   - No longer the checks that count lines in Designer's log (`read_designer_log`, the harmless-messages fact): each
     worker started by `launch_designer` writes a log of its own (ROADMAP item 49), on macOS.
 - **Workers count as started by the test**, per worker, so the checks that load library packages and the Home screen
   check run.
 - **The unit tests run at the same time as the live shards:** they don't use Designer.
 - **When the user's Designer is open,** the self-test keeps today's behaviour: one run, in that Designer, nothing
-  quit: `launch_designer` starts none next to it (they share the preferences plist: AGENTS.md, Several Designers).
+  quit: `launch_designer` starts none next to it (they share the preferences plist: GUIDE.md, Several Designers).
 
 **Why:**
 - **No check is lost:** unlike selection, every check still runs, so no bug can slip through.
@@ -228,9 +227,9 @@ pass, against 12 today (*estimate*).
 - **Live:** the self-test itself, with `--workers 3` and with `--workers 1`.
 
 **Docs:**
-- **AGENTS.md, "Running the tests":** the new options, what runs in the serial stage and why.
+- **The `live-check` skill:** the new options, what runs in the serial stage and why.
 - **README.md, How it works:** the workers.
-- **AGENTS.md, Environment facts:** done with ROADMAP item 49 (Several Designers): each has its own `SD_BRIDGE_PORT` and,
+- **GUIDE.md, Environment facts:** done with ROADMAP item 49 (Several Designers): each has its own `SD_BRIDGE_PORT` and,
   on macOS, a temp folder and home, so its own log, crash dumps and settings; they still share the preferences plist.
 
 ### Step 3: remove fixed waits (S–M)
@@ -243,7 +242,7 @@ pass, against 12 today (*estimate*).
     change keeps "a dump that appears late still counts". The final wait stays 10 s.
 - **`facts/function_states` (up to about 50 s, unknown):** it takes 60 s, because nested loops over parameter kinds,
   function-graph states and inheritance call `compute()` each time. First profile it, then try a smaller graph
-  size or fewer computes, with the same rows of the table in AGENTS.md checked.
+  size or fewer computes, with the same rows of the table in GUIDE.md checked.
 - **The plugin's 100 ms poll timer (about 40 s, *estimate*):** measure first. Then try a shorter interval, or
   waking the main thread when a job arrives, after checking Designer's idle CPU use.
   - **Users gain too:** every tool call for real users would be faster.
@@ -294,7 +293,7 @@ about 2 min for a rendering change, about 3 min for one in quitting or launching
 - **Unit test, the selection:** example diffs give the expected tests, and an unknown file gives the full run.
 
 **Docs:**
-- **AGENTS.md, "Running the tests":** when to use `--changed`.
+- **The `live-check` skill:** when to use `--changed`.
 - **The `address-review` skill, step 4:** `--changed` instead of naming the tests by hand, once the user adopts it.
 
 ---

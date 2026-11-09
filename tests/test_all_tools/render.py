@@ -49,18 +49,18 @@ async def run(ctx: Ctx) -> None:
         'INPUT $randomseed' in t,
         ' / '.join(l for l in t.splitlines() if 'INPUT' in l),
     )
-    # and an Absolute one is not (AGENTS.md): a copy saved with it Absolute, the graph put back;
+    # and an Absolute one is not (GUIDE.md): a copy saved with it Absolute, the graph put back;
     # changing the inheritance resets the value, so the value goes back after it
     abs_sbs = os.path.join(scratch, 'seed_absolute.sbs')
     await designer_script(c, 'render/absolute_seed_copy', graph=TEST_GRAPH, path=abs_sbs)
     t_abs = text(await c('sbsar_info', {'sbs_path': abs_sbs}))
     check(
         'designer facts',
-        'an Absolute graph $randomseed is not exposed in a .sbsar (AGENTS.md)',
+        'an Absolute graph $randomseed is not exposed in a .sbsar (GUIDE.md)',
         'INPUT $outputsize' in t_abs and 'INPUT $randomseed' not in t_abs,
         ' / '.join(l for l in t_abs.splitlines() if 'INPUT' in l),
     )
-    # the stored seed (5) reaches the .sbsar too, added to the seed a render sets (AGENTS.md: "its
+    # the stored seed (5) reaches the .sbsar too, added to the seed a render sets (GUIDE.md: "its
     # value is added to its parent's seed"; REVIEW.md TST-39, TST-44): copies storing 0 and 3 to compare
     seed_copies = {}
     for stored_seed in (0, 3):  # copies of the graph storing another seed
@@ -108,7 +108,7 @@ async def run(ctx: Ctx) -> None:
     added = apart('stored3_seed2', 'stored0_seed5')
     check(
         'designer facts',
-        'an inherited graph seed stored in the .sbsar is added to the render seed (AGENTS.md)',
+        'an inherited graph seed stored in the .sbsar is added to the render seed (GUIDE.md)',
         stored > 8 and override > 8 and 0 <= added <= 8,
         'max difference: stored value %d, render seed %d, 3+2 vs 0+5 %d (/65535)%s'
         % (stored, override, added, '' if min(stored, override, added) >= 0 else ' | ' + t_r[-150:]),
@@ -122,7 +122,7 @@ async def run(ctx: Ctx) -> None:
     reached = not any('is not exposed' in render_said[k] for k in ('abs_node_seed0', 'abs_node_seed5'))
     check(
         'designer facts',
-        "a node $randomseed made Absolute ignores the render's seed (AGENTS.md)",
+        "a node $randomseed made Absolute ignores the render's seed (GUIDE.md)",
         0 <= frozen <= 8 and override > 8 and reached,
         'max difference: Absolute node, render seed 0 vs 5: %d; '
         'inherited: %d (/65535); render seed exposed: %s' % (frozen, override, reached),
@@ -138,7 +138,7 @@ async def run(ctx: Ctx) -> None:
 
     exported = np.array(Image.open(os.path.join(scratch, 'export', 'height.png'))).astype(int)
     rendered = np.array(Image.open(os.path.join(render_dir, 'height.png'))).astype(int)
-    # the same to within a few 16-bit steps at a few pixels (AGENTS.md, Output; seen: 27 of
+    # the same to within a few 16-bit steps at a few pixels (GUIDE.md, Output; seen: 27 of
     # 262144 pixels off by <= 3/65535); parallel renders aren't bit-identical, so allow 8
     worst = np.abs(exported - rendered).max() if exported.shape == rendered.shape else -1
     check(
@@ -320,7 +320,7 @@ async def run(ctx: Ctx) -> None:
         str(rendered_material[..., :3].std()),
     )
     # a material's first output is `diffuse`, off by default and black on a metal, so a tool picking the first says so
-    # (REVIEW.md HLP-65). AGENTS.md's library facts rely on these
+    # (REVIEW.md HLP-65). GUIDE.md's library facts rely on these
     t = text(
         await c(
             'apply_edits',

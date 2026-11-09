@@ -7,14 +7,14 @@ from typing import Any
 from .core import _bridge, _control, _tool, _with_undo
 
 
-@_tool()
+@_tool(gated=False)  # stopping a runaway script must never wait for the guide
 def cancel_designer_job() -> str:
     """Abort the script currently running in Designer (and drop queued ones). Takes effect the
     next time Python code runs, so one long C++ call (e.g. graph.compute()) finishes first."""
     return _control('cancel', wait=10)
 
 
-@_tool()
+@_tool(scripting=True)
 def execute_designer_code(code: str, undo_label: str = 'Claude: code', timeout_s: int = 120) -> str:
     """Run Python inside Substance Designer (full `sd` API) and return printed output and errors.
     All changes form one undo step named `undo_label` (Ctrl+Z in Designer reverts them).
@@ -25,7 +25,7 @@ def execute_designer_code(code: str, undo_label: str = 'Claude: code', timeout_s
     return _bridge(_with_undo(code, undo_label), '<execute_designer_code>', timeout_s)
 
 
-@_tool()
+@_tool(scripting=True)
 def run_designer_script(path: str, timeout_s: int = 600, args: dict[str, Any] | None = None) -> str:
     """Run a Python file inside Substance Designer; `__file__` is set to its absolute path.
     `args` (JSON values) reach the script as the global dict `ARGS`, empty without any; a script

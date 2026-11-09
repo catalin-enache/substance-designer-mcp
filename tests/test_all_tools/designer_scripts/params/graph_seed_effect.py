@@ -1,5 +1,5 @@
 """Runs inside Designer: whether the graph's $randomseed changes a node's pixels and repeats, within a tolerance
-(AGENTS.md), and its inheritance. A temporary output, removed even if it fails (REVIEW.md TST-38, TST-53). ARGS:
+(GUIDE.md), and its inheritance. A temporary output, removed even if it fails (REVIEW.md TST-38, TST-53). ARGS:
 graph, node."""
 
 import array

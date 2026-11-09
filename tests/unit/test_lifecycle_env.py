@@ -288,6 +288,7 @@ def test_scripts_and_tool_output_are_read_as_utf8_whatever_the_locale(tmp_path: 
         dedent("""\
             import sys; sys.path.insert(0, %r); sys.path.insert(0, %r)
             import server, server_tools.scripting
+            server._session.update(guide_read=True, scripting_read=True)  # or the tool refuses
             # where the tool looks it up
             server_tools.scripting._bridge = lambda code, path=None, timeout=None: code
             sent = server.run_designer_script(%r)
@@ -1067,7 +1068,7 @@ def test_launch_on_a_port_next_to_an_agents_on_another(
 def test_launch_refuses_to_start_one_next_to_the_users(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
 ) -> None:
-    # Designers share the preferences plist (AGENTS.md, Several Designers), not measured to undo anything (REVIEW.md
+    # Designers share the preferences plist (GUIDE.md, Several Designers), not measured to undo anything (REVIEW.md
     # TST-189: the refusal said the last to quit writes every settings file)
     started = _launch_fakes(monkeypatch, tmp_path)
     processes = _Processes(monkeypatch, 11)

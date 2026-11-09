@@ -216,6 +216,21 @@ def _output_note(how: str) -> str:
     return 'no output given: %s; pass output to pick another' % how
 
 
+MAX_SIZE_LOG2 = 13  # 8192 px; 14 and 15 compute 8192 px too ("designer facts")
+_SIZE_UNIT = 'log2 of the size in pixels (0 is 1 px, 11 is 2048 px, 13 is 8192 px, the largest)'
+_OFFSET_UNIT = (
+    'a log2 offset while the parameter is inherited, added to the log2 of the size it inherits '
+    '(0 keeps that size, 1 doubles it, -1 halves it; the result stops at 8192 px, and 13 is the most it takes)'
+)
+
+
+def _refuse_bad_size(name: str, sizes: Sequence[int], shown: Any, inherited: bool = False) -> None:
+    """A size in log2: Designer takes a pixel count silently and computes 8192 px, and a negative size computes 1 px.
+    inherited: the value is an offset instead, so it can be negative."""
+    if any(size > MAX_SIZE_LOG2 or (size < 0 and not inherited) for size in sizes):
+        raise RuntimeError('%s is %s, not %r' % (name, _OFFSET_UNIT if inherited else _SIZE_UNIT, shown))
+
+
 def _position(value: Any, what: str = 'position') -> tuple[float, float]:
     """[x, y] as two numbers, checked before anything is created or moved: read after, a bad one
     left the new node (or comment) behind (REVIEW.md HLP-46)."""

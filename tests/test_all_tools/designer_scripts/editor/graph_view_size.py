@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QApplication, QDockWidget, QGraphicsView, QWidget
 
 
 def graph_dock(w: QWidget) -> bool:
-    # a dead wrapper raises, now or on its children: skip it (AGENTS.md, Designer UI)
+    # a dead wrapper raises, now or on its children: skip it (GUIDE.md, Designer UI)
     try:
         return (
             isinstance(w, QDockWidget)

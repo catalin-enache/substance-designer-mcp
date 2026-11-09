@@ -1,5 +1,5 @@
 """What the tools share: configuration, the MCP server and its tool decorator (with the
-guide reminder), the bridge to the plugin inside Designer, and the helpers' calls."""
+gate on the guide), the bridge to the plugin inside Designer, and the helpers' calls."""
 
 import functools
 import hashlib
@@ -12,10 +12,9 @@ import shutil
 import socket
 import subprocess
 import sys
-import threading
 from collections.abc import Callable
 from textwrap import dedent
-from typing import Any, ParamSpec, TypedDict, TypeVar, cast
+from typing import Any, ParamSpec, TypedDict, TypeVar
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -46,36 +45,56 @@ SBSCOOKER = _find_tool('sbscooker')
 SBSRENDER = _find_tool('sbsrender')
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # mcp_server/
-AGENTS_MD = os.path.join(os.path.dirname(HERE), 'AGENTS.md')
+GUIDE_MD = os.path.join(HERE, 'GUIDE.md')
 sys.path.insert(0, HERE)  # designer_helpers/, a folder of parts joined into one script
 from designer_helpers import source as _helpers_source  # noqa: E402
 
 HELPERS = _helpers_source()
 
 
-def _agent_guide() -> str:
+def _agent_guide(part: str | None = None) -> str:
+    """The guide file, whole or its 'core' or 'scripting' part: the file's level-1 Scripting heading divides them.
+    Raises ToolError if it can't be read, as a guide that wasn't read must not count as read."""
+    restore = 'mcp_server/GUIDE.md %s: restore it (git checkout), then call get_guide again.'
     try:
-        with open(AGENTS_MD, encoding='utf-8') as f:
-            return f.read()
-    except OSError:
-        return 'AGENTS.md not found next to mcp_server/.'
+        with open(GUIDE_MD, encoding='utf-8') as f:
+            text = f.read()
+    except (OSError, UnicodeDecodeError) as e:
+        raise ToolError(restore % "can't be read") from e
+    heading = re.search(r'(?m)^# Scripting.*$', text)
+    core = text[: heading.start()] if heading else text
+    if not core.strip():
+        raise ToolError(restore % 'has no core')
+    if part is None:
+        return text
+    if part == 'core':
+        return core.rstrip('\n') + '\n'
+    if heading is None or not text[heading.end() :].strip():
+        raise ToolError(restore % 'has no scripting part')
+    return text[heading.start() :]
 
 
-# Claude Code cuts a server's instructions at 4,096 characters (measured: AGENTS.md arrived cut
+# Claude Code cuts a server's instructions at 4,096 characters (measured: the guide arrived cut
 # there), so the instructions only point to get_guide(), whose result arrives in full. Claude Code
 # starts this server with every session, so the guide is read on first use: a session started for
 # other work never loads it.
 INSTRUCTIONS = (
     "Tools for driving the user's Adobe Substance 3D Designer. Do not call get_guide() or any other "
     'tool from this server unless the user asks for work in Designer. Right before your first '
-    'Designer tool call in this session, call get_guide() and read the whole result: it is the full '
-    "guide (AGENTS.md), with the rules that protect the user's work (Undo, the bridge token, "
-    'quitting Designer, snapshots) and the sd API pitfalls. Then tell the user in one line that you '
-    'have read the Designer guide, and continue (if Designer is not running, ask the user to open it).'
+    'Designer tool call in this session, call get_guide() and read the whole result: it is the core '
+    "of the guide, with the rules that protect the user's work (Undo, the bridge token, "
+    'quitting Designer, snapshots) and the first sd pitfalls. Then tell the user in one line that you '
+    'have read the Designer guide, and continue (if Designer is not running, ask the user to open it). '
+    "Before writing raw sd or Qt code, also call get_guide('scripting'), read the whole result, then "
+    'tell the user in one line that you have read the scripting part.'
 )
 GUIDE_NOT_READ = (
-    'NOTE: the Designer guide has not been read in this session. Call get_guide() and '
-    "read it before going on: it has the rules that protect the user's work."
+    'Not run: the Designer guide has not been read in this session. Call get_guide() and '
+    "read it first: it has the rules that protect the user's work."
+)
+SCRIPTING_NOT_READ = (
+    "Not run: the scripting part of the Designer guide has not been read in this session. Call get_guide('scripting') "
+    'and read it first: it has the sd API and Designer UI pitfalls.'
 )
 
 
@@ -105,33 +124,32 @@ def _designer_running() -> bool:
 
 
 server = MCPServer(name='substance-designer', instructions=INSTRUCTIONS)
-_session: dict[str, bool] = {'guide_read': False}  # one server process per client session (stdio)
+_session: dict[str, bool] = {
+    'guide_read': False,
+    'scripting_read': False,
+}  # one server process per client session (stdio)
 
-
-_nesting = threading.local()
 
 P = ParamSpec('P')
 R = TypeVar('R')
 
 
-def _tool() -> Callable[[Callable[P, R]], Callable[P, R]]:
-    """server.tool(), plus a reminder at the top of text results until get_guide() was called."""
+def _tool(scripting: bool = False, gated: bool = True) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    """server.tool(), refusing to run until the guide was read: any tool until get_guide() was called and, with
+    `scripting`, a tool that runs code the caller wrote until get_guide('scripting') was too, so that nothing reaches
+    Designer first. `gated=False` for a tool that must always work."""
     register = server.tool()
 
     def decorate(fn: Callable[P, R]) -> Callable[P, R]:
         @functools.wraps(fn)
         def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            # only the outermost call adds it: a tool that calls another (set_link_display calls
-            # snapshot_graph and open_graph) would otherwise paste it twice (REVIEW.md SRV-28)
-            # (per thread: tools may run on worker threads side by side)
-            _nesting.depth = getattr(_nesting, 'depth', 0) + 1
-            try:
-                result = fn(*args, **kwargs)
-            finally:
-                _nesting.depth -= 1
-            if not _session['guide_read'] and isinstance(result, str) and not _nesting.depth:
-                return cast(R, GUIDE_NOT_READ + '\n\n' + result)
-            return result
+            if gated:
+                missing = [] if _session['guide_read'] else [GUIDE_NOT_READ]
+                if scripting and not _session['scripting_read']:
+                    missing.append(SCRIPTING_NOT_READ)
+                if missing:
+                    raise ToolError(' '.join(missing))
+            return fn(*args, **kwargs)
 
         return register(wrapper)
 

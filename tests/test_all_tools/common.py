@@ -383,7 +383,7 @@ class Call(Protocol):
 
 
 async def designer_script(c: Call, name: str, /, **args: Any) -> CallToolResult:
-    """Run designer_scripts/<module>/<script>.py inside Designer, name being '<module>/<script>', the folder the module that runs it, or 'shared/<script>' for one that several modules run: Python with real logic lives in real files, which ruff and mypy check (AGENTS.md).
+    """Run designer_scripts/<module>/<script>.py inside Designer, name being '<module>/<script>', the folder the module that runs it, or 'shared/<script>' for one that several modules run: Python with real logic lives in real files, which ruff and mypy check (the live-check skill).
     The keywords reach it as its ARGS. A script that raises is a failed check here, whatever the caller reads from the
     result: a traceback shows the failing source line, output token included, and a tool returns a script's error as
     normal text."""

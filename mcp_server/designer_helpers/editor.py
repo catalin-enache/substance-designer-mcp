@@ -14,6 +14,7 @@ from .core import (
     _current_graph,
     _graph_to_edit,
     _position,
+    _refuse_bad_size,
     _same_graph,
     cast,
     find_graph,
@@ -74,7 +75,7 @@ def _visible_panels() -> int:
     for d in cast(QtWidgets.QApplication, QtWidgets.QApplication.instance()).allWidgets():
         try:
             count += isinstance(d, QtWidgets.QDockWidget) and d.objectName().startswith('area') and d.isVisible()
-        except RuntimeError:  # a wrapper whose widget is gone (AGENTS.md, Designer UI)
+        except RuntimeError:  # a wrapper whose widget is gone (GUIDE.md, Designer UI)
             pass
     return count
 
@@ -84,7 +85,7 @@ def leave_home_screen() -> None:
     if home is None:
         return
     stack, page, button = home
-    before = _visible_panels()  # 0 while Home shows (AGENTS.md; measured here, REVIEW.md TST-64)
+    before = _visible_panels()  # 0 while Home shows (GUIDE.md; measured here, REVIEW.md TST-64)
     button.click()  # Designer's own "Close home screen"
     _process_events()
     if stack.currentWidget() is page:
@@ -304,6 +305,7 @@ def create_graph(name: str, save_path: str | None = None, size_log2: int = 11) -
     from sd.api.sdproperty import SDPropertyInheritanceMethod
     from sd.api.sdvalueint2 import SDValueInt2
 
+    _refuse_bad_size('size_log2', [size_log2], size_log2)
     pkg = _PM.newUserPackage()
     g = SDSBSCompGraph.sNew(pkg)
     g.setIdentifier(name)

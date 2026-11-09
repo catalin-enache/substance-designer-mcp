@@ -27,7 +27,8 @@ def _visible_dock(mw: Any, prefix: str) -> Any:
 
 
 def _save_3d_render(mw: Any, out_path: str) -> tuple[int, int]:
-    """The 3D view is GPU-drawn, so QWidget.grab() returns black. Use the view's own
+    """The 3D view is GPU-drawn, so a QWidget.grab() of its viewport is leftover black or grey
+    blocks, varying between calls. Use the view's own
     Camera > 'Copy Render to Clipboard' (the renderer's image, never screen pixels) and put
     the user's clipboard back afterwards."""
     import time

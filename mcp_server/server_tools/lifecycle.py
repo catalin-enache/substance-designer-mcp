@@ -1,6 +1,34 @@
 """Designer itself: designer_status, launch_designer, quit_designer.
 
 A Designer an agent started is disposable: it can be ended however works. Any other is the user's: the tools never end it.
+
+Several Designers side by side (macOS; other platforms not tried). Designer is single-instance: starting, it reads the
+ID of the last one started (`session.instancePID`, preferences plist) and looks for its socket (`algipc-...-<ID>`, 41
+bytes) in its own temp folder; found, it hands over its arguments and exits (`[IPC] Found instance PID` in the log). So
+launch_designer starts the binary, in `/`, with `SD_BRIDGE_PORT`, `TMPDIR=/tmp/sd_mcp_<uid>_<port>/temp/` (a socket path
+has at most 103 bytes; under `/var/folders/...` it was too long and Designer made none) and, on macOS,
+`CFFIXED_USER_HOME=.../home`: Designer then keeps its log, settings and crash-dump database there (not one byte to the
+user's log, their `user_preferences.xml` left as it was) and loads user plugins from `SBS_DESIGNER_PYTHON_PATH`, set to
+the plugin folders the user's Designer loads (its newest project file's, else Designer's default, where install.py puts
+the plugin), then any value already set. `HOME` is unchanged, so the token is found. The preferences plist stays shared
+(each Designer writes its `session.instancePID` there), so none is started next to the user's (`lsof`: listening on
+another port). Tests: test_lifecycle_env.py, lifecycle.check_launch_on_another_port,
+lifecycle.check_a_designer_sharing_the_temp_folder_hands_over.
+
+Quitting. The window the user sees is a top-level `QStackedWidget` ("Adobe Substance 3D Designer"), not the hidden
+`getMainWindow()`; closing the visible top-level widgets quits Designer normally, even with another top-level window
+showing (measured) or a modal dialog open. If a window refuses to close, Qt 6's `QApplication.quit()` gives up too, and
+`QApplication.exit(0)` stops the event loops, but Designer's teardown then races its own background threads: twice
+Adobe's licence check (`Alg::BinaryHardeningService`, on a `QtConcurrent` thread) crashed reading a destroyed profile
+and the process hung over 30 s. The shutdown can also hang at the very end, in `~QCoreApplication` waiting for the
+thread pool (seen once with the licence check; a Python task held in `QThreadPool.globalInstance()` does it on demand).
+So quit_designer only closes the windows, and past its wait the server ends the process (SIGTERM, then SIGKILL), only
+for a Designer an agent started. launch_designer records the process it started (its own child), its start time and, on
+macOS, its home in `agent_designer_file(port)` (project_constants.py), one per port, so a /mcp reconnect keeps it and a
+reused ID doesn't count; on Windows nothing is recorded, so every Designer counts as the user's. A close goes to
+whichever Designer holds the port, so it names the recorded process and any other refuses (`os.getpid()` inside Designer
+is that process, checked live). The plugin answers status from another thread, so a main thread frozen outside
+a job reads as idle (measured with a timer slot sleeping in a loop).
 """
 
 import contextlib
@@ -220,21 +248,15 @@ def _own_folder(port: int, part: str) -> str:
 
 def _own_temp(port: int) -> str | None:
     """A temp folder of its own for the Designer started on `port`, or None (Windows: a second Designer there hasn't
-    been tried). Measured: a Designer starting reads the process ID of the last one started (`session.instancePID` in
-    Designer's settings) and looks for that one's socket (algipc-...-<ID>, 41 bytes) in its own temp folder; found, it
-    hands it its arguments and exits, so with the temp folder they share, no second one starts. In /tmp: a socket's
-    path has at most 103 bytes, and in the user's temp folder (/var/folders/..., 56 bytes) a folder named for the user
-    and the port left too little room: Designer made none."""
+    been tried). Why: Several Designers, in this module's docstring."""
     if sys.platform == 'win32':
         return None
     return _own_folder(port, 'temp') + os.sep
 
 
 def _own_home(port: int) -> str | None:
-    """A home of its own for the Designer started on `port` (CFFIXED_USER_HOME, CoreFoundation's), or None (not
-    macOS). Measured: Designer then writes its log, crash dumps and user settings there, so each Designer an
-    agent starts has a log of its own and leaves the user's user_preferences.xml as it was; the preferences plist stays
-    shared (each Designer writes its `session.instancePID` there)."""
+    """A home of its own for the Designer started on `port` (CFFIXED_USER_HOME, CoreFoundation's: the module's
+    docstring says what it holds), or None (not macOS)."""
     if sys.platform != 'darwin':
         return None
     return _own_folder(port, 'home')
@@ -631,7 +653,7 @@ def launch_designer(wait_s: int = 180, port: int | None = None) -> str:
     own (other platforms not tried; on Windows nothing is recorded, and with any Designer running none is started);
     designer_status, quit_designer and read_designer_log take the same port. The other tools reach only this server's
     port: one on another is for a server or client/sd_run.py started with SD_BRIDGE_PORT set to it. None is started
-    next to a Designer the user opened, on another port (AGENTS.md, Several Designers). None is started on a
+    next to a Designer the user opened, on another port (GUIDE.md, Several Designers). None is started on a
     port the plugin couldn't listen on (another program holds it; the result gives the error), nor where its record
     can't be written (unrecorded, it would count as the user's); a plugin of another bridge protocol (another version)
     is reported at once.

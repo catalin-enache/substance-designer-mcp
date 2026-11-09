@@ -22,4 +22,21 @@ for m in (M.Absolute, M.RelativeToInput, M.RelativeToParent):
         pm.savePackageAs(pkg, os.path.join(ARGS['folder'], m.name + '.sbs'))
     finally:
         pm.unloadUserPackage(pkg)
+    pkg = pm.newUserPackage()
+    try:
+        inner: Any = SDSBSCompGraph.sNew(pkg)
+        inner.setIdentifier('mcp_selftest_inherit_inner')
+        uniform: Any = inner.newNode('sbs::compositing::uniform')
+        uniform.newPropertyConnectionFromId(
+            'unique_filter_output', inner.newNode('sbs::compositing::output'), 'inputNodeOutput'
+        )
+        outer: Any = SDSBSCompGraph.sNew(pkg)
+        outer.setIdentifier('mcp_selftest_inherit_outer')
+        instance: Any = outer.newInstanceNode(inner)
+        size = instance.getPropertyFromId('$outputsize', SDPropertyCategory.Input)
+        print('instance default %s' % instance.getPropertyInheritanceMethod(size).name)
+        instance.setPropertyInheritanceMethod(size, m)
+        pm.savePackageAs(pkg, os.path.join(ARGS['folder'], 'instance_%s.sbs' % m.name))
+    finally:
+        pm.unloadUserPackage(pkg)
 print('saved')

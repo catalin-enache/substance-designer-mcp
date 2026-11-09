@@ -1,5 +1,5 @@
 """Runs inside Designer: a saved package whose graph's own $outputsize is a function reading an input, which the API
-can't make, so the .sbs is edited (AGENTS.md, the file-level edit pattern), then loaded and left open. Prints the size
+can't make, so the .sbs is edited (GUIDE.md, the file-level edit pattern), then loaded and left open. Prints the size
 it gives at two values of the input, which ends at 3,3. ARGS: identifier, path."""
 
 import xml.etree.ElementTree as ET

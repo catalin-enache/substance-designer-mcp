@@ -1,4 +1,4 @@
-"""AGENTS.md, Rendering and verifying (REVIEW.md TST-3): how PIL loads Designer's 16-bit PNGs.
+"""GUIDE.md, Rendering and verifying (REVIEW.md TST-3): how PIL loads Designer's 16-bit PNGs.
 Grayscale stays 16-bit ('I;16'); RGBA comes back as 8 bits per channel, so exact values need
 node_stats. Measured with the Pillow in mcp_server/venv."""
 

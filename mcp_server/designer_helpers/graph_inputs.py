@@ -15,6 +15,7 @@ from .core import (
     SDTypeEnum,
     SDValue,
     _graph_to_edit,
+    _refuse_bad_size,
     cast,
     find_graph,
     fmt,
@@ -101,7 +102,10 @@ def expose_param(
     from sd.api.sdvalueint import SDValueInt
 
     # validate first; a parameter always has a value
-    value = _make_value(prop, default) if default is not None else cast(SDValue, node.getPropertyValue(prop))
+    inherited = prop.getId() == '$outputsize' and _inherits_size(node, prop)
+    if default is not None:
+        _refuse_bad_size_on_input(node, prop, [default])
+    value = _make_value(prop, default, inherited) if default is not None else cast(SDValue, node.getPropertyValue(prop))
     if is_enum:
         value = SDValueInt.sNew(int(cast(SDValueEnum, value).get()))
     inp = cast(SDProperty, g.newProperty(input_id, SDTypeInt.sNew() if is_enum else ptype, SDPropertyCategory.Input))
@@ -139,9 +143,9 @@ def expose_param(
 
 def _driving_graph(node: SDNode, prop: SDProperty) -> SDGraph | None:
     """The function graph on a parameter that the tools must not overwrite, or None. An empty one
-    (no nodes) drives nothing and holds nothing, so the stored value counts ($outputsize differs: AGENTS.md). One with nodes but no
+    (no nodes) drives nothing and holds nothing, so the stored value counts ($outputsize differs: GUIDE.md). One with nodes but no
     output node drives nothing either (_has_output), but setting the value would delete its nodes,
-    so it is returned too. The states are measured: AGENTS.md, sd API gotchas."""
+    so it is returned too. The states are measured: GUIDE.md, sd API gotchas."""
     try:
         fg: SDGraph | None = node.getPropertyGraph(prop)
     except (Exception, APIException):
@@ -233,7 +237,7 @@ def _connected_nodes(fg: SDGraph) -> list[SDNode]:
 
 def _delete_function(node: SDNode, prop: SDProperty) -> None:
     """Delete a parameter's function graph. On a $ parameter that also switches its inheritance
-    back to the node's default (measured on all six and an instance node, AGENTS.md), so the inheritance is put back; the caller sets the value after it."""
+    back to the node's default (measured on all six on a levels node and `$outputsize` on an instance node, tests/test_all_tools/designer_scripts/facts/function_states.py), so the inheritance is put back; the caller sets the value after it."""
     compositing_node: Any = node  # the inheritance methods are on the compositing node's class
     method = compositing_node.getPropertyInheritanceMethod(prop) if prop.getId().startswith('$') else None
     node.deletePropertyGraph(prop)
@@ -259,9 +263,10 @@ def _is_processor_program(node: SDNode, prop: SDProperty) -> bool:
     )
 
 
-def _graph_parameter_reads(g: SDSBSCompGraph, connected_only: bool) -> dict[str, list[str]]:
+def _graph_parameter_reads(g: SDSBSCompGraph, connected_only: bool, plain_only: bool = False) -> dict[str, list[str]]:
     """input id -> ['graph.<parameter>'] for functions on the graph's own parameters. SDGraph has no getPropertyGraph,
-    so they are read from the package's file, as last saved; a package never saved has none to read."""
+    so they are read from the package's file, as last saved; a package never saved has none to read. plain_only, with
+    connected_only: only functions that are nothing but that read."""
     try:
         root = ET.parse(g.getPackage().getFilePath()).getroot()
     except (OSError, ET.ParseError):
@@ -288,6 +293,8 @@ def _graph_parameter_reads(g: SDSBSCompGraph, connected_only: bool) -> dict[str,
                         wired[uid] = nodes[uid]
                         todo.extend(c.get('v') for c in nodes[uid].findall('connections/connection/connRef'))
                 nodes = wired
+            if plain_only and len(nodes) != 1:
+                continue
             for node in nodes.values():
                 kind = node.find('function')
                 if kind is not None and kind.get('v', '').startswith('get_'):
@@ -341,6 +348,52 @@ def _input_users(g: SDSBSCompGraph, plain_only: bool = False, connected_only: bo
         for input_id, refs in _graph_parameter_reads(g, connected_only).items():
             users.setdefault(input_id, []).extend(refs)
     return users
+
+
+def _inherits_size(owner: Any, prop: SDProperty) -> bool:
+    """Whether a node's or the graph's $outputsize isn't Absolute, so that its value is an offset."""
+    from sd.api.sdproperty import SDPropertyInheritanceMethod
+
+    return bool(owner.getPropertyInheritanceMethod(prop) != SDPropertyInheritanceMethod.Absolute)
+
+
+def _offset_note(node: Any, prop: SDProperty) -> str:
+    """For a refusal sending the agent to the graph input that drives a node's $outputsize."""
+    if prop.getId() == '$outputsize' and _inherits_size(node, prop):
+        return '; while this node inherits its size, a graph input bound to it is a log2 offset (0 keeps the size, 1 doubles it)'
+    return ''
+
+
+def _refuse_bad_size_on_input(target: Any, prop: SDProperty, values: list[Any]) -> None:
+    """Values for what only binds a $outputsize: an input of the graph `target`, or a parameter of the instance node
+    `target`, which is an input of the graph it references (that one level). What it binds is a node's size or the
+    graph's own, read as last saved since the API can't. An input read through other function nodes isn't a size, so it
+    isn't checked; nor is an input of `target` bound to an instance's parameter, which only that instance's graph
+    shows to be a size."""
+    input_id = prop.getId()
+    if input_id.startswith('$') or cast(SDType, prop.getType()).getId() != 'int2':
+        return
+    graph = target if isinstance(target, SDSBSCompGraph) else target.getReferencedResource()
+    if not isinstance(graph, SDSBSCompGraph):
+        return
+    owners: list[tuple[Any, str]] = [
+        (_node(graph, ref.split('.', 1)[0]), 'it drives $outputsize')
+        for ref in _input_users(graph, plain_only=True).get(input_id, [])
+        if ref.endswith('.$outputsize')
+    ]
+    if 'graph.outputsize' in _graph_parameter_reads(graph, True, plain_only=True).get(input_id, []):
+        owners.append(
+            (
+                graph,
+                'as last saved it drives $outputsize of the graph it belongs to; '
+                "save that graph's package if that has changed",
+            )
+        )
+    for owner, how in owners:
+        inherited = _inherits_size(owner, owner.getPropertyFromId('$outputsize', SDPropertyCategory.Input))
+        for value in values:
+            _make_value(prop, value)  # the length and the numbers are checked here
+            _refuse_bad_size('%s (%s)' % (input_id, how), [int(v) for v in value], value, inherited)
 
 
 def list_graph_inputs(identifier: str | SDSBSCompGraph | None = None) -> None:
@@ -434,6 +487,7 @@ def set_graph_size(identifier: str | SDSBSCompGraph | None, size_log2: int, over
     from sd.api.sdproperty import SDPropertyInheritanceMethod
     from sd.api.sdvalueint2 import SDValueInt2
 
+    _refuse_bad_size('size_log2', [size_log2], size_log2)
     g = _graph_to_edit(identifier)
     prop = cast(SDProperty, g.getPropertyFromId('$outputsize', SDPropertyCategory.Input))  # every graph has it
     if overridable:

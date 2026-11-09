@@ -1,5 +1,5 @@
 """tests/test_all_tools/alone.py: chosen checks of the live self-test, run on their own in an environment built for
-them, the way agents see a check fail and then pass while working (AGENTS.md, Running the tests). Designer is
+them, the way agents see a check fail and then pass while working (the live-check skill). Designer is
 replaced by a fake that answers each tool by name."""
 
 import asyncio
@@ -145,11 +145,12 @@ def test_an_agents_designer_is_used_as_it_is() -> None:
     assert _run(alone, c) == 0 and 'launch_designer' not in c.names()
 
 
-def test_the_guide_is_read_first_so_no_result_carries_the_reminder() -> None:
+def test_both_parts_of_the_guide_are_read_first_so_no_tool_is_refused() -> None:
     alone = _alone()
     c = FakeDesigner(AGENTS)
     _run(alone, c)
     assert c.names()[0] == 'get_guide'
+    assert c.calls[1] == ('get_guide', {'part': 'scripting'}), 'the code tools refuse until it is read'
 
 
 def test_a_failing_check_gives_exit_code_1_and_passing_ones_0() -> None:
@@ -263,7 +264,7 @@ def test_close_quits_and_removes_the_folders_once_designer_has_ended(
     c = FakeDesigner(AGENTS)
     asyncio.run(alone.close_with(c))
     assert 'quit_designer' in c.names() and os.path.isdir(tmp_path / 'root')  # still running: kept
-    assert c.names()[0] == 'get_guide'  # no reminder in front of what it prints
+    assert c.names()[0] == 'get_guide'  # or quit_designer would be refused
     monkeypatch.setitem(vars(alone), 'designer_here', lambda: False)
     asyncio.run(alone.close_with(FakeDesigner(AGENTS)))
     assert not os.path.exists(tmp_path / 'root')

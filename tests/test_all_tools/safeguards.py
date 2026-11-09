@@ -19,6 +19,7 @@ LIBRARY_WAY = (
 
 async def run(ctx: Ctx) -> None:
     c, scratch, was_running, G, lv = ctx.c, ctx.scratch, ctx.was_running, ctx.G, ctx.lv
+    await check_outputsize_above_log2_is_refused(ctx)
     # the reload behind set_link_display never unloads a package with unsaved changes
     # (REVIEW.md SRV-4): a saved package, then an edit, then the helper's unload
     helpers = helpers_source()
@@ -774,7 +775,7 @@ async def run(ctx: Ctx) -> None:
         )
     )
     # unloaded in a separate call, after Designer's event loop has run: both were open in
-    # editor views, and an unload in the same call as the opening risks a crash (AGENTS.md,
+    # editor views, and an unload in the same call as the opening risks a crash (GUIDE.md,
     # Portals; after an unload in one call, Designer crashed once as the test ended, PLG-9)
     time.sleep(0.5)
     await designer_script(c, 'shared/unload_packages', paths=[dup_a, dup_b])
@@ -831,3 +832,235 @@ async def run(ctx: Ctx) -> None:
     check(
         'open_graph', 'a copy of the file in the editor: the original given is focused', 'FOCUS_ORIG=True' in t, found
     )
+
+
+async def check_outputsize_above_log2_is_refused(ctx: Ctx) -> None:
+    """$outputsize is log2, so a pixel count is a mistake that Designer takes silently (it computes 8192 px): every path
+    that sets a size refuses above 13, a real size below 0 too, and 13 itself works. On graphs of its own, left for
+    CLEAN."""
+    c = ctx.c
+    O, S, name = '$outputsize', '$outputsize', TEST_GRAPH + '_sizes'
+    G = {'graph': name}
+    await c('create_graph', {'name': name, 'size_log2': 9})
+
+    async def refused(what: str, tool: str, args: dict[str, Any], says: str = 'log2 of the size') -> None:
+        res = await c(tool, args)
+        check(O, what, bool(res.is_error) and says in text(res), text(res))
+
+    def add(size: list[int]) -> dict[str, Any]:
+        return {'ops': [{'op': 'add', 'definition': 'uniform', 'ref': 'u', 'params': {S: size}}], **G}
+
+    def set_op(target: str, params: dict[str, Any]) -> dict[str, Any]:
+        return {'ops': [{'op': 'set', 'node': target, 'params': params}], **G}
+
+    async def computed(target: str) -> str:
+        return text(await c('node_stats', {'node_id': target, **G}))
+
+    await refused('add refuses a pixel count', 'apply_edits', add([1024, 1024]))
+    node = added_id(text(await c('apply_edits', add([5, 5]))))
+    await refused('set refuses above 13', 'apply_edits', set_op(node, {S: [14, 14]}))
+    await refused('set refuses one axis above 13', 'apply_edits', set_op(node, {S: [5, 1024]}))
+    await refused('set refuses numbers sent as strings', 'apply_edits', set_op(node, {S: ['1024', '1024']}))
+    await refused('set on the graph refuses', 'apply_edits', set_op('graph', {S: [1024, 1024]}))
+    # set makes it Absolute, where a value below 0 computes 1 px on that axis
+    await refused('add refuses a negative size', 'apply_edits', add([-1, -1]))
+    await refused('set refuses a negative size', 'apply_edits', set_op(node, {S: [-1, -1]}))
+    await refused('set refuses a negative axis', 'apply_edits', set_op(node, {S: [-3, 5]}))
+    await refused(
+        'sweep_param refuses a negative size', 'sweep_param', {'node_id': node, 'param': S, 'values': [[-1, -1]], **G}
+    )
+    await refused(
+        'sweep_param refuses a later bad value, as an error',
+        'sweep_param',
+        {'node_id': node, 'param': S, 'values': [[5, 5], [1024, 1024]], **G},
+    )
+    await refused(
+        'sweep_param refuses a pixel count', 'sweep_param', {'node_id': node, 'param': S, 'values': [[1024, 1024]], **G}
+    )
+    t = await computed(node)
+    check(O, 'a refusal leaves the size as it was', '32x32' in t, t)
+    t = text(await c('describe_graph', G))
+    check(O, "a refusal leaves the graph's size as it was", '$outputsize (log2): 9 x 9' in t, t)
+
+    # a graph input bound to it: an offset while the node's size is inherited, refused above 13 all the same
+    bound = added_id(text(await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'uniform', 'ref': 'b'}], **G})))
+    expose = {'op': 'expose', 'node': bound, 'param': S, 'input_id': 'mcp_size'}
+    offset = 'a log2 offset'
+    await refused(
+        "expose's default refuses a pixel count",
+        'apply_edits',
+        {'ops': [{**expose, 'default': [1024, 1024]}], **G},
+        says=offset,
+    )
+    t = text(await c('list_graph_inputs', G))
+    check(O, 'a refused expose adds no input', 'mcp_size' not in t, t)
+    res = await c('apply_edits', {'ops': [{**expose, 'default': [0, 0]}], **G})
+    check(O, 'an offset of 0 can be exposed', not res.is_error, text(res))
+    await refused(
+        'set on a bound input refuses', 'apply_edits', set_op('graph', {'mcp_size': [1024, 1024]}), says=offset
+    )
+    await refused(
+        'set on a bound input refuses strings', 'apply_edits', set_op('graph', {'mcp_size': ['14', '14']}), says=offset
+    )
+    await refused(
+        'sweep_param on a bound input refuses',
+        'sweep_param',
+        {'node_id': 'graph', 'param': 'mcp_size', 'view_node': bound, 'values': [[1, 1], [1024, 1024]], **G},
+        says=offset,
+    )
+    res = await c('apply_edits', set_op('graph', {'mcp_size': [1, 1]}))
+    check(O, 'a bound input takes a small offset', not res.is_error, text(res))
+    t = await computed(bound)
+    check(O, 'a bound input is an offset from the graph', '1024x1024' in t, t)
+    res = await c('apply_edits', set_op('graph', {'mcp_size': [-2, -2]}))
+    check(O, 'a bound input takes a negative offset', not res.is_error, text(res))
+    t = await computed(bound)
+    check(O, 'a negative offset makes it smaller', '128x128' in t, t)
+    # the refusal for a driven size sends the agent to that input, so it says what the input means
+    # worded for any function driving it: a hand-written one reaches the same refusal (REVIEW.md HLP-94)
+    bound_offset = 'a graph input bound to it is a log2 offset'
+    await refused(
+        'set on a driven size says its input is an offset',
+        'apply_edits',
+        set_op(bound, {S: [11, 11]}),
+        says=bound_offset,
+    )
+    await refused(
+        'sweep_param on a driven size says its input is an offset',
+        'sweep_param',
+        {'node_id': bound, 'param': S, 'values': [[11, 11]], **G},
+        says=bound_offset,
+    )
+
+    # bound to a node at Absolute the value is a size, so the size's wording and lower limit
+    fixed = added_id(text(await c('apply_edits', add([5, 5]))))
+    fixed_input = {'op': 'expose', 'node': fixed, 'param': S, 'input_id': 'mcp_fixed'}
+    await refused(
+        "expose's default on an Absolute node refuses a negative size",
+        'apply_edits',
+        {'ops': [{**fixed_input, 'default': [-1, -1]}], **G},
+    )
+    res = await c('apply_edits', {'ops': [{**fixed_input, 'default': [2, 2]}], **G})
+    check(O, 'an Absolute node can be exposed', not res.is_error, text(res))
+    await refused('a size input refuses above 13', 'apply_edits', set_op('graph', {'mcp_fixed': [14, 14]}))
+    await refused('a size input refuses a negative size', 'apply_edits', set_op('graph', {'mcp_fixed': [-1, -1]}))
+    res = await c('apply_edits', set_op(fixed, {S: [3, 3]}))
+    check(
+        O,
+        'a driven Absolute size is not called an offset',
+        bool(res.is_error) and 'is driven by' in text(res) and 'log2 offset' not in text(res),
+        text(res),
+    )
+
+    # bound to the graph's own $outputsize, which only the saved file shows
+    base = TEST_GRAPH + '_sizes_base'
+    await designer_script(
+        c, 'shared/graph_parameter_function', identifier=base, path=os.path.join(ctx.scratch, base + '.sbs')
+    )
+    base_set = {'ops': [{'op': 'set', 'node': 'graph', 'params': {'size_in': [1024, 1024]}}], 'graph': base}
+    saved_text = "as last saved it drives $outputsize of the graph it belongs to; save that graph's package"
+    await refused("an input bound to the graph's own size refuses", 'apply_edits', base_set, says=saved_text)
+
+    # an instance's parameter that only binds a $outputsize inside its graph
+    inner, outer = TEST_GRAPH + '_sizes_inner', TEST_GRAPH + '_sizes_outer'
+    await c('create_graph', {'name': inner, 'size_log2': 9})
+    source = added_id(text(await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'uniform'}], 'graph': inner})))
+    sink = added_id(text(await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'output'}], 'graph': inner})))
+    await c(
+        'apply_edits',
+        {
+            'ops': [
+                {'op': 'connect', 'from': source, 'to': sink, 'input': 'inputNodeOutput'},
+                {'op': 'expose', 'node': source, 'param': S, 'input_id': 'size_in', 'default': [0, 0]},
+            ],
+            'graph': inner,
+        },
+    )
+    made = dedent("""\
+        import sd
+        from sd.api.sbs.sdsbscompgraph import SDSBSCompGraph
+        pm=sd.getContext().getSDApplication().getPackageMgr()
+        inner=[r for p in pm.getUserPackages() for r in p.getChildrenResources(False) if r.getIdentifier()=='%s'][0]
+        outer=SDSBSCompGraph.sNew(inner.getPackage()); outer.setIdentifier('%s')
+        print('ID='+outer.newInstanceNode(inner).getIdentifier())""") % (inner, outer)
+    instance = text(await c('execute_designer_code', {'code': made})).split('ID=')[1].split()[0]
+    Outer = {'graph': outer}
+    instance_set = {'op': 'set', 'node': instance}
+    await refused(
+        "set on an instance's parameter bound to a size refuses",
+        'apply_edits',
+        {'ops': [{**instance_set, 'params': {'size_in': [1024, 1024]}}], **Outer},
+        says=offset,
+    )
+    await refused(
+        "sweep_param on an instance's parameter bound to a size refuses",
+        'sweep_param',
+        {'node_id': instance, 'param': 'size_in', 'values': [[1024, 1024]], **Outer},
+        says=offset,
+    )
+    res = await c('apply_edits', {'ops': [{**instance_set, 'params': {'size_in': [1, 1]}}], **Outer})
+    check(O, "an instance's parameter takes a small offset", not res.is_error, text(res))
+    t = text(await c('node_stats', {'node_id': instance, **Outer}))
+    check(O, "an instance's parameter is an offset inside its graph", '1024x1024' in t, t)
+    exposed = {'op': 'expose', 'node': instance, 'param': 'size_in', 'input_id': 'mcp_outer'}
+    await refused(
+        "expose's default on an instance's parameter bound to a size refuses",
+        'apply_edits',
+        {'ops': [{**exposed, 'default': [1024, 1024]}], **Outer},
+        says=offset,
+    )
+    res = await c('apply_edits', {'ops': [{**exposed, 'default': [1, 1]}], **Outer})
+    check(O, "expose's default on an instance's parameter takes a small offset", not res.is_error, text(res))
+
+    # a refused sweep_param must not touch a saved package
+    saved = TEST_GRAPH + '_sizes_saved'
+    await c('create_graph', {'name': saved, 'save_path': os.path.join(ctx.scratch, saved + '.sbs'), 'size_log2': 9})
+    saved_node = added_id(
+        text(await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'uniform', 'ref': 'u'}], 'graph': saved}))
+    )
+    await c('save_package', {'graph_or_path': saved})
+    modified = (
+        dedent("""\
+        import sd
+        pm=sd.getContext().getSDApplication().getPackageMgr()
+        print('MODIFIED', [p.isModified() for p in pm.getUserPackages()
+            if any(r.getIdentifier()=='%s' for r in p.getChildrenResources(False))])""")
+        % saved
+    )
+    t = text(await c('execute_designer_code', {'code': modified}))
+    check(O, 'the saved package starts unmodified', 'MODIFIED [False]' in t, t)
+    await refused(
+        'sweep_param refuses on a saved package',
+        'sweep_param',
+        {'node_id': saved_node, 'param': S, 'values': [[1024, 1024]], 'graph': saved},
+    )
+    t = text(await c('execute_designer_code', {'code': modified}))
+    check(O, 'a refused sweep_param leaves a saved package unmodified', 'MODIFIED [False]' in t, t)
+
+    # the two tools that take size_log2 report 2**size_log2, which is not what 14 computes
+    for size in (14, -1):
+        await refused(
+            'create_graph refuses %d' % size, 'create_graph', {'name': TEST_GRAPH + '_toolarge', 'size_log2': size}
+        )
+    res = await c('describe_graph', {'graph': TEST_GRAPH + '_toolarge'})
+    check(O, 'a refused create_graph makes no graph', bool(res.is_error) and 'open graphs' not in text(res), text(res))
+    for overridable in (False, True):
+        for size in (14, -1):
+            await refused(
+                'set_graph_size refuses %d (overridable=%s)' % (size, overridable),
+                'set_graph_size',
+                {'size_log2': size, 'overridable': overridable, **G},
+            )
+    t = text(await c('describe_graph', G))
+    check(O, "a refused set_graph_size leaves the graph's size", '$outputsize (log2): 9 x 9' in t, t)
+    res = await c('set_graph_size', {'size_log2': 13, 'overridable': False, **G})
+    check(O, 'set_graph_size accepts 13', not res.is_error and '8192 px' in text(res), text(res))
+
+    await c('set_graph_size', {'size_log2': 11, 'overridable': True, **G})
+    t = text(await c('describe_graph', G))
+    check(O, 'an overridable graph shows an offset of 0', '$outputsize (log2): 0 x 0' in t, t)
+
+    res = await c('apply_edits', set_op(node, {S: [13, 13]}))
+    check(O, '13 is accepted', not res.is_error, text(res))
+    t = await computed(node)
+    check(O, '13 computes 8192 px', '8192x8192' in t, t)

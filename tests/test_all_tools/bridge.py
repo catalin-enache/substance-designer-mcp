@@ -13,6 +13,8 @@ import time
 from textwrap import dedent
 from typing import Any, cast
 
+from mcp.client.session import ClientSession
+from mcp.client.stdio import stdio_client
 from mcp.types import TextResourceContents
 
 from . import common
@@ -33,7 +35,7 @@ from .common import (
 
 
 async def run(ctx: Ctx) -> None:
-    c, s, scratch = ctx.c, ctx.s, ctx.scratch
+    c, scratch = ctx.c, ctx.scratch
     # --- connection
     t = text(await c('designer_status'))
     check('designer_status', 'idle + version', 'idle' in t and 'Designer ' in t, t.splitlines()[0])
@@ -157,9 +159,8 @@ async def run(ctx: Ctx) -> None:
     )
 
     # --- MCP resource and the fallback command-line client
-    res = await s.read_resource('designer://agents-guide')
-    guide = cast(TextResourceContents, res.contents[0]).text  # served as text
-    check('mcp resource', 'agents-guide serves AGENTS.md', guide.startswith('# AGENTS.md'), guide[:40])
+    await check_the_resource_serves_the_guide(ctx)
+    await check_the_guide_gates_the_tools(ctx)
     r = sd_run('--status')
     check('sd_run.py', '--status', r.returncode == 0 and PLUGIN in r.stdout, r.stdout + r.stderr)
     r = sd_run('-c', 'print(6 * 7)')
@@ -206,6 +207,58 @@ async def run(ctx: Ctx) -> None:
         )
     else:
         check('install.py', 'installed plugin matches the repo', False, t)
+
+
+async def check_the_resource_serves_the_guide(ctx: Ctx) -> None:
+    """The resource designer://agents-guide serves mcp_server/GUIDE.md."""
+    res = await ctx.s.read_resource('designer://agents-guide')
+    guide = cast(TextResourceContents, res.contents[0]).text  # served as text
+    check(
+        'mcp resource',
+        'agents-guide serves the whole of GUIDE.md',
+        guide.startswith('# GUIDE.md') and '## sd API gotchas' in guide,
+        guide[:40],
+    )
+
+
+async def check_the_guide_gates_the_tools(ctx: Ctx) -> None:
+    """A tool refuses until get_guide() was called, and one running code until get_guide('scripting') was too, before
+    anything reaches Designer; cancel_designer_job never refuses. A session of its own: the run's has read both parts."""
+    G_ = 'get_guide'
+    SETS_MARK = 'import builtins; builtins._mcp_gate_ran = 1'
+    READS_MARK = "import builtins; print('ran', getattr(builtins, '_mcp_gate_ran', 0)); builtins._mcp_gate_ran = 0"
+    CORE, SCRIPTING = 'get_guide()', "get_guide('scripting')"
+    async with stdio_client(common.PARAMS) as (r, w), ClientSession(r, w) as s:
+        await s.initialize()
+        res = await s.call_tool('list_snapshots', {'graph': 'no_such_graph'})
+        check(G_, 'a tool refuses until the guide is read', bool(res.is_error) and CORE in text(res), text(res))
+        res = await s.call_tool('screenshot_designer', {'panel': 'graph'})
+        refused = bool(res.is_error) and CORE in text(res)
+        check(G_, 'an image tool refuses too', refused, 'image' if res.content[0].type == 'image' else text(res))
+        res = await s.call_tool('execute_designer_code', {'code': SETS_MARK})
+        says_both = CORE in text(res) and SCRIPTING in text(res)
+        check(G_, 'code refused with neither part read, naming both', bool(res.is_error) and says_both, text(res))
+        res = await s.call_tool('cancel_designer_job', {})
+        check(G_, 'cancel_designer_job works with nothing read', not res.is_error, text(res))
+        await s.call_tool('get_guide', {})
+        res = await s.call_tool('designer_status', {})
+        check(G_, 'other tools work once the core is read', not res.is_error, text(res))
+        res = await s.call_tool('execute_designer_code', {'code': SETS_MARK})
+        check(
+            G_,
+            'code refused until the scripting part is read',
+            bool(res.is_error) and SCRIPTING in text(res),
+            text(res),
+        )
+        res = await s.call_tool('get_guide', {'part': 'nope'})
+        check(G_, 'refuses an unknown part', bool(res.is_error) and 'scripting' in text(res), text(res))
+        t = text(await s.call_tool('get_guide', {'part': 'scripting'}))
+        check(G_, 'the scripting part', t.startswith('# Scripting') and '## sd API gotchas' in t, t[:60])
+        check(G_, 'the scripting part asks to confirm', 'tell the user' in t.splitlines()[-1], t.splitlines()[-1])
+        t = text(await s.call_tool('execute_designer_code', {'code': READS_MARK}))
+        check(G_, 'code runs once it is read, and the refused code never ran', 'ran 0' in t, t)
+        t = text(await s.call_tool('execute_designer_code', {'code': 'raise ValueError("boom")'}))
+        check(G_, "a failing script's error reaches the agent", 'boom' in t, t)
 
 
 async def check_bridge_security(ctx: Ctx) -> None:

@@ -513,7 +513,7 @@ async def run(ctx: Ctx) -> None:
     base_sbs = os.path.join(ctx.scratch, 'graph_parameter_function.sbs')
     base_graph = TEST_GRAPH + '_base_function'
     B = {'graph': base_graph}
-    t = text(await designer_script(c, 'inputs/graph_parameter_function', identifier=base_graph, path=base_sbs))
+    t = text(await designer_script(c, 'shared/graph_parameter_function', identifier=base_graph, path=base_sbs))
     try:
         check(
             'designer facts',

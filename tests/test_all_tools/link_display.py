@@ -61,7 +61,7 @@ async def run(ctx: Ctx) -> None:
     check('set_link_display', 'back to wires', 'changed to wire' in t, t.split(';')[0])
     t = text(await c('set_link_display', {'mode': 'wire', 'from_nodes': [clouds], **G}))
     check('set_link_display', 'nothing to change: no save, no reload', 'nothing to do' in t, t)
-    # automatic selection, as AGENTS.md recommends: clouds feeds 3 inputs once this blend is in
+    # automatic selection, as GUIDE.md recommends: clouds feeds 3 inputs once this blend is in
     tb = added_id(
         text(await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'blend', 'position': [-400, -300]}], **G}))
     )

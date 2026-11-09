@@ -51,7 +51,7 @@ async def run(ctx: Ctx) -> None:
         '(128x128)' in t and '(256x256)' in t and before == after,
         t + before + after,
     )
-    # changing a parameter's inheritance resets its value to the default (AGENTS.md), so a sweep
+    # changing a parameter's inheritance resets its value to the default (GUIDE.md), so a sweep
     # of one that isn't Absolute must put the inheritance back before the value (REVIEW.md HLP-26)
     # each switch on its own, on a node and on the graph (REVIEW.md TST-42)
     fact = text(await designer_script(c, 'measure/inheritance_resets', graph=TEST_GRAPH, node=lv))
@@ -61,7 +61,7 @@ async def run(ctx: Ctx) -> None:
     default_back = re.search(r'NODE_SIZE=\[\([^)]*\), \(0, 0\)\]', fact) and re.search(r'GRAPH_SEED=\[-?\d+, 0\]', fact)
     check(
         'designer facts',
-        "changing a parameter's inheritance doesn't keep its value, either way, node or graph (AGENTS.md)",
+        "changing a parameter's inheritance doesn't keep its value, either way, node or graph (GUIDE.md)",
         default_back and not kept_any,
         fact.strip(),
     )

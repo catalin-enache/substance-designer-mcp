@@ -241,8 +241,8 @@ def _xml_graph(root: ET.Element, graph_id: str, where: str) -> ET.Element:
 
 # How a .sbs stores a size parameter's inheritance (<relativeTo>). The file's numbers differ from
 # the sd API's SDPropertyInheritanceMethod (input 0, parent 1, absolute 2); measured in Designer 16
-# and re-checked by the self-test ("designer facts"). The default isn't stored at all: relative to
-# parent for a graph, relative to input for a node.
+# and re-checked by the self-test ("designer facts"). A default isn't stored at all: relative to
+# parent for a graph; for a node, its own (relative to input on a blur, relative to parent on an instance with no input).
 _RELATIVE_TO: dict[str | None, str] = {'0': 'absolute', '1': 'relative to parent', '2': 'relative to input'}
 
 
@@ -262,7 +262,7 @@ class _GraphModel(TypedDict):
 
 def _function_value(function: ET.Element) -> str:
     """A function graph on a parameter, comparable: 'function (reads 'a', 'b') <digest>' of what it computes, where its
-    nodes sit left out, and 'no output' in the brackets for one with no output node, which drives nothing (AGENTS.md)."""
+    nodes sit left out, and 'no output' in the brackets for one with no output node, which drives nothing (GUIDE.md)."""
     root = function.find('rootnode')
     parts = [root.get('v', '') if root is not None else '']
     reads: set[str] = set()

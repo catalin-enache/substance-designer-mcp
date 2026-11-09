@@ -260,7 +260,7 @@ def _with_node_texture(
     g: SDSBSCompGraph, node: SDNode, output: str | None, use: Callable[[SDTexture, SDProperty], None]
 ) -> None:
     """Compute the graph and call use(texture, output_property) for one node output. Designer
-    computes the nodes that feed an output node and may skip others (AGENTS.md), so a temporary
+    computes the nodes that feed an output node and may skip others (GUIDE.md), so a temporary
     output node is attached when needed and removed afterwards."""
     outs = list(node.getProperties(SDPropertyCategory.Output))
     if output:

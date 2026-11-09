@@ -9,7 +9,7 @@ from .core import _bridge, _checked, _edit, _helpers_call, _local_path, _tool
 @_tool()
 def create_graph(name: str, save_path: str | None = None, size_log2: int = 11) -> str:
     """Create a new package with one empty compositing graph (output size 2^size_log2,
-    default 2048). save_path: optional .sbs path to save it to. One undo step."""
+    default 2048; 13 is 8192 px, the largest). save_path: optional .sbs path to save it to. One undo step."""
     return _edit('create_graph(%r, %r, %d)' % (name, _local_path(save_path), size_log2), 'Claude: create graph ' + name)
 
 
@@ -36,7 +36,7 @@ def remove_graph_input(input_id: str, graph: str | None = None) -> str:
 
 @_tool()
 def set_graph_size(size_log2: int, graph: str | None = None, overridable: bool = True) -> str:
-    """Set the graph's output size to 2^size_log2. overridable=True (default) makes the size
+    """Set the graph's output size to 2^size_log2 (13 is 8192 px, the largest). overridable=True (default) makes the size
     follow the parent with that default, so render_sbs(size_log2=...) can override it;
     False fixes it. One undo step."""
     return _edit('set_graph_size(%r, %d, %r)' % (graph, size_log2, overridable), 'Claude: set graph size')
@@ -65,7 +65,7 @@ def apply_edits(ops: list[dict[str, Any]], graph: str | None = None) -> str:
     runs: ops run in order and stop at the first failing one (earlier ops stay applied, and the error
     lists the nodes already added, with their refs; Ctrl+Z on the graph reverts the whole batch).
     add: definition is atomic ('levels', 'blend') or library ('tile_generator', 'hbao.sbs/hbao', 'materials/pbr/bricks_001');
-      position defaults to the right of the existing nodes; params as in set, and a bad one
+      position is the node's centre, by default to the right of the existing nodes; params as in set, and a bad one
       refuses the whole add, so no node is left.
     identifier, label, usage: an output node's, on add or set; a set op gives these or params. identifier is the exported
       file's name (letters, digits, _ and -), label its display name, usage its tag, such as baseColor, normal, roughness,
@@ -90,7 +90,7 @@ def apply_edits(ops: list[dict[str, Any]], graph: str | None = None) -> str:
       while inherited); except $randomseed, on a node or the graph, whose inheritance is left as it
       is: inherited, its value counts (added to the parent's seed), and only an inherited seed
       follows the graph's seed and the cooked .sbsar's Random Seed. To fix a seed on purpose,
-      change its inheritance with execute_designer_code. Prints old -> new for params.
+      change its inheritance with execute_designer_code. Prints old -> new for params. $outputsize is log2 of the size in pixels (11 is 2048 px; above 13 or below 0 is refused).
     connect: from's output (default: the one tagged base colour, else its first; the result says which) to to's input connector; replaces an existing
       link on that input.
     disconnect: removes the connection(s) going into the node's input connector.

@@ -10,7 +10,7 @@ any other way.
 
 Each entry stands on its own: the decision, the reason and what would reopen it, pointing at the code,
 test or doc it concerns. Entries don't cite review findings. "The user" is named only where the record
-says so. Measured Designer behaviour lives in `AGENTS.md`; an entry links to it rather than repeating it.
+says so. Measured Designer behaviour lives in `GUIDE.md` or the module's docstring; an entry links to it rather than repeating it.
 
 An entry is a bold one-line decision, then the reason, then `Reopen if: <condition>.`, with who decided and
 when if the user did. An entry comes from a decision of the user's, on a finding or about the project, or from a
@@ -29,11 +29,11 @@ may update the names and paths an entry points at; changing what was decided, or
   the suite as a function its category's `run(ctx)` calls, is seen failing and then passing by calling that same
   function from a scratch script (`tests/test_all_tools/alone.py`, or one written from zero where it falls short), in
   an environment built for it, with a fresh MCP server, in a Designer an
-  agent started; the few checks a scratch run can't prove wait for the full run (AGENTS.md lists them). A check proven
+  agent started; the few checks a scratch run can't prove wait for the full run (the `live-check` skill lists them). A check proven
   that way can still pass or fail in the suite because of state earlier categories
   left; the user accepts that the full run is what shows it. When the final check fails, the failing tests run on
   their own until they pass (a live check in a scratch run), and then the user asks for the suites that failed again.
-  When only unit tests failed, the live self-test runs again only if the fixes touch code it reaches (AGENTS.md lists
+  When only unit tests failed, the live self-test runs again only if the fixes touch code it reaches (the `live-check` skill lists
   it); its pass is for the code as it was. (The user's choice, 2026-11-06.) Docs changed alone run the doc tests instead (AGENTS.md, Running the tests).
   Only the agent changing the code runs tests; a review runs none, and judges the tests by reading them, its lead
   agent checking in Designer with scratch probes what reading can't settle.
@@ -90,7 +90,7 @@ may update the names and paths an entry points at; changing what was decided, or
 
 - **`execute_designer_code` and `run_designer_script` aren't checked for edits to a library graph.**
   On purpose: the tools refuse such edits (`_graph_to_edit`, `designer_helpers/core.py`), and a person's
-  or agent's own code is not checked (`AGENTS.md`, Environment facts).
+  or agent's own code is not checked (`GUIDE.md`, Environment facts).
   Reopen if: the user wants scripts restricted.
 - **A definition naming a function or another resource isn't told apart from a graph**
   (`designer_helpers/describe.py`). The suggested fix would remove what works for bitmaps and SVGs. What
@@ -130,6 +130,11 @@ may update the names and paths an entry points at; changing what was decided, or
   today; the refusal also counts a function with no effect today, since a later edit could connect it
   (`designer_helpers/graph_inputs.py`).
   Reopen if: the user changes the rule.
+- **A graph input bound to an instance's parameter isn't checked as a size.** The instance's own parameter and `expose`'s
+  default are (`_refuse_bad_size_on_input`, `designer_helpers/graph_inputs.py`); this one is a known limit, stated in that
+  docstring. Only an instance a person made reaches it, as `add` instances only library graphs, and following the binding
+  would widen the check again for that case. The user's decision, 2026-11-09.
+  Reopen if: the tools become able to instance a user's own graph, or an agent is seen to build a wrong size this way.
 - **`_delete_function`'s inheritance calls have no guard** (`designer_helpers/graph_inputs.py`). Not
   reproduced: neither call raised in any measured case, and a guard would be untested code.
   Reopen if: a case that raises is measured.
@@ -173,6 +178,6 @@ may update the names and paths an entry points at; changing what was decided, or
   Reopen if: a crash dump points at this reload.
 - **Renaming an existing output warns; it isn't refused.** Designer updates only the graphs open during the rename. One that
   was closed computes black, with no error, and the tools can't see it. So `apply_edits`' result tells the agent to tell the
-  user, naming the repair (`set_output_tags`; `AGENTS.md`, Output nodes). The user chose this over refusing a rename or only
+  user, naming the repair (`set_output_tags`; `GUIDE.md`, Output nodes). The user chose this over refusing a rename or only
   documenting it, 2026-11-04.
   Reopen if: the user changes the choice, or the tools become able to see the graphs a rename would break.

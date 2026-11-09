@@ -1002,7 +1002,7 @@ def test_a_job_arriving_after_stop_is_answered_at_once(bridge: Bridge) -> None:
 
 def test_one_job_per_timer_tick(bridge: Bridge) -> None:
     # REVIEW.md PLG-13: one tick ran every queued job back to back, without returning to Qt's
-    # event loop in between (AGENTS.md, Portals: an unload and a load need that)
+    # event loop in between (GUIDE.md, Portals: an unload and a load need that)
     plugin, srv, draining = bridge
     draining['on'] = False
     time.sleep(0.05)

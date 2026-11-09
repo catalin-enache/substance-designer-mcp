@@ -96,7 +96,7 @@ def unused_port(take: Callable[[], int] | None = None) -> int:
 async def check_launch_on_another_port(ctx: Ctx) -> None:
     """A second Designer an agent started, next to the run's on a port of its own (ROADMAP item 49): each answers on its
     own port from its own process, and quitting it leaves the first. It quits only the one it started, so it runs in a
-    scratch run too (AGENTS.md, Running the tests)."""
+    scratch run too (the live-check skill)."""
     c = ctx.c
     # a free port another run's Designer, still starting, doesn't hold: that one isn't this check's to quit
     # (REVIEW.md TST-154)
@@ -216,7 +216,7 @@ async def check_launch_on_another_port(ctx: Ctx) -> None:
         new_dumps = new_crash_dumps(dumps_before, ports=[other])
         check('quit_designer', 'the second Designer leaves no crash dump', not new_dumps, str(sorted(new_dumps)))
         # its home, fresh for this port: its settings and its crash-dump database are there, the user's settings are
-        # left as they were (AGENTS.md, Several Designers; REVIEW.md TST-160)
+        # left as they were (server_tools/lifecycle.py; REVIEW.md TST-160)
         data = os.path.join(theirs, 'Library', 'Application Support', 'Adobe', 'Adobe Substance 3D Designer')
         settings = glob.glob(os.path.join(data, '*', 'user_preferences.xml'))
         after = os.path.getmtime(users_settings) if users_settings else None
@@ -239,7 +239,7 @@ async def check_launch_on_another_port(ctx: Ctx) -> None:
 async def check_launch_refuses_a_port_another_program_holds(ctx: Ctx) -> None:
     """REVIEW.md SRV-85: a program listening on 127.0.0.1 at the port asked for keeps the plugin off it, so
     launch_designer refuses at once instead of starting a Designer that can't listen there. It quits only a Designer
-    it started, so it runs in a scratch run too (AGENTS.md, Running the tests)."""
+    it started, so it runs in a scratch run too (the live-check skill)."""
     held: list[socket.socket] = []
 
     def hold() -> int:
@@ -284,7 +284,7 @@ async def check_a_designer_sharing_the_temp_folder_hands_over(ctx: Ctx) -> None:
     process. Started here from the binary as launch_designer starts one (_designer_env: a home of its own, so its log is
     its own and the user's is left alone; no plugins), on a port of its own, with the temp folder of the run's
     Designer; ended if it stays. It ends only the Designer it
-    started, so it runs in a scratch run too (AGENTS.md, Running the tests), but skips unless the run's Designer was
+    started, so it runs in a scratch run too (the live-check skill), but skips unless the run's Designer was
     the last one started: run it before check_launch_on_another_port."""
     c = ctx.c
     name = 'a Designer sharing the temp folder of the last one started hands over to it and exits'

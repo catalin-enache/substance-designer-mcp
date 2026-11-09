@@ -4,7 +4,7 @@ server, the CLI client, the installer and the tests.
 The plugin itself (running inside Designer from its installed copy) can't import this file; it
 takes its name from its own folder. So renaming the plugin means: change PLUGIN here and rename
 both plugin/<PLUGIN>/ folders to match. tests/unit/test_constants.py checks that the folders
-match, that no other code spells the name out, and that README.md and AGENTS.md mention it.
+match, that no other code spells the name out, and that README.md, AGENTS.md and GUIDE.md mention it.
 """
 
 import os

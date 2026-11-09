@@ -1,4 +1,4 @@
-"""Designer facts AGENTS.md relies on (they fail if a Designer update changes them)."""
+"""Designer facts GUIDE.md relies on (they fail if a Designer update changes them)."""
 
 import base64
 import os
@@ -22,7 +22,7 @@ from .common import (
 async def check_unsaved_bitmap_copies(ctx: Ctx) -> None:
     c, png = ctx.c, ctx.png
     F = 'designer facts'
-    # two unsaved packages copy the same file, one after the other: AGENTS.md says the copy
+    # two unsaved packages copy the same file, one after the other: GUIDE.md says the copy
     # goes to <Designer's temp folder>/Adobe/Adobe Substance 3D Designer/ with an XXXXXX- prefix, stays
     # after its package closes, and so the next copy of that name gets 1- in front
     # (REVIEW.md TST-15: the check used to test only "under the temp folder"). Designer's temp folder, not this
@@ -52,9 +52,22 @@ async def check_unsaved_bitmap_copies(ctx: Ctx) -> None:
             os.remove(copy_path)  # Designer leaves them there
 
 
+async def check_the_largest_output_size(ctx: Ctx) -> None:
+    """An absolute $outputsize of 13 computes 8192 px, and a larger one no more: why apply_edits and sweep_param refuse
+    above 13 (GUIDE.md, First sd pitfalls)."""
+    c = ctx.c
+    t = text(await designer_script(c, 'facts/largest_output_size'))
+    check(
+        'designer facts',
+        '$outputsize: 13 is 8192 px, and larger values compute no more',
+        all('SIZE %d 8192' % log2 in t for log2 in (13, 14, 15)),
+        t,
+    )
+
+
 async def run(ctx: Ctx) -> None:
     c, scratch, G, slope, lv, png = ctx.c, ctx.scratch, ctx.G, ctx.slope, ctx.lv, ctx.png
-    # --- Designer facts that AGENTS.md relies on (fail if a Designer update changes them)
+    # --- Designer facts that GUIDE.md relies on (fail if a Designer update changes them)
     F = 'designer facts'
     t = text(await c('describe_node', {'definition': 'blend'}))
     check(
@@ -97,7 +110,8 @@ async def run(ctx: Ctx) -> None:
     )
     check(F, 'a usage tag is taken unchecked', 'USAGE_UNCHECKED=True' in t, t)
     check(F, 'only an output node has an identifier', 'OTHER_NODE_RAISES=True' in t, t)
-    # what a rename reaches (AGENTS.md, Output nodes). A pixel, not only the link: a closed graph's looks untouched
+    # what a rename reaches (GUIDE.md, Output nodes). A pixel, not only the link: a closed graph's looks untouched
+    # (measured: the closed graph's pixel went from 407fbfff to 00000000)
     t = text(
         await designer_script(c, 'facts/rename_output_instance', folder=os.path.join(ctx.scratch, 'rename_output'))
     )
@@ -131,7 +145,7 @@ async def run(ctx: Ctx) -> None:
         'REPAIRED_BY_OLD_NAME connectors= link= pixel=00000000' in t,
         t,
     )
-    # the table in AGENTS.md: what a function graph on a parameter does, per state. The stored value
+    # the table in GUIDE.md: what a function graph on a parameter does, per state. The stored value
     # is 0.5 before any function graph, the function reads an input at 0.25, expose adds a second at 0.75
     t = text(await designer_script(c, 'facts/function_states'))
     for state, cells in (
@@ -218,7 +232,7 @@ async def run(ctx: Ctx) -> None:
     ]
     check(F, "a graph's model is the same after a save and a reload", not differing, '%s %s' % (differing, nodes[:2]))
     # an int on an enum parameter is accepted whatever it is, and one beyond the enum's can't be read back: why
-    # remove_graph_input checks first (AGENTS.md; REVIEW.md HLP-73)
+    # remove_graph_input checks first (GUIDE.md; REVIEW.md HLP-73)
     t = text(await designer_script(c, 'facts/enum_int_beyond_values'))
     check(
         F,
@@ -249,7 +263,27 @@ async def run(ctx: Ctx) -> None:
         stored == {'Absolute': (['0'], ['0']), 'RelativeToInput': (['2'], []), 'RelativeToParent': ([], ['1'])},
         str(stored),
     )
-    # REVIEW.md TST-3: the remaining AGENTS.md facts, measured
+    # a node's default is its own: an instance with no input stores nothing for relative to parent (REVIEW.md TST-222)
+    instance_stored = {}
+    for name in ('Absolute', 'RelativeToInput', 'RelativeToParent'):
+        outer = next(
+            g
+            for g in ET.parse(os.path.join(inherit_dir, 'instance_%s.sbs' % name)).getroot().iter('graph')
+            if g.find('identifier').get('v') == 'mcp_selftest_inherit_outer'  # type: ignore[union-attr]
+        )
+        instance_stored[name] = [
+            p.find('relativeTo').get('v')  # type: ignore[union-attr]
+            for p in outer.iter('parameter')
+            if p.find('name').get('v') == 'outputsize' and p.find('relativeTo') is not None  # type: ignore[union-attr]
+        ]
+    check(
+        F,
+        '.sbs size inheritance: an instance with no input stores nothing for its default, relative to parent',
+        instance_stored == {'Absolute': ['0'], 'RelativeToInput': ['2'], 'RelativeToParent': []}
+        and 'instance default RelativeToParent' in t,
+        '%s %s' % (instance_stored, t),
+    )
+    # REVIEW.md TST-3: the remaining GUIDE.md facts, measured
     t = text(
         await c(
             'execute_designer_code',
@@ -262,6 +296,7 @@ async def run(ctx: Ctx) -> None:
     )
     check(F, 'API inheritance: RelativeToInput 0, RelativeToParent 1, Absolute 2', 'API_INHERIT=0,1,2' in t, t)
     await check_unsaved_bitmap_copies(ctx)
+    await check_the_largest_output_size(ctx)
     t = text(await c('describe_node', {'definition': 'tile_generator'}))
     ids_ok = all(
         re.search(r'^\s+%s\s' % re.escape(i), t, re.M)
@@ -418,7 +453,7 @@ async def run(ctx: Ctx) -> None:
     )
     await c('apply_edits', {'ops': [{'op': 'delete', 'node': grad}, {'op': 'delete', 'node': nrm}], **G})
     # a Dot node (passthrough) has no ID property: Designer's UI portals store it as <userId> in the
-    # file and in Designer's memory, not exposed to the API, so the API can't make one (AGENTS.md, Portals). Any id-like property here would be new
+    # file and in Designer's memory, not exposed to the API, so the API can't make one (server_tools/layout.py). Any id-like property here would be new
     t = text(await designer_script(c, 'facts/dot_properties'))
     props = re.search(r'DOT_PROPS=(.*)', t)
     check(

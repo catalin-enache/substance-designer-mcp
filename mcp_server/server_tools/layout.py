@@ -1,5 +1,15 @@
 """Readable graphs: arrange_graph, add_frame, add_comment, set_link_display (a file-level edit:
-snapshot, save, edit the .sbs, reload)."""
+snapshot, save, edit the .sbs, reload).
+
+Designer's own UI portals are Dot nodes (`passthrough`): a transmitter given an ID (`<userId v="p1"/>` on its
+`compNode`) and a receiver that picks it in its Input Portal field, stored as an ordinary connection from the
+transmitter with the display flag (seen once by hand, Designer 16.0.7; to the API a plain connection). A Dot node has no
+ID property ("designer facts"); set_link_display sets the flag on any connection, without Dots.
+
+The reload is three separate bridge calls because, back to back, Designer once crashed (a null call in PySide from its
+own `node_align_tools` plugin, which adds a toolbar to each new graph view, while the old views were being torn down);
+returning to Designer's event loop between the steps lets the teardown finish.
+"""
 
 import contextlib
 import os

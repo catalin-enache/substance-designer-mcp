@@ -70,7 +70,7 @@ def test_designer_self_test_covers_every_tool() -> None:
 
 
 def test_screenshots_never_grab_the_screen() -> None:
-    # QScreen.grabWindow copies the screen area on macOS, capturing other apps (AGENTS.md, Screenshots)
+    # QScreen.grabWindow copies the screen area on macOS, capturing other apps (GUIDE.md, Screenshots)
     assert 'grabWindow' not in designer_helpers.source() and 'grabWindow' not in server_source()
 
 
@@ -209,28 +209,6 @@ def test_relative_paths_are_resolved_here_not_in_designer(monkeypatch: pytest.Mo
         assert any(os.path.join(here, name) in code for code in sent), (name, [c[-200:] for c in sent])
     server.save_package('Mat')  # a graph identifier stays as it is
     assert "'Mat'" in sent[-1] and os.path.join(here, 'Mat') not in sent[-1]
-
-
-def test_a_tool_calling_another_tool_shows_the_guide_reminder_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    # REVIEW.md SRV-28: set_link_display pastes snapshot_graph's and open_graph's results into its
-    # own, so before get_guide() the reminder appeared twice
-    from types import SimpleNamespace
-
-    from server_tools.core import _tool  # server._tool itself, with its type
-
-    patch_server(monkeypatch, 'server', SimpleNamespace(tool=lambda: lambda fn: fn))  # no registration
-    monkeypatch.setitem(server._session, 'guide_read', False)
-
-    @_tool()
-    def inner() -> str:
-        return 'inner result'
-
-    @_tool()
-    def outer() -> str:
-        return 'outer, with ' + inner()
-
-    assert outer().count(server.GUIDE_NOT_READ) == 1
-    assert inner().startswith(server.GUIDE_NOT_READ)  # called on its own it still has one
 
 
 def test_a_failed_reload_says_the_package_was_closed_and_where_it_is(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -411,6 +389,6 @@ def test_run_designer_script_args_leave_the_script_text_alone(monkeypatch: pytes
 
 
 def test_the_fallback_client_sends_no_args() -> None:
-    """AGENTS.md: a script reading ARGS runs through the MCP tool, not client/sd_run.py (REVIEW.md SRV-62)."""
+    """GUIDE.md: a script reading ARGS runs through the MCP tool, not client/sd_run.py (REVIEW.md SRV-62)."""
     assert 'ARGS' not in _read('client', 'sd_run.py')
-    assert 'no `ARGS`' in _read('AGENTS.md')
+    assert 'no `ARGS`' in _read(os.path.join('mcp_server', 'GUIDE.md'))

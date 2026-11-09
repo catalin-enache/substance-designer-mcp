@@ -23,7 +23,7 @@ async def run(ctx: Ctx) -> None:
     )
     check('apply_edits', 'set: graph $outputsize', '-> (10, 10)' in t, t)
     await c('apply_edits', {'ops': [{'op': 'set', 'node': 'graph', 'params': {'$outputsize': [9, 9]}}], **G})
-    # a node's $outputsize: made Absolute and taking effect (AGENTS.md, Graph size; TST-60)
+    # a node's $outputsize: made Absolute and taking effect (GUIDE.md, Graph size; TST-60)
     t = text(await c('apply_edits', {'ops': [{'op': 'set', 'node': lv, 'params': {'$outputsize': [7, 7]}}], **G}))
     inherit = text(await designer_script(c, 'shared/node_size_inheritance', graph=TEST_GRAPH, node=lv))
     size = text(await c('node_stats', {'node_id': lv, **G}))
@@ -65,7 +65,7 @@ async def run(ctx: Ctx) -> None:
     fact = text(await designer_script(c, 'params/graph_format', graph=TEST_GRAPH, set_16_bits=True))
     check(
         'designer facts',
-        'an inherited graph $format ignores its value (AGENTS.md)',
+        'an inherited graph $format ignores its value (GUIDE.md)',
         'FORMAT=RGBA8' in fact and 'INHERIT=RelativeToParent' in fact,
         fact.strip(),
     )
@@ -95,17 +95,17 @@ async def run(ctx: Ctx) -> None:
     fact = text(await designer_script(c, 'params/graph_seed_effect', graph=TEST_GRAPH, node=clouds))
     check(
         'designer facts',
-        "an inherited graph $randomseed's value changes the output (AGENTS.md)",
+        "an inherited graph $randomseed's value changes the output (GUIDE.md)",
         'DIFFERS=True REPEATS=True INHERIT=RelativeToParent' in fact,
         fact.strip(),
     )
     # graph.compute() computes what feeds an output node, and in a fresh graph not a node that
-    # feeds none (AGENTS.md; REVIEW.md TST-64). In this graph a lone node did come back computed,
+    # feeds none (GUIDE.md; REVIEW.md TST-64). In this graph a lone node did come back computed,
     # so the fact is measured in a package of its own
     fact = text(await designer_script(c, 'params/compute_fresh_graph'))
     check(
         'designer facts',
-        'graph.compute() computes what feeds an output, in a fresh graph only that (AGENTS.md)',
+        'graph.compute() computes what feeds an output, in a fresh graph only that (GUIDE.md)',
         'ALONE_COMPUTED=False FED_COMPUTED=True' in fact,
         fact.strip(),
     )
@@ -116,7 +116,7 @@ async def run(ctx: Ctx) -> None:
     m = re.search(r'ADDED_WITHIN=(\d+) VALUE_COUNTS_BY=(\d+) ABSOLUTE_MOVES_WITH_GRAPH_BY=(\d+)', fact)
     check(
         'designer facts',
-        "a node's $randomseed: inherited it's added to the graph's; Absolute it no longer follows it (AGENTS.md)",
+        "a node's $randomseed: inherited it's added to the graph's; Absolute it no longer follows it (GUIDE.md)",
         m is not None and int(m.group(1)) <= 8 and int(m.group(2)) > 8 and int(m.group(3)) <= 8,
         fact.strip(),
     )
@@ -129,7 +129,7 @@ async def run(ctx: Ctx) -> None:
         t.strip() + ' | ' + still.strip(),
     )
     # and one already Absolute stays Absolute, on a node and on the graph: the set op never
-    # changes a seed's inheritance (AGENTS.md; REVIEW.md HLP-29, TST-57)
+    # changes a seed's inheritance (GUIDE.md; REVIEW.md HLP-29, TST-57)
     for seed_node, node_id in ((clouds, clouds), ('', 'graph')):
         kept = re.search(
             r'VALUE=(-?\d+)', text(await designer_script(c, 'params/seed_state', graph=TEST_GRAPH, node=seed_node))

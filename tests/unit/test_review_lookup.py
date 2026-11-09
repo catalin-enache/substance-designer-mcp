@@ -568,7 +568,7 @@ def test_the_second_branch_renumbers_from_mains_counters(tmp_path: Path) -> None
     assert 'their finding' in _lookup(tmp_path, 'HLP-2') and 'my finding' in _lookup(tmp_path, 'HLP-3')
 
 
-DOC_TESTS = re.compile(r"""['"](?:AGENTS|README|ROADMAP|DECISIONS|REVIEW)\.md['"]""")
+DOC_TESTS = re.compile(r"""['"](?:AGENTS|GUIDE|README|ROADMAP|DECISIONS|REVIEW)\.md['"]""")
 
 
 def test_the_docs_command_names_every_test_that_reads_a_doc() -> None:

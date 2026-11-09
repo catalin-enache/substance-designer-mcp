@@ -9,7 +9,7 @@ If Designer isn't running, the test starts it (launch_designer) and closes it ag
 temporary graph ("mcp_selftest") that is removed at the end; the graph you had open in the
 editor is reopened. It triggers Undo/Redo only while the self-test graph is the one in the editor
 (Undo acts on the document in focus), checks that exactly its own step was undone, and redoes at
-once if not. "designer facts" checks the Designer behaviour AGENTS.md documents.
+once if not. "designer facts" checks the Designer behaviour GUIDE.md documents.
 The 3D screenshot is skipped if no 3D View is visible. Exits with code 1 if any check fails.
 
 This file is the index: it opens the MCP session, runs the categories in CATEGORIES in order, then
@@ -103,7 +103,7 @@ CATEGORIES: list[Callable[[Ctx], Awaitable[None]]] = [
     batch.run,  # apply_edits
     inputs.run,  # set_graph_size, expose ops, list_graph_inputs, remove_graph_input
     layout.run,  # snapshot_graph, list_snapshots, diff_graph, arrange_graph, add_frame, add_comment
-    facts.run,  # Designer facts AGENTS.md relies on
+    facts.run,  # Designer facts GUIDE.md relies on
     lookup.run,  # same-named and library graphs; a node with several outputs
     editor.open_and_zoom,  # open_graph, screenshot_designer('graph') and crops
     undo.run,  # one tool call = one undo step
@@ -123,7 +123,7 @@ async def run(scratch: str) -> list[str]:
         c: Call = lambda name, args=None: s.call_tool(name, args or {})  # noqa: E731 (typed by Call)
         tools = sorted(t.name for t in (await s.list_tools()).tools)
         print('server instructions: %d chars; tools: %d\n' % (len(init.instructions or ''), len(tools)))
-        # --- the guide: short instructions point to get_guide(); a reminder until it is called
+        # --- the guide: short instructions point to get_guide(); tools refuse until it is called
         instructions = init.instructions or ''
         check(
             'get_guide',
@@ -131,21 +131,31 @@ async def run(scratch: str) -> list[str]:
             len(instructions) < 4096 and 'Right before your first Designer tool call' in instructions,
             '%d chars' % len(instructions),
         )
-        t = text(await c('list_snapshots', {'graph': 'no_such_graph'}))
+        res = await c('list_snapshots', {'graph': 'no_such_graph'})
         check(
-            'get_guide', 'reminder before it is called', t.startswith('NOTE: the Designer guide has not been read'), t
+            'get_guide',
+            'a tool refuses before it is called',
+            bool(res.is_error) and 'get_guide()' in text(res),
+            text(res),
         )
-        with open(os.path.join(BUNDLE, 'AGENTS.md'), encoding='utf-8') as f:
-            agents_md = f.read()
+        with open(os.path.join(BUNDLE, 'mcp_server', 'GUIDE.md'), encoding='utf-8') as f:
+            core, _, scripting = f.read().partition('\n# Scripting')
         t = text(await c('get_guide'))
         check(
             'get_guide',
-            'returns all of AGENTS.md, asks to confirm',
-            t.startswith(agents_md) and 'tell the user' in t.splitlines()[-1],
+            'returns the core of GUIDE.md, asks to confirm',
+            t.startswith(core.rstrip('\n')) and 'tell the user' in t.splitlines()[-1],
             '%d chars' % len(t),
         )
         t = text(await c('list_snapshots', {'graph': 'no_such_graph'}))
-        check('get_guide', 'no reminder afterwards', t == 'No snapshots for no_such_graph.', t)
+        check('get_guide', 'the tool works afterwards', t == 'No snapshots for no_such_graph.', t)
+        t = text(await c('get_guide', {'part': 'scripting'}))  # the code tools refuse until it is read
+        check(
+            'get_guide',
+            'returns the scripting part of GUIDE.md, asks to confirm',
+            scripting.strip() in t and 'tell the user' in t.splitlines()[-1],
+            '%d chars' % len(t),
+        )
         helper_source = helpers_source()  # sent ahead of snippets that call the helpers
         was_running = STATE['was_running'] = await already_running(c)
         t = text(await c('launch_designer', {'wait_s': 240}))
@@ -174,7 +184,7 @@ async def run(scratch: str) -> list[str]:
             else:
                 check(
                     'designer facts',
-                    'while the Home screen shows, no panel is visible (AGENTS.md)',
+                    'while the Home screen shows, no panel is visible (GUIDE.md)',
                     m is not None and m.group(1) == '0' and int(m.group(2)) > 0,
                     t,
                 )

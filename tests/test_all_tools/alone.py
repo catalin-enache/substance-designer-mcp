@@ -170,7 +170,8 @@ async def run_with(
     """The checks, over the MCP session c (s, for the few checks that read ctx.s), in an environment built by needs
     and setup, the server on `port` if given; the exit code as the module says."""
     steps = resolve(needs)
-    await c('get_guide')  # tool results carry a reminder until it is called, and checks compare results
+    await c('get_guide')  # tools refuse until it is called
+    await c('get_guide', {'part': 'scripting'})  # the code tools refuse until this one is
     refusal = await _own_designer(c, port)
     if refusal:
         print('alone: nothing run: %s' % refusal)
@@ -221,7 +222,7 @@ async def run_with(
 async def close_with(c: Call) -> int:
     """Ends a Designer an agent started on common.PORT, then removes that port's runs' folders once no Designer may be
     on it (another run's, on its own port, doesn't count)."""
-    await c('get_guide')  # no reminder in front of what it prints
+    await c('get_guide')  # or quit_designer would be refused
     status = await c('designer_status')
     # one that doesn't answer (an older plugin's protocol, REVIEW.md SRV-82) is asked too: quit_designer ends one an
     # agent started from its record, and refuses any other by itself

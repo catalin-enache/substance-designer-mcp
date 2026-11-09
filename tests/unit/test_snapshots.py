@@ -158,7 +158,7 @@ def test_an_unsaved_package_and_a_recovered_copy_of_it_keep_their_snapshots_apar
 
 # Every case _from_package tells apart, decided once (REVIEW.md SRV-34, -36, -38, -40): the note's
 # file and UID against the package's. The UID is the file's <fileUID>: kept through saves, shared by
-# a copy of the file (AGENTS.md); a snapshot opened to recover lives in the snapshot folder.
+# a copy of the file (GUIDE.md); a snapshot opened to recover lives in the snapshot folder.
 _SNAP = '<snapshots>'
 _NOTE_CASES = [
     # (note file, note UID, package file, package UID, its own?, why)

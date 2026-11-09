@@ -454,7 +454,7 @@ class _Server:
                     self.busy_since = None
                     done.set()  # the client always gets an answer (REVIEW.md PLG-22)
                 # One job per tick: Designer's event loop runs before the next one, as two separate
-                # calls (an unload, then a load) need (AGENTS.md, Portals; REVIEW.md PLG-13)
+                # calls (an unload, then a load) need (GUIDE.md, Portals; REVIEW.md PLG-13)
                 return
         finally:
             self.draining = False

@@ -1,5 +1,5 @@
 """Runs inside Designer: a node's $randomseed, inherited (added to the graph's) and Absolute (no longer following it),
-compared in pixels, within a tolerance (AGENTS.md; params.py). Everything is put back. ARGS: graph, node."""
+compared in pixels, within a tolerance (GUIDE.md; params.py). Everything is put back. ARGS: graph, node."""
 
 import array
 import ctypes

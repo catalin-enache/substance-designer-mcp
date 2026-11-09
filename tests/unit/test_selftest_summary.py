@@ -159,7 +159,7 @@ def test_every_category_function_is_run() -> None:
             if inspect.iscoroutinefunction(f)
             and f.__module__ == module.__name__
             # a check of its own, check_<what>(ctx), runs when a category function of its module awaits it
-            # (AGENTS.md, the self-test); alone.py runs it on its own too
+            # (the live-check skill); alone.py runs it on its own too
             and not (f.__name__.startswith('check_') and re.search(r'await\s+%s\(' % f.__name__, source))
         }
     assert defined, 'no category functions found'

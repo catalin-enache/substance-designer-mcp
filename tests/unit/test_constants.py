@@ -70,7 +70,7 @@ def test_no_code_spells_out_the_name() -> None:
 
 
 def test_docs_mention_the_current_name() -> None:
-    for doc in ('README.md', 'AGENTS.md'):
+    for doc in ('README.md', 'AGENTS.md', os.path.join('mcp_server', 'GUIDE.md')):
         with open(os.path.join(ROOT, doc), encoding='utf-8') as f:
             text = f.read()
         assert PLUGIN in text and os.path.basename(TOKEN_FILE) in text, doc

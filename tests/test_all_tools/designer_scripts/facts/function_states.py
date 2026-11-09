@@ -1,5 +1,5 @@
 """Runs inside Designer (run_designer_script), for the "designer facts" checks in facts.py: what a function graph
-on a parameter does, the table in AGENTS.md (sd API gotchas). Prints one line per case; facts.py compares them.
+on a parameter does, the table in GUIDE.md (sd API gotchas). Prints one line per case; facts.py compares them.
 
 On a white uniform, a levels node's levelouthigh is its output. Everything happens in a package of this script's
 own, closed again, and each cell gets a fresh node, since setting the value deletes the function graph."""

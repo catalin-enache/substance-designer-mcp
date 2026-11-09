@@ -73,9 +73,10 @@ def selftest_check_sources() -> dict[str, str]:
 
 @pytest.fixture(autouse=True)
 def guide_read(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Tool results start with a reminder until get_guide() was called; tests compare exact
-    results, so they run as a session that has read the guide (test_guide.py covers the rest)."""
+    """Tools refuse until get_guide() was called, so tests run as a session that has read the guide, both parts
+    (test_guide.py covers the rest)."""
     monkeypatch.setitem(server._session, 'guide_read', True)
+    monkeypatch.setitem(server._session, 'scripting_read', True)
 
 
 @pytest.fixture

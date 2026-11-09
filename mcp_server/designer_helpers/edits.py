@@ -17,13 +17,21 @@ from .core import (
     _graph_to_edit,
     _output_note,
     _position,
+    _refuse_bad_size,
     cast,
     fmt,
     node_kind,
     os,
 )
 from .describe import _library_graph
-from .graph_inputs import _driver_text, _driving_graph, _refuse_no_input, _refuse_no_output
+from .graph_inputs import (
+    _driver_text,
+    _driving_graph,
+    _offset_note,
+    _refuse_bad_size_on_input,
+    _refuse_no_input,
+    _refuse_no_output,
+)
 
 
 def _target(g: SDSBSCompGraph, node_id: str | None) -> SDSBSCompNode | SDSBSCompGraph:
@@ -48,8 +56,9 @@ def _node(g: SDSBSCompGraph, node_id: str | None) -> SDNode:
     return node
 
 
-def _make_value(prop: SDProperty, value: Any) -> SDValue:
-    """Build the SDValue matching the property's type from a plain Python value."""
+def _make_value(prop: SDProperty, value: Any, inherited: bool = False) -> SDValue:
+    """Build the SDValue matching the property's type from a plain Python value. inherited: for a $outputsize, whether
+    it stays inherited, which makes the value an offset (_refuse_bad_size)."""
     from sd.api.sdbasetypes import ColorRGBA, float2, float3, float4, int2, int3, int4
     from sd.api.sdvaluebool import SDValueBool
     from sd.api.sdvaluecolorrgba import SDValueColorRGBA
@@ -113,6 +122,8 @@ def _make_value(prop: SDProperty, value: Any) -> SDValue:
         raise RuntimeError('%s expects %s values' % (prop.getId(), tid[-1]))
     if tid == 'ColorRGBA' and (seq is None or len(seq) not in (3, 4)):
         raise RuntimeError('%s expects a colour [r, g, b] or [r, g, b, a]' % prop.getId())
+    if prop.getId() == '$outputsize' and seq:  # as the builder converts them, so numbers sent as strings count
+        _refuse_bad_size('$outputsize', [as_int(v) for v in seq], value, inherited)
     return builders[tid]()
 
 
@@ -146,9 +157,10 @@ def set_params(graph_id: str | SDSBSCompGraph | None, node_id: str | None, param
             _refuse_no_output(driven, node_id, pid)
             _refuse_no_input(g, driven, node_id, pid)
             raise RuntimeError(
-                "%s.%s is driven by %s; set that instead (a set op on node 'graph')"
-                % (node_id, pid, _driver_text(g, driven))
+                "%s.%s is driven by %s; set that instead (a set op on node 'graph')%s"
+                % (node_id, pid, _driver_text(g, driven), _offset_note(target, prop))
             )
+        _refuse_bad_size_on_input(target, prop, [value])
         checked.append((pid, prop, _make_value(prop, value)))
     for pid, prop, new_value in checked:
         before = fmt(target.getPropertyValue(prop))

@@ -33,7 +33,7 @@ already said to go ahead without one.
 
 The full suites never run while findings are addressed: they run only when the user asks (AGENTS.md, Running the
 tests). Each finding's tests run on their own instead: unit tests by name, live checks in a scratch run, an
-environment you build for them (AGENTS.md, Running the tests, "Live checks while working"). All the findings being
+environment you build for them (the `live-check` skill). All the findings being
 addressed in one go (the ones the user named, or the batch in the plan) are handled together:
 
 1. **Write every finding's test first** (step 1 below, for each finding), and no fix yet.
@@ -41,11 +41,11 @@ addressed in one go (the ones the user named, or the batch in the plan) are hand
    fail on the bug, or would it pass on state an earlier check left, a value already there, a comparison any rule
    satisfies? Does it clean up when a step fails?
 3. **One failing run for all of them:** every finding's unit tests in one command, with lint and types, and every
-   finding's live checks in one scratch script (`alone.run` first, AGENTS.md, Running the tests). Read each failure (steps 1 and 2). A test that passes, or fails for
+   finding's live checks in one scratch script (`alone.run` first; load the `live-check` skill). Read each failure (steps 1 and 2). A test that passes, or fails for
    another reason, was written wrong, unless the finding is false (step 2): fix it and run again, before any fix.
 4. **Measure with a scratch probe** what a fix needs measured in Designer first (step 3): temporary code of your own,
    in the same Designer, the way the `project-code-review` skill's lead agent probes. What it measures goes in
-   AGENTS.md, with a "designer facts" check, run in the scratch run like the others.
+   GUIDE.md or the module's docstring, as AGENTS.md's table says, with a "designer facts" check, run in the scratch run like the others.
 5. **Fix everything** (step 3 for each finding), then run the same unit tests and scratch script again (step 4), until
    every test passes.
 
@@ -76,7 +76,7 @@ addressed in one go (the ones the user named, or the batch in the plan) are hand
       behaves (inheritance, seeds, function graphs, shutdown, the UI), first measure every case the
       code distinguishes (the node and the graph, each inheritance mode, with and without a render override...) in one
       scratch probe (**All the findings' tests first, run together**, point 4), record the measured table in
-      AGENTS.md with its "designer facts" check, then write the fix for that table. Never fix the one case in the finding and leave the next case
+      GUIDE.md or the module's docstring, as AGENTS.md's table says, with its "designer facts" check, then write the fix for that table. Never fix the one case in the finding and leave the next case
       for the next review.
     - **Fix the pattern, not the instance.** Search for every other place with the same pattern:
       the other callers of the helper, the same check or message elsewhere, the sibling tool or
@@ -89,13 +89,13 @@ addressed in one go (the ones the user named, or the batch in the plan) are hand
       `mcp_server/venv/bin/python -m pytest tests/unit/test_x.py::test_name tests/unit/test_lint.py tests/unit/test_types.py`;
     - the live checks in the group's scratch script. Plugin changes only reach Designer after `install.py` and a
       restart of the Designer the scratch runs use, which an agent started: `alone.close()`, and the next run starts
-      one (AGENTS.md, Running the tests); say that you did.
+      one (the `live-check` skill); say that you did.
 
    A scratch run proves a check in its own environment; if the full run the user asks for later shows it failing
    there, the finding is open again: uncheck it, add a note under its resolution saying what failed (the entry's
    earlier text stays), fix it, and add the new resolution below the note.
 5. **Update the docs** the change touches, as AGENTS.md's "Keeping the docs current" table says:
-   tool docstrings, AGENTS.md facts, README.md. Add a new sentence only when an agent or a user
+   tool docstrings, GUIDE.md facts, README.md. Add a new sentence only when an agent or a user
    needs it to act, and make it say exactly what its check measures, no more. Every claim is
    something the next review audits against its test: a third of the links in REVIEW.md's
    chains were "the sentence says more than the check".
@@ -108,7 +108,7 @@ addressed in one go (the ones the user named, or the batch in the plan) are hand
       a comparison that any rule would satisfy, hashes of data that differs run to run;
     - the test leaves state behind for later checks, or cleans up only when every step succeeds (no `finally`);
     - an older test no longer guards what it was written for, because the fix changed the order;
-    - a comment, docstring, AGENTS.md or README.md sentence the fix made untrue, a name or path in DECISIONS.md it made stale, or a new
+    - a comment, docstring, AGENTS.md, GUIDE.md or README.md sentence the fix made untrue, a name or path in DECISIONS.md it made stale, or a new
       sentence that claims more than the test measures.
       Adjust what you find, then step back and review the adjusted change the same way, again and
       again, until a fresh look finds nothing a reviewer could report. Only then go on.
