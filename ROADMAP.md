@@ -90,6 +90,7 @@ An ID no longer in REVIEW.md was removed by a cleanup: `python3 scripts/review_l
 |---|---|---|---|---|
 | [ ] | 18 | **Test on Windows** | Paths, installer, log location and plugin folder are written for Windows but untested; so are the exclusive port binding (`SO_EXCLUSIVEADDRUSE`), the `tasklist` CSV check, the installer running `claude.cmd`, and reading `.sbsar` archives with Windows' `tar` | Someone with Windows and Designer runs `install.py` and the self-test, and reports the failures |
 | [ ] | 20 | **Releases** | Users currently clone `main` | Version numbers, a CHANGELOG, tagged GitHub releases; maybe a one-line install command |
+| [ ] | 52 | **The size limit on another compute engine** | The tools refuse a log2 size above 13 (8192 px), measured only on this Designer's active engine; the `sd` API has no call to switch it, so another engine may compute larger | Someone switches the engine by hand in Designer's UI and runs "designer facts" `check_the_largest_output_size` |
 
 ## Ideas, not yet decided
 
