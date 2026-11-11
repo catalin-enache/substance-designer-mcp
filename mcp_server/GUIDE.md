@@ -106,7 +106,8 @@ grouping, no `ARGS`).
   `snapshot_graph` with no graph given work. Your own code isn't checked: Designer takes an edit to a library graph, and
   a package using it sees it at once (seen by hand).
 - Plugin tracebacks land in Designer's log (`read_designer_log`; "since the last start" means after the "Python SDK
-  Version" line logged once per start). Read it when the bridge misbehaves or a plugin change doesn't seem to load.
+  Version" line logged once per start, or, while Designer is still starting, from its "===== New Session =====", a
+  session that ended at once, a process handing over to the running Designer, not counting). Read it when the bridge misbehaves or a plugin change doesn't seem to load.
 - Harmless log noise: creating an exposed input logs "Some Get nodes don't have a variable name", and may log "No
   output node defined", until the function node is named. The exposure works.
 - **Several Designers side by side:** `launch_designer(port=...)` runs one per bridge port, on macOS (other platforms

@@ -28,6 +28,7 @@ from project_constants import (  # noqa: E402 (after the sys.path entry; `X as X
     DESIGNER_PROCESS,
     PLUGIN as PLUGIN,
     PLUGIN_PACKAGE_DIR as PLUGIN_PACKAGE_DIR,
+    QUIT_FORCED_IN_SHUTDOWN as QUIT_FORCED_IN_SHUTDOWN,
     SHORT_TEMP as SHORT_TEMP,  # where launch_designer makes the folders of a Designer it starts
     TOKEN_FILE as TOKEN_FILE,
     agent_designer_file,
@@ -64,6 +65,26 @@ def skip(tool: str, name: str, why: str) -> None:
     results.setdefault(tool, [])
     skipped.append((tool, name))
     print('SKIP  %-22s %s | %s' % (tool, name, why))
+
+
+forced_in_shutdown: list[str] = []  # this process's normal closes forced during their shutdown, for the pool to count
+
+
+def normal_close(t: str, what: str) -> bool:
+    """closed_by_quit, for a check of a normal close (`what`), when the check reaches it: a quit forced during its
+    shutdown is recorded, reported to the pool (its count, its folder kept: REVIEW.md TST-293), and any forced quit
+    printed whole, as a check's detail is cut."""
+    if 'forced' in t:
+        print('      %s, its quit whole: %s' % (what, ' / '.join(t.strip().splitlines())))
+    if QUIT_FORCED_IN_SHUTDOWN in t:
+        forced_in_shutdown.append(what)
+    return closed_by_quit(t)
+
+
+def closed_by_quit(t: str) -> bool:
+    """quit_designer's reply `t` says Designer quit with its close taken: not forced, or forced during its own shutdown,
+    every window closed (it can hang there: server_tools/lifecycle.py, Quitting; DECISIONS.md, Bridge and quitting)."""
+    return 'Designer quit after' in t and ('forced' not in t or QUIT_FORCED_IN_SHUTDOWN in t)
 
 
 def text(r: CallToolResult) -> str:

@@ -18,7 +18,14 @@ from collections.abc import Callable
 from pathlib import Path
 from textwrap import dedent
 
-from project_constants import STARTUP_LIMIT, TOKEN_FILE, agent_designer_file
+from project_constants import (
+    QUIT_CLOSED,
+    QUIT_FORCED_IN_SHUTDOWN,
+    QUIT_FORCED_NOT_CLOSED,
+    STARTUP_LIMIT,
+    TOKEN_FILE,
+    agent_designer_file,
+)
 from test_all_tools import common, launch_lock
 from test_all_tools.common import (
     Ctx,
@@ -30,6 +37,7 @@ from test_all_tools.common import (
     designer_script,
     free_port,
     helpers_source,
+    normal_close,
     raw_request,
     skip,
     text,
@@ -147,6 +155,7 @@ async def check_launch_on_another_port(ctx: Ctx) -> None:
         users_settings = users_settings_file()
         settings_before = os.path.getmtime(users_settings) if users_settings else None
         second: int | None = None
+        its_quit = ''  # the other port's quit: its folder kept if forced, to read its log (REVIEW.md TST-293)
         try:
             t = text(await c('launch_designer', {'port': other, 'wait_s': 240}))
             check(
@@ -213,13 +222,12 @@ async def check_launch_on_another_port(ctx: Ctx) -> None:
                 is not None,
                 status,
             )
-            t = text(await c('quit_designer', {'port': other, 'wait_s': 30}))
+            t = its_quit = text(await c('quit_designer', {'port': other, 'wait_s': 30}))
             status_after = await c('designer_status')
             check(
                 'quit_designer',
                 'closes the Designer on another port, and only that one',
-                'Designer quit after' in t
-                and 'forced' not in t
+                normal_close(t, 'closes the Designer on another port')
                 and not os.path.exists(record)
                 and second not in designer_pids()
                 and int(first) in designer_pids()
@@ -253,8 +261,10 @@ async def check_launch_on_another_port(ctx: Ctx) -> None:
 
                 def remove_its_folder() -> None:  # once a late crash dump would be there
                     theirs_dumps = {d for d in crash_dumps([other]) if d.startswith(agent_folder(other) + '/')}
-                    if ended and not theirs_dumps:  # a crash dump is kept, to read
+                    if ended and not theirs_dumps and 'forced' not in its_quit:  # a crash dump or forced quit: kept
                         shutil.rmtree(agent_folder(other), ignore_errors=True)
+                    elif ended:
+                        print('kept, to read:', agent_folder(other))
 
                 watch.later(remove_its_folder)
 
@@ -480,7 +490,8 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
         )
 
         # the close names its process: asked of another, it refuses before touching anything (REVIEW.md SRV-73)
-        r_ = await c('execute_designer_code', {'code': helpers_source() + '\n\nquit_designer(1)\n'})
+        call = '\n\nquit_designer(1, %r)\n' % QUIT_CLOSED
+        r_ = await c('execute_designer_code', {'code': helpers_source() + call})
         time.sleep(1)
         status = text(await c('designer_status'))
         check(
@@ -504,8 +515,7 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
             'quit_designer',
             "closes an agent's Designer with unsaved changes, dropping them",
             'discarding unsaved changes' in t
-            and 'Designer quit after' in t
-            and 'forced' not in t
+            and normal_close(t, "closes an agent's Designer with unsaved changes")
             and has_ended(quitting),
             t,
         )
@@ -523,7 +533,7 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
             step,
             'quit_designer',
             'forces one whose window stays open, without a crash',
-            'forced' in t and has_ended(quitting) and not os.path.exists(forced_marker),
+            QUIT_FORCED_NOT_CLOSED in t and has_ended(quitting) and not os.path.exists(forced_marker),
             t,
         )
         t = text(await c('launch_designer', {'wait_s': 240}))
@@ -538,7 +548,7 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
             step,
             'quit_designer',
             'forces one stuck in its shutdown, without a crash',
-            'HELD=True' in held and 'forced' in t and has_ended(quitting),
+            'HELD=True' in held and QUIT_FORCED_IN_SHUTDOWN in t and has_ended(quitting),
             held + t,
         )
         t = text(await c('launch_designer', {'wait_s': 240}))
@@ -564,7 +574,7 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
             step,
             'quit_designer',
             'forces one running a job after its wait, not asking it to close',
-            'did not reply: busy' in t and 'forced' in t and has_ended(quitting) and took < 30,
+            'did not reply: busy' in t and QUIT_FORCED_NOT_CLOSED in t and has_ended(quitting) and took < 30,
             '%s; took %.0f s' % (t, took),
         )
         t = text(await c('launch_designer', {'wait_s': 240}))
@@ -585,7 +595,7 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
             step,
             'quit_designer',
             'forces one with a frozen main thread, within the limit of its close',
-            'did not reply: No reply' in t and 'forced' in t and has_ended(quitting) and took < 30,
+            'did not reply: No reply' in t and QUIT_FORCED_NOT_CLOSED in t and has_ended(quitting) and took < 30,
             '%s; took %.0f s' % (t, took),
         )
         t = text(await c('launch_designer', {'wait_s': 240}))
@@ -609,21 +619,21 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
             t,
         )
 
-        # a window shown while the main window closes (a prompt appearing then) doesn't keep Designer alive: it quits once
-        # its main window has closed (REVIEW.md HLP-19, measured). A quit by itself emits aboutToQuit, which writes a marker
+        # a window shown while the main window closes (a prompt appearing then), accepting its close: Designer quits once
+        # the helper has closed both (REVIEW.md HLP-105, TST-307). A quit by itself emits aboutToQuit, which writes a marker
         prompt_marker = os.path.join(scratch, 'prompt_shown')
         normal_quit = os.path.join(scratch, 'quit_normally')
         await designer_script(
-            c, 'lifecycle/quit_prompt_after_close', prompt_marker=prompt_marker, normal_quit=normal_quit
+            c, 'lifecycle/quit_prompt_after_close', prompt_marker=prompt_marker, normal_quit=normal_quit, refuse=False
         )
         step, quit_started = watch.step(), time.time()
         quitting = own_pid()  # the process this quit is about
-        await c('quit_designer', {'wait_s': 60})
+        t = text(await c('quit_designer', {'wait_s': 60}))
         took = time.time() - quit_started
         watch.check(
             step,
             'designer facts',
-            'Designer quits once its main window closes, even with another window shown',
+            'Designer quits once the helper has closed its window and a prompt shown as it closed',
             os.path.exists(prompt_marker)
             and Path(prompt_marker).read_text() == 'True'
             and os.path.exists(normal_quit)
@@ -635,10 +645,94 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
                 took,
             ),
         )
+        logged = text(await c('read_designer_log', {'contains': QUIT_CLOSED, 'lines': 1}))
+        check(
+            'quit_designer',
+            'logs its close taken when a window shows as the main window closes',
+            normal_close(t, 'a window shown as the main window closes') and QUIT_CLOSED in logged,
+            '%s / %s' % (t, logged.splitlines()[-1]),
+        )  # the prompt, shown after the helper listed the windows, accepts its close (REVIEW.md HLP-102, HLP-105)
         t = text(await c('launch_designer', {'wait_s': 240}))
         check('launch_designer', 'starts again', 'Designer started in' in t and 'ERROR' not in t, t)
 
-        # wait_s is respected: 7 s in the window's close handler, then 7 s in an aboutToQuit handler, left to finish
+        # the same prompt refusing its own close keeps Designer from quitting (measured): a forced quit says it had not
+        # closed (REVIEW.md HLP-105)
+        refusing_marker = os.path.join(scratch, 'refusing_prompt_shown')
+        refusing_quit = os.path.join(scratch, 'refusing_prompt_quit')
+        await designer_script(
+            c,
+            'lifecycle/quit_prompt_after_close',
+            prompt_marker=refusing_marker,
+            normal_quit=refusing_quit,
+            refuse=True,
+        )
+        step = watch.step()
+        quitting = own_pid()  # the process this quit is about
+        t = text(await c('quit_designer', {'wait_s': 5}))
+        shown = os.path.exists(refusing_marker) and Path(refusing_marker).read_text() == 'True'
+        watch.check(
+            step,
+            'quit_designer',
+            'forces one kept open by a prompt refusing its close, saying it had not closed, without a crash',
+            shown and not os.path.exists(refusing_quit) and QUIT_FORCED_NOT_CLOSED in t and has_ended(quitting),
+            '%s; prompt shown: %s; quit by itself (aboutToQuit): %s' % (t, shown, os.path.exists(refusing_quit)),
+        )
+        t = text(await c('launch_designer', {'wait_s': 240}))
+        check(
+            'launch_designer',
+            'starts again after a quit kept open by a prompt',
+            'Designer started in' in t and 'ERROR' not in t,
+            t,
+        )
+
+        # Designer quits on its own window, the visible QStackedWidget (REVIEW.md HLP-19): with it hidden and another
+        # window shown, the helper closes that one, Designer stays, and a forced quit says it had not closed (REVIEW.md
+        # HLP-102, HLP-104)
+        hidden = text(await designer_script(c, 'lifecycle/hide_own_window'))
+        step = watch.step()
+        quitting = own_pid()  # the process this quit is about
+        t = text(await c('quit_designer', {'wait_s': 5}))
+        watch.check(
+            step,
+            'quit_designer',
+            "forces one whose own window wasn't shown, saying it had not closed, without a crash",
+            'HIDDEN=1' in hidden and QUIT_FORCED_NOT_CLOSED in t and has_ended(quitting),
+            '%s / %s' % (hidden.strip(), t),
+        )
+        t = text(await c('launch_designer', {'wait_s': 240}))
+        check(
+            'launch_designer',
+            'starts again after a quit with its own window hidden',
+            'Designer started in' in t and 'ERROR' not in t,
+            t,
+        )
+
+        # forced in its aboutToQuit, its close taken: Designer's own shutdown, before it logs a line of its teardown, is
+        # told from a close that didn't take by the line the quit helper logs (REVIEW.md SRV-106)
+        early_close = os.path.join(scratch, 'early_close_finished')
+        early_marker = os.path.join(scratch, 'early_shutdown_finished')
+        await designer_script(c, 'lifecycle/quit_slow_shutdown', slow_close=early_close, slow_marker=early_marker)
+        step = watch.step()
+        quitting = own_pid()  # the process this quit is about
+        t = text(await c('quit_designer', {'wait_s': 10}))
+        closed_only = os.path.exists(early_close) and not os.path.exists(early_marker)
+        watch.check(
+            step,
+            'quit_designer',
+            'forces one stuck in its aboutToQuit, saying its close had taken, without a crash',
+            closed_only and QUIT_FORCED_IN_SHUTDOWN in t and has_ended(quitting),
+            '%s; its close handler finished and its aboutToQuit not: %s' % (t, closed_only),
+        )
+        t = text(await c('launch_designer', {'wait_s': 240}))
+        check(
+            'launch_designer',
+            'starts again after a quit forced in its aboutToQuit',
+            'Designer started in' in t and 'ERROR' not in t,
+            t,
+        )
+
+        # wait_s is respected: 7 s in the window's close handler, then 7 s in an aboutToQuit handler, left to finish; a
+        # force, if any, only after the whole wait (REVIEW.md TST-289)
         slow_close = os.path.join(scratch, 'slow_close_finished')
         slow_marker = os.path.join(scratch, 'slow_shutdown_finished')
         await designer_script(c, 'lifecycle/quit_slow_shutdown', slow_close=slow_close, slow_marker=slow_marker)
@@ -646,11 +740,13 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
         quitting = own_pid()  # the process this quit is about
         t = text(await c('quit_designer', {'wait_s': 40}))
         finished = os.path.exists(slow_close) and os.path.exists(slow_marker)
+        waited = re.search(r'quit after (\d+)s', t)
+        whole_wait = 'forced' not in t or (waited is not None and int(waited.group(1)) >= 40)
         watch.check(
             step,
             'quit_designer',
             'a slow shutdown within its wait is left to finish',
-            finished and 'Designer quit after' in t and 'forced' not in t and has_ended(quitting),
+            finished and normal_close(t, 'a slow shutdown within its wait') and whole_wait and has_ended(quitting),
             '%s; both handlers finished: %s' % (t, finished),
         )
         t = text(await c('launch_designer', {'wait_s': 240}))
@@ -676,6 +772,8 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
             step,
             'quit_designer',
             'closes the Designer it started, with a modal dialog open, without a crash',
-            'MODAL=QMessageBox' in modal and 'Designer quit after' in t and 'forced' not in t and gone,
+            'MODAL=QMessageBox' in modal
+            and normal_close(t, 'closes the Designer it started, with a modal dialog open')
+            and gone,
             modal + t,
         )

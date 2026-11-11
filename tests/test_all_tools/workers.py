@@ -19,6 +19,10 @@ once wasn't measured (ROADMAP item 66).
   Designer's folder fails that category's quit check, `closes <category>'s Designer, which left no crash dump`.
 - **The unit suite** (`pytest`, no test ids) runs beside the pool, its result one check, `unit tests`; `--no-unit`
   leaves it out.
+- **A quit forced during its shutdown** (its close taken: quit_designer says so) passes its own check; more than two in
+  a run, lifecycle's normal closes that reach `common.normal_close` counted too, fail a check of their own. A category's Designer's folder is kept after
+  its quit was forced, lifecycle's after one of its normal closes forced during its shutdown that its check reached, to
+  read its log (DECISIONS.md, Bridge and quitting).
 - **No folder shared** between workers (worker_env): with the system's temp folder shared, two of five runs lost a
   Designer (ROADMAP item 59).
 - **No unit test starts a real run:** `spawn` and the index's run refuse under pytest unless the test faked them (a
@@ -44,9 +48,11 @@ from typing import Any, Protocol
 from test_all_tools import common
 from test_all_tools.categories import CATEGORIES, CLIPBOARD, SOLO, category_name
 from test_all_tools.common import (
+    QUIT_FORCED_IN_SHUTDOWN,
     NoListing,
     agent_folder,
     agents_designers,
+    closed_by_quit,
     crash_dumps,
     summarize,
     users_designer_running,
@@ -248,8 +254,10 @@ def _holds_a_crash_dump(folder: str) -> bool:
 
 
 def check_the_quits(parts: Mapping[str, dict[str, Any] | None], port_of: Mapping[str, int], before: set[str]) -> None:
-    """After one wait from the last quit: each category's quit check, failed by a forced quit, none, or a
-    crash dump in its Designer's folder; a new dump elsewhere (the shared folder) fails a check of its own."""
+    """After one wait from the last quit: each category's quit check, failed by a quit forced before its close took or
+    whose log couldn't be read (common.closed_by_quit), none, or a crash dump in its Designer's folder; more than two
+    quits forced during their shutdown, the categories' and those of lifecycle's normal closes (its `forced_in_shutdown`),
+    fail a check of their own, as does a new dump elsewhere (the shared folder)."""
     quits = [part['quit_at'] for part in parts.values() if part and part.get('quit_at')]
     if quits:
         sleep(max(0.0, max(quits) + CRASH_WAIT_S - time.time()))
@@ -267,12 +275,26 @@ def check_the_quits(parts: Mapping[str, dict[str, Any] | None], port_of: Mapping
                 common.check('quit_designer', "%s's Designer left no crash dump" % name, False, str(dumps))
             continue
         t = part.get('quit') or 'no quit'
+        if 'forced' in t:  # whole: a check's detail is cut, the line its log stopped at with it
+            print("      %s's quit whole: %s" % (name, t))
         common.check(
             'quit_designer',
             "closes %s's Designer, which left no crash dump" % name,
-            'Designer quit after' in t and 'forced' not in t and not dumps,
+            closed_by_quit(t) and not dumps,
             '%s; new crash dumps: %s' % (t, dumps),
         )
+    # each passes its own check (DECISIONS.md, Bridge and quitting); more than the two seen at once (ROADMAP item 69) is
+    # a pattern, such as a task every Designer leaves in Qt's thread pool, which the user's own Designer would hang on too
+    in_shutdown = sorted(n for n, part in parts.items() if part and QUIT_FORCED_IN_SHUTDOWN in (part.get('quit') or ''))
+    in_shutdown += [
+        '%s: %s' % (n, what) for n, part in parts.items() if part for what in part.get('forced_in_shutdown', [])
+    ]
+    common.check(
+        'quit_designer',
+        'no more than two quits forced during their shutdown',
+        len(in_shutdown) <= 2,
+        'quits forced during their shutdown: %s' % (', '.join(in_shutdown) or 'none'),
+    )
     if new - placed:
         common.check('self-test', 'no new crash dump outside the run', False, str(sorted(new - placed)))
 
@@ -365,13 +387,19 @@ def run_pool(slots: int, unit: bool = True, only: Sequence[str] | None = None) -
     summary, ok = summarize(tools, common.results, common.skipped, common.times)
     print(summary)
     print('wall time %.0f s, %d categories, %s' % (wall, len(order), what))
-    _clean_up(root, chosen)
+    forced = {
+        port_of[n]
+        for n, part in parts.items()
+        if part and ('forced' in (part.get('quit') or '') or part.get('forced_in_shutdown'))
+    }
+    _clean_up(root, chosen, forced)
     return 0 if ok else 1
 
 
-def _clean_up(root: str, chosen: list[int]) -> None:
-    """The folders launch_designer made for the workers' Designers (about 90 MB each), unless one still runs there or
-    left a crash dump, to read; then the run's folder, once none of its Designers is left."""
+def _clean_up(root: str, chosen: list[int], forced: Collection[int] = ()) -> None:
+    """The folders launch_designer made for the workers' Designers (about 90 MB each), unless one still runs there, left
+    a crash dump or is in `forced` (run_pool's: the ports whose quit it counts as forced, their log saying how far that
+    quit got), to read; then the run's folder, once none of its Designers is left."""
     try:
         left = set(chosen) & set(agents_designers())
     except Exception as e:  # can't tell: everything kept
@@ -380,6 +408,8 @@ def _clean_up(root: str, chosen: list[int]) -> None:
     for port in sorted(set(chosen) - left):
         if _holds_a_crash_dump(agent_folder(port)):
             print('kept, it holds a crash dump:', agent_folder(port))
+        elif port in forced:
+            print('kept, its quit was forced:', agent_folder(port))
         else:
             shutil.rmtree(agent_folder(port), ignore_errors=True)
     if left:

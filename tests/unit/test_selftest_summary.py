@@ -435,3 +435,10 @@ def test_the_scratch_folder_goes_once_the_runs_own_designer_is_ended(
     with pytest.raises(SystemExit):
         selftest.one_run(worker='undo', results_file=str(tmp_path / 'undo.json'))
     assert not up[0] and not scratch.exists(), 'kept for the Designer just ended'
+
+
+def test_a_workers_results_carry_its_quits_forced_during_their_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md TST-293: what lifecycle's normal closes recorded (common.normal_close), for the pool to count
+    selftest = _selftest()
+    monkeypatch.setitem(vars(selftest.common), 'forced_in_shutdown', ['the modal close'])
+    assert selftest._ended()['forced_in_shutdown'] == ['the modal close']

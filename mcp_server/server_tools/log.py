@@ -8,11 +8,15 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from project_constants import (
     PLUGIN,
+    QUIT_CLOSED,
     agent_designer_file,
 )  # on sys.path: the package's __init__ imports .core, which puts it there
 
 from .core import _designer_data_dir, _tool
 from .lifecycle import _agent_designer, _agent_home, _checked_folder, _own_home_path, _port, _running_on
+
+NEW_SESSION = '===== New Session ====='  # the first line Designer logs at each start
+ENDED = 'Application uninitialized'  # its last, in a session that ends
 
 
 def _newest_log(base: str) -> str | None:
@@ -53,16 +57,7 @@ def _log_for(port: int) -> str | None:
         home = _agent_home(port)
         if not home:  # older code started it, or not macOS: it writes the shared log
             return shared
-        if _checked_folder(port) is None:  # its record names a home there (REVIEW.md SRV-96)
-            raise ToolError(
-                "%s is not a folder of this user: the log of the Designer on port %d isn't read from it"
-                % (os.path.dirname(home), port)
-            )
-        own = _newest_log(_designer_data_dir(home))
-        # older than its record, it is an earlier run's on this port: the folder outlives a quit (REVIEW.md SRV-99)
-        if own is None or os.path.getmtime(own) < os.path.getmtime(agent_designer_file(port)):  # not the shared log
-            raise ToolError('The Designer on port %d has no log yet: it is still starting. Try again shortly.' % port)
-        return own
+        return _agent_log(port, home)
     # only from this user's own folder: another account may have made it first (REVIEW.md SRV-96)
     ours = sys.platform == 'darwin' and _checked_folder(port) is not None
     own = _newest_log(_designer_data_dir(_own_home_path(port))) if ours else None
@@ -71,6 +66,21 @@ def _log_for(port: int) -> str | None:
     if shared is None or not os.path.exists(shared) or _last_port(shared) not in (port, None):
         return own  # the shared log's last Designer was on another port: it isn't this port's
     return own if os.path.getmtime(own) >= os.path.getmtime(shared) else shared
+
+
+def _agent_log(port: int, home: str) -> str:
+    """The own log of the Designer an agent started on `port`, whose home is `home`, never the shared one; ToolError if
+    that folder isn't this user's or the log isn't written yet."""
+    if _checked_folder(port) is None:  # its record names a home there (REVIEW.md SRV-96)
+        raise ToolError(
+            "%s is not a folder of this user: the log of the Designer on port %d isn't read from it"
+            % (os.path.dirname(home), port)
+        )
+    own = _newest_log(_designer_data_dir(home))
+    # older than its record, it is an earlier run's on this port: the folder outlives a quit (REVIEW.md SRV-99)
+    if own is None or os.path.getmtime(own) < os.path.getmtime(agent_designer_file(port)):  # not the shared log
+        raise ToolError('The Designer on port %d has no log yet: it is still starting. Try again shortly.' % port)
+    return own
 
 
 @_tool()
@@ -105,10 +115,40 @@ def read_designer_log(
     return header + '\n' + '\n'.join(tail)
 
 
+LOG_TAIL = 256 * 1024  # the end of its log a forced quit reads: the quit's lines are its last
+
+
+def _quit_evidence(port: int) -> tuple[bool, str] | None:
+    """From the own log of the Designer an agent started on `port`, since its last start: whether the quit helper logged
+    every window closed (QUIT_CLOSED: its close taken, whatever its shutdown did next), and its last line that isn't
+    blank. None without a log of its own to read; one recorded without a home writes the shared log, the user's lines
+    among its own: never read here (REVIEW.md SRV-108)."""
+    home = _agent_home(port)
+    if not home:
+        return None
+    try:
+        path = _agent_log(port, home)
+        with open(path, 'rb') as f:
+            f.seek(max(0, os.path.getsize(path) - LOG_TAIL))
+            lines = f.read().decode('utf-8', errors='replace').splitlines()
+    except (ToolError, OSError):
+        return None
+    lines = lines[_last_start(lines) :]
+    said = [line.strip() for line in lines if line.strip()]
+    return any(QUIT_CLOSED in line for line in lines), said[-1] if said else ''
+
+
 def _last_start(lines: list[str]) -> int:
-    """Index of the most recent Designer start-up: Designer logs "Python SDK Version" exactly
-    once per start, just before plugins load. 0 if not found."""
-    for i in range(len(lines) - 1, -1, -1):
-        if 'Python SDK Version' in lines[i]:
-            return i
-    return 0
+    """Index of the most recent Designer start-up: the "Python SDK Version" line Designer logs once per start, just
+    before plugins load, or, while one starts, its session's first line ("===== New Session =====", about 430 lines
+    earlier): the previous session's lines aren't this one's (REVIEW.md SRV-107). A session after the SDK line that has
+    ended, in its own lines up to the next session (a process handing its arguments over to the running Designer, then
+    gone: no SDK line), isn't a start (REVIEW.md SRV-109, SRV-110). 0 if neither is found."""
+    sdk = next((i for i in range(len(lines) - 1, -1, -1) if 'Python SDK Version' in lines[i]), -1)
+    end = len(lines)
+    for i in range(len(lines) - 1, sdk, -1):  # sessions begun since, the latest first
+        if lines[i].startswith(NEW_SESSION):
+            if not any(ENDED in line for line in lines[i:end]):
+                return i
+            end = i
+    return max(sdk, 0)

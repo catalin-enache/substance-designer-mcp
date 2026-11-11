@@ -16,12 +16,18 @@ another port). Tests: test_lifecycle_env.py, lifecycle.check_launch_on_another_p
 lifecycle.check_a_designer_sharing_the_temp_folder_hands_over.
 
 Quitting. The window the user sees is a top-level `QStackedWidget` ("Adobe Substance 3D Designer"), not the hidden
-`getMainWindow()`; closing the visible top-level widgets quits Designer normally, even with another top-level window
-showing (measured) or a modal dialog open. If a window refuses to close, Qt 6's `QApplication.quit()` gives up too, and
+`getMainWindow()`; closing the visible top-level widgets quits Designer normally, with a modal dialog open too. If a
+window refuses to close, Qt 6's `QApplication.quit()` gives up too, and
 `QApplication.exit(0)` stops the event loops, but Designer's teardown then races its own background threads: twice
 Adobe's licence check (`Alg::BinaryHardeningService`, on a `QtConcurrent` thread) crashed reading a destroyed profile
 and the process hung over 30 s. The shutdown can also hang at the very end, in `~QCoreApplication` waiting for the
 thread pool (seen once with the licence check; a Python task held in `QThreadPool.globalInstance()` does it on demand).
+In a full self-test run (2026-11-11) two Designers, just started, hung about 30 s after their close had taken, no crash
+dump: the macOS system log shows their main thread silent from AppKit's termination on while another thread still
+evaluated a certificate for the network work Designer starts with; not reproduced (ROADMAP item 69). Designer logs no
+line of its teardown before its aboutToQuit handlers have run, so the quit helper logs QUIT_CLOSED once every window it
+closed has closed, Designer's own among them, and a forced quit says from it whether its close had taken, as the
+helper judged it (its limits: designer_helpers/quit.py), and quotes the last line of the log.
 So quit_designer only closes the windows, and past its wait the server ends the process (SIGTERM, then SIGKILL), only
 for a Designer an agent started. launch_designer records the process it started (its own child), its start time and, on
 macOS, its home in `agent_designer_file(port)` (project_constants.py), one per port, so a /mcp reconnect keeps it and a
@@ -55,6 +61,9 @@ from mcp.server.mcpserver.exceptions import ToolError
 from project_constants import (  # on sys.path: the package's __init__ imports .core, which puts it there
     DESIGNER_PROCESS,
     PLUGIN,
+    QUIT_CLOSED,
+    QUIT_FORCED_IN_SHUTDOWN,
+    QUIT_FORCED_NOT_CLOSED,
     SHORT_TEMP,
     STARTUP_LIMIT,
     agent_designer_file,
@@ -764,8 +773,9 @@ def launch_designer(wait_s: int = 180, port: int | None = None) -> str:
 @_tool()
 def quit_designer(wait_s: int = 10, port: int | None = None) -> str:
     """Close a Designer an agent started, and wait until its process has exited: unsaved changes are dropped, and after
-    wait_s it is force-ended; the result says which. Running a job, it isn't asked to close. Not replying to the close
-    within wait_s (at least 10 s) adds that to the wait. Any other Designer is the user's: this ends nothing and says to ask them to save, close and reopen it.
+    wait_s it is force-ended; the result says which and, if forced, whether its close had taken (its own shutdown
+    then hung) and the last line of its log. Running a job, it isn't asked to close. Not replying to the close within
+    wait_s (at least 10 s) adds that to the wait. Any other Designer is the user's: this ends nothing and says to ask them to save, close and reopen it.
     port: the one on that bridge port (launch_designer's port); this server's when omitted. Others are left alone."""
     port = _port(port)
     found = _agent_record(port)
@@ -781,7 +791,7 @@ def quit_designer(wait_s: int = 10, port: int | None = None) -> str:
         if 'idle, 0 queued' not in state:  # the close would queue behind it, for up to 15 minutes (REVIEW.md SRV-74)
             raise ToolError('busy: %s' % state)
         # it goes to whichever Designer holds the port, so it names this one and any other refuses (REVIEW.md SRV-73)
-        call = _helpers_call('quit_designer(%d)' % own)
+        call = _helpers_call('quit_designer(%d, %r)' % (own, QUIT_CLOSED))
         # a frozen main thread reads as idle too, and a close running late runs in the process being ended (REVIEW.md SRV-78)
         reply = _bridge(call, timeout=30, wait=max(wait_s, 10), port=port)
         notes = _checked(reply).replace('closing Designer', '').strip()
@@ -794,8 +804,19 @@ def quit_designer(wait_s: int = 10, port: int | None = None) -> str:
         if own not in _designer_pids():
             _forget_started(port, seen)  # only its own: another server may have recorded a new one (REVIEW.md SRV-91)
             return prefix + 'Designer quit after %.0fs.' % (time.time() - started)
+    from .log import _quit_evidence  # here: log.py imports from this module
+
+    evidence = _quit_evidence(port)  # read while it still runs: how far its quit got
+    if own not in _designer_pids():  # it ended while that was read: by itself (REVIEW.md SRV-108)
+        _forget_started(port, seen)
+        return prefix + 'Designer quit after %.0fs.' % (time.time() - started)
     if _force_end(
         own, port, seen
-    ):  # it can hang at the very end of its shutdown, past anything inside it (REVIEW.md HLP-82)
-        return prefix + 'Designer quit after %.0fs (forced: it had not closed).' % (time.time() - started)
+    ):  # it can hang in its own shutdown, past anything inside it (REVIEW.md HLP-82, ROADMAP item 69)
+        took = time.time() - started
+        if evidence is None:
+            return prefix + 'Designer quit after %.0fs (forced; its log could not be read).' % took
+        closed, last = evidence
+        how = QUIT_FORCED_IN_SHUTDOWN + ': its close had taken' if closed else QUIT_FORCED_NOT_CLOSED
+        return prefix + 'Designer quit after %.0fs (%s; its log stopped at "%s").' % (took, how, last)
     raise ToolError(_could_not_end(own))

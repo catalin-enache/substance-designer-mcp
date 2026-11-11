@@ -31,6 +31,15 @@ NONCE = re.compile(r'[0-9a-f]{32}')
 # Seconds launch_designer gives a Designer an agent started before it counts as stuck: its default wait
 STARTUP_LIMIT = 180
 
+# quit_designer's words for a Designer an agent started that it had to force-end: during its own shutdown, every window
+# closed, or before its close took (the self-test tells them apart: DECISIONS.md, Bridge and quitting)
+QUIT_FORCED_IN_SHUTDOWN = 'forced during its shutdown'
+QUIT_FORCED_NOT_CLOSED = 'forced: it had not closed'
+# The line the quit helper logs in Designer once every window it closed has closed, Designer's own among them: its close
+# taken, as the helper judges it before Designer's own quit decides (its limits: designer_helpers/quit.py), whatever its
+# shutdown does next
+QUIT_CLOSED = '[%s] quit: every window closed' % PLUGIN
+
 
 # Where the records of the Designers an agent started go (agent_designer_file). In the home folder, as the temp folder
 # depends on how the server was started, and the MCP client doesn't pass TMPDIR on

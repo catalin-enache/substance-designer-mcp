@@ -343,7 +343,7 @@ def one_run(worker: str | None = None, results_file: str | None = None, first: b
 
 
 def _ended() -> dict[str, Any]:
-    return {'quit': ENDED.get('quit'), 'quit_at': ENDED.get('quit_at')}
+    return {'quit': ENDED.get('quit'), 'quit_at': ENDED.get('quit_at'), 'forced_in_shutdown': common.forced_in_shutdown}
 
 
 if __name__ == '__main__':

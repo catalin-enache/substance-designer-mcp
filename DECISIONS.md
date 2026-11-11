@@ -169,6 +169,25 @@ may update the names and paths an entry points at; changing what was decided, or
   dump. The user's decision, 2026-11-11.
   Reopen if: a crash dump at Designer's quit points at them.
 
+- **A quit forced during Designer's own shutdown, its close taken, passes the self-test's checks of a normal close;
+  more than two in one run fail a check of their own.** Those checks are about the close (`common.closed_by_quit`);
+  past it, a Designer an agent started can hang in its own shutdown (`server_tools/lifecycle.py`, its docstring's
+  "Quitting."). `quit_designer` tells the two apart by the line its helper logs in Designer once every window it closed
+  has closed, Designer's own among them (`QUIT_CLOSED`, `project_constants.py`), and names the last line of the log; the categories' quits and
+  lifecycle's normal closes are counted (`workers.check_the_quits`). The user's choice, 2026-11-11: this way, over
+  confirming the cause first or not quitting a Designer just started; and the threshold, two hangs having been seen at
+  once.
+  Reopen if: that check fails, or the cause is confirmed and can be avoided (ROADMAP item 70).
+
+- **The quit helper's line is its judgement before Designer's own quit decides: its limits are stated, not worked
+  around.** A window refusing its close that shows after the helper judged, or a dialog of Designer's window refusing
+  its close, makes that line wrong (`designer_helpers/quit.py`, its docstring); both were seen only with windows a
+  probe made, in a Designer an agent started. Judging again once Designer's quit has had its turn would take a second
+  timer, measured first against every quit case. The user's choice, 2026-11-11, of two: state the limit, or judge
+  again later.
+  Reopen if: a quit outside a probe is reported this way wrongly, or a script or plugin that agents use shows such a
+  window.
+
 - **No job starts sooner than 30 ms after the one before ended, whatever starts it; a call after a pause starts at
   once.** Started at once, a job found Designer not settled after the one before (a node measured right after the one
   feeding it got no texture); 20 ms was enough where 5 ms wasn't (measured: `WAKE_DELAY_MS` in the plugin). Calls one after

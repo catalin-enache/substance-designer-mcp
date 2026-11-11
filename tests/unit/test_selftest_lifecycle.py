@@ -204,7 +204,7 @@ def test_the_quit_checks_ask_about_the_runs_designer_only() -> None:
     # this run's for all it can tell: each asks about the process it quit
     source = Path(SELFTEST_DIR, 'lifecycle', 'checks.py').read_text(encoding='utf-8')
     assert 'designer_alive' not in source and 'designer_here' not in source
-    assert source.count('has_ended(quitting)') == 7 and source.count('quitting = own_pid()') == 7
+    assert source.count('has_ended(quitting)') == 10 and source.count('quitting = own_pid()') == 10
 
 
 def test_its_own_designer_is_gone_whatever_else_starts(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -441,3 +441,22 @@ def test_every_quit_lifecycle_makes_is_a_watched_step() -> None:
         if run.rfind('watch.step(', 0, at) < max(run.rfind('check(', 0, at), run.rfind('check(\n', 0, at))
     ]
     assert len(calls) >= 8 and not unwatched, unwatched
+
+
+def test_a_normal_close_forced_during_its_shutdown_is_recorded_for_the_pool(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # REVIEW.md TST-293: the pool counts lifecycle's too, and keeps its folder, from what its worker reports
+    import project_constants
+
+    lifecycle = _lifecycle()
+    common = lifecycle.common
+    monkeypatch.setitem(vars(common), 'forced_in_shutdown', [])
+    hung = 'Designer quit after 31s (%s: every window had closed; its log stopped at "[INFO][IPC] Remove PID").' % (
+        project_constants.QUIT_FORCED_IN_SHUTDOWN
+    )
+    not_closed = 'Designer quit after 31s (%s; its log stopped at "x").' % project_constants.QUIT_FORCED_NOT_CLOSED
+    assert common.normal_close('Designer quit after 2s.', 'a') and common.forced_in_shutdown == []
+    assert common.normal_close(hung, 'the modal close') and common.forced_in_shutdown == ['the modal close']
+    assert not common.normal_close(not_closed, 'b') and common.forced_in_shutdown == ['the modal close']
+    assert '[INFO][IPC] Remove PID' in capsys.readouterr().out, 'printed whole'

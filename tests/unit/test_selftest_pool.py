@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 from selftest_fakes import Designer, Done, FakeRun, OpenGate, fresh, part, pool, unit_log
 
+import project_constants
 from conftest import SELFTEST_DIR
 
 REAL_POPEN = __import__('subprocess').Popen  # before any test replaces it
@@ -380,6 +381,7 @@ def test_a_worker_runs_its_category_and_writes_its_results_with_its_quit(
         'times': {'render': 1.5},
         'quit': 'Designer quit after 2s.',
         'quit_at': 12.5,
+        'forced_in_shutdown': [],  # lifecycle's normal closes forced during their shutdown (REVIEW.md TST-293)
     }
 
 
@@ -427,8 +429,9 @@ def test_the_pool_runs_every_category_once_and_prints_one_summary(
     assert all('check of %s' % name in out for name in names)
     # the run's start checks (get_guide, the Home screen) once, in the first category started, not lifecycle
     assert [n for n in workers.started if n.startswith('--first')] == ['--first ' + names[1]]
-    # each worker's check, each category's quit (not lifecycle's: it ends its own), the unit suite's
-    assert 'checks passed: %d/%d' % (2 * len(names), 2 * len(names)) in out
+    # each worker's check, each category's quit (not lifecycle's: it ends its own), the unit suite's, and the run's
+    # count of quits forced during their shutdown
+    assert 'checks passed: %d/%d' % (2 * len(names) + 1, 2 * len(names) + 1) in out
     assert 'quit_designer' in out and not (tmp_path / 'root').exists()
 
 
@@ -476,15 +479,98 @@ def test_a_dump_in_a_workers_folder_is_never_one_outside_the_run(
         assert "FAIL  quit_designer          undo's Designer left no crash dump" in out
 
 
-def test_a_forced_quit_or_none_fails_that_categorys_check(
+def _forced(how: str) -> str:
+    """quit_designer's words for a quit forced after 31 s: `how` is one of project_constants' QUIT_FORCED_*."""
+    return 'Designer quit after 31s (%s; its log stopped at "[INFO][IPC] Remove PID").' % how
+
+
+def test_a_quit_forced_before_its_close_took_or_none_fails_that_categorys_check(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
-    quits = {'render': 'Designer quit after 9s (forced).', 'facts': None}
+    # a quit forced during its own shutdown, every window closed, passes: not this check's to fail (ROADMAP item 69)
+    quits = {
+        'render': _forced(project_constants.QUIT_FORCED_NOT_CLOSED),
+        'measure': _forced(project_constants.QUIT_FORCED_IN_SHUTDOWN + ': its close had taken'),
+        'facts': None,
+    }
     workers = pool(
         monkeypatch, tmp_path, lambda name, folder, port: part(name, quits.get(name, 'Designer quit after 2s.'))
     )
     assert workers.run_pool(4) == 1
-    assert workers.common.results['quit_designer'].count(False) == 2
+    out = capsys.readouterr().out
+    assert "FAIL  quit_designer          closes render's Designer, which left no crash dump" in out
+    assert "FAIL  quit_designer          closes facts's Designer, which left no crash dump" in out
+    assert "PASS  quit_designer          closes measure's Designer, which left no crash dump" in out
+
+
+@pytest.mark.parametrize('count, passes', [(2, True), (3, False)])
+def test_more_than_two_quits_forced_during_their_shutdown_fail_the_run(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path, count: int, passes: bool
+) -> None:
+    # REVIEW.md TST-288: each passes its own check (DECISIONS.md, Bridge and quitting); more than the two seen at once
+    # (ROADMAP item 69) is a pattern, such as a task every Designer leaves in Qt's thread pool
+    forced = ['render', 'measure', 'params'][:count]
+    workers = pool(
+        monkeypatch,
+        tmp_path,
+        lambda name, folder, port: part(
+            name, _forced(project_constants.QUIT_FORCED_IN_SHUTDOWN) if name in forced else 'Designer quit after 2s.'
+        ),
+    )
+    assert workers.run_pool(4) == (0 if passes else 1)
+    out = capsys.readouterr().out
+    line = [l for l in out.splitlines() if 'quits forced during their shutdown' in l]
+    assert len(line) == 1 and line[0].startswith('PASS' if passes else 'FAIL') and all(n in line[0] for n in forced)
+
+
+def test_a_forced_quits_designer_folder_is_kept_to_read_its_log(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    # REVIEW.md SRV-106: the log naming where its shutdown stopped is in that folder
+    ports: dict[str, int] = {}
+
+    def write(name: str, folder: str, port: int) -> dict[str, Any]:
+        ports[name] = port
+        return part(
+            name, _forced(project_constants.QUIT_FORCED_IN_SHUTDOWN) if name == 'render' else 'Designer quit after 2s.'
+        )
+
+    workers = pool(monkeypatch, tmp_path, write)
+    for port in range(5001, 5001 + len(workers.names())):
+        os.makedirs(tmp_path / ('agent_%d' % port))
+    workers.run_pool(4)
+    kept = list(tmp_path.glob('agent_*'))
+    assert len(kept) == 1 and 'kept, its quit was forced: %s' % kept[0] in capsys.readouterr().out
+    assert kept[0].name == 'agent_%d' % ports['render'], "render's (REVIEW.md TST-294)"
+
+
+def test_lifecycles_quits_forced_during_their_shutdown_count_and_keep_its_folder(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    # REVIEW.md TST-293: lifecycle's own normal closes pass on such a quit too, and item 69 was first seen in one
+    ports: dict[str, int] = {}
+
+    def write(name: str, folder: str, port: int) -> dict[str, Any]:
+        ports[name] = port
+        if name == 'lifecycle':
+            return {**part(name), 'forced_in_shutdown': ['closes the Designer it started, with a modal dialog open']}
+        return part(
+            name,
+            _forced(project_constants.QUIT_FORCED_IN_SHUTDOWN)
+            if name in ('render', 'measure')
+            else 'Designer quit after 2s.',
+        )
+
+    workers = pool(monkeypatch, tmp_path, write)
+    for port in range(5001, 5001 + len(workers.names())):
+        os.makedirs(tmp_path / ('agent_%d' % port))
+    assert workers.run_pool(4) == 1
+    out = capsys.readouterr().out
+    line = [l for l in out.splitlines() if 'quits forced during their shutdown' in l]
+    assert len(line) == 1 and line[0].startswith('FAIL') and 'lifecycle: closes the Designer it started' in line[0]
+    assert {p.name for p in tmp_path.glob('agent_*')} == {
+        'agent_%d' % ports[n] for n in ('lifecycle', 'render', 'measure')
+    }
 
 
 def test_a_worker_without_results_fails_the_run(

@@ -815,6 +815,159 @@ def test_quit_forces_an_agents_that_stays(monkeypatch: pytest.MonkeyPatch, no_sl
     assert not Path(server.agent_designer_file(server.PORT)).exists()
 
 
+NEW = '===== New Session ====='  # the first line Designer logs at each start
+START = '[INFO][Python] Python SDK Version 3.13'  # about 430 lines later, as the plugins load (read_designer_log)
+CLOSED = '[INFO][Python] %s' % project_constants.QUIT_CLOSED  # the quit helper's line once every window closed
+
+
+def _forced_with(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, lines: list[str] | None) -> tuple[str, Any]:
+    """quit_designer forcing the agent's Designer 11, whose own log holds `lines` (None: it has none)."""
+    processes = _Processes(monkeypatch, 11)
+    _an_agent_started(11, home=str(tmp_path))
+    asked = _closes(monkeypatch)
+    log = tmp_path / 'log.txt'
+    if lines is not None:
+        log.write_text('\n'.join(lines))
+    patch_server(monkeypatch, '_log_for', lambda port: pytest.fail('the shared log may be read (REVIEW.md SRV-108)'))
+
+    def agent_log(port: int, home: str) -> str:
+        if lines is None:  # as the real one says it (REVIEW.md TST-294)
+            raise server.ToolError(
+                'The Designer on port %d has no log yet: it is still starting. Try again shortly.' % port
+            )
+        return str(log)
+
+    patch_server(monkeypatch, '_agent_log', agent_log)
+    text = server.quit_designer(wait_s=3)
+    assert processes.signals == [(11, signal.SIGTERM)] and asked
+    return text, asked
+
+
+def test_a_forced_quit_after_every_window_closed_says_so_and_quotes_its_logs_last_line(
+    monkeypatch: pytest.MonkeyPatch, no_sleep: None, tmp_path: Path
+) -> None:
+    # ROADMAP item 69, REVIEW.md SRV-106: two quits in a full run hung in Designer's shutdown after their close had
+    # taken; the result tells that from a close that didn't take, by the line the quit helper logs, wherever the
+    # shutdown hangs after it (in aboutToQuit too, before Designer logs any teardown line)
+    text, asked = _forced_with(
+        monkeypatch, tmp_path, [NEW, START, '[INFO] ready', CLOSED, '[INFO][IPC] Remove PID', '', '   ', '']
+    )  # blank lines after the last that isn't: the file ends in them (REVIEW.md TST-306)
+    assert project_constants.QUIT_FORCED_IN_SHUTDOWN in text and '"[INFO][IPC] Remove PID"' in text
+    assert project_constants.QUIT_FORCED_NOT_CLOSED not in text
+    assert repr(project_constants.QUIT_CLOSED) in asked[0], 'the helper is given the line to log'
+
+
+@pytest.mark.parametrize(
+    'lines',
+    [
+        [NEW, START, '[INFO][Environment] Instance Execute'],  # running: its close didn't take
+        [NEW, START, CLOSED, NEW, START, '[INFO][Environment] Instance Execute'],  # a close of an earlier start
+        [NEW, START, CLOSED, NEW, '[INFO][3DView] Precompiling shaders done.'],  # REVIEW.md SRV-107: still starting
+    ],
+)
+def test_a_forced_quit_says_it_had_not_closed_unless_its_session_logged_every_window_closed(
+    monkeypatch: pytest.MonkeyPatch, no_sleep: None, tmp_path: Path, lines: list[str]
+) -> None:
+    text, _ = _forced_with(monkeypatch, tmp_path, lines)
+    assert project_constants.QUIT_FORCED_NOT_CLOSED in text and '"%s"' % lines[-1] in text
+    assert project_constants.QUIT_FORCED_IN_SHUTDOWN not in text
+
+
+def test_a_forced_quit_with_no_log_of_its_own_says_so(
+    monkeypatch: pytest.MonkeyPatch, no_sleep: None, tmp_path: Path
+) -> None:
+    # REVIEW.md SRV-106: "had not closed" only when its log was read
+    text, _ = _forced_with(monkeypatch, tmp_path, None)
+    assert 'forced' in text and 'its log could not be read' in text
+    assert (
+        project_constants.QUIT_FORCED_NOT_CLOSED not in text and project_constants.QUIT_FORCED_IN_SHUTDOWN not in text
+    )
+
+
+def test_a_forced_quit_reads_no_log_but_its_own(monkeypatch: pytest.MonkeyPatch, no_sleep: None) -> None:
+    # one recorded without a home writes the shared log, the user's lines among its own: not read
+    _Processes(monkeypatch, 11)
+    _an_agent_started(11)
+    _closes(monkeypatch)
+    patch_server(monkeypatch, '_log_for', lambda port: pytest.fail('the shared log was read'))
+    patch_server(monkeypatch, '_agent_log', lambda port, home: pytest.fail('a log read without a home'))
+    assert 'its log could not be read' in server.quit_designer(wait_s=3)
+
+
+def test_a_designer_ending_while_its_log_is_read_is_not_reported_forced(
+    monkeypatch: pytest.MonkeyPatch, no_sleep: None, tmp_path: Path
+) -> None:
+    # REVIEW.md SRV-108: the read takes time after the last look; one that ended in it quit by itself
+    processes = _Processes(monkeypatch, 11)
+    _an_agent_started(11, home=str(tmp_path))
+    _closes(monkeypatch)
+    log = tmp_path / 'log.txt'
+    log.write_text('\n'.join([NEW, START, CLOSED]))
+
+    def read_as_it_ends(port: int, home: str) -> str:
+        processes.pids.clear()
+        return str(log)
+
+    patch_server(monkeypatch, '_agent_log', read_as_it_ends)
+    text = server.quit_designer(wait_s=3)
+    assert 'Designer quit after' in text and 'forced' not in text and not processes.signals
+
+
+LISTENING = '[INFO] [%s] v8 listening on 127.0.0.1:9877' % PLUGIN
+HANDED_OVER = '[INFO][IPC] Found instance PID: 1'  # a second process, handing its arguments over, then gone
+ENDED = '[INFO][Environment] Application uninitialized'
+
+
+@pytest.mark.parametrize(
+    'lines, since, port',
+    [
+        # REVIEW.md SRV-107: Designer logs "Python SDK Version" about 430 lines into a session; before it, the previous
+        # session's lines aren't this one's
+        ([NEW, START, LISTENING, CLOSED, NEW, '[INFO] starting'], [NEW, '[INFO] starting'], None),
+        # REVIEW.md TST-294: started, from its SDK line, as before
+        ([NEW, '[INFO] start-up', START, LISTENING, 'x'], [START, LISTENING, 'x'], 9877),
+        # REVIEW.md SRV-109: a process handing over to the running one logs a session that ends at once, no SDK line
+        (
+            [NEW, START, LISTENING, 'x', NEW, HANDED_OVER, ENDED, 'y'],
+            [START, LISTENING, 'x', NEW, HANDED_OVER, ENDED, 'y'],
+            9877,
+        ),
+        # REVIEW.md SRV-110: a hand-over while one starts ends its own session only, not the one starting
+        (
+            [NEW, START, LISTENING, CLOSED, ENDED, NEW, '[INFO] starting', NEW, HANDED_OVER, ENDED, 'still starting'],
+            [NEW, '[INFO] starting', NEW, HANDED_OVER, ENDED, 'still starting'],
+            None,
+        ),
+    ],
+)
+def test_the_last_start_is_the_session_still_running(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, lines: list[str], since: list[str], port: int | None
+) -> None:
+    # for read_designer_log, the port its plugin last logged (_log_for) and a forced quit's evidence
+    log = tmp_path / 'log.txt'
+    log.write_text('\n'.join(lines))
+    monkeypatch.setenv('SD_DESIGNER_LOG', str(log))
+    assert server.read_designer_log(lines=100).splitlines()[1:] == since
+    assert server._last_port(str(log)) == port
+
+
+@pytest.mark.parametrize(
+    'lines, closed',
+    [
+        # the previous session's line inside the tail, its first line before the cut
+        ([NEW, START, 'p' * server.LOG_TAIL, CLOSED, 'q' * 100, NEW, START, '[INFO] running'], False),
+        # this session longer than the tail, its line in it
+        ([NEW, START, 'r' * server.LOG_TAIL, CLOSED, '[INFO][IPC] Remove PID'], True),
+    ],
+)
+def test_a_forced_quit_reads_its_logs_tail_and_judges_this_session(
+    monkeypatch: pytest.MonkeyPatch, no_sleep: None, tmp_path: Path, lines: list[str], closed: bool
+) -> None:
+    # REVIEW.md SRV-108, TST-294: only the end of the log is read
+    text, _ = _forced_with(monkeypatch, tmp_path, lines)
+    assert (project_constants.QUIT_FORCED_IN_SHUTDOWN in text) == closed and '"%s"' % lines[-1] in text
+
+
 def test_quit_forces_harder_if_it_must(monkeypatch: pytest.MonkeyPatch, no_sleep: None) -> None:
     processes = _Processes(monkeypatch, 11, ends_on=signal.SIGKILL)
     _an_agent_started(11)
@@ -856,7 +1009,7 @@ def test_quit_names_the_process_it_means(monkeypatch: pytest.MonkeyPatch, no_sle
     _an_agent_started(11)
     asked = _closes(monkeypatch)
     server.quit_designer(wait_s=1)
-    assert asked[0].rstrip().endswith('quit_designer(11)')
+    assert asked[0].rstrip().endswith('quit_designer(11, %r)' % project_constants.QUIT_CLOSED)
 
 
 def test_quit_with_another_designer_on_the_port_only_ends_its_own(
@@ -1166,7 +1319,11 @@ def test_quit_on_a_port_closes_only_its_own(monkeypatch: pytest.MonkeyPatch, no_
     monkeypatch.setattr(time, 'sleep', gone)
     text = server.quit_designer(port=OTHER)
     assert 'Designer quit after' in text and not processes.signals and processes.pids == [11]
-    assert len(asked) == 1 and asked[0][0].rstrip().endswith('quit_designer(12)') and asked[0][1] == OTHER
+    assert (
+        len(asked) == 1
+        and asked[0][0].rstrip().endswith('quit_designer(12, %r)' % project_constants.QUIT_CLOSED)
+        and asked[0][1] == OTHER
+    )
     assert set(sent) == {OTHER}
     assert server._agent_designer(server.PORT) == 11 and not os.path.exists(server.agent_designer_file(OTHER))
 
