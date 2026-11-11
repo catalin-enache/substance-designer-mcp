@@ -62,6 +62,14 @@ may update the names and paths an entry points at; changing what was decided, or
   Reopen if: such a finding turns out to have hidden a real break, or the user changes the rule. (The user's decision,
   2026-11-07.)
 
+- **A category's preparation opens its graph in the editor only where its checks read the editor.** Each category of
+  the self-test starts from its own preparation in a Designer just started, and most never open their graph, where in
+  `main`'s one run earlier categories had left one open. Measured (2026-11-11): `params`, `inputs`, `bitmaps` and
+  `safeguards` with their graph open, then also with an output node in it, passed 213 of 213 each time, in 4 Designers;
+  no tool they call reads the editor. `facts`, `link_display`, `undo` and the editor categories open theirs, since what
+  they check needs it. The user's decision, 2026-11-11.
+  Reopen if: a defect shows up that needs a view open, in a category whose preparation doesn't open its graph.
+
 - **A Designer the user opened is theirs; one an agent started is disposable.** The tools never end the user's: `quit_designer`
   refuses, and the agent asks them to save, close and reopen it, or to open it if a task needs it. A user wanting a material already
   has Designer open, so an agent only starts one for tests or work on this project, and ends it however works, force included,
@@ -153,6 +161,13 @@ may update the names and paths an entry points at; changing what was decided, or
   Such a plugin runs only between an update and the next restart of that Designer: older plugins aren't used, as
   `install.py` installs the plugin with the server. The user's decision, 2026-11-07.
   Reopen if: plugins of other versions come to be used next to the server.
+
+- **A stopped plugin server keeps its timer and waker until Designer's Python ends** (`_retired`,
+  `uninitializeSDPlugin` in the plugin). Freed with the server, they could be destroyed by a client's thread being served
+  as the plugin unloads, off the main thread they belong to. Kept, they could be destroyed after Designer's
+  QApplication at quit: measured (2026-11-11), more than 20 quits of Designers on plugin v6 and later left no crash
+  dump. The user's decision, 2026-11-11.
+  Reopen if: a crash dump at Designer's quit points at them.
 
 - **No job starts sooner than 30 ms after the one before ended, whatever starts it; a call after a pause starts at
   once.** Started at once, a job found Designer not settled after the one before (a node measured right after the one
