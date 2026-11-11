@@ -223,7 +223,7 @@ or, in a full run, a tool no check exercised; 2: nothing was run (a Designer of 
 
 | Category | What it checks |
 |---|---|
-| `lifecycle` | Quitting and starting Designer, also forced, on other ports, in Designers of its own (the longest, about 3 minutes) |
+| `lifecycle` | Quitting and starting Designer, also forced, on other ports, in Designers of its own (the longest, about 4 minutes) |
 | `render` | Output: `export_outputs`, `sbsar_info`, `render_sbs` (seeds, sizes, formats) and `preview_maps` |
 | `facts` | The Designer behaviour the agent guide relies on, so a Designer update that changes it shows up |
 | `safeguards` | Refusals and failure paths: unsaved changes never unloaded, bad node ids, failed restores |
@@ -383,7 +383,8 @@ snapshot taken by this version that you opened in Designer and saved in place st
 work), and is listed; older snapshots can't be told apart and are deleted. Pass
 `--plugins-dir` if you installed with it. It also removes what `launch_designer` left for the
 Designers an agent started: their records (`~/.sd_claude_bridge_kve_agent_designer_<port>.json`) and
-their folders (`/tmp/sd_mcp_<user ID>_<port>/`, each one's settings, log and crash dumps).
+their folders (`/tmp/sd_mcp_<user ID>_<port>/`, each one's settings, log, crash dumps and, for one that was about
+to be forced, a sample of its threads, about 300 KB).
 While any Designer runs, or when that can't be told (its processes couldn't be listed, or not on
 macOS), those folders are kept and listed instead, since one an agent started uses its own. Then
 restart Designer and delete this folder.

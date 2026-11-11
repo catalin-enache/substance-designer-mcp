@@ -29,8 +29,11 @@ line of its teardown before its aboutToQuit handlers have run, so the quit helpe
 closed has closed, Designer's own among them, and a forced quit says from it whether its close had taken, as the
 helper judged it (its limits: designer_helpers/quit.py), and quotes the last line of the log.
 So quit_designer only closes the windows, and past its wait the server ends the process (SIGTERM, then SIGKILL), only
-for a Designer an agent started. launch_designer records the process it started (its own child), its start time and, on
-macOS, its home in `agent_designer_file(port)` (project_constants.py), one per port, so a /mcp reconnect keeps it and a
+for a Designer an agent started; launch_designer ends one not answering past its start-up the same way. Before either
+force, on macOS, the server runs macOS's `sample` on it for a second, writing its threads' stacks into that Designer's
+own folder, to read what a hang waits on (ROADMAP item 70): 1.5 to 2 s, without admin rights; the sample of one stuck in
+the thread pool's wait holds `QThreadPool::waitForDone` (measured, lifecycle's two sample checks). launch_designer
+records the process it started (its own child), its start time and, on macOS, its home in `agent_designer_file(port)` (project_constants.py), one per port, so a /mcp reconnect keeps it and a
 reused ID doesn't count; on Windows nothing is recorded, so every Designer counts as the user's. A close goes to
 whichever Designer holds the port, so it names the recorded process and any other refuses (`os.getpid()` inside Designer
 is that process, checked live). The plugin answers status from another thread, so a main thread frozen outside
@@ -64,6 +67,7 @@ from project_constants import (  # on sys.path: the package's __init__ imports .
     QUIT_CLOSED,
     QUIT_FORCED_IN_SHUTDOWN,
     QUIT_FORCED_NOT_CLOSED,
+    QUIT_SAMPLED,
     SHORT_TEMP,
     STARTUP_LIMIT,
     agent_designer_file,
@@ -80,6 +84,7 @@ from .core import (
     _designer_running,
     _helpers_call,
     _Refused,
+    _sentence,
     _server_versions,
     _tool,
 )
@@ -562,16 +567,19 @@ def _force_end(pid: int, port: int, seen: bytes) -> bool:
     return False
 
 
-def _end_if_past_startup(port: int) -> bool:
+def _end_if_past_startup(port: int) -> str | None:
     """End the Designer an agent started on `port`, unless it may still be starting: it is disposable, so it isn't
-    waited for past that (REVIEW.md HLP-82), but a retry mustn't kill one that is only slow (REVIEW.md SRV-75)."""
+    waited for past that (REVIEW.md HLP-82), but a retry mustn't kill one that is only slow (REVIEW.md SRV-75). Its
+    threads are sampled first, as it may be hung in its shutdown (REVIEW.md SRV-113). Returns _sampled_before_force's
+    sentence ('' when no sample was tried), or None when nothing was ended."""
     found = _agent_record(port)
     if found is None or _still_starting(port):
-        return False
+        return None
     own, seen = found
+    sampled = _sampled_before_force(own, port)
     if not _force_end(own, port, seen):
-        raise ToolError(_could_not_end(own))  # once is enough (REVIEW.md SRV-79)
-    return True
+        raise ToolError(_could_not_end(own) + sampled)  # once is enough (REVIEW.md SRV-79)
+    return sampled
 
 
 def _could_not_end(pid: int) -> str:
@@ -680,8 +688,9 @@ def launch_designer(wait_s: int = 180, port: int | None = None) -> str:
     # while we wait (it was shutting down, or hung after a crash), a new one is started then.
     app = os.environ.get('SD_DESIGNER_APP') or DESIGNER_APP.get(sys.platform)
 
-    ended_note = 'Ended a Designer an agent started, which was not answering.\n'
-    note = ended_note if _end_if_past_startup(port) else ''
+    ended_note = 'Ended a Designer an agent started, which was not answering.%s\n'
+    ended_sample = _end_if_past_startup(port)
+    note = '' if ended_sample is None else ended_note % ended_sample
 
     def start() -> bool:
         """Start one, unless another launch on this port started one meanwhile: False then, and that one is waited
@@ -725,8 +734,9 @@ def launch_designer(wait_s: int = 180, port: int | None = None) -> str:
         except _Refused:
             raise
         except ToolError:
-            if running and _end_if_past_startup(port):
-                note = ended_note
+            ended_sample = _end_if_past_startup(port) if running else None
+            if ended_sample is not None:
+                note = ended_note % ended_sample
             if running and not _running_on(port):  # it exited, or turned out to be the user's on another port
                 restarted = True
                 running = not start()
@@ -770,12 +780,45 @@ def launch_designer(wait_s: int = 180, port: int | None = None) -> str:
     )
 
 
+SAMPLE = '/usr/bin/sample'  # macOS's: the stacks of a process's threads, the process left running
+
+
+def _sample(pid: int, path: str) -> str | None:
+    """Sample process `pid` for a second into `path`: None once written, else why not."""
+    try:
+        done = subprocess.run(
+            [SAMPLE, str(pid), '1', '-file', path], capture_output=True, text=True, timeout=30, check=False
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return str(e)
+    if done.returncode == 0 and os.path.isfile(path):
+        return None
+    said = done.stderr.strip().splitlines()
+    return said[-1] if said else 'sample exited with %d' % done.returncode
+
+
+def _sampled_before_force(pid: int, port: int) -> str:
+    """On macOS, the threads of the Designer an agent started on `port`, about to be forced, sampled into its own
+    folder: what a hang in its shutdown waits on (ROADMAP item 70). The sentence for the result; '' without that folder
+    (_checked_folder's) or off macOS."""
+    folder = _checked_folder(port) if sys.platform == 'darwin' else None
+    if folder is None:
+        return ''
+    path = os.path.join(folder, 'threads_%d.sample.txt' % pid)  # not "forced": it may quit while sampled
+    failed = _sample(pid, path)
+    return (
+        ' Its threads could not be sampled first: %s' % _sentence(failed) if failed else ' %s %s' % (QUIT_SAMPLED, path)
+    )
+
+
 @_tool()
 def quit_designer(wait_s: int = 10, port: int | None = None) -> str:
     """Close a Designer an agent started, and wait until its process has exited: unsaved changes are dropped, and after
     wait_s it is force-ended; the result says which and, if forced, whether its close had taken (its own shutdown
-    then hung) and the last line of its log. Running a job, it isn't asked to close. Not replying to the close within
-    wait_s (at least 10 s) adds that to the wait. Any other Designer is the user's: this ends nothing and says to ask them to save, close and reopen it.
+    then hung) and the last line of its log. On macOS, one still running past wait_s has its threads sampled into a
+    file the result names, also when it then quits by itself. Running a job, it isn't asked to close. Not replying to
+    the close within wait_s (at least 10 s) adds that to the wait. Any other Designer is the user's: this ends nothing
+    and says to ask them to save, close and reopen it.
     port: the one on that bridge port (launch_designer's port); this server's when omitted. Others are left alone."""
     port = _port(port)
     found = _agent_record(port)
@@ -806,17 +849,20 @@ def quit_designer(wait_s: int = 10, port: int | None = None) -> str:
             return prefix + 'Designer quit after %.0fs.' % (time.time() - started)
     from .log import _quit_evidence  # here: log.py imports from this module
 
-    evidence = _quit_evidence(port)  # read while it still runs: how far its quit got
-    if own not in _designer_pids():  # it ended while that was read: by itself (REVIEW.md SRV-108)
+    sampled = _sampled_before_force(own, port)  # what it is stuck in (ROADMAP item 70)
+    # read while it still runs, after the sample: how far its quit got (REVIEW.md SRV-111)
+    evidence = _quit_evidence(port)
+    if own not in _designer_pids():  # it ended while those were read: by itself (REVIEW.md SRV-108)
         _forget_started(port, seen)
-        return prefix + 'Designer quit after %.0fs.' % (time.time() - started)
+        # a shutdown that hung past its wait, then ended: its sample is a hang's evidence (REVIEW.md SRV-115)
+        return prefix + 'Designer quit after %.0fs.%s' % (time.time() - started, sampled)
     if _force_end(
         own, port, seen
     ):  # it can hang in its own shutdown, past anything inside it (REVIEW.md HLP-82, ROADMAP item 69)
         took = time.time() - started
         if evidence is None:
-            return prefix + 'Designer quit after %.0fs (forced; its log could not be read).' % took
+            return prefix + 'Designer quit after %.0fs (forced; its log could not be read).%s' % (took, sampled)
         closed, last = evidence
         how = QUIT_FORCED_IN_SHUTDOWN + ': its close had taken' if closed else QUIT_FORCED_NOT_CLOSED
-        return prefix + 'Designer quit after %.0fs (%s; its log stopped at "%s").' % (took, how, last)
-    raise ToolError(_could_not_end(own))
+        return prefix + 'Designer quit after %.0fs (%s; its log stopped at "%s").%s' % (took, how, last, sampled)
+    raise ToolError(_could_not_end(own) + sampled)

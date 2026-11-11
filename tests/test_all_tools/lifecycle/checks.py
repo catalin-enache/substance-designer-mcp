@@ -43,6 +43,7 @@ from test_all_tools.common import (
     text,
 )
 from test_all_tools.crash_watch import watching_crashes
+from test_all_tools.lifecycle.samples import sampled
 
 CLOSE_WINDOWS_ONLY = dedent("""\
     from PySide6.QtCore import QTimer
@@ -551,6 +552,15 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
             'HELD=True' in held and QUIT_FORCED_IN_SHUTDOWN in t and has_ended(quitting),
             held + t,
         )
+        # its threads sampled before the force, for the cause of a hang (ROADMAP item 70): this one waits for the pool;
+        # the detail says where its main thread was, as the pool deletes lifecycle's folder (REVIEW.md TST-310)
+        stacks, where = sampled(t)
+        check(
+            'quit_designer',
+            "samples one stuck in its shutdown before forcing it, the thread pool's wait shown",
+            'QThreadPool::waitForDone' in stacks,
+            where,
+        )
         t = text(await c('launch_designer', {'wait_s': 240}))
         check(
             'launch_designer', 'starts again after a stuck shutdown', 'Designer started in' in t and 'Ended' not in t, t
@@ -617,6 +627,13 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
             "ends an agent's Designer not answering, and starts a new one",
             'Ended a Designer an agent started' in t and 'Designer started in' in t,
             t,
+        )
+        stacks, where = sampled(t)  # it can be one hung in its shutdown, as this one is (REVIEW.md SRV-113)
+        check(
+            'launch_designer',
+            "samples the agent's Designer it ends before forcing it, the thread pool's wait shown",
+            'QThreadPool::waitForDone' in stacks,
+            where,
         )
 
         # a window shown while the main window closes (a prompt appearing then), accepting its close: Designer quits once

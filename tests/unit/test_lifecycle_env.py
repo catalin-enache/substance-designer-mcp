@@ -28,6 +28,7 @@ from conftest import (
     REAL_OWN_HOME,
     REAL_OWN_TEMP,
     REAL_PROCESS_START,
+    REAL_SAMPLE,
     REAL_SHORT_TEMP,
     ROOT,
     patch_server,
@@ -911,6 +912,211 @@ def test_a_designer_ending_while_its_log_is_read_is_not_reported_forced(
     patch_server(monkeypatch, '_agent_log', read_as_it_ends)
     text = server.quit_designer(wait_s=3)
     assert 'Designer quit after' in text and 'forced' not in text and not processes.signals
+
+
+# the quit's clean-up locks with fcntl once the platform is faked as macOS (REVIEW.md TST-308)
+_POSIX_QUIT = pytest.mark.skipif(sys.platform == 'win32', reason="no fcntl there, and macOS's sample")
+
+
+def _fake_sample(
+    monkeypatch: pytest.MonkeyPatch, folder: Path, processes: _Processes, said: str | None = None
+) -> list[Any]:
+    """As on macOS, with `folder` the agent's own: `_sample` faked, writing its file unless it says `said`; each call
+    recorded with the signals sent before it."""
+    patch_server(monkeypatch, '_checked_folder', lambda port: str(folder))
+    calls: list[Any] = []
+
+    def sample(pid: int, path: str) -> str | None:
+        calls.append((pid, path, list(processes.signals)))
+        if said is None:
+            Path(path).write_text('Call graph:')
+        return said
+
+    patch_server(monkeypatch, '_sample', sample)
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    return calls
+
+
+def _sampling(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    said: str | None = None,
+    home: str | None = None,
+    ends_on: int = signal.SIGTERM,
+) -> tuple[_Processes, list[Any]]:
+    """An agent's Designer 11, recorded with `home`, that stays past its quit's wait and ends on `ends_on`; its own
+    folder tmp_path, its sample faked (_fake_sample)."""
+    processes = _Processes(monkeypatch, 11, ends_on=ends_on)
+    _an_agent_started(11, home=home)
+    _closes(monkeypatch)
+    return processes, _fake_sample(monkeypatch, tmp_path, processes, said)
+
+
+@_POSIX_QUIT
+def test_a_forced_quit_samples_its_threads_first_and_names_the_file(
+    monkeypatch: pytest.MonkeyPatch, no_sleep: None, tmp_path: Path
+) -> None:
+    # ROADMAP item 70: what a Designer stuck past its quit's wait was doing, kept in its own folder
+    processes, calls = _sampling(monkeypatch, tmp_path)
+    text = server.quit_designer(wait_s=3)
+    path = str(tmp_path / 'threads_11.sample.txt')
+    assert calls == [(11, path, [])], 'sampled once, into its own folder, before any signal'
+    assert processes.signals == [(11, signal.SIGTERM)] and text.endswith('sampled first: %s' % path)
+
+
+@_POSIX_QUIT
+def test_a_forced_quit_whose_sample_fails_is_forced_and_says_why(
+    monkeypatch: pytest.MonkeyPatch, no_sleep: None, tmp_path: Path
+) -> None:
+    # as sample says it (measured), ending in a period: the sentence doesn't add one (REVIEW.md SRV-114)
+    said = 'sample[5]: sample cannot examine process 11 because it no longer appears to be running.'
+    processes, calls = _sampling(monkeypatch, tmp_path, said=said)
+    text = server.quit_designer(wait_s=3)
+    assert len(calls) == 1 and processes.signals == [(11, signal.SIGTERM)]
+    assert 'could not be sampled first: %s' % said in text and '..' not in text
+
+
+@_POSIX_QUIT
+def test_a_forced_quit_samples_nothing_without_its_own_folder(
+    monkeypatch: pytest.MonkeyPatch, no_sleep: None, tmp_path: Path
+) -> None:
+    processes, calls = _sampling(monkeypatch, tmp_path)
+    patch_server(monkeypatch, '_checked_folder', lambda port: None)  # another account's, or gone
+    text = server.quit_designer(wait_s=3)
+    assert not calls and processes.signals == [(11, signal.SIGTERM)] and 'sampled' not in text
+
+
+def test_a_forced_quit_samples_nothing_off_macos(
+    monkeypatch: pytest.MonkeyPatch, no_sleep: None, tmp_path: Path
+) -> None:
+    _, calls = _sampling(monkeypatch, tmp_path)
+    monkeypatch.setattr(sys, 'platform', 'win32')
+    assert server._sampled_before_force(11, server.PORT) == '' and not calls
+
+
+@_POSIX_QUIT
+def test_a_designer_quitting_within_its_wait_is_not_sampled(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # REVIEW.md TST-309: only one about to be forced; a sample costs seconds and a file
+    processes, calls = _sampling(monkeypatch, tmp_path)
+    monkeypatch.setattr(time, 'sleep', lambda s: processes.pids.clear())  # gone at the wait's first look
+    text = server.quit_designer(wait_s=3)
+    assert 'Designer quit after' in text and not calls and not processes.signals
+
+
+@_POSIX_QUIT
+def test_a_designer_ending_while_sampled_is_not_reported_forced(
+    monkeypatch: pytest.MonkeyPatch, no_sleep: None, tmp_path: Path
+) -> None:
+    # as one ending while its log is read (REVIEW.md SRV-108); its sample, written as it ended (measured), is a hang's
+    # evidence, named, the name without "forced", which a plain quit doesn't hold (REVIEW.md SRV-115)
+    processes, _ = _sampling(monkeypatch, tmp_path)
+
+    def sample(pid: int, path: str) -> None:
+        Path(path).write_text('Call graph:')
+        processes.pids.clear()
+
+    patch_server(monkeypatch, '_sample', sample)
+    text = server.quit_designer(wait_s=3)
+    assert 'Designer quit after' in text and 'forced' not in text and not processes.signals
+    assert text.endswith('%s %s' % (project_constants.QUIT_SAMPLED, tmp_path / 'threads_11.sample.txt'))
+
+
+@_POSIX_QUIT
+def test_a_close_logged_while_it_is_sampled_counts(
+    monkeypatch: pytest.MonkeyPatch, no_sleep: None, tmp_path: Path
+) -> None:
+    # REVIEW.md SRV-111: the sample takes seconds; its log is read after it, just before the force
+    processes, _ = _sampling(monkeypatch, tmp_path, home=str(tmp_path))
+    log = tmp_path / 'log.txt'
+    log.write_text('\n'.join([NEW, START, '[INFO] ready']))
+    patch_server(monkeypatch, '_agent_log', lambda port, home: str(log))
+
+    def sample(pid: int, path: str) -> None:
+        log.write_text('\n'.join([NEW, START, '[INFO] ready', CLOSED]))  # its close taking meanwhile
+        Path(path).write_text('Call graph:')
+
+    patch_server(monkeypatch, '_sample', sample)
+    text = server.quit_designer(wait_s=3)
+    assert project_constants.QUIT_FORCED_IN_SHUTDOWN in text and processes.signals == [(11, signal.SIGTERM)]
+
+
+@_POSIX_QUIT
+def test_a_force_that_fails_names_the_sample(monkeypatch: pytest.MonkeyPatch, no_sleep: None, tmp_path: Path) -> None:
+    # REVIEW.md SRV-112: one no signal ends, when its stacks matter most
+    _, calls = _sampling(monkeypatch, tmp_path, ends_on=-1)
+    with pytest.raises(server.ToolError, match=r'kill -9 11`\. Its threads, sampled first: .*threads_11'):
+        server.quit_designer(wait_s=3)
+    assert len(calls) == 1
+
+
+@_POSIX_QUIT
+def test_launch_samples_an_agents_it_ends(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None) -> None:
+    # REVIEW.md SRV-113: one not answering past its start-up may be one hung in its shutdown
+    started = _launch_fakes(monkeypatch, tmp_path)
+    processes = _Processes(monkeypatch, 11)
+    _an_agent_started(11, age=server.STARTUP_LIMIT + 1)
+    own = tmp_path / 'own'
+    own.mkdir()
+    calls = _fake_sample(monkeypatch, own, processes)
+
+    def begin(cmd: list[str], **kw: Any) -> _FakeProcess:
+        started.append(cmd)
+        processes.pids.append(77)
+        return _FakeProcess(77)
+
+    monkeypatch.setattr(subprocess, 'Popen', begin)
+    patch_server(monkeypatch, '_send', _answers_once_started(started))
+    text = server.launch_designer(wait_s=30)
+    path = str(own / 'threads_11.sample.txt')
+    assert calls == [(11, path, [])] and processes.signals == [(11, signal.SIGTERM)]
+    assert 'which was not answering. Its threads, sampled first: %s\n' % path in text and 'Designer started in' in text
+
+
+@_POSIX_QUIT
+def test_launch_names_the_sample_of_one_it_cant_end(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
+) -> None:
+    started = _launch_fakes(monkeypatch, tmp_path)
+    processes = _Processes(monkeypatch, 11, ends_on=-1)
+    _an_agent_started(11, age=server.STARTUP_LIMIT + 1)
+    own = tmp_path / 'own'
+    own.mkdir()
+    _fake_sample(monkeypatch, own, processes)
+    patch_server(monkeypatch, '_send', _no_bridge)
+    with pytest.raises(server.ToolError, match=r'kill -9 11`\. Its threads, sampled first: .*threads_11'):
+        server.launch_designer(wait_s=30)
+    assert not started
+
+
+@pytest.mark.parametrize(
+    'outcome, said',
+    [
+        ((0, '', True), None),  # written
+        ((1, 'sample[5]: sample cannot examine process 11\n', False), 'sample[5]: sample cannot examine process 11'),
+        ((0, '', False), 'sample exited with 0'),  # no file: nothing to name
+        (subprocess.TimeoutExpired(['sample'], 30), 'timed out'),
+        (OSError(2, 'No such file or directory'), 'No such file or directory'),  # no sample here (TST-309)
+    ],
+)
+def test_sample_runs_macos_sample_for_a_second_into_the_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, outcome: Any, said: str | None
+) -> None:
+    path = str(tmp_path / 'threads_11.sample.txt')
+    ran: list[Any] = []
+
+    def run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        ran.append((cmd, kw.get('timeout')))
+        if isinstance(outcome, Exception):
+            raise outcome
+        code, stderr, writes = outcome
+        if writes:
+            Path(path).write_text('Call graph:')
+        return subprocess.CompletedProcess(cmd, code, '', stderr)
+
+    monkeypatch.setattr(subprocess, 'run', run)
+    result = REAL_SAMPLE(11, path)
+    assert ran == [(['/usr/bin/sample', '11', '1', '-file', path], 30)], 'one second, a limit of its own'
+    assert result == said if said is None else said in str(result)
 
 
 LISTENING = '[INFO] [%s] v8 listening on 127.0.0.1:9877' % PLUGIN

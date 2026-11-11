@@ -22,7 +22,7 @@ from typing import cast
 
 from mcp.server.mcpserver.exceptions import ToolError
 
-from .core import _bridge, _checked, _edit, _helpers_call, _tool
+from .core import _bridge, _checked, _edit, _helpers_call, _sentence, _tool
 from .snapshots import _new_snapshot_path, _note_package, _v, _whole_or_none, _xml_graph, snapshot_graph
 
 
@@ -135,7 +135,7 @@ def set_link_display(
             # through the file: by name alone another package's tab of this name could open (SRV-34)
             _checked(_bridge(_helpers_call('open_graph(graph_in_file(%r, %r))' % (path, gid)), timeout=60))
         except ToolError as e:
-            reopen = ' WARNING: could not reopen %s: %s.' % (gid, e)
+            reopen = ' WARNING: could not reopen %s: %s' % (gid, _sentence(str(e)))  # its own stop (REVIEW.md SRV-117)
 
     return (
         '%d of %d selected link(s) changed to %s in %s (of %d links in the graph); package saved and '
@@ -226,9 +226,9 @@ def _reload_package_file(path: str, snapshot: str | None = None) -> None:
     except ToolError as e:
         # the package is closed by now: say so, and where its files are (REVIEW.md SRV-29)
         raise ToolError(
-            '%s. The package was closed in Designer and could not be opened again: the edited file '
+            '%s The package was closed in Designer and could not be opened again: the edited file '
             'is %s%s; open it by hand (File > Open).'
-            % (e, path, ', the snapshot taken before is %s' % snapshot if snapshot else '')
+            % (_sentence(str(e)), path, ', the snapshot taken before is %s' % snapshot if snapshot else '')
         ) from e
     time.sleep(RELOAD_SETTLE_S)
 

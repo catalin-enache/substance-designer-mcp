@@ -4,10 +4,10 @@ than in batches waiting for their slowest (simulated with 4: 2.8 to 3.7 min agai
 `python tests/test_all_tools --worker <category>`, a process of its own (the check record and common.PORT are module
 globals) with a bridge port, an MCP server, a Designer and folders of its own; this parent shows each worker's lines
 and merges their results into one summary. A run is the same with 1 worker (one after the other) or 4: no category
-sees what another did. Both suites took about 12 minutes one after the other before the pool; with it (2026-11-10)
-3.4 minutes with 4 at once, 5.6 with 2, 10.5 with 1, lifecycle (about 3 minutes) and then undo alone setting the time
-with 4. A Designer took about 1.9 GB after a run, about 11 GB after a heavy compute (2026-11-05); the peak of four at
-once wasn't measured (ROADMAP item 66).
+sees what another did. Both suites took about 12 minutes one after the other before the pool; with it 4 minutes with 4
+at once (2026-11-11), lifecycle (about 3.8 minutes) and then undo alone setting the time; 5.6 with 2 and 10.5 with 1
+(2026-11-10, with a shorter lifecycle). A Designer took about 1.9 GB after a run, about 11 GB after a heavy compute
+(2026-11-05); the peak of four at once wasn't measured (ROADMAP item 66).
 
 - **lifecycle starts first** (the longest), and holds launch_lock's lock over its two windows: while it does, no
   Designer of the run starts or quits.
@@ -20,9 +20,10 @@ once wasn't measured (ROADMAP item 66).
 - **The unit suite** (`pytest`, no test ids) runs beside the pool, its result one check, `unit tests`; `--no-unit`
   leaves it out.
 - **A quit forced during its shutdown** (its close taken: quit_designer says so) passes its own check; more than two in
-  a run, lifecycle's normal closes that reach `common.normal_close` counted too, fail a check of their own. A category's Designer's folder is kept after
-  its quit was forced, lifecycle's after one of its normal closes forced during its shutdown that its check reached, to
-  read its log (DECISIONS.md, Bridge and quitting).
+  a run, lifecycle's normal closes that reach `common.normal_close` counted too, fail a check of their own. A category's
+  Designer's folder is kept after its quit was forced or named a sample of its threads (one that ended while sampled),
+  lifecycle's after one of its normal closes forced during its shutdown that its check reached, to read its log and
+  sample (DECISIONS.md, Bridge and quitting; ROADMAP item 70).
 - **No folder shared** between workers (worker_env): with the system's temp folder shared, two of five runs lost a
   Designer (ROADMAP item 59).
 - **No unit test starts a real run:** `spawn` and the index's run refuse under pytest unless the test faked them (a
@@ -49,6 +50,7 @@ from test_all_tools import common
 from test_all_tools.categories import CATEGORIES, CLIPBOARD, SOLO, category_name
 from test_all_tools.common import (
     QUIT_FORCED_IN_SHUTDOWN,
+    QUIT_SAMPLED,
     NoListing,
     agent_folder,
     agents_designers,
@@ -275,7 +277,7 @@ def check_the_quits(parts: Mapping[str, dict[str, Any] | None], port_of: Mapping
                 common.check('quit_designer', "%s's Designer left no crash dump" % name, False, str(dumps))
             continue
         t = part.get('quit') or 'no quit'
-        if 'forced' in t:  # whole: a check's detail is cut, the line its log stopped at with it
+        if 'forced' in t or QUIT_SAMPLED in t:  # whole: a check's detail is cut, the log's line and sample with it
             print("      %s's quit whole: %s" % (name, t))
         common.check(
             'quit_designer',
@@ -387,18 +389,23 @@ def run_pool(slots: int, unit: bool = True, only: Sequence[str] | None = None) -
     summary, ok = summarize(tools, common.results, common.skipped, common.times)
     print(summary)
     print('wall time %.0f s, %d categories, %s' % (wall, len(order), what))
-    forced = {
+    keep = {  # a quit forced, or sampled as it ended by itself (REVIEW.md SRV-115)
         port_of[n]
         for n, part in parts.items()
-        if part and ('forced' in (part.get('quit') or '') or part.get('forced_in_shutdown'))
+        if part
+        and (
+            'forced' in (part.get('quit') or '')
+            or QUIT_SAMPLED in (part.get('quit') or '')
+            or part.get('forced_in_shutdown')
+        )
     }
-    _clean_up(root, chosen, forced)
+    _clean_up(root, chosen, keep)
     return 0 if ok else 1
 
 
-def _clean_up(root: str, chosen: list[int], forced: Collection[int] = ()) -> None:
+def _clean_up(root: str, chosen: list[int], keep: Collection[int] = ()) -> None:
     """The folders launch_designer made for the workers' Designers (about 90 MB each), unless one still runs there, left
-    a crash dump or is in `forced` (run_pool's: the ports whose quit it counts as forced, their log saying how far that
+    a crash dump or is in `keep` (run_pool's: the ports whose quit was forced or sampled, their log saying how far that
     quit got), to read; then the run's folder, once none of its Designers is left."""
     try:
         left = set(chosen) & set(agents_designers())
@@ -408,8 +415,8 @@ def _clean_up(root: str, chosen: list[int], forced: Collection[int] = ()) -> Non
     for port in sorted(set(chosen) - left):
         if _holds_a_crash_dump(agent_folder(port)):
             print('kept, it holds a crash dump:', agent_folder(port))
-        elif port in forced:
-            print('kept, its quit was forced:', agent_folder(port))
+        elif port in keep:
+            print('kept, its quit was forced or sampled:', agent_folder(port))
         else:
             shutil.rmtree(agent_folder(port), ignore_errors=True)
     if left:

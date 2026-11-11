@@ -26,6 +26,7 @@ REAL_BIND_ERROR = server._bind_error  # binds a real socket: a Designer listenin
 REAL_DESIGNER_PIDS = server._designer_pids  # runs pgrep
 REAL_DESIGNER_RUNNING = server._designer_running  # runs pgrep (tasklist on Windows)
 REAL_PROCESS_START = server._process_start  # runs ps
+REAL_SAMPLE = server._sample  # runs macOS's sample on a process
 # as the test run found it, before the autouse fixture below replaces it
 REAL_SNAPSHOT_DIR = os.environ.get('SD_SNAPSHOT_DIR') or os.path.join(os.path.expanduser('~'), '.sd_mcp', 'snapshots')
 
@@ -96,6 +97,8 @@ def no_real_designer_process(
     # follows whatever _designer_pids gives now (REVIEW.md TST-147: it ran the real pgrep)
     patch_server(monkeypatch, '_designer_running', lambda: bool(server._designer_pids()))
     patch_server(monkeypatch, '_process_start', lambda pid: None)
+    # a test's process IDs are made up: a real sample would read whatever process has one (ROADMAP item 70)
+    patch_server(monkeypatch, '_sample', lambda pid, path: pytest.fail('a real process sampled: %d' % pid))
     patch_server(monkeypatch, '_own_temp', lambda port: str(tmp_path / ('T_%d' % port)) + os.sep)
     patch_server(monkeypatch, '_own_home', lambda port: None)
     # beside tmp_path, not in it: tests list what they put there (test_install.py)

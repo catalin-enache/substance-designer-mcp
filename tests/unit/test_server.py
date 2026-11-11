@@ -238,6 +238,26 @@ def test_a_failed_reload_says_the_package_was_closed_and_where_it_is(monkeypatch
     ), message
 
 
+def test_a_failed_reloads_message_keeps_its_own_period(monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md SRV-117: the bridge's own errors end in one, which the sentence after it doubled
+    import pytest
+
+    said = 'Designer closed the connection without a reply (it may be starting or quitting).'
+    calls: list[str] = []
+
+    def bridge(code: str, *a: Any, **kw: Any) -> str:  # the unload, then the load
+        calls.append(code)
+        if len(calls) == 1:
+            return 'unloaded 1 package(s): /p/mat.sbs'
+        raise server.ToolError(said)
+
+    patch_server(monkeypatch, '_bridge', bridge)
+    patch_server(monkeypatch, 'RELOAD_SETTLE_S', 0)
+    with pytest.raises(server.ToolError) as error:
+        server._reload_package_file('/p/mat.sbs')
+    assert str(error.value).startswith(said + ' The package was closed in Designer'), str(error.value)
+
+
 def test_a_sweep_with_no_values_is_refused_before_designer(monkeypatch: pytest.MonkeyPatch) -> None:
     # REVIEW.md SRV-30: values=[] produced no images and failed with "restored X.p to ..." as the error
     import pytest

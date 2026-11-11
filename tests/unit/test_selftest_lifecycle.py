@@ -460,3 +460,71 @@ def test_a_normal_close_forced_during_its_shutdown_is_recorded_for_the_pool(
     assert common.normal_close(hung, 'the modal close') and common.forced_in_shutdown == ['the modal close']
     assert not common.normal_close(not_closed, 'b') and common.forced_in_shutdown == ['the modal close']
     assert '[INFO][IPC] Remove PID' in capsys.readouterr().out, 'printed whole'
+
+
+def _samples() -> Any:  # a module imported by name: PyCharm can't see its names
+    _lifecycle()  # the self-test's folder on sys.path, its modules afresh
+    return importlib.import_module('test_all_tools.lifecycle.samples')
+
+
+# in the format macOS's sample writes, its heaviest calls first (measured 2026-11-11, a Designer stuck in its shutdown);
+# the calls shortened, and the lighter sibling made up
+SAMPLE = """Call graph:
+    820 Thread_1140019   DispatchQueue_1: com.apple.main-thread  (serial)
+    + 820 start  (in dyld) + 6992  [0x18c8384e4]
+    +   820 main  (in Adobe Substance 3D Designer) + 12432  [0x1044142e0]
+    +     820 QCoreApplication::~QCoreApplication()  (in QtCore) + 128  [0x11996049c]
+    +       820 QThreadPool::waitForDone(QDeadlineTimer)  (in QtCore) + 44  [0x119af21cc]
+    +         500 QWaitCondition::wait(QMutex*, QDeadlineTimer)  (in QtCore) + 108  [0x119af6ad4]
+    +         ! 500 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x18cbc350c]
+    +         320 QThreadPoolPrivate::reset()  (in QtCore) + 10  [0x119af1000]
+    820 Thread_1140040
+    + 820 start_wqthread  (in libsystem_pthread.dylib) + 8  [0x18cbfec10]
+"""
+
+
+def test_the_main_threads_heaviest_calls_are_read_from_a_sample() -> None:
+    # REVIEW.md TST-310: a failing check says where the main thread waited, as the pool may delete the file
+    samples = _samples()
+    assert samples.main_thread(SAMPLE, 3) == (
+        'QWaitCondition::wait < QThreadPool::waitForDone < QCoreApplication::~QCoreApplication'
+    ), 'its heaviest path, deepest first, not the lighter sibling, the next thread, system calls or arguments'
+    assert samples.main_thread('Call graph:\n    820 Thread_1\n') == 'no main thread in the sample'
+
+
+def test_a_result_naming_a_sample_gives_its_text_and_where_the_main_thread_was(tmp_path: Path) -> None:
+    samples = _samples()
+    path = tmp_path / 'forced_quit_11.sample.txt'
+    path.write_text(SAMPLE)
+    result = 'Designer quit after 9s (forced; its log could not be read). %s %s' % (
+        project_constants.QUIT_SAMPLED,
+        path,
+    )
+    stacks, detail = samples.sampled(result)
+    # its calls only: check() prints 150 characters, which they fill (REVIEW.md TST-312)
+    assert stacks == SAMPLE and detail == samples.main_thread(SAMPLE)
+    path.unlink()
+    assert samples.sampled(result) == ('', result), 'gone: the result itself'
+    assert samples.sampled('Designer quit after 2s.') == ('', 'Designer quit after 2s.')
+
+
+# names as macOS's sample writes them, made up: an AppKit category method, a lambda's call operator, a const member of a
+# template, the C library's exit; under exit, a kernel wait, then a lighter callee of exit after it
+CALLS = """    820 Thread_1   DispatchQueue_1: com.apple.main-thread  (serial)
+    + 820 start  (in dyld) + 1  [0x1]
+    +   820 -[NSApplication(NSAppleEventHandling) _handleAEQuit]  (in AppKit) + 2  [0x2]
+    +     820 std::__1::__function::__func<Foo::bar()::$_0, void ()>::operator()()  (in Designer) + 3  [0x3]
+    +       820 Foo<decltype(x)>::f() const  (in Designer) + 4  [0x4]
+    +         820 exit  (in libsystem_c.dylib) + 5  [0x5]
+    +           600 __psynch_cvwait  (in libsystem_kernel.dylib) + 6  [0x6]
+    +           220 __cxa_finalize_ranges  (in libsystem_c.dylib) + 7  [0x7]
+"""
+
+
+def test_the_main_threads_calls_keep_their_names_and_the_c_librarys() -> None:
+    # REVIEW.md TST-311: only a call's trailing arguments go, an Objective-C method whole; the C library's calls (exit
+    # handlers) stay, the kernel's waits go; a lighter callee after the path's last call isn't on it
+    assert _samples().main_thread(CALLS, 10) == (
+        'exit < Foo<decltype(x)>::f < std::__1::__function::__func<Foo::bar()::$_0, void ()>::operator() < '
+        '-[NSApplication(NSAppleEventHandling) _handleAEQuit] < start'
+    )

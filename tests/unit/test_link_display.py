@@ -35,8 +35,9 @@ def _sbs(tmp_path: Path, graph_body: str) -> Path:
     return path
 
 
+@pytest.mark.parametrize('stop', ['.', '?'])
 def test_set_link_display_reports_success_when_the_reopen_fails(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stop: str
 ) -> None:
     # REVIEW.md SRV-12: after the edit and reload, an ambiguous reopen was reported as a failure
     sbs = _sbs(
@@ -51,7 +52,7 @@ def test_set_link_display_reports_success_when_the_reopen_fails(
 
     def bridge(code: str, path: str | None = None, timeout: float | None = None) -> str:
         if 'open_graph(graph_in_file(' in code:  # the reopen, through the package file (REVIEW.md SRV-34)
-            return "--- ERROR ---\nRuntimeError: graph 'g' not found in the package %s" % sbs
+            return "--- ERROR ---\nRuntimeError: graph 'g' not found in the package %s%s" % (sbs, stop)
         return 'FILE=%s\nGRAPH=g\nOPEN=1' % sbs
 
     patch_server(monkeypatch, '_bridge', bridge)
@@ -61,6 +62,8 @@ def test_set_link_display_reports_success_when_the_reopen_fails(
     text = server.set_link_display('g', from_nodes=['1'])
     assert '1 of 1 selected link(s) changed to portal' in text
     assert "could not reopen g: RuntimeError: graph 'g' not found in the package" in text
+    # the message's own stop, no period after it (REVIEW.md TST-313, SRV-117)
+    assert sbs.name + stop in text and sbs.name + stop + '.' not in text
     assert '<displayType v="1"' in sbs.read_text()
     # the edited file replaced the user's with its permissions, and no temporary file is left (SRV-46)
     assert os.stat(sbs).st_mode & 0o777 == 0o644

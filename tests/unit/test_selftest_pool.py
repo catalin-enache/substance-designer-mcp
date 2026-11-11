@@ -540,8 +540,41 @@ def test_a_forced_quits_designer_folder_is_kept_to_read_its_log(
         os.makedirs(tmp_path / ('agent_%d' % port))
     workers.run_pool(4)
     kept = list(tmp_path.glob('agent_*'))
-    assert len(kept) == 1 and 'kept, its quit was forced: %s' % kept[0] in capsys.readouterr().out
+    assert len(kept) == 1 and 'kept, its quit was forced or sampled: %s' % kept[0] in capsys.readouterr().out
     assert kept[0].name == 'agent_%d' % ports['render'], "render's (REVIEW.md TST-294)"
+
+
+def test_a_quit_ending_while_sampled_passes_and_keeps_its_folder(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    # REVIEW.md SRV-115: a shutdown hanging past its wait that ended while its threads were sampled: a normal close, its
+    # sample a hang's evidence (ROADMAP item 70)
+    ports: dict[str, int] = {}
+
+    def write(name: str, folder: str, port: int) -> dict[str, Any]:
+        ports[name] = port
+        sampled = 'Designer quit after 32s. %s /tmp/sd_mcp_1_%d/threads_42.sample.txt' % (
+            project_constants.QUIT_SAMPLED,
+            port,
+        )
+        return part(name, sampled if name == 'render' else 'Designer quit after 2s.')
+
+    workers = pool(monkeypatch, tmp_path, write)
+    for port in range(5001, 5001 + len(workers.names())):
+        os.makedirs(tmp_path / ('agent_%d' % port))
+    workers.run_pool(4)
+    out = capsys.readouterr().out
+    assert [k.name for k in tmp_path.glob('agent_*')] == ['agent_%d' % ports['render']]
+    assert "PASS  quit_designer          closes render's Designer, which left no crash dump" in out
+    # whole, where the check's detail is cut: the sample's path with it (REVIEW.md TST-314)
+    assert (
+        "render's quit whole: Designer quit after 32s. %s /tmp/sd_mcp_1_%d/threads_42.sample.txt"
+        % (
+            project_constants.QUIT_SAMPLED,
+            ports['render'],
+        )
+        in out
+    )
 
 
 def test_lifecycles_quits_forced_during_their_shutdown_count_and_keep_its_folder(

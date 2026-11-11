@@ -29,6 +29,7 @@ from project_constants import (  # noqa: E402 (after the sys.path entry; `X as X
     PLUGIN as PLUGIN,
     PLUGIN_PACKAGE_DIR as PLUGIN_PACKAGE_DIR,
     QUIT_FORCED_IN_SHUTDOWN as QUIT_FORCED_IN_SHUTDOWN,
+    QUIT_SAMPLED as QUIT_SAMPLED,
     SHORT_TEMP as SHORT_TEMP,  # where launch_designer makes the folders of a Designer it starts
     TOKEN_FILE as TOKEN_FILE,
     agent_designer_file,

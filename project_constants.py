@@ -39,6 +39,9 @@ QUIT_FORCED_NOT_CLOSED = 'forced: it had not closed'
 # taken, as the helper judges it before Designer's own quit decides (its limits: designer_helpers/quit.py), whatever its
 # shutdown does next
 QUIT_CLOSED = '[%s] quit: every window closed' % PLUGIN
+# Before the path of the file a Designer an agent started had its threads sampled into, when it was about to be forced
+# (macOS: server_tools/lifecycle.py); a quit naming one keeps the self-test's folder of it (ROADMAP item 70)
+QUIT_SAMPLED = 'Its threads, sampled first:'
 
 
 # Where the records of the Designers an agent started go (agent_designer_file). In the home folder, as the temp folder

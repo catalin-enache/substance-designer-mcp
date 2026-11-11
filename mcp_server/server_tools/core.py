@@ -320,6 +320,12 @@ def _edit(call: str, label: str) -> str:
     return _checked(_bridge(_with_undo(HELPERS + '\n\n' + call + '\n', label), '<quick edit>', 300))
 
 
+def _sentence(text: str) -> str:
+    """`text` ending in one stop: its own (. ? !), or a period: for a message a sentence of the caller's goes on after
+    (REVIEW.md SRV-114, SRV-117)."""
+    return text if text.endswith(('.', '?', '!')) else text + '.'
+
+
 def _checked(text: str) -> str:
     # Turn a Designer-side traceback into a clean tool error
     if '--- ERROR ---' in text:
