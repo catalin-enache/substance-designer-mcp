@@ -119,6 +119,7 @@ def pool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, write: Any, unit: Any 
     def schedule(names: list[str], slots: int, start: Any, **kw: Any) -> dict[str, int]:
         # what run_pool must pass on (REVIEW.md TST-268): these have defaults or do nothing when left out
         assert kw['exclusive'] == workers.CLIPBOARD and kw['solo'] == workers.SOLO
+        workers.slots = slots  # its count, read by the test that gives one (REVIEW.md TST-287)
         gates.append(kw['gate'])
         codes = {}
         for name in names:

@@ -585,3 +585,89 @@ def test_the_lifecycle_checks_that_run_alone_are_the_ones_the_skill_names() -> N
         sorted(named),
         sorted(say_so),
     )
+
+
+# the names of the pool's rules, as workers.py's docstring gives them
+POOL_RULES = ('launch_lock', 'CLIPBOARD', 'SOLO', 'start checks', 'worker_env', 'spawn')
+# phrases of workers.py's docstring saying where and when the pool runs things
+POOL_RULE_WORDINGS = (
+    'starts first',
+    'never run at once',
+    'last, alone',
+    'first category to start after',
+    'one wait at the end',
+)
+
+
+def _selftest_docstring(module: str) -> str:
+    """The docstring of tests/test_all_tools/<module>, flat."""
+    import ast
+
+    path = Path(ROOT, 'tests', 'test_all_tools', module)
+    return _flat(ast.get_docstring(ast.parse(path.read_text(encoding='utf-8'))) or '')
+
+
+def _skill_bullet() -> str:
+    """The live-check skill's bullet on the self-test, flat."""
+    bullet = re.search(
+        r'(?ms)^- `mcp_server/venv/bin/python tests/test_all_tools`.*?(?=^ {2}- |^- |^$)', _live_check_skill()
+    )
+    assert bullet, "the live-check skill's bullet on the self-test"
+    return _flat(bullet.group(0))
+
+
+def _skill_cant_prove_list() -> str:
+    """The live-check skill's list of what a scratch run can't prove, flat."""
+    found = re.search(r"(?s)\*\*What a scratch run can't prove\*\*.*?(?=\n\n\*\*)", _live_check_skill())
+    assert found, "the live-check skill's list of what a scratch run can't prove"
+    return _flat(found.group(0))
+
+
+@pytest.mark.parametrize('rule', POOL_RULES)
+def test_the_skills_bullet_points_at_workers_py_and_names_none_of_the_pools_rules(rule: str) -> None:
+    # ROADMAP item 68: the skill's bullet on the self-test repeated the rules workers.py's docstring holds, and a copy
+    # had drifted once; it points there, as it does for alone.py's. Only these names are looked for, as whole words
+    # (REVIEW.md TST-284, TST-286)
+    text = _skill_bullet()
+    assert '(`tests/test_all_tools/workers.py`; its docstring has the rules)' in text
+    word = r'\b%s\b' % re.escape(rule)
+    assert re.search(word, _selftest_docstring('workers.py')) and not re.search(word, text)
+
+
+@pytest.mark.parametrize('wording', POOL_RULE_WORDINGS)
+def test_the_skills_pool_passages_have_none_of_these_phrases_of_workers_py(wording: str) -> None:
+    # REVIEW.md TST-283: the skill's bullet on the self-test and its list of what a scratch run can't prove name the
+    # pool's rules and leave where and when they run to workers.py's docstring (the start checks' sentence had gone
+    # false once: TST-265). Only these phrases are looked for, and only there: elsewhere the skill words other modules'
+    # rules alike (REVIEW.md TST-286)
+    assert wording in _selftest_docstring('workers.py')
+    assert wording not in _skill_bullet() and wording not in _skill_cant_prove_list()
+
+
+def test_workers_py_sends_a_windows_run_to_the_index_which_says_what_it_does() -> None:
+    # REVIEW.md TST-285: the skill points at workers.py, whose sentence on Windows said only "one run, as before"
+    assert "one run in one Designer (`__main__.py`'s docstring)" in _selftest_docstring('workers.py')
+    index = _selftest_docstring('__main__.py')
+    assert 'every category but `lifecycle`' in index and 'leaves it open at the end' in index
+
+
+@pytest.mark.parametrize(
+    'name',
+    [
+        'README.md',
+        'AGENTS.md',
+        os.path.join('.claude', 'skills', 'live-check', 'SKILL.md'),
+        os.path.join('tests', 'test_all_tools', '__main__.py'),
+    ],
+)
+def test_these_docs_have_none_of_these_phrasings_of_four_at_once_or_by_default(name: str) -> None:
+    # ROADMAP item 68: each of these said "four at once" or "4 by default"; the number is workers.AT_ONCE, which --help
+    # prints. Only these phrasings are looked for (REVIEW.md TST-284, TST-286): four or 4 up to two words before "at
+    # once", or right beside "by default", "default", "default:" or "defaults to"; a measurement made with four is
+    # written without "at once" ("four side by side")
+    text = _flat(Path(ROOT, name).read_text(encoding='utf-8'))
+    pattern = (
+        r'\b(?:four|4)(?: \S+){0,2} at once\b'
+        r'|\b(?:four|4) by default\b|\bdefault:? (?:four|4)\b|\bdefaults to (?:four|4)\b'
+    )
+    assert not re.search(pattern, text, re.I)

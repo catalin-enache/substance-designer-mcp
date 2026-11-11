@@ -69,13 +69,13 @@ dump goes in the watch's `later()`, so a dump written late isn't deleted with it
 **What a scratch run can't prove** (only the full suite runs these; changing one, say so rather than claiming it was
 seen failing and passing):
 
-- **The run's start checks,** in the first category to start after `lifecycle` (`--first`): the `get_guide` checks (instructions' length,
-  the refusal before it is called and the tool working after, the core and the scripting part returned), Designer
-  started, and the Home screen check (no panel visible while it shows), measurable only right after a fresh start,
-  since Home can't be shown again once closed.
-- **What the pool's parent checks** (`workers.py`): every worker's quit and the crash dumps (`check_the_quits`, after
-  one wait at the end), every tool exercised over all the workers (and which were all skipped), the `unit tests`
-  check; and its scheduling: the launch lock, `CLIPBOARD`, `SOLO`.
+- **The run's start checks** (`--first`; which category runs them: `workers.py`'s docstring): the `get_guide` checks
+  (instructions' length, the refusal before it is called and the tool working after, the core and the scripting part
+  returned), Designer started, and the Home screen check (no panel visible while it shows), measurable only right
+  after a fresh start, since Home can't be shown again once closed.
+- **What the pool's parent checks** (`workers.py`): every worker's quit and the crash dumps (`check_the_quits`), every
+  tool exercised over all the workers (and which were all skipped), the `unit tests` check; and its scheduling: the
+  launch lock, `CLIPBOARD`, `SOLO`.
 - **In the user's Designer,** only in a run there (Windows today): their graph back in the editor, and that it still
   runs with no new crash dump.
 
@@ -95,25 +95,10 @@ configs) need only the unit suite again.
   other in cycles, so in the whole-repo run some sd return types come out `Any` (`no-any-return`): annotate the local
   (`node: SDNode = g.newNode(...)`). The formatter can move a trailing
   `# type: ignore` or `# noqa` off its line when it rewraps a statement (mypy then reports it): put it back.
-- `mcp_server/venv/bin/python tests/test_all_tools`: every tool over MCP against the real Designer. On macOS a pool
-  (`workers.py`): each category a worker of its own, in a Designer started for it and closed after it, `--workers N`
-  at once (4 by default), the next starting as soon as one ends; `lifecycle` first, holding `launch_lock`'s lock while
-  no other Designer may start or quit (its hand-over check, its record moved aside); `facts` and
-  `editor_panels_and_fit` never at once (`categories.CLIPBOARD`: the machine's one clipboard); `undo` last, alone
-  (`categories.SOLO`: beside the others its Undo failed); the run's start checks (the guide,
-  the Home screen) once, in the first category to start after `lifecycle`; one wait for crash dumps at the end, each category's quit a
-  check of its own. Their lines are shown per worker, then one summary. The whole unit suite runs beside them
-  (`workers.start_unit`, in a temp folder of its own), its result the check `unit tests`: that one command is the
-  whole final check. `--only <category>...` runs
-  those categories alone through the same pool, without the unit suite, the coverage of every tool left to a full run.
-  `--no-unit` leaves it out, for the live suite alone (which command for what the user asks:
-  AGENTS.md, Running the tests). With a Designer open that no agent started (the user's), it starts nothing and asks
-  for it to be closed. On Windows: one run, without the unit suite; it starts Designer if none runs and leaves it open
-  at the end, as one already running, the checks that quit Designer skipped (ROADMAP item 65). Under pytest the pool's
-  process starts and the index's run refuse (`workers.spawn`): a unit test reaching them would start Designers. No
-  worker shares a folder with another: its snapshots and
-  temp folder (`TMPDIR`) are its own (`workers.worker_env`; a shared temp folder came with Designer crashes: ROADMAP item
-  59). Its "designer facts" checks re-measure the Designer behaviour GUIDE.md or a module's docstring
+- `mcp_server/venv/bin/python tests/test_all_tools`: every tool over MCP against the real Designer. On macOS a pool,
+  each category in a Designer of its own, several at once, the whole unit suite beside them
+  (`tests/test_all_tools/workers.py`; its docstring has the rules); which command for what the user asks: AGENTS.md,
+  Running the tests. Its "designer facts" checks re-measure the Designer behaviour GUIDE.md or a module's docstring
   states: add one with each new fact. One folder per category (`bridge/`, `params/`, `render/`...: its `run(ctx)` and checks in
   `checks.py`, the `prepare(ctx)` building what they read in `preparations.py`, the Designer scripts only it runs in
   `designer_scripts/`), shared helpers and snippets in `common.py`, and the index `__main__.py`, which runs the

@@ -1,6 +1,6 @@
 """The live self-test as a pool, the default on macOS: every category in a Designer of its own, started for it and
-closed after it, `--workers N` of them at once (4 by default), the next starting as soon as any ends, rather than in
-batches waiting for their slowest (simulated with 4: 2.8 to 3.7 min against 5.9 to 6.5). Each is a worker,
+closed after it, `--workers N` of them at once (AT_ONCE by default), the next starting as soon as any ends, rather
+than in batches waiting for their slowest (simulated with 4: 2.8 to 3.7 min against 5.9 to 6.5). Each is a worker,
 `python tests/test_all_tools --worker <category>`, a process of its own (the check record and common.PORT are module
 globals) with a bridge port, an MCP server, a Designer and folders of its own; this parent shows each worker's lines
 and merges their results into one summary. A run is the same with 1 worker (one after the other) or 4: no category
@@ -27,7 +27,7 @@ once wasn't measured (ROADMAP item 66).
 The workers count as started by the test, decided here once: a worker asking for itself could take another's Designer,
 just started and not yet recorded, for the user's. With a Designer running that no agent started (the user's) the run
 asks for it to be closed and starts nothing (all share the preferences plist: ROADMAP item 67). Off macOS, where
-launch_designer starts one per port only there, it is one run, as before."""
+launch_designer starts one per port only there, it is one run in one Designer (`__main__.py`'s docstring)."""
 
 import json
 import os
@@ -55,6 +55,7 @@ from test_all_tools.launch_lock import Gate
 from test_all_tools.lifecycle.checks import unused_port
 
 LIFECYCLE = 'lifecycle'
+AT_ONCE = 4  # categories at once unless --workers says otherwise (ROADMAP item 66: the memory it takes)
 INDEX = os.path.dirname(os.path.abspath(__file__))  # `python <this folder>` runs __main__.py
 REPO = os.path.dirname(os.path.dirname(INDEX))
 UNIT = 'unit tests'
@@ -85,7 +86,7 @@ def names() -> list[str]:
 
 
 def choose(asked: int | None) -> int:
-    """How many at once: `asked`, 4 by default; 0 for one run, off macOS. Refused with a Designer running that no
+    """How many at once: `asked`, AT_ONCE by default; 0 for one run, off macOS. Refused with a Designer running that no
     agent started, or when that can't be told."""
     if sys.platform != 'darwin':
         print('one run: several Designers side by side are for macOS only')
@@ -99,7 +100,7 @@ def choose(asked: int | None) -> int:
             'nothing run: a Designer is open that no agent started (yours?): save your work and close it, then run '
             'the self-test again; it starts Designers of its own and never touches yours'
         )
-    return asked or 4
+    return asked or AT_ONCE
 
 
 def ports(count: int, take: Callable[[], int] = unused_port) -> list[int]:
@@ -276,7 +277,7 @@ def check_the_quits(parts: Mapping[str, dict[str, Any] | None], port_of: Mapping
         common.check('self-test', 'no new crash dump outside the run', False, str(sorted(new - placed)))
 
 
-def run_pool(slots: int = 4, unit: bool = True, only: Sequence[str] | None = None) -> int:
+def run_pool(slots: int, unit: bool = True, only: Sequence[str] | None = None) -> int:
     """The pool, with the unit suite beside it unless `unit` is False; `only`: those categories alone, in the pool's
     order, the coverage of every tool left to a full run. Its exit code: 0 every check passed and, in a full run, every
     tool was exercised; 1 otherwise."""

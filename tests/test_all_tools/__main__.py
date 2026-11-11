@@ -5,15 +5,16 @@ End-to-end self-test of every substance-designer MCP tool, over a real stdio MCP
     Windows: mcp_server\\venv\\Scripts\\python tests\\test_all_tools
 
 On macOS, with no Designer running that no agent started, it runs each category in a Designer started for it and
-closed after it, four at once (`--workers N`; 1 runs them one after the other, the unit suite still beside them), with
-the whole unit suite beside them (workers.py); `--no-unit` leaves the unit suite out. `--only` runs the categories it
-names alone, through the same pool, without the unit suite, judging the coverage of the tools they ran only. With the user's Designer open it
-starts nothing and asks for it to be closed. On Windows it makes one run in one Designer, without the unit suite: it
-starts Designer if none runs (launch_designer) and leaves it open at the end, as it leaves one already running
-(ROADMAP item 65). Everything that changes state happens in temporary graphs ("mcp_selftest"), removed after each
-category; in the user's Designer the graph they had open in the editor is reopened. It triggers Undo/Redo only while the self-test graph is the one in the editor
-(Undo acts on the document in focus), checks that exactly its own step was undone, and redoes at
-once if not. "designer facts" checks the Designer behaviour GUIDE.md documents.
+closed after it, several at once (`--workers N`; 1 runs them one after the other), with the whole unit suite beside
+them (the pool's rules: workers.py); `--no-unit` leaves the unit suite out. `--only` runs the categories it
+names alone, through the same pool, without the unit suite, judging the coverage of the tools they ran only. With
+the user's Designer open it starts nothing and asks for it to be closed. On Windows it makes one run in one
+Designer, of every category but `lifecycle`, without the unit suite: it starts Designer if none runs
+(launch_designer) and leaves it open at the end, as it leaves one already running (ROADMAP item 65). Everything
+that changes state happens in temporary graphs ("mcp_selftest"), removed after each category; in the user's
+Designer the graph they had open in the editor is reopened. It triggers Undo/Redo only while the self-test graph is
+the one in the editor (Undo acts on the document in focus), checks that exactly its own step was undone, and redoes
+at once if not. "designer facts" checks the Designer behaviour GUIDE.md documents.
 The 3D screenshot is skipped if no 3D View is visible in the user's Designer. Exits with code 1 if any check fails.
 
 This file is the index: it opens the MCP session, runs the categories in order (CATEGORIES, categories.py), each on its
@@ -252,7 +253,10 @@ def main(argv: list[str] | None = None) -> None:
     pool (--worker, from workers.py)."""
     parser = argparse.ArgumentParser(prog='tests/test_all_tools', description='The live self-test of every tool.')
     parser.add_argument(
-        '--workers', type=int, metavar='N', help='categories at once, each in a Designer of its own (default 4)'
+        '--workers',
+        type=int,
+        metavar='N',
+        help='categories at once, each in a Designer of its own (default %d)' % workers.AT_ONCE,
     )
     parser.add_argument(
         '--no-unit',

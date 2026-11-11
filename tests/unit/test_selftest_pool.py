@@ -4,6 +4,7 @@ lifecycle first, holding a lock while no other Designer may start (launch_lock.p
 end. No Designer: processes, ports and sessions are fakes."""
 
 import asyncio
+import inspect
 import json
 import os
 import sys
@@ -269,7 +270,7 @@ def test_lifecycle_starts_first_and_the_categories_follow_in_their_listed_order(
 @pytest.mark.parametrize(
     'asked, platform, users, expected',
     [
-        (None, 'darwin', False, 4),
+        (None, 'darwin', False, 'AT_ONCE'),
         (2, 'darwin', False, 2),
         (1, 'darwin', False, 1),
         (None, 'win32', False, 0),  # one run: no Designer counts as an agent's on Windows yet (ROADMAP item 18)
@@ -277,7 +278,7 @@ def test_lifecycle_starts_first_and_the_categories_follow_in_their_listed_order(
         (4, 'darwin', 'no listing', 'refused'),  # can't tell whose may be running: as with the user's
     ],
 )
-def test_a_pool_of_four_unless_asked_off_macos_or_with_the_users_designer(
+def test_a_pool_of_at_once_unless_asked_off_macos_or_with_the_users_designer(
     monkeypatch: pytest.MonkeyPatch, asked: Any, platform: str, users: Any, expected: Any
 ) -> None:
     workers = fresh('workers')
@@ -294,7 +295,23 @@ def test_a_pool_of_four_unless_asked_off_macos_or_with_the_users_designer(
         with pytest.raises(workers.Refused, match='close'):
             workers.choose(asked)
     else:
-        assert workers.choose(asked) == expected
+        assert workers.choose(asked) == (workers.AT_ONCE if expected == 'AT_ONCE' else expected)
+
+
+def test_at_once_alone_holds_the_default_number(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # ROADMAP item 68: the number was written in choose, in --help and in the docs; workers.AT_ONCE holds it alone, read
+    # by choose and --help, and run_pool has no default of its own (REVIEW.md TST-282)
+    index = fresh('__main__')
+    monkeypatch.setitem(vars(index.workers), 'AT_ONCE', 7)
+    monkeypatch.setitem(vars(index.workers), 'users_designer_running', lambda: False)
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    assert index.workers.choose(None) == 7
+    with pytest.raises(SystemExit) as ended:
+        index.main(['--help'])
+    assert ended.value.code == 0 and '(default 7)' in ' '.join(capsys.readouterr().out.split())
+    assert inspect.signature(index.workers.run_pool).parameters['slots'].default is inspect.Parameter.empty
 
 
 def test_the_index_runs_a_pool_one_run_off_macos_and_nothing_next_to_the_users_designer(
@@ -403,6 +420,7 @@ def test_the_pool_runs_every_category_once_and_prints_one_summary(
 ) -> None:
     workers = pool(monkeypatch, tmp_path, lambda name, folder, port: part(name))
     assert workers.run_pool(3) == 0
+    assert workers.slots == 3, 'run_pool passes its count on to schedule (REVIEW.md TST-287)'
     out = capsys.readouterr().out
     names = workers.names()
     assert sorted(n.removeprefix('--first ') for n in workers.started[::2]) == sorted(names), 'each one, once'

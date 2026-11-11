@@ -50,7 +50,7 @@ There are two programs, plus Designer's own command-line tools:
 | **sbscooker / sbsrender** | Separate processes | Designer's own tools for compiling a saved `.sbs` into `.sbsar` and rendering its outputs, independently of the open Designer. |
 | **CLI client** (`client/sd_run.py`) | Your terminal | The same connection to the plugin without MCP, for running scripts by hand. |
 | `scripts/review_lookup.py` | Your terminal | Finds a code review finding by its ID, in `REVIEW.md` or its git history. Used by the review skills. |
-| `install.py`, `uninstall.py`, `tests/` | Your terminal | Installation (including the Claude Code skill that tells sessions in other folders about the server), clean removal, the end-to-end self-test (on macOS four worker processes at once, each with a Designer and an MCP server of its own: `tests/test_all_tools/workers.py`), and unit tests that need no Designer (`tests/unit`). |
+| `install.py`, `uninstall.py`, `tests/` | Your terminal | Installation (including the Claude Code skill that tells sessions in other folders about the server), clean removal, the end-to-end self-test (on macOS several worker processes at once, each with a Designer and an MCP server of its own: `tests/test_all_tools/workers.py`), and unit tests that need no Designer (`tests/unit`). |
 
 **One tool call, step by step** (`preview_node`, "show me this node's image"):
 
@@ -189,10 +189,10 @@ context on it:
 ## Self-test
 
 Check every tool end to end against the real Designer. On macOS it runs each category of checks (below) in a Designer
-started for it and closed after it, four at once, with the unit tests (`pytest`) beside them, their result one line of
-its summary: about 3.2 minutes for both, 10.5 one at a time. With a Designer of yours open it starts nothing and asks
-you to close it first: they would share its settings. On Windows it is one run in one Designer, without the unit
-tests: it starts Designer if none runs and leaves it open at the end, as it leaves yours.
+started for it and closed after it, several at once (how many: `--help`), with the unit tests (`pytest`) beside them,
+their result one line of its summary: about 3.2 minutes for both, 10.5 one at a time. With a Designer of yours open
+it starts nothing and asks you to close it first: they would share its settings. On Windows it is one run in one
+Designer, without the unit tests: it starts Designer if none runs and leaves it open at the end, as it leaves yours.
 
 ### Running it
 
@@ -210,8 +210,8 @@ The rows that run the unit tests also need their packages, which `install.py` do
 | Every option | `mcp_server/venv/bin/python tests/test_all_tools --help` |
 | Windows: one run of every category but `lifecycle` | `mcp_server\venv\Scripts\python tests\test_all_tools` |
 
-Each Designer takes about 2 GB after a run, and took up to about 11 GB after a heavy compute; four at once was
-measured on a 64 GB Mac: with less memory, run fewer at once (`--workers 2`).
+Each Designer takes about 2 GB after a run, and took up to about 11 GB after a heavy compute; four side by side ran
+on a 64 GB Mac: with less memory, run fewer at once (`--workers 2`).
 
 `--only` takes one name or more, from the table below; an unknown name is refused with the list. It runs those
 categories the same way, each in a Designer of its own, to check one area quickly; it judges only the tools they use,

@@ -96,10 +96,10 @@ the user says the work is done, just before merging into `main`; both must pass 
 command for what the user asks:
 
 - **Both suites** (the final check included): `mcp_server/venv/bin/python tests/test_all_tools`. On macOS it runs every
-  category in a Designer of its own, four at once (`--workers N` for another number), with the whole unit suite beside
-  them: one command for both. With a Designer of the user's open it runs nothing and says so: ask them to save and
-  close it. On Windows it makes one run instead, leaving the unit suite out: run `pytest` at the same time, as a
-  background command.
+  category in a Designer of its own, several at once (`--workers N`; the pool's rules:
+  `tests/test_all_tools/workers.py`), with the whole unit suite beside them: one command for both. With a Designer of
+  the user's open it runs nothing and says so: ask them to save and close it. On Windows it makes one run instead,
+  leaving the unit suite out: run `pytest` at the same time, as a background command.
 - **The unit suite alone:** `mcp_server/venv/bin/python -m pytest`.
 - **The live suite alone:** `mcp_server/venv/bin/python tests/test_all_tools --no-unit`.
 - **Chosen categories** (macOS): `mcp_server/venv/bin/python tests/test_all_tools --only <category>...`, through the
