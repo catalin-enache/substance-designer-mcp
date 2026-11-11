@@ -22,7 +22,7 @@ may update the names and paths an entry points at; changing what was decided, or
 
 - **The full suites run only when the user asks; while working, only the tests added or modified run, always with lint
   and types, a live check in a scratch run.** The full suites took about 12 minutes when this was decided; on macOS both now take
-  about 3.5 minutes, with four Designers at once (10.5 one at a time: `tests/test_all_tools/workers.py`), still longer than the tests of
+  about 4 minutes, with four Designers at once (10.5 one at a time: `tests/test_all_tools/workers.py`), still longer than the tests of
   one change. No agent starts a whole run of either suite on its own, not for TDD, not after a fix, not
   between reviews: when a review finds nothing, it says the work is ready, and the user asks for the final check (both
   suites in full, before merging into `main`) when they say the work is done. Lint and types (`test_lint.py`,
@@ -174,7 +174,7 @@ may update the names and paths an entry points at; changing what was decided, or
   past it, a Designer an agent started can hang in its own shutdown (`server_tools/lifecycle.py`, its docstring's
   "Quitting."). `quit_designer` tells the two apart by the line its helper logs in Designer once every window it closed
   has closed, Designer's own among them (`QUIT_CLOSED`, `project_constants.py`), and names the last line of the log; the categories' quits and
-  lifecycle's normal closes are counted (`workers.check_the_quits`). The user's choice, 2026-11-11: this way, over
+  lifecycle's normal closes whose check reached `common.normal_close` are counted (`workers.check_the_quits`). The user's choice, 2026-11-11: this way, over
   confirming the cause first or not quitting a Designer just started; and the threshold, two hangs having been seen at
   once.
   Reopen if: that check fails, or the cause is confirmed and can be avoided (ROADMAP item 70).
