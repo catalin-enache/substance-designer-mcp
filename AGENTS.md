@@ -12,6 +12,15 @@ GitHub Actions or other CI.
 
 How the plugin, server, helpers and command-line tools fit together: README.md, **How it works**.
 
+**Navigating and checking code: PyCharm's MCP tools first** (`mcp__pycharm__*`, when PyCharm has this project open;
+it resolves Designer's `sd` and PySide6 through the repo's `.idea`): `search_symbol` to find a definition
+(`include_external` for Designer's and the libraries' code), `get_symbol_info` for a symbol's signature and docs,
+`analyze_calls` for callers and callees, `get_file_problems` or `lint_files` after an edit, `rename_refactoring` for a
+rename across files. Fall back to the command line (grep, `git grep`, reading files) only when they don't help enough:
+they aren't connected, a call refuses or finds nothing (`analyze_calls` takes only names it resolves), or you need
+every use of a name, which `search_symbol` doesn't give (it finds where a name is defined). mypy strict and ruff (the
+unit tests) stay the checks that count; PyCharm's inspections don't replace them.
+
 **Load the `mcp-builder` skill** (`.claude/skills/mcp-builder/`: Anthropic's, from `anthropics/skills` at `ca45fc4`,
 trimmed to its Python parts) before designing or changing tools (adding, merging or removing one, its parameters,
 description, errors or results), and for evaluations. Where it differs from this file, this file wins. Its defaults this
@@ -50,6 +59,12 @@ node as well as the graph, the other parameter, the other code path); would each
 clean up on failure too; did the change weaken an older test; does any comment, docstring or doc say more than the code
 and tests show? Fix what you find and look again, until a fresh look finds nothing a reviewer could report.
 
+**Keep each file to its main logic.** Code that isn't what a file is about (the setup a test needs, a parser, a helper
+its reader doesn't need to follow the main flow) goes into a module of its own beside it, named for what it does
+(`preparations.py`, `parsing.py`), and is imported from there: a reader of a file meets its main logic first, not its
+scaffolding. It applies to new code and to code a change touches; a move alone changes no behaviour, so the existing
+tests of the code it touches run before and after and pass both times.
+
 **Reviews go in REVIEW.md** (repo root, committed with the changes it records). Three skills: `project-code-review`
 (`.claude/skills/project-code-review/`) for reviewing, its `TEMPLATE.md` the format; `address-review`
 (`.claude/skills/address-review/`) for fixing or answering findings test first and checking them off; `cleanup-review`
@@ -77,7 +92,18 @@ scratch probes of its own, one at a time in one Designer an agent started (the `
 **The full suites run only when the user asks:** the whole unit suite (`pytest` with no test ids) and a whole run of the
 live self-test (`tests/test_all_tools`). Never start one on your own: not for TDD, not after a fix, not between
 reviews. When a review finds nothing, tell the user the work is ready for the final check: both suites in full, run when
-the user says the work is done, just before merging into `main`; both must pass (DECISIONS.md, Project rules).
+the user says the work is done, just before merging into `main`; both must pass (DECISIONS.md, Project rules). Which
+command for what the user asks:
+
+- **Both suites** (the final check included): `mcp_server/venv/bin/python tests/test_all_tools`. On macOS it runs every
+  category in a Designer of its own, four at once (`--workers N` for another number), with the whole unit suite beside
+  them: one command for both. With a Designer of the user's open it runs nothing and says so: ask them to save and
+  close it. On Windows it makes one run instead, leaving the unit suite out: run `pytest` at the same time, as a
+  background command.
+- **The unit suite alone:** `mcp_server/venv/bin/python -m pytest`.
+- **The live suite alone:** `mcp_server/venv/bin/python tests/test_all_tools --no-unit`.
+- **Chosen categories** (macOS): `mcp_server/venv/bin/python tests/test_all_tools --only <category>...`, through the
+  pool with its safety checks, without the unit suite; not a final check, which stays a full run.
 
 **Unit tests while working:** only those added or modified for the change (for a refactor, the existing tests of the
 code it touches), as often as useful. **Lint and types always run too** (about 10 s):

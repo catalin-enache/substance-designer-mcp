@@ -1,4 +1,4 @@
-"""Scripts in tests/test_all_tools/designer_scripts/ that can be run with a stand-in for Designer's own packages:
+"""Designer scripts of the live self-test (tests/test_all_tools/<category>/designer_scripts/ and designer_scripts/shared/) that can be run with a stand-in for Designer's own packages:
 what they do on a failure, which a passing self-test doesn't show."""
 
 import os
@@ -13,10 +13,20 @@ import pytest
 from conftest import SELFTEST_DIR
 
 
+def script_path(name: str) -> str:
+    """common.script_path: where common.designer_script finds the script it sends."""
+    tests_dir = os.path.dirname(SELFTEST_DIR)
+    if tests_dir not in sys.path:
+        sys.path.insert(0, tests_dir)
+    from test_all_tools.common import script_path as path_of
+
+    return path_of(name)
+
+
 def _run(name: str, args: dict[str, Any]) -> tuple[str, str]:
     """(what it printed, the traceback or ''), run as the plugin runs it: compiled with its own path, so a traceback
     shows its source lines."""
-    path = os.path.join(SELFTEST_DIR, 'designer_scripts', *name.split('/')) + '.py'
+    path = script_path(name)  # the self-test's own (REVIEW.md TST-238: this built the path itself)
     with open(path, encoding='utf-8') as f:
         code = compile(f.read(), path, 'exec')
     printed: list[str] = []
@@ -44,7 +54,7 @@ def _stand_in(monkeypatch: pytest.MonkeyPatch, *names: str) -> dict[str, MagicMo
 
 
 def test_a_failing_3d_grab_does_not_read_as_no_3d_view(monkeypatch: pytest.MonkeyPatch) -> None:
-    """facts.py skips its check when NO_3D_VIEW is in the result, and a traceback shows the failing source line
+    """facts/checks.py reads NO_3D_VIEW in the result as no 3D view, and a traceback shows the failing source line
     (REVIEW.md TST-117): the token can't be on a line that can fail."""
     made = _stand_in(monkeypatch, 'sd', 'PySide6.QtWidgets')
     viewport = MagicMock()

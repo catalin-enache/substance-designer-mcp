@@ -54,7 +54,7 @@ addressed in one go (the ones the user named, or the batch in the plan) are hand
 1. **Reproduce it with a test that fails.**
     - Pure-Python logic (server, installer, CLI, test infrastructure): a unit test in `tests/unit`.
     - Anything that depends on Designer (helpers, plugin behaviour inside Designer, sd API facts):
-      a check in the live self-test (`tests/test_all_tools/`, in its category's module), even when a unit test also
+      a check in the live self-test (`tests/test_all_tools/`, in its category's `checks.py`), even when a unit test also
       covers it. A unit test can take a path Designer never does.
     - Run it, in the group's failing run (a live check in its scratch run), and **read the failure**. It must fail
       *because of the bug*: compare the failure with the entry's scenario. A test that fails for another reason (a typo,

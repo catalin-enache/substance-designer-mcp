@@ -3,11 +3,13 @@ them, the way agents see a check fail and then pass while working (the live-chec
 replaced by a fake that answers each tool by name."""
 
 import asyncio
+import glob
 import importlib
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from types import SimpleNamespace
 from typing import Any
 
@@ -24,7 +26,7 @@ def _alone() -> Any:  # a module imported by name: PyCharm can't see its names
     for name in [m for m in sys.modules if m == 'test_all_tools' or m.startswith('test_all_tools.')]:
         del sys.modules[name]
     alone = importlib.import_module('test_all_tools.alone')
-    vars(alone)['PAUSE_S'] = 0  # no Designer to wait for
+    vars(sys.modules['test_all_tools.category_run'])['PAUSE_S'] = 0  # no Designer to wait for (slept in _cleaned)
     # not the real pgrep: as if one of the user's ran, so close_with never removes the real SCRATCH_ROOT (REVIEW.md
     # TST-147) and a run with no bridge is refused; a test about none running says so itself
     vars(alone)['designer_here'] = lambda: True
@@ -65,33 +67,192 @@ USERS = "Designer 16.0.7, idle.\nNot started by an agent: it is the user's."
 
 
 def _run(alone: Any, c: FakeDesigner, *checks: Any, **kw: Any) -> int:
-    return int(asyncio.run(alone.run_with(c, list(checks), kw.get('needs', ()), kw.get('setup'), 'scratch')))
+    if kw.get('scratch'):
+        return int(asyncio.run(alone.run_with(c, list(checks), kw.get('setup'), kw['scratch'])))
+    with tempfile.TemporaryDirectory(prefix='alone_unit_') as scratch:  # each category gets a folder in it
+        return int(asyncio.run(alone.run_with(c, list(checks), kw.get('setup'), scratch)))
 
 
-def test_needs_come_with_what_they_rely_on_first() -> None:
+def _run_own_designer(alone: Any, c: FakeDesigner, *checks: Any) -> int:
+    return int(asyncio.run(alone.run_with(c, list(checks), None, 'scratch', own_designer=True)))
+
+
+def _in_category(category: str, name: str, body: Any) -> Any:
+    """A check of the category <category> (test_all_tools.<category>.checks), running body(ctx)."""
+
+    async def check(ctx: Any) -> None:
+        await body(ctx)
+
+    check.__module__, check.__qualname__ = 'test_all_tools.%s.checks' % category, name
+    return check
+
+
+def test_checks_with_their_own_designer_get_none_started_and_no_clean_up() -> None:
+    # lifecycle.run starts its Designer itself and ends it: a clean-up then reached a closed Designer, and a passing
+    # run ended with exit code 2
     alone = _alone()
-    assert alone.resolve([]) == []
-    assert alone.resolve(['graph']) == ['graph']
-    assert alone.resolve(['png', 'graph']) == ['graph', 'png']
-    # wire's checks read what params' set (Samples = 16): measured, a live run of 'sbs' without it failed one
-    assert alone.resolve(['wired']) == ['graph', 'params', 'wired']
-    assert alone.resolve(['sbs']) == ['graph', 'params', 'wired', 'png', 'sbs']
+    vars(alone)['users_designer_running'] = lambda: False
+    c = FakeDesigner(None)
+    ran: list[str] = []
+
+    async def own(ctx: Any) -> None:
+        ran.append('checks')
+
+    assert _run_own_designer(alone, c, own) == 0
+    assert ran == ['checks']
+    assert c.names() == ['get_guide', 'get_guide', 'designer_status']  # whose Designer runs: asked, nothing started
+    assert not [f for f in alone.common.results.values() if not all(f)]
 
 
-def test_an_unknown_need_is_refused_naming_the_known_ones() -> None:
+@pytest.mark.parametrize(
+    ('status', 'users_running'),
+    [(USERS, False), (None, True)],
+    ids=['the users answering', 'one no agent recorded, not answering yet'],
+)
+def test_checks_with_their_own_designer_never_run_beside_the_users(status: str | None, users_running: bool) -> None:
+    # REVIEW.md TST-228: own_designer ran its checks before anything asked whose Designer was open
     alone = _alone()
-    with pytest.raises(ValueError, match=r"no_such.*'graph'"):
-        alone.resolve(['no_such'])
+    vars(alone)['users_designer_running'] = lambda: users_running
+    ran: list[str] = []
+
+    async def own(ctx: Any) -> None:
+        ran.append('checks')
+
+    c = FakeDesigner(status)
+    assert _run_own_designer(alone, c, own) == 2
+    assert ran == [] and 'launch_designer' not in c.names()
 
 
-def test_needs_are_the_suites_own_setup_steps() -> None:
-    # the suite's functions themselves, not copies of them: the environment is the one the suite builds
+@pytest.mark.parametrize(
+    ('users_running', 'code'), [(True, 2), (False, 0)], ids=['the users running', 'none of theirs']
+)
+def test_checks_with_their_own_designer_on_a_port_are_refused_beside_the_users_too(
+    users_running: bool, code: int
+) -> None:
+    # REVIEW.md TST-260: on a port, whether the user's ran was left to launch_designer, which these checks call themselves
     alone = _alone()
-    from test_all_tools import bitmaps, graph_edit, params, save
+    vars(alone)['users_designer_running'] = lambda: users_running
+    ran: list[str] = []
 
-    assert alone.NEEDS['graph'][1] is graph_edit.create and alone.NEEDS['wired'][1] is graph_edit.wire
-    assert alone.NEEDS['params'][1] is params.run
-    assert alone.NEEDS['png'][1] is bitmaps.run and alone.NEEDS['sbs'][1] is save.run
+    async def own(ctx: Any) -> None:
+        ran.append('checks')
+
+    assert (
+        int(asyncio.run(alone.run_with(FakeDesigner(None), [own], None, 'scratch', port=9901, own_designer=True)))
+        == code
+    )
+    assert ran == ([] if users_running else ['checks'])
+
+
+def test_checks_with_their_own_designer_run_beside_an_agents() -> None:
+    # lifecycle.run ends one an agent started itself (check_a_designer_of_its_own)
+    alone = _alone()
+    ran: list[str] = []
+
+    async def own(ctx: Any) -> None:
+        ran.append('checks')
+
+    c = FakeDesigner(AGENTS)
+    assert _run_own_designer(alone, c, own) == 0
+    assert ran == ['checks'] and 'launch_designer' not in c.names()
+
+
+def test_checks_with_their_own_designer_still_report_a_failure() -> None:
+    alone = _alone()
+    vars(alone)['users_designer_running'] = lambda: False
+
+    async def fails(ctx: Any) -> None:
+        alone.common.check('t', 'x', False)
+
+    async def raises(ctx: Any) -> None:
+        raise RuntimeError('boom')
+
+    assert _run_own_designer(alone, FakeDesigner(None), fails) == 1
+    assert _run_own_designer(alone, FakeDesigner(None), raises) == 1
+
+
+@pytest.mark.parametrize('kw', [{'setup': 'a setup'}])
+def test_checks_with_their_own_designer_take_no_environment(kw: dict[str, Any]) -> None:
+    # an environment would be built in a Designer those checks then replace
+    alone = _alone()
+    with pytest.raises(ValueError, match='own_designer'):
+        alone.run(lambda ctx: None, own_designer=True, **kw)
+
+
+def test_the_snapshots_of_a_run_on_a_port_have_no_symlink_in_their_path(tmp_path: Any) -> None:
+    # macOS's temp folder is under /var, a symlink: Designer wrote a snapshot's paths to files outside it one `..` short
+    # (measured: 'copied bitmaps stay reachable' failed on a port of its own, and passed with the snapshots in the home)
+    real = tmp_path / 'real'
+    real.mkdir()
+    link = tmp_path / 'link'
+    link.symlink_to(real)
+    alone = _alone()
+    before = os.environ.get('TMPDIR')
+    with alone.on_port(9911, str(link)):
+        assert os.environ['SD_SNAPSHOT_DIR'] == os.path.join(os.path.realpath(real), 'snapshots')
+        # no folder shared with a run on another port: its server's temporary files go in the run's folder
+        assert os.environ['TMPDIR'] == os.path.join(os.path.realpath(real), 'tmp') and os.path.isdir(
+            os.environ['TMPDIR']
+        )
+        assert alone.server_params(9911).env['TMPDIR'] == os.environ['TMPDIR']
+    assert os.environ.get('TMPDIR') == before, 'put back afterwards'
+
+
+def test_a_check_runs_after_its_own_categorys_preparation(monkeypatch: pytest.MonkeyPatch) -> None:
+    # no needs: a category, or one of its checks, runs on its own preparation (category_run.py)
+    alone = _alone()
+    order: list[str] = []
+    run = sys.modules['test_all_tools.category_run']
+
+    async def prepare(ctx: Any) -> None:
+        order.append('prepare')
+        ctx.lv = '12'
+
+    async def body(ctx: Any) -> None:
+        order.append('check ' + ctx.lv)
+
+    monkeypatch.setitem(vars(run), 'preparation', lambda step: prepare)
+    assert _run(alone, FakeDesigner(AGENTS), _in_category('params', 'check_x', body)) == 0
+    assert order == ['prepare', 'check 12']
+
+
+def test_checks_of_one_category_share_one_preparation_and_two_categories_get_one_each(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    alone = _alone()
+    order: list[str] = []
+    run = sys.modules['test_all_tools.category_run']
+
+    def preparation(step: Any) -> Any:
+        async def prepare(ctx: Any) -> None:
+            order.append('prepare ' + step.__module__.split('.')[1])
+
+        return prepare
+
+    async def body(ctx: Any) -> None:
+        order.append('check in ' + os.path.basename(ctx.scratch))
+
+    monkeypatch.setitem(vars(run), 'preparation', preparation)
+    checks = [_in_category('params', 'a', body), _in_category('params', 'b', body), _in_category('facts', 'c', body)]
+    assert _run(alone, FakeDesigner(AGENTS), *checks, scratch=str(tmp_path)) == 0
+    assert order == ['prepare params', 'check in params', 'check in params', 'prepare facts', 'check in facts']
+
+
+def test_a_preparation_that_fails_gives_exit_code_2_and_runs_no_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    alone = _alone()
+    ran: list[str] = []
+    run = sys.modules['test_all_tools.category_run']
+
+    async def prepare(ctx: Any) -> None:
+        raise run.common.Unprepared('create_graph: refused')
+
+    async def body(ctx: Any) -> None:
+        ran.append('check')
+
+    monkeypatch.setitem(vars(run), 'preparation', lambda step: prepare)
+    c = FakeDesigner(AGENTS)
+    assert _run(alone, c, _in_category('params', 'run', body)) == 2
+    assert ran == [] and ('execute_designer_code', {'code': run.common.CLEAN}) in c.calls
 
 
 def test_the_users_designer_is_refused_and_nothing_runs() -> None:
@@ -170,6 +331,18 @@ def test_a_failing_check_gives_exit_code_1_and_passing_ones_0() -> None:
     assert _run(alone, FakeDesigner(AGENTS), passes, fails) == 1
 
 
+def test_a_run_here_leaves_no_folder_in_the_temp_folder() -> None:
+    # REVIEW.md TST-263: each call left an alone_unit_* folder behind, a plain pytest run after run
+    alone = _alone()
+
+    async def a_check(ctx: Any) -> None:
+        pass
+
+    before = set(glob.glob(os.path.join(tempfile.gettempdir(), 'alone_unit_*')))
+    assert _run(alone, FakeDesigner(AGENTS), a_check) == 0
+    assert set(glob.glob(os.path.join(tempfile.gettempdir(), 'alone_unit_*'))) == before
+
+
 def test_the_checks_get_a_ctx_of_an_agents_designer() -> None:
     alone = _alone()
     seen: list[Any] = []
@@ -178,9 +351,12 @@ def test_the_checks_get_a_ctx_of_an_agents_designer() -> None:
         seen.append(ctx)
 
     c = FakeDesigner(AGENTS)
-    _run(alone, c, a_check)
+    scratch = tempfile.mkdtemp(prefix='alone_unit_')
+    _run(alone, c, a_check, scratch=scratch)
     ctx = seen[0]
-    assert ctx.c is c and ctx.scratch == 'scratch' and ctx.was_running is False and 'def ' in ctx.helper_source
+    assert ctx.c is c and ctx.was_running is False and 'def ' in ctx.helper_source
+    assert os.path.dirname(ctx.scratch) == scratch, "a folder of its category's own, in the run's"
+    shutil.rmtree(scratch)
 
 
 def test_a_check_that_raises_fails_and_the_clean_up_still_runs() -> None:
@@ -196,22 +372,22 @@ def test_a_check_that_raises_fails_and_the_clean_up_still_runs() -> None:
     assert ('execute_designer_code', {'code': CLEAN}) in c.calls[-4:]
 
 
-def test_the_setup_runs_before_the_checks_needs_first() -> None:
+def test_the_setup_runs_before_the_checks_after_the_preparation(monkeypatch: pytest.MonkeyPatch) -> None:
     alone = _alone()
     order: list[str] = []
 
     async def step(ctx: Any) -> None:
-        order.append('graph')
+        order.append('prepare')
 
     async def setup(ctx: Any) -> None:
         order.append('setup')
 
-    async def a_check(ctx: Any) -> None:
+    async def body(ctx: Any) -> None:
         order.append('check')
 
-    alone.NEEDS['graph'] = ((), step)
-    assert _run(alone, FakeDesigner(AGENTS), a_check, needs=['graph'], setup=setup) == 0
-    assert order == ['graph', 'setup', 'check']
+    monkeypatch.setitem(vars(sys.modules['test_all_tools.category_run']), 'preparation', lambda s: step)
+    assert _run(alone, FakeDesigner(AGENTS), _in_category('params', 'run', body), setup=setup) == 0
+    assert order == ['prepare', 'setup', 'check']
 
 
 def test_a_setup_that_fails_skips_the_checks_and_still_cleans_up() -> None:
@@ -342,10 +518,10 @@ def test_with_a_port_a_designer_running_elsewhere_doesnt_stop_it(monkeypatch: py
     alone = _alone()
     monkeypatch.setitem(vars(alone), 'users_designer_running', lambda: True)
     c = FakeDesigner(None)
-    assert int(asyncio.run(alone.run_with(c, [], (), None, 'scratch', port=9901))) == 0
+    assert int(asyncio.run(alone.run_with(c, [], None, 'scratch', port=9901))) == 0
     assert 'launch_designer' in c.names()
     refused = FakeDesigner(None, launch='ERROR: a Designer no agent started is running (process 11, on port 9877)')
-    assert int(asyncio.run(alone.run_with(refused, [], (), None, 'scratch', port=9901))) == 2
+    assert int(asyncio.run(alone.run_with(refused, [], None, 'scratch', port=9901))) == 2
 
 
 def test_close_asks_quit_designer_when_the_status_fails() -> None:
@@ -425,3 +601,32 @@ def test_a_failing_process_listing_keeps_the_folders_and_starts_nothing(
     assert os.path.isdir(alone.scratch_root())
     c = FakeDesigner(None)
     assert _run(alone, c) == 2 and 'launch_designer' not in c.names()
+
+
+class LeavesALibrary(FakeDesigner):
+    """A Designer whose clean-up fails: a library package the category loaded is still there after it."""
+
+    def __init__(self) -> None:
+        super().__init__(AGENTS)
+        self.listed = 0
+
+    async def __call__(self, name: str, args: dict[str, Any] | None = None) -> Any:
+        if name == 'execute_designer_code' and 'unloadUserPackage' not in (args or {}).get('code', ''):
+            self.calls.append((name, args or {}))
+            self.listed += 1
+            return _result('LIBS=' if self.listed == 1 else 'LIBS=/library/noise.sbs')
+        return await super().__call__(name, args)
+
+
+def test_a_clean_up_that_fails_is_exit_code_2_though_every_check_passed(monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md TST-238: only a passing clean-up was ever tested
+    alone = _alone()
+    monkeypatch.setitem(vars(sys.modules['test_all_tools.category_run']), 'preparation', lambda step: None)
+    ran: list[str] = []
+
+    async def passes(ctx: Any) -> None:
+        ran.append('check')
+        alone.common.check('t', 'x', True)
+
+    assert _run(alone, LeavesALibrary(), _in_category('params', 'run', passes)) == 2
+    assert ran == ['check'], "prepared, so the exit code is the clean-up's"

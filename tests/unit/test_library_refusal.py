@@ -1,6 +1,6 @@
 """The refusal for Designer's library packages (designer_helpers): one message on every path, with fake
 graphs and packages (ROADMAP item 27; REVIEW.md HLP-10, HLP-14, HLP-18, HLP-20). The live self-test runs
-what the message suggests (safeguards.py)."""
+what the message suggests (tests/test_all_tools/safeguards/checks.py)."""
 
 import ast
 import os

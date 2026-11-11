@@ -237,7 +237,7 @@ def _connected_nodes(fg: SDGraph) -> list[SDNode]:
 
 def _delete_function(node: SDNode, prop: SDProperty) -> None:
     """Delete a parameter's function graph. On a $ parameter that also switches its inheritance
-    back to the node's default (measured on all six on a levels node and `$outputsize` on an instance node, tests/test_all_tools/designer_scripts/facts/function_states.py), so the inheritance is put back; the caller sets the value after it."""
+    back to the node's default (measured on all six on a levels node and `$outputsize` on an instance node, tests/test_all_tools/facts/designer_scripts/function_states.py), so the inheritance is put back; the caller sets the value after it."""
     compositing_node: Any = node  # the inheritance methods are on the compositing node's class
     method = compositing_node.getPropertyInheritanceMethod(prop) if prop.getId().startswith('$') else None
     node.deletePropertyGraph(prop)

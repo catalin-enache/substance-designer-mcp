@@ -29,8 +29,9 @@ def _visible_dock(mw: Any, prefix: str) -> Any:
 def _save_3d_render(mw: Any, out_path: str) -> tuple[int, int]:
     """The 3D view is GPU-drawn, so a QWidget.grab() of its viewport is leftover black or grey
     blocks, varying between calls. Use the view's own
-    Camera > 'Copy Render to Clipboard' (the renderer's image, never screen pixels) and put
-    the user's clipboard back afterwards."""
+    Camera > 'Copy Render to Clipboard' (the renderer's image, never screen pixels), then put
+    back what Qt can copy of the user's clipboard: its text; the rest may be lost (DECISIONS.md,
+    the user's choice)."""
     import time
 
     from PySide6 import QtCore, QtWidgets
@@ -111,7 +112,7 @@ def save_screenshot(panel: str, out_path: str) -> None:
     mw = _APP.getQtForPythonUIMgr().getMainWindow()  # type: ignore[no-untyped-call]  # sd: no annotations
     if panel == '3d':
         width, height = _save_3d_render(mw, out_path)
-        print('3d render %dx%d (clipboard restored)' % (width, height))
+        print("3d render %dx%d (the clipboard's text put back)" % (width, height))
         return
     if panel == 'window':
         widget = mw

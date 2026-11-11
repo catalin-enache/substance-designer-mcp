@@ -13,7 +13,7 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.types import CallToolResult
 
 import designer_helpers
-from conftest import ROOT, patch_server, selftest_check_sources, selftest_sources, server, server_source
+from conftest import ROOT, SELFTEST_DIR, patch_server, selftest_check_sources, selftest_sources, server, server_source
 
 SERVER = os.path.join(ROOT, 'mcp_server', 'server.py')
 
@@ -59,6 +59,14 @@ def test_readme_tool_count_and_table() -> None:
     table = readme.split('## Tools', 1)[1].split('\n## ', 1)[0]
     missing = [t for t in tools if '`%s`' % t not in table]
     assert not missing, 'tools missing from README Tools table: %s' % missing
+
+
+def test_readme_lists_every_category_the_self_test_runs() -> None:
+    # the names --only takes (README, Self-test): one row each, no other
+    categories = {p.parent.name for p in Path(SELFTEST_DIR).glob('*/checks.py')}
+    section = _read('README.md').split('### The categories', 1)[-1].split('\n## ', 1)[0].split('\n### ', 1)[0]
+    listed = re.findall(r'^\| `(\w+)` \|', section, re.M)
+    assert len(listed) == len(set(listed)) and set(listed) == categories, sorted(categories ^ set(listed))
 
 
 def test_designer_self_test_covers_every_tool() -> None:
@@ -347,7 +355,7 @@ def test_the_self_test_passes_no_field_an_op_doesnt_take() -> None:
     # kinds outside the table are the self-test's own unknown-op checks
     passed = {k: v for k, v in _selftest_op_fields().items() if k in allowed}
     wrong = {k: sorted(v - set(allowed[k])) for k, v in passed.items() if v - set(allowed[k])}
-    # the one on purpose: batch.py's check that such a field is refused
+    # the one on purpose: the self-test's batch/checks.py check that such a field is refused
     assert wrong == {'add': ['postion']}, 'op fields no op takes, in tests/test_all_tools/: %s' % wrong
 
 

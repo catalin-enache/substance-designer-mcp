@@ -7,6 +7,7 @@ from .core import (
     SDPackage,
     SDPropertyCategory,
     SDSBSCompGraph,
+    SDTexture,
     SDValueTexture,
     _is_library_package,
     _library_refusal,
@@ -66,10 +67,22 @@ def _output_ident(node: SDNode, i: int) -> str:
         return 'output_%d' % i
 
 
+def _output_textures(outputs: list[tuple[str, SDNode]]) -> list[tuple[str, SDTexture | None]]:
+    found: list[tuple[str, SDTexture | None]] = []
+    for ident, node in outputs:
+        for prop in node.getProperties(SDPropertyCategory.Output):
+            value = cast(SDValueTexture | None, node.getPropertyValue(prop))
+            found.append((ident, value.get() if value is not None else None))
+    return found
+
+
 def export_outputs(
     identifier: str | SDSBSCompGraph | None, out_dir: str, names: list[str] | None = None, ext: str = 'png'
 ) -> None:
-    """Compute the graph in Designer and save each output node's texture as <identifier>.<ext>."""
+    """Compute the graph in Designer and save each output node's texture as <identifier>.<ext>. With the graph open in
+    the editor and an output node added right after the node feeding it was measured, the compute sometimes gave it no
+    texture: so a second compute, only then (REVIEW.md HLP-100, HLP-101). That came from the plugin starting the job at
+    once after the one before; it now waits first (REVIEW.md PLG-38), and the second compute stays as a defence."""
     g = find_graph(identifier)
     out_dir = os.path.abspath(os.path.expanduser(out_dir))
     os.makedirs(out_dir, exist_ok=True)
@@ -86,19 +99,20 @@ def export_outputs(
             'identifier' % ', '.join(twice)
         )
     g.compute()
+    textures = _output_textures(outputs)
+    if any(texture is None for _, texture in textures):
+        g.compute()
+        textures = _output_textures(outputs)
     saved = []
-    no_image = []  # never seen: an unconnected output still computes one (REVIEW.md HLP-48)
-    for ident, node in outputs:
-        for prop in node.getProperties(SDPropertyCategory.Output):
-            value = cast(SDValueTexture | None, node.getPropertyValue(prop))
-            texture = value.get() if value is not None else None
-            if texture is None:
-                no_image.append(ident)
-                continue
-            path = os.path.join(out_dir, '%s.%s' % (ident, ext))
-            texture.save(path)
-            size = texture.getSize()
-            saved.append('%s  %dx%d %s' % (os.path.basename(path), size.x, size.y, texture.getPixelFormat()))
+    no_image = []  # an unconnected output still computes one (REVIEW.md HLP-48)
+    for ident, texture in textures:
+        if texture is None:
+            no_image.append(ident)
+            continue
+        path = os.path.join(out_dir, '%s.%s' % (ident, ext))
+        texture.save(path)
+        size = texture.getSize()
+        saved.append('%s  %dx%d %s' % (os.path.basename(path), size.x, size.y, texture.getPixelFormat()))
     if not saved:
         # a typo-only request: say which outputs there are (REVIEW.md HLP-36)
         raise RuntimeError(

@@ -14,8 +14,11 @@ before parsing them, so a request without the right answer is never parsed (REVI
 The server and client/sd_run.py send nothing to a greeting of another protocol.
 
   run:    {"code", "path"?, "timeout"?}  -> {"ok", "output", "error"}
-          Code runs on Designer's main thread. With "timeout" (seconds) the script is
-          aborted once it exceeds that time.
+          Code runs on Designer's main thread, one job each time Qt's event loop runs, none
+          sooner than 30 ms after the one before ended: a job reaching an idle bridge wakes that
+          thread, and starts once those 30 ms are over (at once after a pause); one queued
+          behind another starts when they are over too. With "timeout" (seconds) the script is aborted once it
+          exceeds that time.
   cancel: {"cmd": "cancel"}              -> {"ok", "output"}
           Aborts the running script (and drops queued ones).
   status: {"cmd": "status"}              -> {"ok", "output"}
@@ -30,6 +33,7 @@ import hashlib
 import hmac
 import io
 import json
+import math
 import os
 import queue
 import secrets
@@ -38,6 +42,7 @@ import sys
 import threading
 import time
 import traceback
+import weakref
 from collections.abc import Callable
 from types import FrameType, TracebackType
 from typing import Any, TypedDict
@@ -53,7 +58,13 @@ READ_TIMEOUT = 30  # seconds to receive a whole request
 MAX_REQUEST = 64 << 20  # bytes
 MAX_CLIENTS = 16  # connections not yet authenticated; more are closed straight away
 MAX_OUTPUT = 8 << 20  # characters of a script's output sent back (the last ones)
-VERSION = 4
+VERSION = 8
+# Between one job's end and the next one's start: started at once (about 1 ms after), a node measured right after the
+# one feeding it got no texture in 5 runs of 5; after 5 ms in 4 of 5, after 20 ms and 50 ms in none of 5 (REVIEW.md
+# PLG-38). Designer's own work after a job evidently needs that moment; what it is wasn't found. So no job starts sooner
+# than this after the one before ended, whichever starts it (the wake, the poll, `later`), and none waits longer for it
+# (PLG-40, PLG-42).
+WAKE_DELAY_MS = 30
 PROTOCOL = 2  # the greeting and the answer above; the clients check it before answering
 ANSWER_LENGTH = 64  # characters of the answer: an HMAC-SHA256 in hex
 
@@ -267,6 +278,32 @@ def _read_request(conn: socket.socket) -> bytes:
             raise ValueError('request too large')
 
 
+class _Waker(QtCore.QObject):
+    """Wakes Designer's main thread for a job reaching an idle bridge, instead of its waiting up to 100 ms for the
+    timer (about 85 ms for calls one after the other, measured 2026-11-10). Emitted from a client's thread; queued, so it
+    runs `drain` on the thread this was made on, Designer's main one. `delay` brings `drain` back once the wait after
+    the job before is over, when `_drain` found it too soon (`later`). It holds `drain` weakly: the server holds it,
+    and a cycle would keep a stopped server until a garbage collection (REVIEW.md PLG-36)."""
+
+    wake = QtCore.Signal()
+
+    def __init__(self, drain: Callable[[], None]) -> None:
+        super().__init__()
+        self.drain = weakref.WeakMethod(drain)  # a bound method: _Server._drain
+        self.delay = QtCore.QTimer(self)
+        self.delay.setSingleShot(True)
+        self.delay.timeout.connect(self._on_wake)
+        self.wake.connect(self._on_wake, QtCore.Qt.ConnectionType.QueuedConnection)
+
+    def later(self, ms: int) -> None:  # main thread only: from _drain
+        self.delay.start(ms)
+
+    def _on_wake(self) -> None:  # a method of this QObject: run on its thread
+        drain = self.drain()
+        if drain is not None:  # None: the server is gone
+            drain()
+
+
 class _Server:
     def __init__(self) -> None:
         self.token = _load_token()
@@ -275,6 +312,7 @@ class _Server:
         self.lock = threading.Lock()  # dequeuing a job and marking it running happen together
         self.busy_since: float | None = None
         self.draining = False  # main thread only: _drain is running
+        self.ended: float | None = None  # main thread only: when the last job ended (time.monotonic)
         self.clients = 0  # connections being served (under self.lock)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         if sys.platform == 'win32':
@@ -286,12 +324,14 @@ class _Server:
         self.port: int = self.sock.getsockname()[1]  # what clients sign (module docstring)
         self.sock.listen(4)
         self.running = True
-        self.thread = threading.Thread(target=self._accept_loop, daemon=True)
-        self.thread.start()
-        # Jobs are executed on the main (Qt) thread, polled by this timer
+        # Jobs are executed on the main (Qt) thread: woken for a job reaching an idle bridge, else polled by this timer
+        self.waker = _Waker(self._drain)
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self._drain)
         self.timer.start(100)
+        # last: a request served before the waker existed was queued, then told "bad request" (REVIEW.md PLG-34)
+        self.thread = threading.Thread(target=self._accept_loop, daemon=True)
+        self.thread.start()
         print('[%s] v%d listening on 127.0.0.1:%d' % (NAME, VERSION, PORT))
 
     def _accept_loop(self) -> None:
@@ -418,7 +458,12 @@ class _Server:
         with self.lock:
             if not self.running:  # stop() has emptied the queue already; nothing would run it
                 return _fail('Designer is closing; the script was not run')
+            # only an idle bridge wakes the main thread: a job behind another waits for the timer, so two never run
+            # back to back without Qt's event loop between them (REVIEW.md PLG-13)
+            idle = self.jobs.empty() and self.busy_since is None
             self.jobs.put((code, req.get('path'), timeout, box, done))
+        if idle:
+            self.waker.wake.emit()
         if not box.get('started') and not done.wait(QUEUE_WAIT):
             with self.lock:
                 if not box.get('started'):
@@ -428,15 +473,23 @@ class _Server:
         return box['result']
 
     def _drain(self) -> None:
-        # Never start a job inside the running one. Qt doesn't fire this timer again while its
-        # own slot runs, even when the script processes events (the self-test checks it), so
-        # this only guards against any other caller of _drain
+        # Never start a job inside the running one: two callers run this, the timer and the wake, and a job that
+        # processes events lets either fire inside it (the wake starts most jobs now), so this flag is what stops it
+        # (test_a_job_never_starts_inside_the_running_one; REVIEW.md PLG-35)
         if self.draining:
             return
         self.draining = True
         try:
             while True:
                 with self.lock:
+                    if self.jobs.empty():
+                        return
+                    # too soon after the job before, whoever called: back once the wait is over (REVIEW.md PLG-40);
+                    # under the lock, so a job a client queues meanwhile waits too (PLG-41)
+                    rest = WAKE_DELAY_MS - (time.monotonic() - self.ended) * 1000 if self.ended is not None else 0
+                    if rest > 0:
+                        self.waker.later(max(1, math.ceil(rest)))
+                        return
                     try:
                         code, path, timeout, box, done = self.jobs.get_nowait()
                     except queue.Empty:
@@ -452,6 +505,7 @@ class _Server:
                     box['result'] = _fail('the bridge failed running the job:\n' + traceback.format_exc())
                 finally:
                     self.busy_since = None
+                    self.ended = time.monotonic()
                     done.set()  # the client always gets an answer (REVIEW.md PLG-22)
                 # One job per tick: Designer's event loop runs before the next one, as two separate
                 # calls (an unload, then a load) need (GUIDE.md, Portals; REVIEW.md PLG-13)
@@ -463,6 +517,12 @@ class _Server:
         with self.lock:
             self.running = False
         self.timer.stop()
+        # both hold the server through their slots (REVIEW.md PLG-36)
+        with contextlib.suppress(RuntimeError, TypeError):  # stopped before: nothing connected
+            self.waker.wake.disconnect()
+        self.waker.delay.stop()  # a wake on its way
+        with contextlib.suppress(RuntimeError, TypeError):
+            self.timer.timeout.disconnect()
         try:
             self.sock.shutdown(socket.SHUT_RDWR)  # wakes a blocked accept(), so the port is released
         except OSError:
@@ -490,8 +550,14 @@ def initializeSDPlugin() -> None:
         print('[%s] not started: %s (port %d; is another instance running?)' % (NAME, e, PORT))
 
 
+# A stopped server's Qt objects, kept: the thread that drops the server last can be a client's being served as the
+# plugin unloads, and they would be destroyed there, off the main thread they belong to (REVIEW.md PLG-39)
+_retired: list[object] = []
+
+
 def uninitializeSDPlugin() -> None:
     global _server
     if _server:
         _server.stop()
+        _retired.extend((_server.timer, _server.waker))
         _server = None

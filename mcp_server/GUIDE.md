@@ -83,7 +83,9 @@ grouping, no `ARGS`).
 - Undo history is **per document** (Edit > Undo reverts the last step of the graph in focus). If you must trigger it:
   the actions live in a `QMenu` (find them via `QApplication.instance().allWidgets()`, not `mainWindow.findChildren`)
   and apply **asynchronously**: schedule them with `QTimer.singleShot(0, action.trigger)` (outside your own undo group)
-  and call `QApplication.processEvents()` before reading results.
+  and call `QApplication.processEvents()` before reading results. Raise and activate the main window first
+  (`getQtForPythonUIMgr().getMainWindow()`, `raise_()`, `activateWindow()`): in a Designer just started, with another
+  Designer in front, Undo of an output's fields sometimes did nothing without it. It leaves the other app in front.
 - Timeouts and cancel use a trace hook in the plugin: the abort happens the next time Python runs, so one long C++ call
   (a huge `graph.compute()`) completes first. A script catching `BaseException` swallows the abort: don't. An abort
   landing where Python only reports an exception (a finalizer such as every sd object's `__del__`, a weakref callback,
@@ -105,8 +107,8 @@ grouping, no `ARGS`).
   a package using it sees it at once (seen by hand).
 - Plugin tracebacks land in Designer's log (`read_designer_log`; "since the last start" means after the "Python SDK
   Version" line logged once per start). Read it when the bridge misbehaves or a plugin change doesn't seem to load.
-- Harmless log noise: creating an exposed input logs "No output node defined" and "Some Get nodes don't have a variable
-  name" until the function node is named. The exposure works.
+- Harmless log noise: creating an exposed input logs "Some Get nodes don't have a variable name", and may log "No
+  output node defined", until the function node is named. The exposure works.
 - **Several Designers side by side:** `launch_designer(port=...)` runs one per bridge port, on macOS (other platforms
   not tried: `launch_designer`), each with its own temp folder, log, settings and crash dumps, recorded per port;
   `read_designer_log(port=...)` reads its log, also after it ended. The user's Designers share one log, their lines not
@@ -215,8 +217,9 @@ The rules and the first pitfalls are in the core, `get_guide()`.
 - **Connections are reported from the queried node's side:** for `c` in `node.getPropertyConnections(prop)`,
   `getOutputPropertyNode()` / `getOutputProperty()` is `node`/`prop` itself and `getInputPropertyNode()` is the
   **other** node, whatever direction the data flows.
-- `graph.compute()` computes the nodes feeding an **output node** (about 1 s for a 190-node 2048² graph);
-  `node.getPropertyValue(outputProp).get()` is then an `SDTexture`. A node feeding no output got no texture in a fresh
+- `graph.compute()` computes the nodes feeding an **output node**, and takes about 0.9 s however small the graph, with
+  nothing changed since the last one too (measured: a 3-node 4×4 graph and a 63-node one): build what you need to read,
+  compute once, then read every node. `node.getPropertyValue(outputProp).get()` is then an `SDTexture`. A node feeding no output got no texture in a fresh
   graph but did in the self-test's busier one, so rely on neither: attach a temporary output node, as `preview_node` and
   `node_stats` do.
 - Exposing a parameter = a graph input via `graph.newProperty(id, type, SDPropertyCategory.Input)` (annotations `label`,

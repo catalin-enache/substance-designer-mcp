@@ -50,7 +50,7 @@ There are two programs, plus Designer's own command-line tools:
 | **sbscooker / sbsrender** | Separate processes | Designer's own tools for compiling a saved `.sbs` into `.sbsar` and rendering its outputs, independently of the open Designer. |
 | **CLI client** (`client/sd_run.py`) | Your terminal | The same connection to the plugin without MCP, for running scripts by hand. |
 | `scripts/review_lookup.py` | Your terminal | Finds a code review finding by its ID, in `REVIEW.md` or its git history. Used by the review skills. |
-| `install.py`, `uninstall.py`, `tests/` | Your terminal | Installation (including the Claude Code skill that tells sessions in other folders about the server), clean removal, the end-to-end self-test, and unit tests that need no Designer (`tests/unit`). |
+| `install.py`, `uninstall.py`, `tests/` | Your terminal | Installation (including the Claude Code skill that tells sessions in other folders about the server), clean removal, the end-to-end self-test (on macOS four worker processes at once, each with a Designer and an MCP server of its own: `tests/test_all_tools/workers.py`), and unit tests that need no Designer (`tests/unit`). |
 
 **One tool call, step by step** (`preview_node`, "show me this node's image"):
 
@@ -149,7 +149,7 @@ Then:
 
 1. **Restart Substance Designer** (the plugin loads at startup). Don't also load it from
    Tools > Plugin Manager; a second copy can't open the port and stays inactive.
-2. Check Designer's console (Windows > Console) for `[sd_claude_bridge_kve] v4 listening on 127.0.0.1:9877`.
+2. Check Designer's console (Windows > Console) for `[sd_claude_bridge_kve] v8 listening on 127.0.0.1:9877`.
 3. **Start `claude` in this folder** and approve `substance-designer` when asked (once). Then
    `claude mcp list` here shows `substance-designer: … ✔ Connected`.
 
@@ -188,18 +188,75 @@ context on it:
 
 ## Self-test
 
-Check every tool end to end against the real Designer (about 11 minutes when it starts Designer itself). If Designer isn't
-running, the self-test starts it and closes it again at the end; if it is running, it's left open:
+Check every tool end to end against the real Designer. On macOS it runs each category of checks (below) in a Designer
+started for it and closed after it, four at once, with the unit tests (`pytest`) beside them, their result one line of
+its summary: about 3.2 minutes for both, 10.5 one at a time. With a Designer of yours open it starts nothing and asks
+you to close it first: they would share its settings. On Windows it is one run in one Designer, without the unit
+tests: it starts Designer if none runs and leaves it open at the end, as it leaves yours.
 
-```bash
-mcp_server/venv/bin/python tests/test_all_tools        # macOS
-mcp_server\venv\Scripts\python tests\test_all_tools   # Windows
-```
+### Running it
 
-It builds a temporary graph (`mcp_selftest`), checks every tool including error cases, removes
-the graph and reopens the graph you had open. It doesn't touch your packages. Its files go in a
-temporary folder (`sd_mcp_selftest_...`), deleted at the end, except when Designer stays open:
-deleting it while Designer ran crashed Designer twice, so it is left and its path printed. Delete it
+From the repository's folder, once `install.py` has made `mcp_server/venv`, with no Designer of yours open (macOS).
+The rows that run the unit tests also need their packages, which `install.py` doesn't install:
+`mcp_server/venv/bin/pip install -r mcp_server/requirements-dev.txt` (pytest, mypy and ruff).
+
+| To run | Command |
+|---|---|
+| Both suites, the check before merging into `main` | `mcp_server/venv/bin/python tests/test_all_tools` |
+| The live checks alone, without the unit tests | `mcp_server/venv/bin/python tests/test_all_tools --no-unit` |
+| Another number of Designers at once (1: one after the other) | `mcp_server/venv/bin/python tests/test_all_tools --workers 2` |
+| Chosen categories (below), without the unit tests | `mcp_server/venv/bin/python tests/test_all_tools --only render measure` |
+| The unit tests alone | `mcp_server/venv/bin/python -m pytest` |
+| Every option | `mcp_server/venv/bin/python tests/test_all_tools --help` |
+| Windows: one run of every category but `lifecycle` | `mcp_server\venv\Scripts\python tests\test_all_tools` |
+
+Each Designer takes about 2 GB after a run, and took up to about 11 GB after a heavy compute; four at once was
+measured on a 64 GB Mac: with less memory, run fewer at once (`--workers 2`).
+
+`--only` takes one name or more, from the table below; an unknown name is refused with the list. It runs those
+categories the same way, each in a Designer of its own, to check one area quickly; it judges only the tools they use,
+so before merging, run everything. At the end it prints each category's lines, then one summary: the tools covered,
+the checks passed and skipped, and the time per category. Exit code 0: every check that ran passed; 1: a check failed,
+or, in a full run, a tool no check exercised; 2: nothing was run (a Designer of yours open, an unknown name, `--only` on Windows).
+
+### The categories
+
+| Category | What it checks |
+|---|---|
+| `lifecycle` | Quitting and starting Designer, also forced, on other ports, in Designers of its own (the longest, about 3 minutes) |
+| `render` | Output: `export_outputs`, `sbsar_info`, `render_sbs` (seeds, sizes, formats) and `preview_maps` |
+| `facts` | The Designer behaviour the agent guide relies on, so a Designer update that changes it shows up |
+| `safeguards` | Refusals and failure paths: unsaved changes never unloaded, bad node ids, failed restores |
+| `graph_edit_wire` | One-op edits: `apply_edits`' connect, disconnect, move and delete |
+| `link_display` | `set_link_display`: portals and wires, by node, by link, by fan-out and by length |
+| `inputs` | Exposed inputs and graph size: `set_graph_size`, the expose op, `list_graph_inputs`, `remove_graph_input` |
+| `params` | `apply_edits`' set op: value types, `$outputsize`, `$format`, `$randomseed` and their inheritance |
+| `bridge` | The connection: `designer_status`, `cancel_designer_job`, the bridge's security and job queue, the command-line client |
+| `example` | README's full example, the trim sheet, built from a renamed copy |
+| `measure` | Measuring: `node_stats`, `sweep_param`, `check_tiling` and `read_designer_log` |
+| `lookup` | Finding a graph (same-named graphs, library graphs) and a node with several outputs |
+| `discovery` | Finding nodes: `search_nodes` and `describe_node` |
+| `editor_open_and_zoom` | The editor: `open_graph`'s targets and zoom, `screenshot_designer('graph')` with crops |
+| `bitmaps` | Bitmaps: `apply_edits`' bitmap op and `compare_to_reference` |
+| `editor_panels_and_fit` | The editor: every panel's screenshot, the clipboard, `open_graph` fitting the whole graph |
+| `graph_edit_create` | `create_graph` and `apply_edits`' add op |
+| `layout` | Snapshots, diffs and readable graphs: `snapshot_graph`, `list_snapshots`, `diff_graph`, `arrange_graph` |
+| `save` | Saving: `save_package`, snapshots of a saved package, a diff against a `.sbs`, copied bitmaps |
+| `graph_edit_output_fields` | Naming and tagging output nodes with `apply_edits` |
+| `batch` | Several edits in one `apply_edits` call |
+| `undo` | One tool call is one undo step |
+| `script_runner` | `run_designer_script` |
+
+A few never run beside some others, `--only` included: `undo` runs last, alone, and `facts` and
+`editor_panels_and_fit` never at the same time (both use the clipboard).
+
+### What it checks
+
+
+It builds temporary graphs (`mcp_selftest`), checks every tool including error cases, and removes
+them; in your Designer (Windows) it reopens the graph you had open. It doesn't touch your packages. Its files go in a
+temporary folder (`sd_mcp_selftest_...`), deleted once its Designer has closed. On Windows, where Designer stays open,
+it is left and its path printed: deleting it while Designer ran crashed Designer twice. Delete it
 once Designer is closed (the system may clear old temporary files itself, but don't count on it). To check that
 one change is one undo step it triggers Undo and Redo, but only while its own graph is the one
 in the editor; it skips that check otherwise. It also re-checks the Designer behaviour the
@@ -207,14 +264,16 @@ agent notes rely on ("designer facts"), so a Designer update that changes it sho
 checks the Security promises below (unsigned and wrongly signed requests refused, not
 reachable from the network, private token file), the command-line client, that the plugin Designer loaded matches
 this repo (re-run `install.py` if not), and that the example trim sheet still builds (a renamed
-copy, so a trim sheet you have open is never touched). The 3D screenshot check is skipped if no 3D View is visible; the clipboard check runs
-on macOS only. Exit code 0 means everything that ran passed; the summary lists tools whose checks
-were all skipped (`quit_designer` when your own Designer is running) instead of counting them as
+copy, so a trim sheet you have open is never touched). The screenshot of a panel not visible in your Designer (Windows) is skipped; the clipboard checks run
+on macOS only: they use your clipboard for a few seconds, then put your text back (only the text). Exit code 0 means everything that ran passed; the summary lists tools whose checks
+were all skipped (`quit_designer` on Windows) instead of counting them as
 covered. Run it after installing, after updates, and
-after a Designer update. To run chosen checks on their own, in an environment built for them (how agents see a check
+after a Designer update (`--no-unit` where the unit tests' packages aren't installed). To run chosen checks on their own, in an environment built for them (how agents see a check
 fail and then pass while changing it), see `tests/test_all_tools/alone.py` (`.claude/skills/live-check/`).
 
-**Unit tests (no Designer needed).** `tests/unit` tests everything that can run outside
+### Unit tests (no Designer needed)
+
+`tests/unit` tests everything that can run outside
 Designer: the plugin's server and authentication (with Qt replaced), both clients' protocol
 (the MCP server's and `client/sd_run.py`'s, against that plugin server),
 pixel decoding, image comparison, the tiling metric, `.sbs` parsing, diffing and portal
@@ -231,10 +290,12 @@ alone, which runs the docs tests (AGENTS.md, Running the tests):
 mcp_server/venv/bin/pip install -r mcp_server/requirements-dev.txt   # pytest, mypy and ruff
 mcp_server/venv/bin/ruff check --fix . && mcp_server/venv/bin/ruff format .   # lint and format
 mcp_server/venv/bin/python -m pytest tests/unit/test_x.py::test_name tests/unit/test_lint.py tests/unit/test_types.py   # while working
-mcp_server/venv/bin/python -m pytest   # all of them, before merging
+mcp_server/venv/bin/python -m pytest   # all of them (on macOS the self-test runs them too: Running it, above)
 ```
 
-**Working in PyCharm.** The repo's `.idea` marks the source roots, excludes `mcp_server/venv`,
+### Working in PyCharm
+
+The repo's `.idea` marks the source roots, excludes `mcp_server/venv`,
 sets pytest as the test runner, and switches on PyCharm's built-in Ruff integration. Its source roots
 include Designer's own `sd` and PySide6 folders at the default macOS install location, since the venv
 doesn't have them. With Designer elsewhere, add yours under Settings → Project Structure, or PyCharm reports
@@ -299,7 +360,8 @@ python client/sd_run.py --cancel              # abort the running script
   unsigned one costs Designer only its bytes. Malformed requests get no details back, only the last 8 million characters of a
   script's output come back, and on Windows the port is bound exclusively so a second program can't share it.
 - Screenshots only ever capture Designer's own panels. The 3D view uses Designer's own render
-  through the clipboard and puts back whatever was on your clipboard.
+  through the clipboard, then puts back its text; anything else on it (an image, formatting, copied files) may
+  be lost.
 - To turn the bridge off, disable it in Tools > Plugin Manager or delete the `sd_claude_bridge_kve`
   folder from the plugin directory.
 

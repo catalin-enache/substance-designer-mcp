@@ -398,7 +398,7 @@ def _graph_model(sbs_path: str, graph_id: str) -> _GraphModel:
             'params': params,
             'links': links,
             'display': display,
-            'pos': pos.get('v') if pos is not None else '',
+            'pos': pos.get('v') if pos is not None else '0 0 0',  # Designer writes no <gpos> for a node at (0, 0)
         }
     inputs: dict[str, str | None] = {}
     for pi in g.iter('paraminput'):

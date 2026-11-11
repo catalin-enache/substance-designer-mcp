@@ -51,7 +51,8 @@ def screenshot_designer(panel: str = 'window', max_size: int = 1000, crop: list[
     parameters, library or console. Shows what the user sees (node layout, 2D view, properties).
     'graph' is the node view alone (no title bar or toolbars); open_graph(frame=... / node_ids=...)
     zooms it to a section first. '3d' returns the 3D view's own render (material on the mesh);
-    the user's clipboard is restored afterwards. Inside 'window' the 3D area doesn't show the render.
+    it goes through the clipboard: its text is put back, anything else on it may be lost. Inside 'window' the
+    3D area doesn't show the render.
     crop: [left, top, right, bottom] as fractions 0-1 of the panel, applied before max_size.
     An image costs about width x height / 750 tokens (1000 x 700 is about 930), so keep
     max_size small and crop to what you need."""

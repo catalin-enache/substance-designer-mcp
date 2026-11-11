@@ -21,8 +21,9 @@ may update the names and paths an entry points at; changing what was decided, or
 ## Project rules
 
 - **The full suites run only when the user asks; while working, only the tests added or modified run, always with lint
-  and types, a live check in a scratch run.** The full suites took about 12 minutes (PLAN.md, measured), longer than
-  the work they checked. No agent starts a whole run of either suite on its own, not for TDD, not after a fix, not
+  and types, a live check in a scratch run.** The full suites took about 12 minutes when this was decided; on macOS both now take
+  about 3.5 minutes, with four Designers at once (10.5 one at a time: `tests/test_all_tools/workers.py`), still longer than the tests of
+  one change. No agent starts a whole run of either suite on its own, not for TDD, not after a fix, not
   between reviews: when a review finds nothing, it says the work is ready, and the user asks for the final check (both
   suites in full, before merging into `main`) when they say the work is done. Lint and types (`test_lint.py`,
   `test_types.py`) run with every test run, whichever tests it has. TDD stays: a new or changed live self-test check, which lives in
@@ -30,8 +31,9 @@ may update the names and paths an entry points at; changing what was decided, or
   function from a scratch script (`tests/test_all_tools/alone.py`, or one written from zero where it falls short), in
   an environment built for it, with a fresh MCP server, in a Designer an
   agent started; the few checks a scratch run can't prove wait for the full run (the `live-check` skill lists them). A check proven
-  that way can still pass or fail in the suite because of state earlier categories
-  left; the user accepts that the full run is what shows it. When the final check fails, the failing tests run on
+  in a scratch run can still pass or fail in the full run (the pool) because of what differs there (no category sees another's state, but
+  other Designers start, quit and work beside it, the unit suite runs at the same time, and its Designer was just
+  started: the `live-check` skill); the user accepts that the full run is what shows it. When the final check fails, the failing tests run on
   their own until they pass (a live check in a scratch run), and then the user asks for the suites that failed again.
   When only unit tests failed, the live self-test runs again only if the fixes touch code it reaches (the `live-check` skill lists
   it); its pass is for the code as it was. (The user's choice, 2026-11-06.) Docs changed alone run the doc tests instead (AGENTS.md, Running the tests).
@@ -104,7 +106,7 @@ may update the names and paths an entry points at; changing what was decided, or
 - **Loading and then unloading a package that is already a dependency loses nothing.** Not reproduced: measured
   on Designer 16, it goes back to being a dependency, the instance still resolves, the graph computes and nothing
   is marked modified. Not measured: the same check's path comparison on Windows. The self-test's subfolder check
-  (`tests/test_all_tools/safeguards.py`) now runs only in a Designer it started, so neither case reaches the
+  (`tests/test_all_tools/safeguards/checks.py`) now runs only in a Designer it started, so neither case reaches the
   user's session.
   Reopen if: that check runs in the user's Designer again, or an unload is seen to lose work.
 - **`preview_node` and `node_stats` count as reads on a library graph.** Their temporary output node can leave the package
@@ -152,20 +154,32 @@ may update the names and paths an entry points at; changing what was decided, or
   `install.py` installs the plugin with the server. The user's decision, 2026-11-07.
   Reopen if: plugins of other versions come to be used next to the server.
 
+- **No job starts sooner than 30 ms after the one before ended, whatever starts it; a call after a pause starts at
+  once.** Started at once, a job found Designer not settled after the one before (a node measured right after the one
+  feeding it got no texture); 20 ms was enough where 5 ms wasn't (measured: `WAKE_DELAY_MS` in the plugin). Calls one after
+  the other take about 30 ms each instead of the poll's 85; a call after a pause doesn't wait. The tools' second compute
+  stays as a defence; the `measure` check that runs one compute is what fails without the wait. The user's choice,
+  2026-11-11, of three (keep the wake and retry, remove the wake, or wait a little), then of this wording, which says
+  what was measured.
+  Reopen if: the wait shows too short (that check failing), or what Designer needs the moment for is found.
+
 ## Output, pixels, screenshots, the graph view, example
 
 - **An unconnected output node computes an image and is exported.** Not reproduced as a skipped output. The
   branch in `export_outputs` naming an output that computed no image is only a defence.
-  Reopen if: the check in `tests/test_all_tools/render.py` (`mcp_empty`) fails.
+  Reopen if: the check in `tests/test_all_tools/render/checks.py` (`mcp_empty`) fails.
 - **An empty clipboard gives empty mime data, not `None`.** Not reproduced as a bug: measured by a live check,
   and Qt documents `None` only for a platform without that clipboard mode. The `None` check in
   `designer_helpers/screenshots.py` is only a defence.
   Reopen if: the "designer facts" check on the empty clipboard fails.
-- **The self-test's empty-clipboard check loses no clipboard data, as far as measured.** Not reproduced: live on
-  macOS the clipboard came back intact. The check clears the real clipboard, so it runs only where it can compare
-  before and after (macOS, skipped elsewhere), and it fails if the clipboard didn't come back. Data Qt can't copy
-  wasn't tried specifically.
-  Reopen if: that comparison fails, or data is seen to be lost.
+- **The 3D screenshot puts back only the clipboard's text; the rest may be lost.** `screenshot_designer('3d')` goes
+  through the clipboard and backs it up through Qt (`designer_helpers/screenshots.py`), which on macOS kept plain
+  text and HTML and lost an image, rich text's RTF and an app's own data, and made several copied files one item (measured
+  2026-11-10). Putting it all back took native code running inside the user's Designer, reading
+  every kind of data on the clipboard; the user doesn't mind losing their clipboard when an agent needs it, as long as
+  the text comes back. The self-test's clipboard checks keep only the user's text too. README says so. The user's
+  decision, 2026-11-10.
+  Reopen if: the user wants the whole clipboard kept, or the text is seen not to come back.
 - **Why `open_graph`'s wheel steps once did nothing is unknown, and isn't being chased.** It happened in one self-test
   run of four. Not reproduced: 200 wheel steps and 40 fits in a fresh Designer gave no stuck step, idle and under
   load. `_fit_view_to` no longer reports such a view as fitted, and gives the view's size and whether Designer's

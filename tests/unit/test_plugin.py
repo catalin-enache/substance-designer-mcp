@@ -29,14 +29,49 @@ Bridge = tuple[types.ModuleType, Any, dict[str, bool]]  # the bridge fixture: th
 
 
 class _FakeTimer:
-    def __init__(self) -> None:
-        self.timeout = types.SimpleNamespace(connect=lambda fn: None)
+    def __init__(self, parent: Any = None) -> None:
+        self.timeout = _FakeSignal()  # connected to, never emitted: the tests call _drain themselves
+        self.single_shot, self.interval_ms, self.active = False, 0, False
 
-    def start(self, ms: int) -> None:
-        pass
+    def setSingleShot(self, single: bool) -> None:
+        self.single_shot = single
+
+    def setInterval(self, ms: int) -> None:
+        self.interval_ms = ms
+
+    def start(self, ms: int | None = None) -> None:
+        if ms is not None:
+            self.interval_ms = ms
+        self.active = True
 
     def stop(self) -> None:
+        self.active = False
+
+
+class _FakeSignal:
+    """A Qt signal: what was connected, how, and how often it was emitted."""
+
+    def __init__(self) -> None:
+        self.slots: list[tuple[Any, Any]] = []
+        self.emitted = 0
+
+    def connect(self, slot: Any, kind: Any = None) -> None:
+        self.slots.append((slot, kind))
+
+    def disconnect(self) -> None:
+        self.slots.clear()
+
+    def emit(self) -> None:
+        self.emitted += 1
+
+
+class _FakeQObject:
+    def __init__(self) -> None:
         pass
+
+
+def _fake_signal() -> _FakeSignal:  # one per class, as each test loads the plugin afresh
+    return _FakeSignal()
 
 
 def read_greeting(sock: socket.socket) -> bytes:
@@ -52,7 +87,12 @@ def read_greeting(sock: socket.socket) -> bytes:
 
 @pytest.fixture
 def plugin(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> types.ModuleType:
-    qtcore = types.SimpleNamespace(QTimer=_FakeTimer)
+    qtcore = types.SimpleNamespace(
+        QTimer=_FakeTimer,
+        QObject=_FakeQObject,
+        Signal=_fake_signal,
+        Qt=types.SimpleNamespace(ConnectionType=types.SimpleNamespace(QueuedConnection='queued')),
+    )
     monkeypatch.setitem(sys.modules, 'PySide6', types.SimpleNamespace(QtCore=qtcore))
     monkeypatch.setitem(sys.modules, 'PySide6.QtCore', qtcore)
     spec = importlib.util.spec_from_file_location('bridge_plugin_under_test', PLUGIN)
@@ -598,6 +638,7 @@ def test_a_job_never_starts_inside_the_running_one(plugin: types.ModuleType, mon
     srv.jobs.put(("print('B ran')", None, None, box_b, done_b))
     try:
         srv._drain()
+        time.sleep(plugin.WAKE_DELAY_MS / 1000 + 0.01)  # no sooner than the wait after A (REVIEW.md PLG-40)
         srv._drain()  # the next tick (one job per tick, PLG-13)
     finally:
         srv.stop()
@@ -945,8 +986,33 @@ def test_stop_answers_queued_clients_and_frees_the_port(bridge: Bridge) -> None:
     assert time.monotonic() - started < 2
     srv.thread.join(2)
     assert not srv.thread.is_alive(), 'the accept thread is still blocked'
-    with socket.socket() as again:  # the port can be bound again at once
-        again.bind(('127.0.0.1', plugin.PORT))
+    _bind_again(plugin)
+
+
+def _bind_again(plugin: types.ModuleType) -> None:
+    """The port bound again at once by the plugin itself, as it binds it restarting (its own socket options: a plain
+    bind is refused while another connection uses the port, test below); OSError if it can't."""
+    again = plugin._Server()
+    try:
+        assert again.port == plugin.PORT
+    finally:
+        again.stop()
+
+
+def test_the_port_is_bound_again_while_another_connection_uses_it_as_its_own(bridge: Bridge) -> None:
+    # beside the four workers the test above failed once: "Address already in use" (ROADMAP item 64). Its port is one a
+    # probe found free, from the range the system gives outgoing connections: once stop() released it, another
+    # process's connection could take it as its local port, which refuses a plain bind but not the plugin's own
+    # (SO_REUSEADDR off Windows), as a listener still open is refused either way (measured 2026-11-10)
+    plugin, srv, _ = bridge
+    srv.stop()
+    srv.thread.join(2)
+    with socket.socket() as elsewhere, socket.socket() as outgoing:
+        elsewhere.bind(('127.0.0.1', 0))
+        elsewhere.listen(1)
+        outgoing.bind(('127.0.0.1', plugin.PORT))  # as the system may give it to another process's connection
+        outgoing.connect(elsewhere.getsockname())
+        _bind_again(plugin)
 
 
 def test_control_commands_are_answered_while_queued_jobs_fill_the_cap(bridge: Bridge) -> None:
@@ -1020,6 +1086,233 @@ def test_one_job_per_timer_tick(bridge: Bridge) -> None:
     srv._drain()
     time.sleep(0.3)
     assert len(replies) == 2
+
+
+def _soon(condition: Any, seconds: float = 5) -> bool:
+    """Whether condition() holds within seconds: the plugin emits the wake after the job is queued, from the client's
+    thread (REVIEW.md TST-273)."""
+    deadline = time.monotonic() + seconds
+    while not condition() and time.monotonic() < deadline:
+        time.sleep(0.005)
+    return bool(condition())
+
+
+def _queue(plugin: types.ModuleType, srv: Any, code: str, replies: list[Any]) -> None:
+    """A job sent from a client thread, returning once it is queued."""
+    queued = srv.jobs.qsize()
+    threading.Thread(target=lambda: replies.append(_call(plugin, {'code': code})), daemon=True).start()
+    deadline = time.monotonic() + 5
+    while srv.jobs.qsize() <= queued and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert srv.jobs.qsize() == queued + 1
+
+
+def test_a_job_reaching_an_idle_bridge_wakes_the_main_thread(bridge: Bridge) -> None:
+    """Instead of waiting for the next 100 ms tick: calls one after the other waited about 85 ms each (measured 2026-11-10).
+    The wake is queued to the main thread, where the waker lives, and runs the drain there."""
+    plugin, srv, draining = bridge
+    draining['on'] = False
+    time.sleep(0.05)
+    wake = srv.waker.wake
+    assert wake.slots == [
+        (srv.waker._on_wake, 'queued')
+    ]  # the wait after the job before is _drain's (REVIEW.md PLG-42)
+    replies: list[Any] = []
+    _queue(plugin, srv, 'print(1)', replies)
+    assert _soon(lambda: wake.emitted == 1)
+    srv.waker._on_wake()  # the main thread, delivering it
+    deadline = time.monotonic() + 5
+    while not replies and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert replies and replies[0]['ok'] and replies[0]['output'].strip() == '1'
+
+
+def test_a_job_queued_behind_another_waits_for_the_timer(bridge: Bridge) -> None:
+    """REVIEW.md PLG-13: two jobs queued together never run back to back, without Qt's event loop between them; a wake
+    for each would. Only a job reaching an empty queue with nothing running wakes the main thread."""
+    plugin, srv, draining = bridge
+    draining['on'] = False
+    time.sleep(0.05)
+    wake = srv.waker.wake
+    replies: list[Any] = []
+    _queue(plugin, srv, 'print(1)', replies)
+    _queue(plugin, srv, 'print(2)', replies)  # behind the first
+    assert _soon(lambda: wake.emitted >= 1)
+    time.sleep(0.05)  # a second emit, the wrong one, would land meanwhile
+    assert wake.emitted == 1
+    srv._drain()
+    time.sleep(plugin.WAKE_DELAY_MS / 1000 + 0.01)  # the next no sooner than the wait after it (REVIEW.md PLG-40)
+    srv._drain()
+    assert _soon(lambda: len(replies) == 2)
+    srv.busy_since = time.monotonic()  # a job running, the queue empty: it runs this one when done, by the timer
+    _queue(plugin, srv, 'print(3)', replies)
+    time.sleep(0.05)  # as above
+    assert wake.emitted == 1
+    srv.busy_since = None
+    srv._drain()
+
+
+def test_no_job_starts_sooner_than_the_wait_after_the_one_before(plugin: types.ModuleType) -> None:
+    # REVIEW.md PLG-38: a job started at once after another (about 1 ms) found a node measured right after the one feeding
+    # it with no texture, in 5 runs of 5; after a wait of 5 ms in 4 of 5, of 20 ms and 50 ms in none of 5. PLG-40: the
+    # wake waited, but the 100 ms poll and a job queued behind another started sooner; the wait is now _drain's
+    assert plugin.WAKE_DELAY_MS >= 20
+    srv = plugin._Server()
+    try:
+        delay = srv.waker.delay
+        assert delay.single_shot and delay.timeout.slots == [(srv.waker._on_wake, None)]
+        box: dict[str, Any] = {}
+        done = threading.Event()
+        srv.jobs.put(('print(1)', None, None, box, done))
+        srv.ended = time.monotonic()  # a job has just ended
+        srv._drain()  # the poll's tick, the wake, or the overdue tick as that job ended
+        assert not box.get('started'), 'started within the wait'
+        assert delay.active and 0 < delay.interval_ms <= plugin.WAKE_DELAY_MS, 'nothing to come back for the rest'
+        srv.ended -= plugin.WAKE_DELAY_MS / 1000  # the wait is over
+        srv._drain()  # the delay's timeout
+        assert box.get('started') and done.is_set()
+        assert srv.ended is not None and time.monotonic() - srv.ended < 1, 'its end noted, for the next one'
+    finally:
+        srv.stop()
+
+
+@pytest.mark.parametrize('before', [None, 1.0], ids=['no job before', 'one long before'])
+def test_a_wake_after_a_pause_starts_the_job_at_once(plugin: types.ModuleType, before: float | None) -> None:
+    # REVIEW.md PLG-42 (the user's choice: no job sooner than the wait after the one before, and no wait beyond it): the
+    # wake waited 30 ms whenever it came, after a pause too
+    srv = plugin._Server()
+    try:
+        assert srv.waker.wake.slots == [(srv.waker._on_wake, 'queued')]
+        if before is not None:
+            srv.ended = time.monotonic() - before
+        box: dict[str, Any] = {}
+        done = threading.Event()
+        srv.jobs.put(('print(1)', None, None, box, done))
+        srv.waker._on_wake()  # the wake, delivered
+        assert box.get('started') and not srv.waker.delay.active
+    finally:
+        srv.stop()
+
+
+def test_a_job_queued_as_the_drain_looks_still_waits(plugin: types.ModuleType) -> None:
+    # REVIEW.md PLG-41: the drain looked at the queue outside the lock, so a job a client queued before it took the lock
+    # started at once, however soon after the one before
+    srv = plugin._Server()
+    try:
+        box: dict[str, Any] = {}
+        done = threading.Event()
+        real = srv.lock
+
+        class ClientFirst:  # the client's thread wins the lock as the drain reaches it
+            queued = False
+
+            def __enter__(self) -> None:
+                if not ClientFirst.queued:
+                    ClientFirst.queued = True
+                    srv.jobs.put(('print(1)', None, None, box, done))
+                real.__enter__()
+
+            def __exit__(self, *exc: object) -> None:
+                real.__exit__(*exc)
+
+        srv.lock = ClientFirst()
+        srv.ended = time.monotonic()  # a job has just ended
+        srv._drain()  # the poll's tick, with nothing queued yet
+        assert not box.get('started'), 'started within the wait'
+        assert srv.waker.delay.active
+    finally:
+        srv.lock = real
+        srv.stop()
+
+
+def test_stop_disconnects_the_wake(bridge: Bridge) -> None:
+    _plugin, srv, _draining = bridge
+    srv.waker.delay.start()  # a wake on its way
+    srv.stop()
+    assert srv.waker.wake.slots == [] and not srv.waker.delay.active
+    assert srv.timer.timeout.slots == [], 'the timer holds the server through its slot as the waker does (PLG-36)'
+
+
+def test_the_accept_thread_starts_once_the_waker_and_the_timer_exist(
+    plugin: types.ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # REVIEW.md PLG-34: a request served before the waker existed queued its job, then failed on the wake: its client
+    # was told "bad request" while the timer ran its script
+    seen: list[tuple[bool, bool]] = []
+
+    class Thread:
+        def __init__(self, target: Any, args: tuple[Any, ...] = (), daemon: bool = False) -> None:
+            self.target = target
+
+        def start(self) -> None:
+            owner = getattr(self.target, '__self__', None)
+            seen.append((hasattr(owner, 'waker'), hasattr(owner, 'timer')))
+
+    fake = types.SimpleNamespace(Thread=Thread, Event=threading.Event, Lock=threading.Lock)
+    monkeypatch.setitem(vars(plugin), 'threading', fake)
+    srv = plugin._Server()
+    try:
+        assert seen == [(True, True)]
+    finally:
+        srv.stop()
+
+
+def test_a_stopped_server_is_freed_without_a_garbage_collection(plugin: types.ModuleType) -> None:
+    # REVIEW.md PLG-36: the server held its waker, and the waker the server's _drain: after uninitializeSDPlugin let
+    # go of it, the server, its timer and its waker lived on until Python's cyclic collector ran, on a thread of its
+    # choosing
+    import gc
+    import weakref
+
+    srv = plugin._Server()
+    freed = weakref.ref(srv)
+    srv.stop()
+    srv.thread.join(5)  # the accept loop holds it until it ends
+    gc.disable()
+    try:
+        del srv
+        assert freed() is None
+    finally:
+        gc.enable()
+
+
+def test_a_stopped_servers_timer_is_never_freed_by_another_thread(plugin: types.ModuleType) -> None:
+    # REVIEW.md PLG-39: with a client being served as the plugin unloads, its thread held the server last, and the
+    # server's QTimer and _Waker were destroyed there, off the main thread they belong to. The timer only: the fake
+    # waker is held by its own delay timer's slot, so only a collection frees it, kept or not (REVIEW.md TST-281)
+    import weakref
+
+    freed: list[str] = []
+    plugin.initializeSDPlugin()
+    srv = plugin._server
+    weakref.finalize(srv.timer, lambda: freed.append(threading.current_thread().name))
+    client = threading.Thread(target=lambda: _call(plugin, {'code': 'print(1)'}), daemon=True)
+    client.start()
+    deadline = time.monotonic() + 5
+    while srv.jobs.qsize() < 1 and time.monotonic() < deadline:
+        time.sleep(0.005)
+    del srv
+    plugin.uninitializeSDPlugin()
+    client.join(5)
+    time.sleep(0.1)
+    assert freed == [], 'freed by %s' % freed
+
+
+def test_a_wake_after_the_server_is_gone_does_nothing(plugin: types.ModuleType) -> None:
+    # REVIEW.md PLG-37: _Waker holds the server's _drain weakly, so a wake delivered after it was freed finds none
+    import gc
+
+    srv = plugin._Server()
+    waker = srv.waker
+    srv.stop()
+    srv.thread.join(5)  # the accept loop holds it until it ends
+    gc.disable()
+    try:
+        del srv
+        assert waker.drain() is None
+        waker._on_wake()
+    finally:
+        gc.enable()
 
 
 def test_cancel_does_not_count_abandoned_jobs(bridge: Bridge) -> None:

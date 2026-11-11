@@ -218,13 +218,13 @@ def test_the_live_check_skill_is_one_claude_code_can_find() -> None:
 @pytest.mark.parametrize(
     'fact',
     [
-        '`needs`',
+        '`<category>/preparations.py`',
         '**The check lives in the suite:**',
         '**The order:**',
         "**What a scratch run can't prove**",
         '**When the final check fails,**',
         '**The suites.**',
-        'designer_scripts/<module>/',
+        '<category>/designer_scripts/',
     ],
 )
 def test_the_procedure_of_live_checks_is_in_the_skill(fact: str) -> None:
@@ -482,7 +482,7 @@ def test_what_a_helper_cites_for_a_measurement_states_it() -> None:
     # REVIEW.md TST-207
     text = Path(ROOT, 'mcp_server', 'designer_helpers', 'graph_inputs.py').read_text(encoding='utf-8')
     assert (
-        '(measured on all six on a levels node and `$outputsize` on an instance node, tests/test_all_tools/designer_scripts/facts/function_states.py)'
+        '(measured on all six on a levels node and `$outputsize` on an instance node, tests/test_all_tools/facts/designer_scripts/function_states.py)'
         in _flat(text)
     )
 
@@ -566,11 +566,11 @@ def test_facts_are_stated_once_in_the_docs(fact: str) -> None:
 
 
 def test_the_lifecycle_checks_that_run_alone_are_the_ones_the_skill_names() -> None:
-    # REVIEW.md TST-168: the live-check skill (What a scratch run can't prove) names the lifecycle checks that do run alone; a
+    # REVIEW.md TST-168: the live-check skill (its paragraph on lifecycle.py) names the lifecycle checks that run alone; a
     # check saying so in its docstring and missing there, or named there without saying so, is a list gone stale
     import ast
 
-    tree = ast.parse(Path(ROOT, 'tests', 'test_all_tools', 'lifecycle.py').read_text(encoding='utf-8'))
+    tree = ast.parse(Path(ROOT, 'tests', 'test_all_tools', 'lifecycle', 'checks.py').read_text(encoding='utf-8'))
     say_so = {
         node.name
         for node in tree.body
@@ -578,11 +578,9 @@ def test_the_lifecycle_checks_that_run_alone_are_the_ones_the_skill_names() -> N
         and node.name.startswith('check_')
         and 'runs in a scratch run too' in ' '.join((ast.get_docstring(node) or '').split())
     }
-    bullet = re.search(
-        r'^- \*\*`lifecycle\.py`, the whole category:\*\*(.*?)(?=^- \*\*)', _live_check_skill(), re.M | re.S
-    )
-    assert bullet, "the live-check skill's lifecycle bullet under What a scratch run can't prove"
-    named = set(re.findall(r'`(check_\w+)`', bullet.group(1)))
+    listed = re.search(r'Three of its checks end only.*?(?=\n\n)', _live_check_skill(), re.S)
+    assert listed, "the live-check skill's list of the lifecycle checks that run alone"
+    named = set(re.findall(r'`(check_\w+)`', listed.group(0)))
     assert say_so and named == say_so, 'named in the skill: %s; saying so in their docstring: %s' % (
         sorted(named),
         sorted(say_so),

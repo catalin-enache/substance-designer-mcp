@@ -247,8 +247,11 @@ def _select_links(
     nodes = {_v(n, 'uid'): n for n in g.findall('compNodes/compNode')}
 
     def pos(uid: str) -> list[float] | None:
-        gp = nodes[uid].find('GUILayout/gpos') if uid in nodes else None
-        return [float(v) for v in cast(str, gp.get('v')).split()[:2]] if gp is not None else None
+        """A node's position; None for a node not in this graph. Designer writes no <gpos> for a node at (0, 0)."""
+        if uid not in nodes:
+            return None
+        gp = nodes[uid].find('GUILayout/gpos')
+        return [float(v) for v in cast(str, gp.get('v')).split()[:2]] if gp is not None else [0.0, 0.0]
 
     # (downstream uid, connection element, source uid, source output)
     conns: list[tuple[str, ET.Element, str, str | None]] = []

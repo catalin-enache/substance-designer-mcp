@@ -26,6 +26,8 @@ REAL_BIND_ERROR = server._bind_error  # binds a real socket: a Designer listenin
 REAL_DESIGNER_PIDS = server._designer_pids  # runs pgrep
 REAL_DESIGNER_RUNNING = server._designer_running  # runs pgrep (tasklist on Windows)
 REAL_PROCESS_START = server._process_start  # runs ps
+# as the test run found it, before the autouse fixture below replaces it
+REAL_SNAPSHOT_DIR = os.environ.get('SD_SNAPSHOT_DIR') or os.path.join(os.path.expanduser('~'), '.sd_mcp', 'snapshots')
 
 
 def patch_server(monkeypatch: pytest.MonkeyPatch, name: str, value: Any) -> None:
@@ -46,7 +48,7 @@ def server_source() -> str:
     return '\n'.join(texts)
 
 
-SELFTEST_DIR = os.path.join(ROOT, 'tests', 'test_all_tools')  # the live self-test, one module per category
+SELFTEST_DIR = os.path.join(ROOT, 'tests', 'test_all_tools')  # the live self-test, one folder per category
 
 
 def selftest_sources() -> dict[str, str]:
@@ -88,8 +90,8 @@ def sbs_path() -> str:
 def no_real_designer_process(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
-    """No unit test looks at, or ends, a Designer really running here, or reads the real record of who started it or
-    the real bridge token."""
+    """No unit test looks at, or ends, a Designer really running here, reads the real record of who started it or
+    the real bridge token, or removes the self-test's real snapshots."""
     patch_server(monkeypatch, '_designer_pids', list)
     # follows whatever _designer_pids gives now (REVIEW.md TST-147: it ran the real pgrep)
     patch_server(monkeypatch, '_designer_running', lambda: bool(server._designer_pids()))
@@ -103,6 +105,9 @@ def no_real_designer_process(
     patch_server(monkeypatch, '_listening_ports', lambda pid: set())  # listening nowhere yet: it may be on any port
     patch_server(monkeypatch, '_bind_error', lambda port: None)  # the user's Designer may hold the server's port
     monkeypatch.setitem(vars(project_constants), 'AGENT_RECORD_DIR', str(tmp_path))
+    # the self-test's clean-up removes the snapshots of its graph there (common.remove_test_snapshots), which a live
+    # run on the real folder still reads (REVIEW.md TST-230)
+    monkeypatch.setenv('SD_SNAPSHOT_DIR', str(own / 'snapshots'))
     # a token of its own: the real one gives code execution in Designer, and a fresh clone has none (REVIEW.md
     # TST-165); sd_run.py, loaded by the tests that use it, takes it from project_constants
     token = own / 'clients_token'  # not test_plugin.py's tmp_path/'token', which its token tests start without

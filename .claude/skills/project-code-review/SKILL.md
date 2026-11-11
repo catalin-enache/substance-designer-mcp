@@ -25,9 +25,10 @@ suspicions: they read, quote the code and say what would settle each one, and th
 (the one running this skill) assesses every report and settles each suspicion as right or wrong, by reading the code,
 or, where reading can't settle it (whether a defect bites in Designer, whether a test or a fix holds up there), with a
 **scratch probe**: temporary code of its own, run in Designer. Only suspicions settled as right go in `REVIEW.md`.
-Reviewers don't probe for now (ROADMAP item 48 will give each one a Designer of its own) because the tools reach a single Designer (one `SD_BRIDGE_PORT` per session), and probes
-sharing it get in each other's way: a cancel drops every queued job, graphs with the same name are refused as
-ambiguous, one probe's leftovers change what another measures, and a crash or a quit ends everyone's work.
+Reviewers don't probe: the lead agent settles every suspicion anyway, so it would have to read each reviewer's probe
+closely and often run it again (ROADMAP item 48, won't do). The lead agent's probes run one at a time in one Designer,
+since probes sharing one get in each other's way: a cancel drops every queued job, graphs with the same name are refused
+as ambiguous, one probe's leftovers change what another measures, and a crash or a quit ends everyone's work.
 - **Where it runs:** one Designer an agent started (`launch_designer`), never the user's, with the probes run one at a
   time. If the user's Designer is open, ask them to close it: a probe's leftovers or crash would land in their work.
   Close the agent's

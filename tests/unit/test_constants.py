@@ -23,7 +23,7 @@ def test_plugin_takes_its_name_from_its_folder(monkeypatch: pytest.MonkeyPatch) 
     import sys
     import types
 
-    qtcore = types.SimpleNamespace(QTimer=object)
+    qtcore = types.SimpleNamespace(QTimer=object, QObject=object, Signal=lambda: None)  # what loading it needs
     monkeypatch.setitem(sys.modules, 'PySide6', types.SimpleNamespace(QtCore=qtcore))
     monkeypatch.setitem(sys.modules, 'PySide6.QtCore', qtcore)
     spec = importlib.util.spec_from_file_location('plugin_name_check', os.path.join(PLUGIN_PACKAGE_DIR, '__init__.py'))

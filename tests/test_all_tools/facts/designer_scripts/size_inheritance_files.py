@@ -1,0 +1,42 @@
+"""Runs inside Designer: saves one graph per inheritance mode, for how a .sbs stores it (checks.py). ARGS: folder."""
+
+import os
+from typing import Any
+
+import sd
+from sd.api.sbs.sdsbscompgraph import SDSBSCompGraph
+from sd.api.sdproperty import SDPropertyCategory, SDPropertyInheritanceMethod
+
+ARGS: dict[str, Any] = globals()['ARGS']
+M = SDPropertyInheritanceMethod
+pm = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
+os.makedirs(ARGS['folder'], exist_ok=True)
+for m in (M.Absolute, M.RelativeToInput, M.RelativeToParent):
+    pkg = pm.newUserPackage()
+    try:
+        g: Any = SDSBSCompGraph.sNew(pkg)
+        g.setIdentifier('mcp_selftest_inherit_' + m.name)
+        n: Any = g.newNode('sbs::compositing::blur')
+        g.setPropertyInheritanceMethod(g.getPropertyFromId('$outputsize', SDPropertyCategory.Input), m)
+        n.setPropertyInheritanceMethod(n.getPropertyFromId('$outputsize', SDPropertyCategory.Input), m)
+        pm.savePackageAs(pkg, os.path.join(ARGS['folder'], m.name + '.sbs'))
+    finally:
+        pm.unloadUserPackage(pkg)
+    pkg = pm.newUserPackage()
+    try:
+        inner: Any = SDSBSCompGraph.sNew(pkg)
+        inner.setIdentifier('mcp_selftest_inherit_inner')
+        uniform: Any = inner.newNode('sbs::compositing::uniform')
+        uniform.newPropertyConnectionFromId(
+            'unique_filter_output', inner.newNode('sbs::compositing::output'), 'inputNodeOutput'
+        )
+        outer: Any = SDSBSCompGraph.sNew(pkg)
+        outer.setIdentifier('mcp_selftest_inherit_outer')
+        instance: Any = outer.newInstanceNode(inner)
+        size = instance.getPropertyFromId('$outputsize', SDPropertyCategory.Input)
+        print('instance default %s' % instance.getPropertyInheritanceMethod(size).name)
+        instance.setPropertyInheritanceMethod(size, m)
+        pm.savePackageAs(pkg, os.path.join(ARGS['folder'], 'instance_%s.sbs' % m.name))
+    finally:
+        pm.unloadUserPackage(pkg)
+print('saved')

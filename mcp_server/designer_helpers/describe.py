@@ -261,7 +261,11 @@ def _with_node_texture(
 ) -> None:
     """Compute the graph and call use(texture, output_property) for one node output. Designer
     computes the nodes that feed an output node and may skip others (GUIDE.md), so a temporary
-    output node is attached when needed and removed afterwards."""
+    output node is attached when needed and removed afterwards. With the graph open in the editor and an output node
+    in it, the first compute after attaching sometimes gave no texture right after another node was measured this way,
+    and the next compute gave it (9 times in 9): so a second compute, only then (REVIEW.md HLP-100). That came from the
+    plugin starting the job at once after the one before; it now waits first (REVIEW.md PLG-38), and the second compute
+    stays as a defence."""
     outs = list(node.getProperties(SDPropertyCategory.Output))
     if output:
         outs = [p for p in outs if p.getId() == output]
@@ -282,9 +286,12 @@ def _with_node_texture(
         if texture is None:
             temp_output = g.newNode('sbs::compositing::output')
             node.newPropertyConnectionFromId(outs[0].getId(), temp_output, 'inputNodeOutput')
-            g.compute()
-            value = cast(SDValueTexture | None, node.getPropertyValue(outs[0]))
-            texture = value.get() if value is not None else None
+            for _ in range(2):  # the second only when the first gave none (the docstring)
+                g.compute()
+                value = cast(SDValueTexture | None, node.getPropertyValue(outs[0]))
+                texture = value.get() if value is not None else None
+                if texture is not None:
+                    break
         if texture is None:
             raise RuntimeError('node %s produced no texture (are its inputs connected?)' % node.getIdentifier())
         return use(texture, outs[0])

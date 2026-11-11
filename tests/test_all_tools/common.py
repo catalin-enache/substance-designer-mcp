@@ -1,4 +1,4 @@
-"""What every part of the live self-test shares: the check/skip record, the MCP and bridge helpers,
+"""What every category of the live self-test shares (each in a folder of its own: categories.py): the check/skip record, the MCP and bridge helpers,
 the code snippets sent to Designer, and the summary. The run itself is in __main__.py."""
 
 import asyncio
@@ -8,12 +8,13 @@ import hmac
 import json
 import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
 import sys
 import time
-from collections.abc import Coroutine, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from textwrap import dedent
 from typing import Any, Protocol
 
@@ -35,6 +36,7 @@ from project_constants import (  # noqa: E402 (after the sys.path entry; `X as X
 
 sys.path.insert(0, os.path.join(BUNDLE, 'mcp_server'))
 import designer_helpers  # noqa: E402
+from test_all_tools.crash_watch import CrashWatch  # noqa: E402  (lifecycle's, kept on its Ctx)
 
 helpers_source = designer_helpers.source  # the helpers as sent to Designer (used by the categories)
 SERVER = os.path.join(BUNDLE, 'mcp_server', 'server.py')
@@ -49,6 +51,7 @@ PARAMS = StdioServerParameters(command=sys.executable, args=[SERVER], env=dict(o
 
 results: dict[str, list[bool]] = {}
 skipped: list[tuple[str, str]] = []
+times: dict[str, float] = {}  # seconds each category took: __main__.py's run_steps
 
 
 def check(tool: str, name: str, ok: object, detail: str = '') -> None:
@@ -158,13 +161,14 @@ def positions(t: str) -> dict[str, tuple[float, float]]:
     return {i: (float(x), float(y)) for i, x, y in re.findall(r'^(\d+) \S+ @\((-?[\d.]+),(-?[\d.]+)\)', t, re.M)}
 
 
-def clipboard_fingerprint() -> str | None:
-    """Hash of the clipboard (never printed). None where we can't read it (non-macOS)."""
-    if sys.platform != 'darwin':
-        return None
-    info = subprocess.run(['osascript', '-e', 'clipboard info'], capture_output=True).stdout
-    data = subprocess.run(['pbpaste'], capture_output=True).stdout
-    return hashlib.sha256(info + data).hexdigest()
+def clipboard_text() -> bytes:
+    """The text on the clipboard (macOS: pbpaste), never printed; b'' if it holds none."""
+    return subprocess.run(['pbpaste'], capture_output=True, check=True).stdout
+
+
+def set_clipboard_text(data: bytes) -> None:
+    """The clipboard made this text alone (macOS: pbcopy): whatever else it held is gone."""
+    subprocess.run(['pbcopy'], input=data, check=True)
 
 
 # Designer's library packages loaded right now (their paths), so the run can unload the ones it
@@ -208,6 +212,12 @@ UNDO_REDO = dedent("""\
         acts=[a for w in QApplication.instance().allWidgets() if isinstance(w, QMenu) and w.title()=='&Edit'
               for a in w.actions() if a.text()=='%s' and a.isEnabled()]
         if acts:
+            # in a Designer just started, with another Designer in front, Undo of an output's fields sometimes did
+            # nothing without this (8 in 8 beside one idle Designer, 3 pool runs in 4, 1 in 3 in scratch runs; with it 4 in 4); it leaves the other
+            # app in front (GUIDE.md, Undo)
+            mw=sd.getContext().getSDApplication().getQtForPythonUIMgr().getMainWindow()
+            mw.raise_()
+            mw.activateWindow()
             QTimer.singleShot(0, acts[0].trigger)
             print('SCHEDULED')
         else:
@@ -231,6 +241,11 @@ CURRENT_GRAPH = dedent("""\
     g=sd.getContext().getSDApplication().getQtForPythonUIMgr().getCurrentGraph()
     sys._selftest_user_graph = g
     print('CURRENT=' + (g.getIdentifier() if g else ''))""")
+# The graph in the editor now, for a check: nothing kept, as the run's start keeps the user's (REVIEW.md TST-271)
+GRAPH_IN_EDITOR = dedent("""\
+    import sd
+    g=sd.getContext().getSDApplication().getQtForPythonUIMgr().getCurrentGraph()
+    print('CURRENT=' + (g.getIdentifier() if g else ''))""")
 # Reopens that graph object, not a graph found by name: two open graphs can share a name
 SAME_GRAPH_BACK = dedent("""\
     import sd, sys
@@ -250,13 +265,14 @@ def agent_folder(port: int) -> str:
     return os.path.join(SHORT_TEMP, agent_folder_name(port))
 
 
-def crash_dumps(ports: Sequence[int] = ()) -> set[str]:
+def crash_dumps(ports: Sequence[int] = (), run_port: bool = True) -> set[str]:
     """Designer's crash dumps (Crashpad's completed reports), as a set of paths; empty where none
     are found. On macOS also those in the homes of this run's Designers (agent_folder(port)/home, where they write
-    theirs): on PORT and on `ports`, never another run's beside it (REVIEW.md TST-155)."""
+    theirs): on PORT (unless run_port is False: the pool's parent has no Designer there, REVIEW.md TST-280) and on
+    `ports`, never another run's beside it (REVIEW.md TST-155)."""
     if sys.platform == 'darwin':
         bases = [os.path.expanduser('~/Library/Application Support/Adobe/Adobe Substance 3D Designer')]
-        homes = [os.path.join(agent_folder(port), 'home') for port in (PORT, *ports)]
+        homes = [os.path.join(agent_folder(port), 'home') for port in ((PORT,) if run_port else ()) + tuple(ports)]
         bases += [
             os.path.join(home, 'Library', 'Application Support', 'Adobe', 'Adobe Substance 3D Designer')
             for home in homes
@@ -382,12 +398,17 @@ class Call(Protocol):
     def __call__(self, name: str, args: dict[str, Any] | None = None, /) -> Coroutine[Any, Any, CallToolResult]: ...
 
 
+Step = Callable[['Ctx'], Awaitable[None]]  # a category's run(ctx), one of its checks, or its prepare(ctx)
+
+
 async def designer_script(c: Call, name: str, /, **args: Any) -> CallToolResult:
-    """Run designer_scripts/<module>/<script>.py inside Designer, name being '<module>/<script>', the folder the module that runs it, or 'shared/<script>' for one that several modules run: Python with real logic lives in real files, which ruff and mypy check (the live-check skill).
+    """Run a Designer script, name being '<category>/<script>' for <category>/designer_scripts/<script>.py, the folder
+    of the category that runs it, or 'shared/<script>' for designer_scripts/shared/<script>.py, one that several run:
+    Python with real logic lives in real files, which ruff and mypy check (the live-check skill).
     The keywords reach it as its ARGS. A script that raises is a failed check here, whatever the caller reads from the
     result: a traceback shows the failing source line, output token included, and a tool returns a script's error as
     normal text."""
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'designer_scripts', *name.split('/')) + '.py'
+    path = script_path(name)
     result = await c('run_designer_script', {'path': path, 'timeout_s': 120, 'args': args})
     if result.is_error or '--- ERROR ---' in text(result):
         print(text(result))  # a setup script discards its result: this is the only place the error shows
@@ -395,26 +416,73 @@ async def designer_script(c: Call, name: str, /, **args: Any) -> CallToolResult:
     return result
 
 
+def script_path(name: str) -> str:
+    """The file of designer_script's `name`: '<category>/<script>' or 'shared/<script>'."""
+    owner, script = name.split('/')
+    here = os.path.dirname(os.path.abspath(__file__))
+    folder = (
+        os.path.join(here, 'designer_scripts', 'shared')
+        if owner == 'shared'
+        else os.path.join(here, owner, 'designer_scripts')
+    )
+    return os.path.join(folder, script + '.py')
+
+
 class Ctx:
-    """What the categories share, in the order they run (__main__.py): set when the run starts, then by
-    the category named beside each later one. One not yet set raises AttributeError when read."""
+    """What one category runs on (category_run.py): the run's session and folder, set when the run starts, and what
+    the category's own preparation (<category>/preparations.py) sets for its checks. Each category gets a fresh one
+    (fresh()), so none reads what another prepared; one not set raises AttributeError when read."""
 
     c: Call  # c(tool name, args): one tool call
     s: ClientSession
-    scratch: str  # the run's temporary folder
+    scratch: str  # the category's temporary folder, in the run's
     helper_source: str  # the Designer helpers, sent ahead of snippets that call them
     was_running: bool  # the user's own Designer was already running
-    G: dict[str, str]  # graph_edit.create: {'graph': TEST_GRAPH}, the self-test graph
-    clouds: str  # graph_edit.create: node ids (clouds -> slope blur -> levels -> output)
+    # set by a category's preparation, for its checks: the names they read
+    G: dict[str, str]  # {'graph': TEST_GRAPH}, the self-test graph
+    clouds: str  # node ids (clouds -> slope blur -> levels -> output)
     slope: str
     lv: str
     out: str
-    png: str  # bitmaps.run: the path of the PNG it imported
-    sbs: str  # save.run: where the self-test graph was saved
-    stats_before: str  # save.run: node_stats of lv, for set_link_display
+    png: str  # the path of a PNG the preparation wrote
+    sbs: str  # where the self-test graph was saved
+    stats_before: str  # node_stats of lv, before set_link_display
 
     def __init__(self, c: Call, s: ClientSession, scratch: str, helper_source: str, was_running: bool) -> None:
         self.c, self.s, self.scratch, self.helper_source, self.was_running = c, s, scratch, helper_source, was_running
+        self.crash_watch: CrashWatch | None = None  # crash_watch.watching_crashes
+
+    def fresh(self, category: str) -> 'Ctx':
+        """A Ctx for one category: the run's session and Designer, a scratch folder of its own, nothing prepared."""
+        scratch = os.path.join(self.scratch, category)
+        os.makedirs(scratch, exist_ok=True)
+        return Ctx(c=self.c, s=self.s, scratch=scratch, helper_source=self.helper_source, was_running=self.was_running)
+
+
+class Unprepared(Exception):
+    """A category's preparation couldn't build its environment: its checks don't run (category_run.py)."""
+
+
+async def prepared_call(c: Call, name: str, args: dict[str, Any] | None = None) -> str:
+    """A tool call of a preparation: its text, or Unprepared if it failed (an error result, or a Designer script's
+    traceback), so a preparation records no check of its own."""
+    result = await c(name, args or {})
+    t = text(result)
+    if result.is_error or '--- ERROR ---' in t:
+        last = t.strip().splitlines()[-1] if t.strip() else 'no answer'
+        raise Unprepared('%s: %s' % (name, last))
+    return t
+
+
+def remove_test_snapshots() -> None:
+    """The self-test graph's snapshots (snapshot_graph's folder for TEST_GRAPH), none other."""
+    root = os.environ.get('SD_SNAPSHOT_DIR') or os.path.join(os.path.expanduser('~'), '.sd_mcp', 'snapshots')
+    shutil.rmtree(os.path.join(root, TEST_GRAPH), ignore_errors=True)
+
+
+def refs(t: str) -> dict[str, str]:
+    """apply_edits' result -> {ref: the id of the node added under it}."""
+    return dict(re.findall(r"^\s*ref '(\w+)' = (\d+)", t, re.M))
 
 
 async def cancel_from_second_client() -> str:
@@ -438,6 +506,13 @@ async def editor_graph(c: Call) -> str:
     m = re.search(r'CURRENT=(.*)', t)
     if m is None:
         check('self-test', 'reads the graph in the editor at the start', False, t)
+    return m.group(1).strip() if m else ''
+
+
+async def graph_in_editor(c: Call) -> str:
+    """The identifier of the graph in the editor now ('' if none or if the bridge answers with an error), for a check:
+    unlike editor_graph, it keeps nothing."""
+    m = re.search(r'CURRENT=(.*)', text(await c('execute_designer_code', {'code': GRAPH_IN_EDITOR})))
     return m.group(1).strip() if m else ''
 
 
@@ -481,10 +556,16 @@ async def restore_library_packages(c: Call, libs_before: list[str] | None) -> No
     )
 
 
-def summarize(tools: list[str], results: dict[str, list[bool]], skipped: list[tuple[str, str]]) -> tuple[str, bool]:
+def summarize(
+    tools: list[str],
+    results: dict[str, list[bool]],
+    skipped: list[tuple[str, str]],
+    times: dict[str, float] | None = None,
+) -> tuple[str, bool]:
     """(summary text, ok). A tool counts as covered only with at least one check that ran; one
-    whose checks were all skipped (quit_designer while your own Designer runs) is listed, and
-    doesn't fail the run. Missing tools and failed checks do."""
+    whose checks were all skipped (quit_designer on Windows) is listed, and
+    doesn't fail the run. Missing tools and failed checks do. `times`, the seconds per category, are listed slowest
+    first."""
     ran = {t for t, v in results.items() if v}
     covered = set(tools) & ran
     only_skipped = sorted(set(tools) & (set(results) - ran))
@@ -503,4 +584,7 @@ def summarize(tools: list[str], results: dict[str, list[bool]], skipped: list[tu
         'checks passed: %d/%d; skipped: %d; tools with failures: %s'
         % (passed, total, len(skipped), ', '.join(failed) or 'none'),
     ]
+    if times:
+        lines.append('time per category, slowest first (total %.1f s):' % sum(times.values()))
+        lines += ['%7.1f s  %s' % (seconds, name) for name, seconds in sorted(times.items(), key=lambda t: -t[1])]
     return '\n'.join(lines), not failed and not missing

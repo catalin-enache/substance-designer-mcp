@@ -1,5 +1,5 @@
 """_fit_view_to (designer_helpers): what it reports when the zoom can't reach the area, with a fake view
-(REVIEW.md HLP-56). Designer's own smallest zoom is checked live (editor.py)."""
+(REVIEW.md HLP-56). Designer's own smallest zoom is checked live (editor_open_and_zoom/checks.py)."""
 
 import re
 import sys

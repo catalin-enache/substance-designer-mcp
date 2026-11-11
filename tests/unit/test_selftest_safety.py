@@ -14,6 +14,7 @@ import ast
 import os
 import re
 import textwrap
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -92,42 +93,63 @@ def test_the_script_guard_tells_the_cases_apart(text: str, named: bool) -> None:
     assert _names_a_library_load(text) == named
 
 
+def _is_a_script(name: str) -> bool:
+    """Whether this path from the self-test's folder is a script run inside Designer, a category's or a shared one."""
+    return 'designer_scripts' in name.split(os.sep)
+
+
+def test_the_guards_read_the_scripts_of_every_category() -> None:
+    # REVIEW.md TST-255: the scripts moved into <category>/designer_scripts/, and the guards kept reading designer_scripts/
+    scripts = {name for name in selftest_sources() if _is_a_script(name)}
+    on_disk = {
+        os.path.relpath(os.path.join(folder, f), SELFTEST_DIR)
+        for folder, _, files in os.walk(SELFTEST_DIR)
+        for f in files
+        if f.endswith('.py') and 'designer_scripts' in Path(folder).parts
+    }
+    assert os.path.join('facts', 'designer_scripts', 'compute_floor.py') in on_disk
+    assert scripts == on_disk
+
+
 def test_no_script_loads_a_library_package() -> None:
     """Such a load stays inline in a module, in a branch that runs only where the self-test started Designer, where the
     guard above can see both (the live-check skill; REVIEW.md TST-118)."""
-    scripts = {
-        name: source for name, source in selftest_sources().items() if name.startswith('designer_scripts' + os.sep)
-    }
+    scripts = {name: source for name, source in selftest_sources().items() if _is_a_script(name)}
     assert scripts
     assert not [name for name, source in scripts.items() if _names_a_library_load(source)]
 
 
 def test_no_snippet_loads_a_library_package_in_the_users_designer() -> None:
     counted = {name: _library_loads(source) for name, source in selftest_sources().items()}
-    assert sum(loads for loads, _ in counted.values()) >= 1  # safeguards.py's subfolder check: the guard still sees it
+    assert (
+        sum(loads for loads, _ in counted.values()) >= 1
+    )  # safeguards/checks.py's subfolder check: the guard still sees it
     where = [name for name, (_, outside) in counted.items() if outside]
     assert not where, 'runs in a Designer the user may be working in: %s' % where
 
 
-def test_designer_scripts_are_grouped_by_the_module_that_runs_them() -> None:
-    """designer_script(c, '<module>/<script>') from <module>.py, or 'shared/<script>' from more than one module:
-    every script exists, sits in the right folder, and is run by something."""
-    root = os.path.join(SELFTEST_DIR, 'designer_scripts')
+def test_designer_scripts_are_grouped_by_the_category_that_runs_them() -> None:
+    """designer_script(c, '<category>/<script>') from <category>/, its script in <category>/designer_scripts/, or
+    'shared/<script>' from more than one category, in designer_scripts/shared/: every script exists, sits in the right
+    folder, and is run by something."""
     runners: dict[str, set[str]] = {}
     for name, source in selftest_sources().items():
-        module = name.removesuffix('.py')
+        category = name.split(os.sep)[0] if os.sep in name else name.removesuffix('.py')
         for script in re.findall(r"designer_script\(\s*c,\s*'([^']+)'", source):
-            assert script.split('/')[0] in (module, 'shared'), '%s runs %s' % (name, script)
-            runners.setdefault(script, set()).add(module)
-    found = {
-        os.path.relpath(os.path.join(folder, f), root).replace(os.sep, '/').removesuffix('.py')
-        for folder, _, files in os.walk(root)
-        for f in files
-        if f.endswith('.py')
-    }
+            assert script.split('/')[0] in (category, 'shared'), '%s runs %s' % (name, script)
+            runners.setdefault(script, set()).add(category)
+    found = set()
+    for folder, _, files in os.walk(SELFTEST_DIR):
+        parts = os.path.relpath(folder, SELFTEST_DIR).split(os.sep)
+        if 'designer_scripts' not in parts or parts == ['designer_scripts']:  # the last: shared/'s parent
+            continue
+        # <category>/designer_scripts/<script>.py, or designer_scripts/shared/<script>.py
+        assert parts in (['designer_scripts', 'shared'], [parts[0], 'designer_scripts']), folder
+        owner = 'shared' if parts[0] == 'designer_scripts' else parts[0]
+        found |= {'%s/%s' % (owner, f.removesuffix('.py')) for f in files if f.endswith('.py')}
     assert set(runners) == found
-    for script, modules in runners.items():
-        assert not script.startswith('shared/') or len(modules) > 1, '%s is only run by %s' % (script, modules)
+    for script, categories in runners.items():
+        assert not script.startswith('shared/') or len(categories) > 1, '%s is only run by %s' % (script, categories)
 
 
 def _is_several_lines_of_python(text: str) -> bool:
@@ -230,7 +252,7 @@ def test_the_dedent_guard_tells_the_cases_apart(source: str, flagged: bool) -> N
 
 def _dedent_rule_sources() -> dict[str, str]:
     """What the rule is checked in: {name: source} of the self-test's modules and the server's."""
-    sources = {name: source for name, source in selftest_sources().items() if os.sep not in name}
+    sources = {name: source for name, source in selftest_sources().items() if not _is_a_script(name)}
     for module in server_tools.MODULES:
         with open(cast(str, module.__file__), encoding='utf-8') as f:
             sources['server_tools/' + os.path.basename(cast(str, module.__file__))] = f.read()
@@ -239,10 +261,14 @@ def _dedent_rule_sources() -> dict[str, str]:
 
 def test_the_dedent_rule_reads_every_module_of_both() -> None:
     """Same-named files of the self-test and the server each count (REVIEW.md TST-126)."""
-    selftest = [name for name in selftest_sources() if os.sep not in name]
+    selftest = [name for name in selftest_sources() if not _is_a_script(name)]
     sources = _dedent_rule_sources()
     assert len(sources) == len(selftest) + len(server_tools.MODULES)
     assert set(selftest) <= set(sources)
+    # REVIEW.md TST-255: the categories moved into packages, out of a filter for what sits at the top
+    categories = [n for n in os.listdir(SELFTEST_DIR) if Path(SELFTEST_DIR, n, 'checks.py').is_file()]
+    assert categories
+    assert not [n for n in categories if os.path.join(n, 'checks.py') not in sources]
 
 
 def test_a_snippet_of_several_lines_is_written_with_dedent() -> None:

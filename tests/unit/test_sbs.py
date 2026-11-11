@@ -389,3 +389,35 @@ def test_a_diff_shows_an_output_renamed_or_retagged(
         models.append(server._graph_model(str(path), 'g'))
     _, lines = server._diff_models(models[0], models[1], False)
     assert lines == ['~ node 5 output: ' + said]
+
+
+def _without_origin_gpos(sbs_path: str, tmp_path: Path) -> str:
+    """The fixture as Designer saves it: no <gpos> for node 201, which is at (0, 0) (ROADMAP item 63, measured: a
+    node at the origin has none; one at x 300 or 600 has its own)."""
+    tree = ET.parse(sbs_path)
+    for node in tree.getroot().iter('compNode'):
+        if node.find('uid').get('v') == '201':  # type: ignore[union-attr]
+            layout = node.find('GUILayout')
+            assert layout is not None and layout.find('gpos') is not None
+            layout.remove(cast(ET.Element, layout.find('gpos')))
+    path = tmp_path / 'origin.sbs'
+    tree.write(path)
+    return str(path)
+
+
+def test_longer_than_measures_a_link_of_a_node_at_the_origin(sbs_path: str, tmp_path: Path) -> None:
+    # ROADMAP item 63: such a node had no position, so its links were never picked: "1 of 1 selected (of 2 links)"
+    path = _without_origin_gpos(sbs_path, tmp_path)
+    g = server._xml_graph(ET.parse(path).getroot(), 'alpha', path)
+    assert server._select_links(g, 'portal', longer_than=1)[1:] == (2, 2), 'both links, 200 units long'
+    assert server._select_links(g, 'portal', longer_than=250)[1:] == (0, 2), 'neither is longer'
+
+
+def test_a_node_at_the_origin_has_that_position_in_a_diff(sbs_path: str, tmp_path: Path) -> None:
+    # ROADMAP item 63, the same pattern: diff_graph read no position for it, and a move there showed as "-> "
+    path = _without_origin_gpos(sbs_path, tmp_path)
+    assert server._graph_model(path, 'alpha')['nodes']['201']['pos'] == '0 0 0'
+    _summary, lines = server._diff_models(
+        server._graph_model(sbs_path, 'alpha'), server._graph_model(path, 'alpha'), True
+    )
+    assert not [line for line in lines if 'moved' in line]
