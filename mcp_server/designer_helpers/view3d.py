@@ -1,7 +1,7 @@
 """The 3D view set up before screenshot_designer('3d') renders it: a graph's outputs on its mesh, the mesh, the
-viewpoint, the zoom and the tiling (ROADMAP item 7). Designer's API has none of it (sd, Designer 16), so this drives the
-view's own menus and widgets, as measured in a Designer an agent started (2026-11-12; the self-test's
-editor_panels_and_fit checks what the tool relies on, lifecycle the first point below):
+viewpoint, the camera turned and panned, the zoom and the tiling (ROADMAP items 7 and 74). Designer's API has none of it
+(sd, Designer 16), so this drives the view's own menus and widgets, as measured in a Designer an agent started
+(2026-11-12; the self-test's editor_panels_and_fit checks what the tool relies on, lifecycle the first point below):
 
 - Designer builds the 3D view's menu bar and viewport once a graph is opened (before, its dock has neither).
 - The 3D view's menu bar: Scene lists the meshes (MESHES, among other entries), Camera the viewpoints (VIEWS) and
@@ -11,6 +11,31 @@ editor_panels_and_fit checks what the tool relies on, lifecycle the first point 
 - Zoom: wheel events on the viewport (the visible Alg::Gui3D::ViewportWidget), taken as from the mouse although the
   view is GPU-drawn: about 1.11x a step closer, 1.09x a step away, from wherever the camera is. Sent back to back,
   some are dropped, so they go WHEEL_PAUSE apart.
+- The camera's position and angles are in none of its properties (Camera > Edit properties shows its lens, clip
+  planes and exposure; the Scene Browser's Camera the same), so orbit and pan are Designer's own navigation: mouse
+  drags on the viewport, taken as from the mouse, in any number of moves. A left-drag turns the camera around the
+  point it looks at (the mesh's middle after a view), ORBIT_ACROSS degrees a pixel across and ORBIT_UP up or down:
+  from Front, 200 px gave Designer's own Left view exactly and 257 px its Top. The mouse right turns the camera left,
+  the mouse down raises it. A middle-drag pans: the content follows the mouse, the point looked at moving a view's
+  width every PAN_WIDTH pixels, either way, whatever the zoom; nearer parts move more (Designer's default 35 mm lens,
+  other lenses not measured). Both rates held in viewports of 124x362, 338x362, 419x443, 627x253 and 325x583 px,
+  measured by probes, on a display of pixel ratio 1 (not measured on another); what the self-test's one size leaves
+  unchecked: its pan check's docstring. A drag is whole pixels: what is said set is what the drags
+  carry, and a value that isn't 0 but rounds to no pixel is refused, as it would be said and not done (REVIEW.md
+  HLP-121).
+  A drag sent too soon after another undoes it, or part of it: a pan 0.02 s after a pan left the first undone (0.05 s
+  later, both taken), two turns sent back to back came out wrong (0.1 s apart, as two calls), and wheel steps right
+  after a drag zoomed less; so each drag is followed by DRAG_PAUSE. A mouse move with no button held, as the user's
+  mouse sends over the viewport, ends a drag where it is: one after the 5th of 10 moves left orbit=[90, 0] 60 grey
+  levels from Designer's Right view, and pan=[0.25, 0] at 0.099 of the view (REVIEW.md HLP-122). So while a drag
+  runs, its pause included, a filter on the viewport drops every mouse event (MOUSE_EVENTS) _mouse isn't sending;
+  the filter goes when the drag ends, or with the drag's frame, after an abort.
+- The toolbar's Camera and Light tools are one group: under Light, neither drags nor the wheel move the camera (the
+  wheel's zoom was said and not done: REVIEW.md HLP-120), so orbit, pan and zoom select the Camera tool and put the
+  Light tool back after. Selection, a toggle beside them, changes nothing a drag does: the camera turned alike, the
+  Parameters panel kept.
+  An abort landing where a drag's button is released, or where the Light tool is selected again, skips that; the
+  abort's handler, run untraced, does it then.
 - A graph's outputs reach the mesh as Designer switches to the graph (Preferences > Graph > Common, "View outputs in 3D
   view when opening a graph"), so outputs added to the graph open in the editor don't until it switches again, and
   opening that graph again doesn't apply them either. The Explorer's "View Outputs In 3D View" does, but only from its
@@ -55,6 +80,15 @@ VIEW_OUTPUTS = 'View Outputs In 3D View'
 VIEW_TURN = 1.0  # s for the camera to turn to a viewpoint: Frame after 0.5 s kept it, at once undid it (2026-11-12)
 WHEEL_PAUSE = 0.2  # s between wheel steps: sent back to back, the 3D view took 1 to 3 of 3 (2026-11-12)
 MENU_GUARD = 5000  # ms the Explorer's context menu may stay open
+ORBIT_ACROSS = 0.45  # degrees the camera turns a pixel dragged across (the module docstring)
+ORBIT_UP = 0.35  # degrees a pixel dragged up or down
+PAN_WIDTH = 356  # pixels dragged a view's width panned, at the point the camera looks at
+DRAG_MOVES = 10  # mouse moves a drag is sent in: 1, 2, 10 or 40 turned the camera alike
+DRAG_PAUSE = 0.2  # s after a drag, before the next one or the wheel (the module docstring)
+TOOLS = ('Camera', 'Light')  # the 3D view's toolbar's tools a drag and the wheel go to, one group
+# what the guard on the viewport drops during a drag unless _mouse is sending it (the module docstring)
+MOUSE_EVENTS = ('MouseButtonPress', 'MouseButtonRelease', 'MouseButtonDblClick', 'MouseMove', 'Wheel')
+_OWN_MOUSE = [False]  # _mouse sending an event
 
 
 def _settle(seconds: float) -> None:
@@ -306,19 +340,150 @@ def _set_tiling(params: Any, bar: Any, value: float, keep: list[Any]) -> str:
     return 'tiling %g (%s)' % (tiling, panel)
 
 
+def _navigation_tools(dock: Any, keep: list[Any]) -> tuple[Any, Any]:
+    """The 3D view's toolbar's Camera and Light tools: drags and the wheel move the camera under the Camera tool alone
+    (the module docstring)."""
+    from PySide6 import QtWidgets
+
+    found = {a.text(): a for bar in dock.findChildren(QtWidgets.QToolBar) for a in bar.actions() if a.text() in TOOLS}
+    for name in TOOLS:
+        if name not in found:
+            raise RuntimeError("the 3D view's toolbar has no %s tool" % name)
+    keep += found.values()
+    return found['Camera'], found['Light']
+
+
+def _tool_back(light: Any, switched: bool) -> None:
+    """The Light tool selected again if it was before the Camera tool was (`switched`) and isn't now."""
+    if switched and not light.isChecked():
+        light.trigger()
+        _process_events()
+
+
+WAYS = (('right', 'left'), ('up', 'down'))  # [right, up]'s values said, positive and negative
+
+
+def _directions(values: list[float], unit: str) -> str:
+    """[right, up] said, each value that isn't 0 with its direction, to 3 digits, `unit` after the first value:
+    '90 degrees right, 30.1 up'."""
+    said: list[str] = []
+    for value, ways in zip(values, WAYS, strict=True):
+        if value:
+            said.append('%.3g%s %s' % (abs(value), '' if said else unit, ways[value < 0]))
+    return ', '.join(said)
+
+
+def _drags(
+    option: str, values: list[float], steps: tuple[float, float], unit: str
+) -> tuple[list[tuple[int, int]], list[float]]:
+    """The drags (dx, dy: right, down) carrying `values`, [right, up], `steps` what a pixel dragged left and up carries,
+    [right, up] (REVIEW.md HLP-123), and the [right, up] they carry; a value that isn't 0 but rounds to no pixel is
+    refused (the module docstring)."""
+    pixels = [round(-values[0] / steps[0]), round(-values[1] / steps[1])]
+    for value, pixel, step, ways in zip(values, pixels, steps, WAYS, strict=True):
+        if value and not pixel:
+            raise RuntimeError(
+                "%s's %g%s %s is less than one pixel's drag, %.3g%s: it would do nothing"
+                % (option, abs(value), unit, ways[value < 0], abs(step), unit)
+            )
+    drags = [d for d in ((pixels[0], 0), (0, pixels[1])) if d != (0, 0)]
+    return drags, [-pixels[0] * steps[0], -pixels[1] * steps[1]]
+
+
+def _orbit_drags(orbit: list[float]) -> tuple[list[tuple[int, int]], list[float]]:
+    """The left-drags turning the camera orbit[0] degrees right and orbit[1] up, and the degrees they turn: the mouse
+    left turns it right, the mouse down raises it (the module docstring)."""
+    return _drags('orbit', orbit, (ORBIT_ACROSS, -ORBIT_UP), ' degrees')
+
+
+def _pan_drags(pan: list[float], width: int, height: int) -> tuple[list[tuple[int, int]], list[float]]:
+    """The middle-drags moving a `width` x `height` view pan[0] of its width right and pan[1] of its height up, and the
+    fractions they move it: the content follows the mouse, a view's width every PAN_WIDTH pixels either way (the module
+    docstring)."""
+    return _drags('pan', pan, (1 / PAN_WIDTH, -width / (height * PAN_WIDTH)), ' of the view')
+
+
+def _mouse(viewport: Any, kind: Any, x: float, y: float, button: Any, buttons: Any) -> None:
+    """One mouse event at (x, y) in `viewport`, as Designer takes them from the mouse, marked as sent here while it is
+    (_OWN_MOUSE), so the guard of a drag lets it through (_mouse_guard)."""
+    from PySide6 import QtCore, QtGui, QtWidgets
+
+    at = QtCore.QPointF(x, y)
+    held = QtCore.Qt.KeyboardModifier.NoModifier
+    event = QtGui.QMouseEvent(kind, at, QtCore.QPointF(viewport.mapToGlobal(at.toPoint())), button, buttons, held)
+    _OWN_MOUSE[0] = True
+    try:
+        QtWidgets.QApplication.sendEvent(viewport, event)
+    finally:
+        _OWN_MOUSE[0] = False
+    _process_events(2)
+
+
+def _mouse_guard() -> Any:
+    """An event filter, for a viewport while a drag runs, dropping every mouse event (MOUSE_EVENTS) _mouse isn't
+    sending: the user's mouse moving over it would end the drag (the module docstring)."""
+    from PySide6 import QtCore
+
+    kinds = {getattr(QtCore.QEvent.Type, name) for name in MOUSE_EVENTS}
+
+    class MouseGuard(QtCore.QObject):
+        def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:
+            return not _OWN_MOUSE[0] and event.type() in kinds
+
+    return MouseGuard()
+
+
+def _release(viewport: Any, button: Any, x: float, y: float) -> None:
+    """`button` released at (x, y) in `viewport`."""
+    from PySide6 import QtCore
+
+    _mouse(viewport, QtCore.QEvent.Type.MouseButtonRelease, x, y, button, QtCore.Qt.MouseButton.NoButton)
+
+
+def _drag(viewport: Any, button: Any, dx: int, dy: int, pressed: list[Any]) -> None:
+    """A drag with `button` from the middle of `viewport`, dx and dy pixels (right, down), in DRAG_MOVES moves, then
+    released, even when a move fails, and DRAG_PAUSE for Designer to take it; a guard on the viewport drops the user's
+    mouse from before the press to after the pause (_mouse_guard). `pressed` holds (button, x, y), where it is
+    released, from before the press to after the release: an abort skipping the release finds it there (set_3d_view's
+    handler). The guard, held by this frame alone, goes with it after an abort that skips its removal."""
+    from PySide6 import QtCore
+
+    x, y = viewport.width() / 2.0, viewport.height() / 2.0
+    end = (button, x + dx, y + dy)
+    guard = _mouse_guard()
+    viewport.installEventFilter(guard)
+    try:
+        pressed.append(end)
+        try:
+            _mouse(viewport, QtCore.QEvent.Type.MouseButtonPress, x, y, button, button)
+            for i in range(1, DRAG_MOVES + 1):
+                at = (x + dx * i / DRAG_MOVES, y + dy * i / DRAG_MOVES)
+                _mouse(viewport, QtCore.QEvent.Type.MouseMove, *at, QtCore.Qt.MouseButton.NoButton, button)
+        finally:
+            _release(viewport, *end)
+            pressed.remove(end)
+        _settle(DRAG_PAUSE)
+    finally:
+        viewport.removeEventFilter(guard)
+
+
 def set_3d_view(
     graph: str | None = None,
     mesh: str | None = None,
     view: str | None = None,
     zoom: int = 0,
     tiling: float | None = None,
+    orbit: list[float] | None = None,
+    pan: list[float] | None = None,
 ) -> None:
     """Set up the 3D view as the user sees it too: `graph`'s outputs on the mesh, the mesh (MESHES), the viewpoint
-    (VIEWS, then framed), `zoom` wheel steps closer (negative: away) and the material's tiling. The graph, the panels
-    and the menu entries it needs are checked before anything changes (with mesh=, the new mesh's material once it
-    shows). Prints '3D view, setting: <step>' before each change, so an abort leaves the steps it began said; an error
-    after a change says what was set; then one line, '3D view: ...', of what it set."""
-    from PySide6 import QtWidgets
+    (VIEWS, then framed), the camera turned `orbit` [right, up] degrees around the point it looks at and moved `pan`
+    [right, up] fractions of the view sideways, `zoom` wheel steps closer (negative: away), in that order, and the
+    material's tiling. The graph, the panels, the menu entries and the tools it needs are checked before anything
+    changes (with mesh=, the new mesh's material once it shows). Prints '3D view, setting: <step>' before each change,
+    so an abort leaves the steps it began said; an error after a change says what was set; then one line,
+    '3D view: ...', of what it set."""
+    from PySide6 import QtCore, QtWidgets
 
     if mesh is not None and mesh not in MESHES:
         raise RuntimeError('unknown mesh %r; the 3D view has %s' % (mesh, ', '.join(MESHES)))
@@ -344,7 +509,15 @@ def set_3d_view(
     if not bars or not viewports:
         raise RuntimeError("the 3D View's menu bar or viewport wasn't found")
     bar = bars[0]
-    keep += [dock, bar, viewports[0]]
+    viewport = viewports[0]
+    keep += [dock, bar, viewport]
+    orbit_drags, turned = _orbit_drags(orbit) if orbit else ([], [])
+    pan_drags, panned = _pan_drags(pan, viewport.width(), viewport.height()) if pan else ([], [])
+    moving = bool(orbit_drags or pan_drags or zoom)
+    camera: Any = None  # the toolbar's tools, looked up only when a drag or the wheel goes to the viewport
+    light: Any = None
+    if moving:
+        camera, light = _navigation_tools(dock, keep)
     tree = _explorer_tree(mw, keep) if g is not None else None
     params = None
     if tiling is not None:
@@ -361,6 +534,8 @@ def set_3d_view(
         _menu_action(bar, keep, *path)  # there; looked up again as it is used, after the mesh may have changed
     done: list[str] = []
     tiling_begun = False  # an abort's handler then turns the Parameters panel back
+    switched = False  # the Light tool was selected, the Camera tool selected for the drags and the wheel
+    pressed: list[Any] = []  # a drag's button down: (button, x, y)
 
     def begin(step: str) -> str:
         """Says the step before its change: no abort can land between a change and its record (REVIEW.md HLP-119)."""
@@ -386,10 +561,28 @@ def set_3d_view(
             _menu_action(bar, keep, 'Camera', 'Frame').trigger()
             _settle(0.3)
             done.append(step)
-        if zoom:
-            step = begin('%+d wheel steps' % zoom)
-            _wheel(viewports[0], zoom, WHEEL_PAUSE)
-            done.append(step)
+        if moving:
+            switched = light.isChecked()  # read before the change: an abort landing on it finds nothing changed
+            try:
+                if switched:
+                    camera.trigger()
+                    _process_events()
+                if orbit_drags:
+                    step = begin('orbit ' + _directions(turned, ' degrees'))
+                    for dx, dy in orbit_drags:
+                        _drag(viewport, QtCore.Qt.MouseButton.LeftButton, dx, dy, pressed)
+                    done.append(step)
+                if pan_drags:
+                    step = begin('pan ' + _directions(panned, ' of the view'))
+                    for dx, dy in pan_drags:
+                        _drag(viewport, QtCore.Qt.MouseButton.MiddleButton, dx, dy, pressed)
+                    done.append(step)
+                if zoom:
+                    step = begin('%+d wheel steps' % zoom)
+                    _wheel(viewport, zoom, WHEEL_PAUSE)
+                    done.append(step)
+            finally:
+                _tool_back(light, switched)
         if tiling is not None:
             begin('tiling %g' % tiling)
             tiling_begun = True
@@ -401,6 +594,10 @@ def set_3d_view(
             raise
         raise RuntimeError('%s; the 3D view was already set: %s' % (e, ', '.join(done))) from e
     except BaseException:  # an abort (the plugin's ScriptAborted): its steps said as begun; this handler runs untraced
+        for button, x, y in pressed:  # one landing on a drag's finally skipped its release
+            _release(viewport, button, x, y)
+        if light is not None:  # or the Light tool's way back
+            _tool_back(light, switched)
         if tiling_begun:  # one landing on _set_tiling's finally's first line skipped its turn-back
             _parameters_back()
         raise

@@ -1,6 +1,6 @@
 """The standalone scripts still behave on a Python older than 3.10 (a stock Mac's `python3` is 3.9):
 install.py refuses with its message instead of a traceback, uninstall.py (which tells users to run it
-with the system Python) works, and sd_run.py explains a timeout (REVIEW.md INS-25). Skipped when no
+with the system Python) works, sd_run.py explains a timeout (REVIEW.md INS-25), and read_crash_dump.py reads a dump. Skipped when no
 such interpreter is installed."""
 
 import os
@@ -10,6 +10,7 @@ from pathlib import Path
 from textwrap import dedent
 
 import pytest
+from minidumps import an_abort, minidump
 
 from conftest import ROOT
 
@@ -45,6 +46,18 @@ def test_review_lookup_runs_on_an_old_python(old_python: str) -> None:
         [old_python, os.path.join(ROOT, 'scripts', 'review_lookup.py'), '--help'], capture_output=True, text=True
     )
     assert done.returncode == 0 and '--last-used' in done.stdout, done.stderr
+
+
+def test_read_crash_dump_reads_a_dump_on_an_old_python(old_python: str, tmp_path: Path) -> None:
+    dump = tmp_path / 'a.dmp'
+    dump.write_bytes(minidump(an_abort()))
+    done = subprocess.run(
+        [old_python, os.path.join(ROOT, 'scripts', 'read_crash_dump.py'), str(dump)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert done.returncode == 0 and "first frame outside the system's libraries: #2 QtCore" in done.stdout, done.stderr
 
 
 def test_install_refuses_an_old_python_with_its_message(old_python: str, tmp_path: Path) -> None:

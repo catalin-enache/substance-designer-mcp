@@ -288,10 +288,11 @@ def agent_folder(port: int) -> str:
 
 
 def crash_dumps(ports: Sequence[int] = (), run_port: bool = True) -> set[str]:
-    """Designer's crash dumps (Crashpad's completed reports), as a set of paths; empty where none
-    are found. On macOS also those in the homes of this run's Designers (agent_folder(port)/home, where they write
-    theirs): on PORT (unless run_port is False: the pool's parent has no Designer there, REVIEW.md TST-280) and on
-    `ports`, never another run's beside it (REVIEW.md TST-155)."""
+    """Designer's crash dumps (Crashpad's reports, done with their upload or waiting for it: completed/ and pending/,
+    REVIEW.md TST-351), as a set of paths, each report once; empty where none are found. Compare them with new_dumps: a
+    report moves to completed/ once its upload is done or skipped. On macOS also those in the homes of this run's
+    Designers (agent_folder(port)/home, where they write theirs): on PORT (unless run_port is False: the pool's parent
+    has no Designer there, REVIEW.md TST-280) and on `ports`, never another run's beside it (REVIEW.md TST-155)."""
     if sys.platform == 'darwin':
         bases = [os.path.expanduser('~/Library/Application Support/Adobe/Adobe Substance 3D Designer')]
         homes = [os.path.join(agent_folder(port), 'home') for port in ((PORT,) if run_port else ()) + tuple(ports)]
@@ -301,12 +302,27 @@ def crash_dumps(ports: Sequence[int] = (), run_port: bool = True) -> set[str]:
         ]
     else:
         bases = [os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Adobe', 'Adobe Substance 3D Designer')]
-    dumps: set[str] = set()
+    dumps: dict[tuple[str, str], str] = {}
     for base in bases:
-        folder = os.path.join(base, 'Sentry-Crashpad', 'completed')
-        if os.path.isdir(folder):
-            dumps |= {os.path.join(folder, f) for f in os.listdir(folder)}
-    return dumps
+        # pending/ first: Crashpad moves a report from it to completed/, so one moving between the two listings is in
+        # both, kept once, rather than in neither (REVIEW.md TST-355)
+        for part in ('pending', 'completed'):
+            folder = os.path.join(base, 'Sentry-Crashpad', part)
+            if os.path.isdir(folder):
+                for f in os.listdir(folder):
+                    dumps.setdefault(_report(os.path.join(folder, f)), os.path.join(folder, f))
+    return set(dumps.values())
+
+
+def _report(dump: str) -> tuple[str, str]:
+    """A crash report, wherever it is in its database: the database's folder and its file name (Crashpad's ID)."""
+    return os.path.dirname(os.path.dirname(dump)), os.path.basename(dump)
+
+
+def new_dumps(after: set[str], before: set[str]) -> set[str]:
+    """The dumps of `after` (crash_dumps) whose reports `before` didn't hold, in either folder (REVIEW.md TST-351)."""
+    held = {_report(d) for d in before}
+    return {d for d in after if _report(d) not in held}
 
 
 def new_crash_dumps(before: set[str], wait_s: float = 10, ports: Sequence[int] = ()) -> set[str]:
@@ -314,7 +330,7 @@ def new_crash_dumps(before: set[str], wait_s: float = 10, ports: Sequence[int] =
     goes down), compared with `before`."""
     deadline = time.time() + wait_s
     while True:
-        new = crash_dumps(ports) - before
+        new = new_dumps(crash_dumps(ports), before)
         if new or time.time() >= deadline:
             return new
         time.sleep(0.5)

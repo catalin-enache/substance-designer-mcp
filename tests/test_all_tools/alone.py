@@ -8,7 +8,7 @@ Running the tests). From a scratch script, with `tests` on sys.path:
 
 A check is a function of its category's checks.py (<category>/checks.py), `async def check_<what>(ctx: Ctx)`, that the
 category's `run(ctx)` calls: this calls the same function, never a copy. It runs in a Designer an agent started, never
-the user's: it starts one if none runs, keeps it open for the next runs, and `alone.close()` ends it. Each category's
+the user's: it starts one if none runs, keeps it open for the next runs, and `alone.close()` ends it, naming any crash dump its quit left (exit code 1). Each category's
 checks run as in the suite (category_run.py): on a Ctx of their own, after the category's own preparation
 (<category>/preparations.py), then cleaned up; checks of several categories run category by category, in the order
 given. `setup(ctx)` adds anything else, after the preparation, its graphs named starting `mcp_selftest`: the clean-up
@@ -61,6 +61,7 @@ from test_all_tools.common import (
 # every run's folder is made in here, in a folder per port (scratch_root); never deleted while that port's Designer runs
 # (deleting the suite's crashed Designer twice: __main__.py), so close() removes it once that Designer has ended
 SCRATCH_ROOT = os.path.join(tempfile.gettempdir(), 'sd_mcp_selftest_alone')
+CLOSE_DUMP_WAIT_S = 10  # Designer writes a crash dump a few seconds after it goes down (common.new_crash_dumps)
 
 
 def scratch_root(port: int | None = None) -> str:
@@ -217,13 +218,23 @@ def _by_category(checks: Sequence[Step]) -> list[tuple[str, list[Step]]]:
 
 async def close_with(c: Call) -> int:
     """Ends a Designer an agent started on common.PORT, then removes that port's runs' folders once no Designer may be
-    on it (another run's, on its own port, doesn't count)."""
+    on it (another run's, on its own port, doesn't count). 1 when a crash dump appeared as it quit (named, with how to
+    read it), else 0."""
     await c('get_guide')  # or quit_designer would be refused
     status = await c('designer_status')
+    code = 0
     # one that doesn't answer (an older plugin's protocol, REVIEW.md SRV-82) is asked too: quit_designer ends one an
     # agent started from its record, and refuses any other by itself
     if status.is_error or 'Started by an agent' in text(status):
+        before = common.crash_dumps()  # the user's folder and this port's Designer's (its own home)
         print('alone: %s' % text(await c('quit_designer')).strip())
+        dumps = common.new_crash_dumps(before, CLOSE_DUMP_WAIT_S)
+        if dumps:
+            print(
+                'alone: a crash dump appeared as it quit: %s (python3 scripts/read_crash_dump.py <dump> reads it)'
+                % ', '.join(sorted(dumps))
+            )
+            code = 1
     else:
         print("alone: the Designer running is the user's: left open")
     try:
@@ -235,7 +246,7 @@ async def close_with(c: Call) -> int:
         shutil.rmtree(scratch_root(), ignore_errors=True)
         with contextlib.suppress(OSError):  # the root too, once no port has folders left in it
             os.rmdir(SCRATCH_ROOT)
-    return 0
+    return code
 
 
 async def _session(job: Callable[[Call, ClientSession], Awaitable[int]], port: int | None = None) -> int:
@@ -266,7 +277,8 @@ def run(*checks: Step, setup: Step | None = None, port: int | None = None, own_d
 
 def close(port: int | None = None) -> int:
     """End the Designer the runs used (only if an agent started it), on `port` if given, and remove that port's runs'
-    folders once no Designer may be on it."""
+    folders once no Designer may be on it; the exit code: 1 when it left a crash dump as it quit (close_with), else
+    0."""
     _checked_port(port)
     with on_port(port, scratch_root(port)):
         return asyncio.run(_session(lambda c, s: close_with(c), port))

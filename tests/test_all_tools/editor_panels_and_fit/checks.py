@@ -28,6 +28,7 @@ from test_all_tools.editor_panels_and_fit.renders import (
     grey,
     plane_columns,
     plane_height,
+    plane_middle,
     plane_width,
     say_failed,
     transitions,
@@ -158,6 +159,279 @@ async def check_the_3d_view_zooms_and_tiles(ctx: Ctx) -> None:
         'tiling= leaves the Parameters panel on the graph in the editor',
         m is not None and m.group(1) == m.group(2),
         panel.strip(),
+    )
+
+
+async def check_orbit_turns_the_camera_around_what_it_looks_at(ctx: Ctx) -> None:
+    """orbit= turns the camera around the point it looks at, by Designer's own left-drags (designer_helpers/view3d.py):
+    from Front, [90, 0] is Designer's own Right view and [0, 90] its Top, on a rounded cube, which Frame frames alike
+    from every side. Each render is within 3 grey levels on average of that view (0.0 and 0.3 to 1.3 measured; a turn 1
+    degree off the Top gave 5 or more) and nearer it than half the view beside it (Left, and Front, which differs from
+    the Top by 5 alone); the degrees said are the drags', within half a degree. Two turns in one call, [90, 90] from
+    Front, are [0, 90] from Right: a drag too soon after another came out wrong (REVIEW.md TST-336)."""
+    c = ctx.c
+    if ctx.was_running:
+        skip('screenshot_designer', 'orbit= turns the camera', USERS_3D_VIEW)
+        return
+    first = await c('screenshot_designer', {**THREE_D, 'graph': VIEW3D_GRAPH, 'mesh': 'Rounded cube', 'view': 'Front'})
+    views = {
+        view: await c('screenshot_designer', {**THREE_D, 'view': view}) for view in ('Front', 'Right', 'Left', 'Top')
+    }
+    right = await c('screenshot_designer', {**THREE_D, 'view': 'Front', 'orbit': [90, 0]})
+    up = await c('screenshot_designer', {**THREE_D, 'view': 'Front', 'orbit': [0, 90]})
+    both = await c('screenshot_designer', {**THREE_D, 'view': 'Front', 'orbit': [90, 90]})
+    one = await c('screenshot_designer', {**THREE_D, 'view': 'Right', 'orbit': [0, 90]})
+    shots = [first, *views.values(), right, up, both, one]
+    if not all(is_image(r) for r in shots):
+        check('screenshot_designer', 'orbit= turns the camera', False, 'a shot failed (below)')
+        say_failed('orbit', *shots)
+        return
+    seen = {view: grey(r) for view, r in views.items()}
+    for r, view, beside, way in ((right, 'Right', 'Left', 'right'), (up, 'Top', 'Front', 'up')):
+        near, far = difference(grey(r), seen[view]), difference(grey(r), seen[beside])
+        said = re.search(r'orbit ([\d.]+) degrees ' + way, text(r))
+        check(
+            'screenshot_designer',
+            'orbit= from Front: 90 degrees %s is the %s view' % (way, view),
+            near < min(3.0, 0.5 * far) and said is not None and abs(float(said.group(1)) - 90) <= 0.5,
+            '%.2f from %s, %.2f from %s | %s' % (near, view, far, beside, text(r).strip()),
+        )
+    near, far = difference(grey(both), grey(one)), difference(grey(both), grey(up))
+    check(
+        'screenshot_designer',
+        'orbit=[90, 90] from Front, two turns in one call, is [0, 90] from Right',
+        near < min(3.0, 0.5 * far),
+        '%.2f from [0, 90] from Right, %.2f from [0, 90] from Front | %s' % (near, far, text(both).strip()),
+    )
+
+
+async def check_pan_moves_the_view_and_zoom_comes_closer_to_the_middle(ctx: Ctx) -> None:
+    """pan= moves the view sideways by fractions of it, measured at the point the camera looks at, by Designer's own
+    middle-drags (designer_helpers/view3d.py): the plane seen from the top, that point its middle, moves a quarter of
+    the view left and down for pan=[0.25, 0.25], within 0.01, as said (a rate 5 % off failed: REVIEW.md TST-335). The
+    self-test's view is about 340 px wide in the default docked layout, the one the shared preferences plist carries
+    (ROADMAP item 67), near PAN_WIDTH's 356: there it can't tell the rate from content following the mouse one to one,
+    which only a view of another size could. A corner of the plane brought to the middle stays there as zoom comes
+    closer, 4 steps (ROADMAP item 74: zoom alone comes closer only to the middle)."""
+    c = ctx.c
+    if ctx.was_running:
+        skip('screenshot_designer', 'pan= moves the view', USERS_3D_VIEW)
+        return
+    small = await c('screenshot_designer', {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH, 'zoom': -4})
+    panned = await c('screenshot_designer', {**THREE_D, 'pan': [0.25, 0.25]})  # from where zoom left the camera
+    # far enough for the plane, zoomed 4 steps closer from its corner, to stay inside the panel
+    far = await c('screenshot_designer', {**THREE_D, 'view': 'Top', 'zoom': -10})
+    if not all(is_image(r) for r in (small, panned, far)):
+        check('screenshot_designer', 'pan= moves the view', False, 'a shot failed (below)')
+        say_failed('pan', small, panned, far)
+        return
+    h, w = grey(small).shape
+    (x0, y0), (x1, y1) = plane_middle(grey(small)), plane_middle(grey(panned))
+    moved = ((x0 - x1) / w, (y1 - y0) / h)  # the plane left and down: the view right and up
+    said = re.search(r'pan ([\d.]+) of the view right, ([\d.]+) up', text(panned))
+    check(
+        'screenshot_designer',
+        'pan=[0.25, 0.25] moves the view a quarter of it right and up',
+        all(0.24 <= m <= 0.26 for m in moved)
+        and said is not None
+        and all(abs(float(v) - 0.25) <= 0.005 for v in said.groups()),
+        'the plane moved %.3f of the view left, %.3f down | %s' % (moved[0], moved[1], text(panned).strip()),
+    )
+    f = grey(far)
+    columns, rows = plane_columns(f), plane_columns(f.T)
+    corner = [round((columns[1] + 1 - w / 2) / w, 3), round((h / 2 - rows[0]) / h, 3)]  # its top right, from the middle
+    closer = await c('screenshot_designer', {**THREE_D, 'pan': corner, 'zoom': 4})
+    if not is_image(closer):
+        check('screenshot_designer', 'zoom after pan= comes closer to the middle', False, text(closer).strip())
+        return
+    z = grey(closer)
+    zc, zr = plane_columns(z), plane_columns(z.T)
+    grown = (zr[1] - zr[0] + 1) / max(rows[1] - rows[0] + 1, 1)  # the side below the corner
+    check(
+        'screenshot_designer',
+        'zoom after pan= comes closer to what pan brought to the middle',
+        abs(zc[1] + 1 - w / 2) <= 0.05 * w
+        and abs(zr[0] - h / 2) <= 0.05 * h
+        and zr[1] < h - 1
+        and STEP**4 * 0.95 <= grown <= STEP**4 * 1.05,  # three steps (1.37x) or five (1.69x) fail
+        'the corner at column %d, row %d of %dx%d; the plane %.2fx as high (%.2f^4 = %.2f)%s; panned %s'
+        % (
+            zc[1] + 1,
+            zr[0],
+            w,
+            h,
+            grown,
+            STEP,
+            STEP**4,
+            " | clipped at the panel's bottom: a lower 3D panel" if zr[1] >= h - 1 else '',
+            corner,
+        ),
+    )
+
+
+MOVES_UNDER_ANY_TOOL = dedent("""
+    from PySide6 import QtCore, QtWidgets
+    mw = _APP.getQtForPythonUIMgr().getMainWindow()
+    dock = _3d_dock(mw)  # mw and dock held: without, the viewport's wrapper went stale during the drags
+    viewport = [w for w in dock.findChildren(QtWidgets.QWidget) if w.metaObject().className() == 'Alg::Gui3D::ViewportWidget'][0]
+    _wheel(viewport, 3, WHEEL_PAUSE)
+    _drag(viewport, QtCore.Qt.MouseButton.MiddleButton, 60, 0, [])
+    _drag(viewport, QtCore.Qt.MouseButton.LeftButton, 100, 0, [])
+    _settle(0.5)
+    print('SENT=wheel,pan,turn')""")
+
+
+async def check_the_camera_moves_under_the_light_tool_too(ctx: Ctx) -> None:
+    """Under the 3D view's Light tool neither the wheel nor a drag moves the camera (a designer fact: zoom= said it
+    zoomed, REVIEW.md HLP-120; its snippet says what it sent: TST-335, TST-336), so zoom, orbit and pan move it under
+    the Camera tool, and the Light tool is selected again after; the Camera tool is put back for the checks after."""
+    c = ctx.c
+    if ctx.was_running:
+        skip('screenshot_designer', 'zoom and pan under the Light tool', USERS_3D_VIEW)
+        return
+    try:
+        base = await c('screenshot_designer', {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH})
+        light = text(await designer_script(c, 'editor_panels_and_fit/tool_3d', tool='Light'))
+        sent = text(await c('execute_designer_code', {'code': ctx.helper_source + MOVES_UNDER_ANY_TOOL}))
+        wheeled = await c('screenshot_designer', THREE_D)
+        zoomed = await c('screenshot_designer', {**THREE_D, 'view': 'Top', 'zoom': 3})
+        after_zoom = text(await designer_script(c, 'editor_panels_and_fit/tool_3d', tool=''))
+        panned = await c('screenshot_designer', {**THREE_D, 'view': 'Top', 'pan': [0.25, 0]})
+        after_pan = text(await designer_script(c, 'editor_panels_and_fit/tool_3d', tool=''))
+    finally:
+        await designer_script(c, 'editor_panels_and_fit/tool_3d', tool='Camera')
+    shots = [base, wheeled, zoomed, panned]
+    if not all(is_image(r) for r in shots):
+        check('screenshot_designer', 'zoom and pan under the Light tool', False, 'a shot failed (below)')
+        say_failed('the Light tool', *shots)
+        return
+    side, edges, after = plane_width(grey(base)), plane_columns(grey(base)), plane_columns(grey(wheeled))
+    check(
+        'designer facts',
+        "under the 3D view's Light tool neither the wheel nor a drag moves the camera",
+        'TOOL=Light' in light
+        and 'SENT=wheel,pan,turn' in sent
+        and all(abs(a - b) <= 2 for a, b in zip(edges, after, strict=True)),
+        'the plane from column %d to %d, then %d to %d after 3 wheel steps, a pan and a turn | %s'
+        % (*edges, *after, light.strip()),
+    )
+    if 'SENT=wheel,pan,turn' not in sent:  # a check's detail is cut at 150 characters (REVIEW.md TST-341)
+        print(
+            '      the moves under the Light tool: %s'
+            % ' / '.join(line.strip() for line in sent.strip().splitlines()[-3:])
+        )
+    ratio = plane_width(grey(zoomed)) / max(side, 1)
+    check(
+        'screenshot_designer',
+        'zoom= comes closer under the Light tool too, then selects it again',
+        STEP**3 * 0.95 <= ratio <= STEP**3 * 1.05 and 'TOOL=Light' in after_zoom,
+        'the plane %.2fx as wide (%.2f^3 = %.2f) | %s' % (ratio, STEP, STEP**3, after_zoom.strip()),
+    )
+    # its right edge: its left one goes out of view (the plane wider than half the view), every point of it moving alike
+    moved = (plane_columns(grey(base))[1] - plane_columns(grey(panned))[1]) / grey(base).shape[1]
+    check(
+        'screenshot_designer',
+        'pan= moves the view under the Light tool too, then selects it again',
+        0.24 <= moved <= 0.26 and 'TOOL=Light' in after_pan,
+        'the plane moved %.3f of the view left | %s' % (moved, after_pan.strip()),
+    )
+
+
+async def check_a_drag_turns_the_camera_alike_with_selection_on(ctx: Ctx) -> None:
+    """With the 3D view's Selection toggle on, orbit= turns the camera and pan= moves the view as with it off, and the
+    Parameters panel keeps what it showed (a designer fact: the tool leaves the toggle as the user set it,
+    designer_helpers/view3d.py; REVIEW.md TST-336). The turn is nearer the Right view than half the Front, so it
+    can't pass on a mesh that looks alike from both, such as a plane edge-on (TST-339); the toggle is off again after,
+    as in a Designer just started."""
+    c = ctx.c
+    if ctx.was_running:
+        skip('designer facts', 'drags with Selection on', USERS_3D_VIEW)
+        return
+    try:
+        front = await c(
+            'screenshot_designer', {**THREE_D, 'graph': VIEW3D_GRAPH, 'mesh': 'Rounded cube', 'view': 'Front'}
+        )
+        right = await c('screenshot_designer', {**THREE_D, 'view': 'Right'})
+        panel = text(await designer_script(c, 'editor_panels_and_fit/parameters_panel'))
+        selection = text(await designer_script(c, 'editor_panels_and_fit/tool_3d', tool='', selection=True))
+        turned = await c('screenshot_designer', {**THREE_D, 'view': 'Front', 'orbit': [90, 0]})
+        small = await c('screenshot_designer', {**THREE_D, **TOP, 'zoom': -4})
+        panned = await c('screenshot_designer', {**THREE_D, 'pan': [0.25, 0]})
+        panel_after = text(await designer_script(c, 'editor_panels_and_fit/parameters_panel'))
+    finally:
+        await designer_script(c, 'editor_panels_and_fit/tool_3d', tool='', selection=False)
+    shots = [front, right, turned, small, panned]
+    if not all(is_image(r) for r in shots):
+        check('designer facts', 'drags with Selection on', False, 'a shot failed (below)')
+        say_failed('Selection', *shots)
+        return
+    near, far = difference(grey(turned), grey(right)), difference(grey(turned), grey(front))
+    moved = (plane_middle(grey(small))[0] - plane_middle(grey(panned))[0]) / grey(small).shape[1]
+    check(
+        'designer facts',
+        "with the 3D view's Selection toggle on, a turn and a pan come out alike and the Parameters panel is kept",
+        'SELECTION=True' in selection and near < min(3.0, 0.5 * far) and 0.24 <= moved <= 0.26 and panel == panel_after,
+        '%.2f from Right, %.2f from Front; panned %.3f | %s | %s (was %s)'
+        % (near, far, moved, selection.strip(), panel_after.strip(), panel.strip()),
+    )
+
+
+# the user's mouse, simulated: after a drag's 5th move, a move with no button held at the viewport's corner, sent by
+# itself, not by the helpers' _mouse (whose events the drag's guard lets through); the drags find _mouse by name
+HOVER_IN_A_DRAG = dedent("""
+    from PySide6 import QtCore, QtGui, QtWidgets
+    _own_mouse = _mouse
+    _moves = [0]
+    def _mouse(viewport, kind, x, y, button, buttons):
+        _own_mouse(viewport, kind, x, y, button, buttons)
+        if kind == QtCore.QEvent.Type.MouseMove and buttons != QtCore.Qt.MouseButton.NoButton:
+            _moves[0] += 1
+            if _moves[0] == 5:
+                at = QtCore.QPointF(5.0, 5.0)
+                none = QtCore.Qt.MouseButton.NoButton
+                hover = QtGui.QMouseEvent(QtCore.QEvent.Type.MouseMove, at, QtCore.QPointF(viewport.mapToGlobal(at.toPoint())),
+                                          none, none, QtCore.Qt.KeyboardModifier.NoModifier)
+                QtWidgets.QApplication.sendEvent(viewport, hover)
+                print('HOVERED')
+    set_3d_view(None, None, VIEW, 0, None, ORBIT, PAN)""")
+
+
+async def check_the_users_mouse_doesnt_stop_a_turn_or_pan(ctx: Ctx) -> None:
+    """A move of the user's mouse over the 3D view in a drag, with no button held, ended Designer's drag: the turn or
+    pan stopped partway and was said as done (REVIEW.md HLP-122: orbit=[90, 0] 60.27 from the Right view, pan=[0.25, 0]
+    0.099 of the view). With one sent mid-drag, outside the tool's own mouse events, orbit=[90, 0] from Front is still
+    the Right view and pan=[0.25, 0] still moves the view a quarter."""
+    c = ctx.c
+    if ctx.was_running:
+        skip('screenshot_designer', "the user's mouse in a drag", USERS_3D_VIEW)
+        return
+    first = await c('screenshot_designer', {**THREE_D, 'graph': VIEW3D_GRAPH, 'mesh': 'Rounded cube', 'view': 'Front'})
+    right = await c('screenshot_designer', {**THREE_D, 'view': 'Right'})
+    turn = 'VIEW, ORBIT, PAN = %r, %r, %r\n' % ('Front', [90.0, 0.0], None)
+    turned_said = text(await c('execute_designer_code', {'code': ctx.helper_source + turn + HOVER_IN_A_DRAG}))
+    turned = await c('screenshot_designer', THREE_D)
+    small = await c('screenshot_designer', {**THREE_D, **TOP, 'zoom': -4})
+    pan = 'VIEW, ORBIT, PAN = %r, %r, %r\n' % (None, None, [0.25, 0.0])
+    panned_said = text(await c('execute_designer_code', {'code': ctx.helper_source + pan + HOVER_IN_A_DRAG}))
+    panned = await c('screenshot_designer', THREE_D)
+    shots = [first, right, turned, small, panned]
+    if not all(is_image(r) for r in shots):
+        check('screenshot_designer', "the user's mouse in a drag", False, 'a shot failed (below)')
+        say_failed("the user's mouse in a drag", *shots)
+        return
+    near, far = difference(grey(turned), grey(right)), difference(grey(turned), grey(first))
+    check(
+        'screenshot_designer',
+        "the user's mouse moving in a drag doesn't stop orbit=",
+        'HOVERED' in turned_said and near < min(3.0, 0.5 * far),
+        '%.2f from Right, %.2f from Front | %s' % (near, far, turned_said.strip()[-90:]),
+    )
+    moved = (plane_middle(grey(small))[0] - plane_middle(grey(panned))[0]) / grey(small).shape[1]
+    check(
+        'screenshot_designer',
+        "the user's mouse moving in a drag doesn't stop pan=",
+        'HOVERED' in panned_said and 0.24 <= moved <= 0.26,
+        'the plane moved %.3f of the view left | %s' % (moved, panned_said.strip()[-90:]),
     )
 
 
@@ -643,6 +917,11 @@ async def run(ctx: Ctx) -> None:
     await check_outputs_added_to_the_open_graph_reach_the_3d_view_once_applied(ctx)
     await check_a_view_turns_the_camera(ctx)
     await check_the_3d_view_zooms_and_tiles(ctx)
+    await check_orbit_turns_the_camera_around_what_it_looks_at(ctx)
+    await check_pan_moves_the_view_and_zoom_comes_closer_to_the_middle(ctx)
+    await check_the_camera_moves_under_the_light_tool_too(ctx)
+    await check_a_drag_turns_the_camera_alike_with_selection_on(ctx)
+    await check_the_users_mouse_doesnt_stop_a_turn_or_pan(ctx)
     await check_graph_finds_its_row_in_a_collapsed_package(ctx)
     await check_a_set_up_checks_what_it_needs_first_and_says_what_it_set(ctx)
     await check_opening_the_editors_graph_again_leaves_the_outputs_on_the_mesh(ctx)

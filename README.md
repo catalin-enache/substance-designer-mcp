@@ -89,7 +89,7 @@ saved file (details: [mcp_server/GUIDE.md](mcp_server/GUIDE.md), Portals).
 | Tuning | `sweep_param` (try several values of a parameter side by side; the original value is restored) |
 | Safety | `snapshot_graph`, `list_snapshots`, `diff_graph` (what changed vs the saved file or a snapshot) |
 | Readability | `arrange_graph` (tidy layout by data flow), `add_frame`, `add_comment`, `set_link_display` (show wires as portals to hide clutter; saves and reloads the package after a snapshot) |
-| Viewing | `screenshot_designer` (window, graph, 2D view, 3D view, panels; only Designer is captured, never other apps; the 3D view optionally set up first: a graph's outputs on a chosen mesh, viewpoint, zoom and tiling), `open_graph` (open a graph, fitted whole, zoomed to a frame, nodes or rectangle, or centred on a node) |
+| Viewing | `screenshot_designer` (window, graph, 2D view, 3D view, panels; only Designer is captured, never other apps; the 3D view optionally set up first: a graph's outputs on a chosen mesh, viewpoint, the camera turned and panned, zoom and tiling), `open_graph` (open a graph, fitted whole, zoomed to a frame, nodes or rectangle, or centred on a node) |
 | Editing | `apply_edits` (add nodes and image files, set parameters, name and tag output nodes, connect, disconnect, move, delete, expose parameters as graph inputs: one or many edits per call, one undo step; a typo'd node id changes nothing), `create_graph`, `set_graph_size` |
 | Controls | `remove_graph_input` (exposing a parameter is `apply_edits`' `expose` op) |
 | Scripting | `execute_designer_code`, `run_designer_script` (with timeout and `args`) |
@@ -411,6 +411,12 @@ Designer log (every plugin traceback ends up here; Claude can read it with `read
   with its crash dumps and settings
 - Windows: under `%LOCALAPPDATA%\Adobe\Adobe Substance 3D Designer\` (version subfolder).
   The same messages appear in Designer's Console window.
+
+Crash dumps: Designer's crash reporter writes one per crash into `Sentry-Crashpad/completed/` (`pending/` while its
+upload waits), beside the log, and may open Adobe's crash window. `python3 scripts/read_crash_dump.py` says what the
+newest one holds (macOS on Apple silicon). A Designer an agent started on macOS doesn't upload its reports once
+`launch_designer` sees it answer: it turns that off in that Designer's own settings, never in yours. Your own
+Designer keeps Adobe's setting.
 
 ## Credits
 

@@ -1,6 +1,6 @@
-"""What the 3D view checks measure in a render of a checker on a plane seen from the top: the plane's width and height
-(a square from straight above), and how often its middle row turns from dark to light (twice per square: tiling 2
-doubles it)."""
+"""What the 3D view checks measure in a render of a checker on a plane seen from the top: the plane's width, height and
+middle (a square from straight above), and how often its middle row turns from dark to light (twice per square: tiling
+2 doubles it)."""
 
 import base64
 import io
@@ -33,6 +33,12 @@ def plane_width(a: 'np.ndarray[tuple[int, int], np.dtype[np.float64]]') -> int:
 def plane_height(a: 'np.ndarray[tuple[int, int], np.dtype[np.float64]]') -> int:
     """The plane_width of the rows: from the first to the last row that differ from the background."""
     return plane_width(a.T)
+
+
+def plane_middle(a: 'np.ndarray[tuple[int, int], np.dtype[np.float64]]') -> tuple[float, float]:
+    """The middle of the plane's bounding box: (column, row)."""
+    columns, rows = plane_columns(a), plane_columns(a.T)
+    return (columns[0] + columns[1]) / 2, (rows[0] + rows[1]) / 2
 
 
 def transitions(a: 'np.ndarray[tuple[int, int], np.dtype[np.float64]]') -> int:

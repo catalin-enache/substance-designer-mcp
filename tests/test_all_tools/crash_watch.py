@@ -56,7 +56,7 @@ class CrashWatch:
         try:
             if self.steps:
                 self.sleep(self.wait_s)
-            found = {i: self.find(step.ports) - step.before for i, step in enumerate(self.steps)}
+            found = {i: _common().new_dumps(self.find(step.ports), step.before) for i, step in enumerate(self.steps)}
             for dump in set().union(*found.values()):
                 try:
                     written = self.mtime(dump)

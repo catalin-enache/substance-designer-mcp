@@ -819,6 +819,36 @@ def test_a_new_dump_outside_the_workers_folders_fails_a_check_of_its_own(
     assert 'FAIL  self-test              no new crash dump outside the run' in capsys.readouterr().out
 
 
+def test_a_report_uploaded_during_the_run_is_no_new_dump(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    # REVIEW.md TST-351: the user's Designer's report, waiting for its upload as the run started, moved to completed/
+    workers = pool(monkeypatch, tmp_path, lambda name, folder, port: part(name))
+    calls: list[int] = []
+
+    def dumps(ports: Any = (), run_port: bool = True) -> set[str]:
+        calls.append(1)
+        return {str(tmp_path / 'user' / 'Sentry-Crashpad' / ('pending' if len(calls) == 1 else 'completed') / 'x.dmp')}
+
+    monkeypatch.setitem(vars(workers), 'crash_dumps', dumps)
+    assert workers.run_pool(4) == 0
+    assert 'no new crash dump outside the run' not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('waiting', [False, True], ids=['completed', 'pending'])
+def test_a_workers_folder_holding_a_crash_dump_is_told(tmp_path: Path, waiting: bool) -> None:
+    # kept to be read; a report waiting for its upload is one too (REVIEW.md TST-351)
+    workers = fresh('workers')
+    crashpad = tmp_path.joinpath(
+        'agent', 'home', 'Library', 'Application Support', 'Adobe', 'Adobe Substance 3D Designer'
+    )
+    folder = crashpad / 'Sentry-Crashpad' / ('pending' if waiting else 'completed')
+    folder.mkdir(parents=True)
+    assert not workers._holds_a_crash_dump(str(tmp_path / 'agent'))
+    (folder / 'x.dmp').write_text('')
+    assert workers._holds_a_crash_dump(str(tmp_path / 'agent'))
+
+
 def test_a_port_answers_once_something_listens_on_it() -> None:
     import socket
 

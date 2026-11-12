@@ -121,7 +121,7 @@ checked against Designer's own `sd` package and PySide6 stubs (found in the Desi
 Python 3.13, which evaluates annotations when a `def` runs: every name in an annotation there must exist at runtime
 (import real types, `from sd.api.sdnode import SDNode`, never only under `if TYPE_CHECKING:`), and no `from __future__
 import annotations` (the helpers are joined into one script, where it can't come first). The standalone scripts
-(`install.py`, `uninstall.py`, `client/sd_run.py`, `scripts/review_lookup.py`) are the opposite: they run on the system
+(`install.py`, `uninstall.py`, `client/sd_run.py`, `scripts/review_lookup.py`, `scripts/read_crash_dump.py`) are the opposite: they run on the system
 Python, maybe 3.9, so they do start with `from __future__ import annotations` and evaluate no `X | None` at module level
 (`tests/unit/test_old_python.py` runs them on an older Python when one is installed).
 
@@ -198,6 +198,15 @@ Open work lives in [ROADMAP.md](ROADMAP.md): check it before proposing improveme
 - Environment variables `SD_DESIGNER_BIN_DIR`, `SD_DESIGNER_APP`, `SD_DESIGNER_LOG`, `SD_SNAPSHOT_DIR`,
   `SD_BRIDGE_PORT`: README.md, Configuration. A port change must reach the plugin (Designer's environment) and the
   server alike.
+- **When a Designer crashed or hung:** a crash leaves a dump in that Designer's `Sentry-Crashpad/completed` (`pending`
+  while its upload waits; GUIDE.md, Several Designers). `python3 scripts/read_crash_dump.py [dump]` reads one (macOS
+  arm64; with no dump, the newest of any Designer's): the exception, the messages Crashpad kept (often an abort's
+  reason), the crashing thread's frames and Designer's log as it crashed. A crash can also open Adobe's crash window
+  on the user's screen and keep the crashed process until the window closes (ROADMAP item 95): close it for a Designer
+  an agent started. A Designer hung in its quit has its threads sampled before it is forced (macOS: `quit_designer`'s
+  or `launch_designer`'s result names the file; ROADMAP item 70). `alone.close()` names any dump its quit left.
+  On macOS, Designers an agent starts upload no crash reports from the moment `launch_designer` sees them answer
+  (DECISIONS.md, Bridge and quitting).
 - **When tools fail:** match the symptom in README.md, Troubleshooting, and try `read_designer_log`. If Designer isn't
   running or answering, ask the user to open it, or to save, close and reopen it (in tests and work on this project,
   `launch_designer`). If the bridge accepts connections but never answers, or a tool is missing in Claude Code, only the

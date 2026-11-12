@@ -10,12 +10,23 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from conftest import SELFTEST_DIR
+
+
+@pytest.fixture(autouse=True)
+def _alone_forgotten() -> Iterator[None]:
+    """The self-test's modules dropped after each test: _alone() patches them, and a later test file importing them
+    without a purge of its own would get them patched (REVIEW.md TST-345)."""
+    yield
+    for name in [m for m in sys.modules if m == 'test_all_tools' or m.startswith('test_all_tools.')]:
+        del sys.modules[name]
 
 
 def _alone() -> Any:  # a module imported by name: PyCharm can't see its names
@@ -31,6 +42,9 @@ def _alone() -> Any:  # a module imported by name: PyCharm can't see its names
     # TST-147) and a run with no bridge is refused; a test about none running says so itself
     vars(alone)['designer_here'] = lambda: True
     vars(alone)['users_designer_running'] = lambda: True
+    # close_with looks for the crash dumps its quit leaves: none here, and no wait for them, unless a test says so
+    vars(alone.common)['crash_dumps'] = lambda ports=(), run_port=True: set()
+    vars(alone)['CLOSE_DUMP_WAIT_S'] = 0
     return alone
 
 
@@ -630,3 +644,69 @@ def test_a_clean_up_that_fails_is_exit_code_2_though_every_check_passed(monkeypa
 
     assert _run(alone, LeavesALibrary(), _in_category('params', 'run', passes)) == 2
     assert ran == ['check'], "prepared, so the exit code is the clean-up's"
+
+
+class CrashesAsItQuits(FakeDesigner):
+    """An agent's Designer leaving a crash dump in `folder` as it quits, written `late` looks after the quit returned
+    (Designer writes one a few seconds after it goes down)."""
+
+    def __init__(self, folder: Any, late: int = 0) -> None:
+        super().__init__(AGENTS)
+        self.folder, self.late, self.quit = folder, late, False
+
+    async def __call__(self, name: str, args: dict[str, Any] | None = None) -> Any:
+        if name == 'quit_designer':
+            self.quit = True
+        return await super().__call__(name, args)
+
+    def dumps(self, ports: Any = (), run_port: bool = True) -> set[str]:
+        if self.quit:
+            if self.late:
+                self.late -= 1
+            else:
+                (self.folder / 'new.dmp').write_text('')
+        return {str(p) for p in self.folder.iterdir()}
+
+
+def _watching(alone: Any, monkeypatch: pytest.MonkeyPatch, c: CrashesAsItQuits) -> None:
+    monkeypatch.setitem(vars(alone.common), 'crash_dumps', c.dumps)
+    monkeypatch.setattr(time, 'sleep', lambda s: None)
+
+
+def test_close_names_a_crash_dump_its_designer_leaves_as_it_quits(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # it went unseen once: a probe's Designer aborted at its quit and the scratch run said nothing
+    alone = _alone()
+    (tmp_path / 'old.dmp').write_text('')  # there before the quit: not its own
+    c = CrashesAsItQuits(tmp_path)
+    _watching(alone, monkeypatch, c)
+    assert asyncio.run(alone.close_with(c)) == 1
+    out = capsys.readouterr().out
+    assert str(tmp_path / 'new.dmp') in out and 'old.dmp' not in out
+    assert 'scripts/read_crash_dump.py' in out, 'how to read it'
+
+
+def test_close_waits_for_a_dump_written_after_the_quit_returned(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    alone = _alone()
+    monkeypatch.setitem(vars(alone), 'CLOSE_DUMP_WAIT_S', 10)
+    c = CrashesAsItQuits(tmp_path, late=3)
+    _watching(alone, monkeypatch, c)
+    assert asyncio.run(alone.close_with(c)) == 1 and 'new.dmp' in capsys.readouterr().out
+
+
+def test_close_with_no_crash_dump_is_exit_code_0(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    alone = _alone()
+    c = FakeDesigner(AGENTS)
+    assert asyncio.run(alone.close_with(c)) == 0 and 'quit_designer' in c.names()
+
+
+def test_close_waits_for_no_dump_when_it_quits_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    alone = _alone()
+    waited: list[float] = []
+    monkeypatch.setitem(vars(alone), 'CLOSE_DUMP_WAIT_S', 10)
+    monkeypatch.setattr(time, 'sleep', waited.append)
+    assert asyncio.run(alone.close_with(FakeDesigner(USERS))) == 0
+    assert not waited, "the user's Designer isn't quit, so it leaves no dump to wait for"

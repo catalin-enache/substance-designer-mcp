@@ -197,6 +197,14 @@ may update the names and paths an entry points at; changing what was decided, or
   what was measured.
   Reopen if: the wait shows too short (that check failing), or what Designer needs the moment for is found.
 
+- **Designers an agent starts don't upload their crash reports to Adobe.** Designer's crash reporter uploads a crash's
+  report with Designer's log, its settings and the user's Adobe account, and turns uploads on as Designer starts; a
+  probe's crash was uploaded so. `launch_designer` turns them off in the Designer it started, in its own home, once it
+  answers; the user's own Designer and its settings are left alone. Adobe's crash window may still open on a crash.
+  How, as measured: `server_tools/lifecycle.py`, Crash reports; checked by
+  `lifecycle.check_launch_on_another_port`. The user's decision, 2026-11-12.
+  Reopen if: the user wants agents' crash reports sent, or Designer gains a setting of its own for it.
+
 ## Output, pixels, screenshots, the graph view, example
 
 - **An unconnected output node computes an image and is exported.** Not reproduced as a skipped output. The
@@ -236,3 +244,11 @@ may update the names and paths an entry points at; changing what was decided, or
   user, naming the repair (`set_output_tags`; `GUIDE.md`, Output nodes). The user chose this over refusing a rename or only
   documenting it, 2026-11-04.
   Reopen if: the user changes the choice, or the tools become able to see the graphs a rename would break.
+
+- **The rule against a Python event filter on the whole application has no live check.** Checking it would crash a
+  Designer on purpose in every full run, and a crash can open Adobe's crash window on the user's screen. It rests on
+  the measurement GUIDE.md gives (Designer UI): the crash dump's frames ran from the exit handlers through the pixmap
+  cache's destructor, `~QObject` and `~QVariant` into PySide, whose clean-up threw (`recursive_mutex lock failed`), and
+  `std::terminate` aborted; the same quit without the filter left no dump. The user's decision, 2026-11-12.
+  Reopen if: Designer, Qt or PySide is updated (the crash may be gone, or move), or a crash dump at a quit points at a
+  Python wrapper of another of Qt's long-lived objects.

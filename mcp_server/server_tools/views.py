@@ -58,6 +58,8 @@ def screenshot_designer(
     view: str | None = None,
     zoom: int = 0,
     tiling: float | None = None,
+    orbit: list[float] | None = None,
+    pan: list[float] | None = None,
 ) -> list[str | Image]:
     """Capture Designer's own UI (never other apps): panel = window, graph, 2d, 3d, explorer,
     parameters, library or console. Shows what the user sees (node layout, 2D view, properties).
@@ -70,9 +72,11 @@ def screenshot_designer(
     graph puts that graph's outputs on the mesh, selecting it in the Explorer (outputs added to the graph open
     in the editor don't reach it by themselves; one with fewer than two outputs is refused:
     preview_node shows one); mesh is one of the 3D view's Scene menu (Plane, Sphere, Rounded cube...); view:
-    Default, Front, Right, Back, Left, Top or Bottom, then framed; zoom: wheel steps from where the camera is
-    (after view, from the framed view), about 1.1x closer each (negative: away); tiling: how often the material
-    repeats on the mesh (the user's Parameters panel then shows the graph in the editor).
+    Default, Front, Right, Back, Left, Top or Bottom, then framed; orbit: [right, up] degrees the camera turns around
+    the point it looks at (from Front, [90, 0] is Right, [0, 20] a low angle from above); pan: [right, up] it moves
+    sideways, in fractions of the view at that point (nearer parts move more); zoom: wheel steps from where the camera
+    is then, about 1.1x closer each (negative: away), so after pan it comes closer to what is in the middle; tiling:
+    how often the material repeats on the mesh (the user's Parameters panel then shows the graph in the editor).
     crop: [left, top, right, bottom] as fractions 0-1 of the panel, applied before max_size.
     An image costs about width x height / 750 tokens (1000 x 700 is about 930), so keep
     max_size small and crop to what you need."""
@@ -80,7 +84,15 @@ def screenshot_designer(
         len(crop) != 4 or not all(0.0 <= float(v) <= 1.0 for v in crop) or not (crop[0] < crop[2] and crop[1] < crop[3])
     ):
         raise ToolError('crop is [left, top, right, bottom] as fractions 0-1, with left < right and top < bottom')
-    options = {'graph': graph, 'mesh': mesh, 'view': view, 'zoom': zoom or None, 'tiling': tiling}
+    options = {
+        'graph': graph,
+        'mesh': mesh,
+        'view': view,
+        'zoom': zoom or None,
+        'tiling': tiling,
+        'orbit': orbit if orbit and any(orbit) else None,  # 0 both ways: nothing to set, as zoom=0
+        'pan': pan if pan and any(pan) else None,
+    }
     given = [name for name, value in options.items() if value not in (None, '')]
     if given and panel != '3d':
         raise ToolError("%s: these set up the 3D view, so they go with panel='3d'" % ', '.join(given))
@@ -88,11 +100,20 @@ def screenshot_designer(
         raise ToolError('zoom is -%d to %d wheel steps (positive: closer), not %r' % (ZOOM_STEPS, ZOOM_STEPS, zoom))
     if tiling is not None and not tiling > 0:
         raise ToolError('tiling is how often the material repeats on the mesh: more than 0, not %r' % tiling)
+    if orbit is not None and not (len(orbit) == 2 and abs(orbit[0]) <= 180 and abs(orbit[1]) <= 90):
+        raise ToolError(
+            'orbit is [right, up] in degrees, -180 to 180 and -90 to 90 (negative: left, down), not %r' % orbit
+        )
+    if pan is not None and not (len(pan) == 2 and all(abs(v) <= 1 for v in pan)):
+        raise ToolError(
+            'pan is [right, up] in fractions of the view, each -1 to 1 (negative: left, down), not %r' % pan
+        )
     tmp_dir = tempfile.mkdtemp(prefix='sd_shot_')
     out_path = os.path.join(tmp_dir, 'shot.png')
     call = 'save_screenshot(%r, %r)' % (panel, out_path)
     if given:
-        call = 'set_3d_view(%r, %r, %r, %r, %r); %s' % (graph or None, mesh, view, zoom, tiling, call)
+        setup = (graph or None, mesh, view, zoom, tiling, options['orbit'], options['pan'])
+        call = 'set_3d_view(%r, %r, %r, %r, %r, %r, %r); %s' % (*setup, call)
     try:
         text = _bridge(_helpers_call(call), timeout=120 if given else 60)
         set_up = [line for line in text.splitlines() if line.startswith('3D view: ')]

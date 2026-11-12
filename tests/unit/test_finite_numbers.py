@@ -29,6 +29,8 @@ REFUSED = [
     ),
     ('render_sbs', {'sbs_path': 'x.sbs', 'output_dir': 'out', 'params': {'roughness': NAN}}, "params['roughness']"),
     ('screenshot_designer', {'panel': '3d', 'tiling': INF}, 'tiling'),
+    ('screenshot_designer', {'panel': '3d', 'orbit': [INF, 0]}, 'orbit[0]'),
+    ('screenshot_designer', {'panel': '3d', 'pan': [0, NAN]}, 'pan[1]'),
 ]
 
 

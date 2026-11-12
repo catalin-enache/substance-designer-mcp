@@ -1,4 +1,4 @@
-"""screenshot_designer's 3D view options (ROADMAP item 7): what the server refuses before reaching Designer, and how it
+"""screenshot_designer's 3D view options (ROADMAP items 7 and 74): what the server refuses before reaching Designer, and how it
 calls the helpers. Driving the 3D view itself is checked live (editor_panels_and_fit)."""
 
 import os
@@ -39,7 +39,15 @@ def _call(code: str) -> str:
     return code[code.rindex('\n\n') + 2 :]
 
 
-OPTIONS = {'graph': 'g', 'mesh': 'Plane', 'view': 'Top', 'zoom': 2, 'tiling': 2.0}
+OPTIONS = {
+    'graph': 'g',
+    'mesh': 'Plane',
+    'view': 'Top',
+    'zoom': 2,
+    'tiling': 2.0,
+    'orbit': [90.0, -30.0],
+    'pan': [0.25, 0.5],
+}
 
 
 @pytest.mark.parametrize('option', sorted(OPTIONS))
@@ -59,10 +67,17 @@ def test_3d_options_need_the_3d_panel(monkeypatch: pytest.MonkeyPatch, temp_fold
         ('tiling', -1.0, 'tiling'),
         ('tiling', float('nan'), 'tiling'),
         ('tiling', float('inf'), 'tiling'),  # REVIEW.md HLP-110, SRV-119: it reached Designer as a NameError
+        ('orbit', [181.0, 0.0], r'orbit is \[right, up\] in degrees'),
+        ('orbit', [0.0, -91.0], r'orbit is \[right, up\] in degrees'),
+        ('orbit', [90.0], r'orbit is \[right, up\] in degrees'),
+        ('orbit', [1.0, 2.0, 3.0], r'orbit is \[right, up\] in degrees'),
+        ('pan', [1.5, 0.0], r'pan is \[right, up\] in fractions of the view'),
+        ('pan', [0.0, -1.01], r'pan is \[right, up\] in fractions of the view'),
+        ('pan', [0.5], r'pan is \[right, up\] in fractions of the view'),
     ],
 )
-def test_zoom_and_tiling_out_of_range_are_refused(
-    monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], option: str, value: float, message: str
+def test_options_out_of_range_are_refused(
+    monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], option: str, value: Any, message: str
 ) -> None:
     sent = _bridge(monkeypatch, temp_folders)
     with pytest.raises(ToolError, match=message):
@@ -77,7 +92,7 @@ def test_the_3d_view_is_set_up_in_the_same_job_before_its_render(
     server.screenshot_designer('3d', **OPTIONS)
     assert len(sent) == 1
     call = _call(sent[0])
-    setup = call.index("set_3d_view('g', 'Plane', 'Top', 2, 2.0)")
+    setup = call.index("set_3d_view('g', 'Plane', 'Top', 2, 2.0, [90.0, -30.0], [0.25, 0.5])")
     assert setup < call.index("save_screenshot('3d', ")
 
 
@@ -104,6 +119,20 @@ def test_a_set_up_that_stopped_says_the_steps_it_began(
         '3D view, setting: Plane',
         '3D view, setting: view Top, framed',
     ]
+
+
+@pytest.mark.parametrize('panel', ['3d', 'graph'])
+@pytest.mark.parametrize(
+    'option, value', [('orbit', [0.0, 0.0]), ('pan', [0.0, 0.0]), ('zoom', 0)], ids=['orbit', 'pan', 'zoom']
+)
+def test_a_turn_pan_or_zoom_of_zero_sets_nothing_up(
+    monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], panel: str, option: str, value: Any
+) -> None:
+    # REVIEW.md TST-336: nothing to set, so not sent, and not refused with another panel
+    sent = _bridge(monkeypatch, temp_folders)
+    result: Any = server.screenshot_designer(panel, **{option: value})
+    assert 'set_3d_view' not in _call(sent[0])
+    assert len(result) == 1 and isinstance(result[0], Image)
 
 
 @pytest.mark.parametrize('panel', ['3d', 'graph'])

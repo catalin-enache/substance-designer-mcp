@@ -1,6 +1,6 @@
 """The helpers' side of screenshot_designer('3d', ...) (designer_helpers/view3d.py), with sd and PySide6 faked: what is
 checked before anything changes, what an error says was set, the graph's row found before its context menu opens
-there, and what the timers do while that menu runs. The live self-test checks the 3D view itself
+there, what the timers do while that menu runs, and the drags that turn and pan the camera, under its Camera tool. The live self-test checks the 3D view itself
 (editor_panels_and_fit)."""
 
 import sys
@@ -309,13 +309,32 @@ class Designer:
     """set_3d_view's Designer, faked: its panels (`hidden` ones not visible), the 3D view's menus (each path looked up
     and each triggered recorded), and one graph with `outputs` outputs."""
 
-    def __init__(self, helpers: types.ModuleType, hidden: tuple[str, ...] = (), outputs: int = 2) -> None:
+    def __init__(
+        self,
+        helpers: types.ModuleType,
+        hidden: tuple[str, ...] = (),
+        outputs: int = 2,
+        tool: str = 'Camera',
+        tools: tuple[str, ...] = ('Scene Browser', 'Selection', 'Camera', 'Light'),
+    ) -> None:
         self.events: list[tuple[str, tuple[str, ...]]] = []  # ('lookup' or 'trigger', the menu path or step)
         self.order: list[str] = []
+        self.tool = tool  # the 3D view's toolbar's tool selected: Camera or Light, one group
         widgets = qt('QtWidgets')
-        viewport = SimpleNamespace(metaObject=lambda: SimpleNamespace(className=lambda: 'Alg::Gui3D::ViewportWidget'))
+        viewport = SimpleNamespace(
+            metaObject=lambda: SimpleNamespace(className=lambda: 'Alg::Gui3D::ViewportWidget'),
+            width=lambda: 400,
+            height=lambda: 300,
+        )
         tree = SimpleNamespace(objectName=lambda: 'mTreeView')
-        children = {widgets.QMenuBar: [object()], widgets.QTreeView: [tree], widgets.QWidget: [viewport]}
+        actions = [self._tool(name) for name in tools]
+        toolbar = SimpleNamespace(actions=lambda: actions)
+        children = {
+            widgets.QMenuBar: [object()],
+            widgets.QTreeView: [tree],
+            widgets.QWidget: [viewport],
+            widgets.QToolBar: [toolbar],
+        }
         dock = SimpleNamespace(findChildren=lambda cls: children[cls])
         areas = {helpers._PANEL_AREAS[name] for name in hidden}
 
@@ -332,6 +351,12 @@ class Designer:
         vars(helpers)['_material'] = lambda bar, keep: 'Default (overridden)'
         vars(helpers)['_home_screen'] = lambda: None
         vars(helpers)['_wheel'] = lambda viewport, steps, pause: self.events.append(('trigger', ('wheel', str(steps))))
+
+        def drag(viewport: Any, button: Any, dx: int, dy: int, pressed: list[Any]) -> None:
+            which = 'left' if button is qt('QtCore').Qt.MouseButton.LeftButton else 'middle'
+            self.events.append(('trigger', ('drag', which, str(dx), str(dy))))
+
+        vars(helpers)['_drag'] = drag
         vars(helpers)['_apply_outputs'] = lambda tree, g, keep: self.events.append(
             ('trigger', ('outputs', g.getIdentifier()))
         )
@@ -347,6 +372,16 @@ class Designer:
 
     def triggered(self) -> list[tuple[str, ...]]:
         return [path for kind, path in self.events if kind == 'trigger']
+
+    def _tool(self, name: str) -> Any:
+        """A toolbar action; Camera and Light are one exclusive group, as in Designer."""
+
+        def trigger() -> None:
+            self.events.append(('trigger', ('tool', name)))
+            if name in ('Camera', 'Light'):
+                self.tool = name
+
+        return SimpleNamespace(text=lambda: name, isChecked=lambda: self.tool == name, trigger=trigger)
 
 
 @pytest.mark.parametrize(
@@ -528,9 +563,10 @@ def test_an_error_after_a_change_says_what_was_set(helpers: types.ModuleType) ->
 
 def test_the_line_says_what_was_set(helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]) -> None:
     Designer(helpers)
-    helpers.set_3d_view('g', 'Plane', 'Top', 2, 2.0)
+    helpers.set_3d_view('g', 'Plane', 'Top', 2, 2.0, [90.0, 30.0], [0.25, -0.4])
     assert capsys.readouterr().out.splitlines()[-1] == (
-        "3D view: Plane, graph g's outputs on the mesh, view Top, framed, +2 wheel steps, tiling 2"
+        "3D view: Plane, graph g's outputs on the mesh, view Top, framed, orbit 90 degrees right, 30.1 up, "
+        'pan 0.25 of the view right, 0.401 down, +2 wheel steps, tiling 2'
     )
 
 
@@ -538,7 +574,7 @@ def test_each_step_is_said_before_its_change(helpers: types.ModuleType) -> None:
     # REVIEW.md HLP-119: an abort anywhere after a change finds it said; one before it finds the step said as begun
     designer = Designer(helpers)
     vars(helpers)['print'] = lambda line: designer.events.append(('print', (line,)))
-    helpers.set_3d_view('g', 'Plane', 'Top', 2, 2.0)
+    helpers.set_3d_view('g', 'Plane', 'Top', 2, 2.0, [90.0, 30.0], [0.25, -0.4])
     said = [(kind, path) for kind, path in designer.events if kind in ('print', 'trigger')]
     assert said == [
         ('print', ('3D view, setting: Plane',)),
@@ -548,12 +584,259 @@ def test_each_step_is_said_before_its_change(helpers: types.ModuleType) -> None:
         ('print', ('3D view, setting: view Top, framed',)),
         ('trigger', ('Camera', 'Top')),
         ('trigger', ('Camera', 'Frame')),
+        ('print', ('3D view, setting: orbit 90 degrees right, 30.1 up',)),
+        ('trigger', ('drag', 'left', '-200', '0')),
+        ('trigger', ('drag', 'left', '0', '86')),
+        ('print', ('3D view, setting: pan 0.25 of the view right, 0.401 down',)),
+        ('trigger', ('drag', 'middle', '-89', '0')),
+        ('trigger', ('drag', 'middle', '0', '-107')),
         ('print', ('3D view, setting: +2 wheel steps',)),
         ('trigger', ('wheel', '2')),
         ('print', ('3D view, setting: tiling 2',)),
         ('trigger', ('tiling', '2.0')),
-        ('print', ("3D view: Plane, graph g's outputs on the mesh, view Top, framed, +2 wheel steps, tiling 2",)),
+        (
+            'print',
+            (
+                "3D view: Plane, graph g's outputs on the mesh, view Top, framed, orbit 90 degrees right, 30.1 up, "
+                'pan 0.25 of the view right, 0.401 down, +2 wheel steps, tiling 2',
+            ),
+        ),
     ]
+
+
+def _drags(designer: Designer) -> list[tuple[str, ...]]:
+    return [path for path in designer.triggered() if path[0] == 'drag']
+
+
+def test_orbit_and_pan_are_drags_at_designers_own_rates(helpers: types.ModuleType) -> None:
+    # ROADMAP item 74: 0.45 degrees a pixel across, 0.35 up and down; the view's width panned every 356 pixels
+    # (designer_helpers/view3d.py)
+    designer = Designer(helpers)
+    helpers.set_3d_view(view='Front', orbit=[90.0, 30.0], pan=[0.25, -0.4])
+    assert _drags(designer) == [
+        ('drag', 'left', '-200', '0'),  # the camera right: the mouse left
+        ('drag', 'left', '0', '86'),  # up: the mouse down
+        ('drag', 'middle', '-89', '0'),  # the view right: the content, which follows the mouse, left
+        ('drag', 'middle', '0', '-107'),  # 0.4 of the 300 px high view down: 120 px, 356 px a 400 px wide view
+    ]
+
+
+def test_a_turn_or_pan_of_zero_is_no_drag(helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]) -> None:
+    designer = Designer(helpers)
+    helpers.set_3d_view(orbit=[0.0, -20.0], pan=[0.5, 0.0])
+    assert _drags(designer) == [('drag', 'left', '0', '-57'), ('drag', 'middle', '-178', '0')]
+    assert capsys.readouterr().out.splitlines()[-1] == '3D view: orbit 19.9 degrees down, pan 0.5 of the view right'
+
+
+@pytest.mark.parametrize(
+    'options',
+    [
+        {'orbit': [0.2, 0.0]},
+        {'orbit': [0.1, 30.0]},
+        {'orbit': [0.0, -0.1]},
+        {'pan': [0.001, 0.0]},
+        {'pan': [0.3, 0.0005]},
+    ],
+    ids=['across', 'across with a turn up', 'down', 'right', 'up with a pan right'],
+)
+def test_a_turn_or_pan_under_a_pixel_is_refused_before_anything_changes(
+    helpers: types.ModuleType, options: dict[str, Any]
+) -> None:
+    # REVIEW.md HLP-121: rounded to no pixel, it was dropped and said as set ('3D view: ' alone for orbit=[0.2, 0])
+    designer = Designer(helpers)
+    with pytest.raises(RuntimeError, match="less than one pixel's drag"):
+        helpers.set_3d_view(mesh='Plane', **options)
+    assert designer.triggered() == []
+
+
+def test_the_turn_and_pan_said_are_what_the_drags_carry(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # REVIEW.md HLP-121: 10 degrees is 22 px, 9.9 degrees; 20 up is 57 px, 19.95; 0.4 of the 300 px high view down is
+    # 107 px, 0.401 of it
+    Designer(helpers)
+    helpers.set_3d_view(orbit=[10.0, 20.0], pan=[0.25, -0.4])
+    assert capsys.readouterr().out.splitlines()[-1] == (
+        '3D view: orbit 9.9 degrees right, 19.9 up, pan 0.25 of the view right, 0.401 down'
+    )
+
+
+@pytest.mark.parametrize(
+    'options', [{'orbit': [90.0, 0.0]}, {'pan': [0.25, 0.0]}, {'zoom': 2}], ids=['orbit', 'pan', 'zoom']
+)
+def test_under_the_light_tool_the_camera_tool_moves_the_camera_then_the_light_tool_comes_back(
+    helpers: types.ModuleType, options: dict[str, Any]
+) -> None:
+    # REVIEW.md HLP-120: under the Light tool, drags and the wheel don't move the camera; zoom= said it zoomed
+    designer = Designer(helpers, tool='Light')
+    helpers.set_3d_view(view='Top', **options)
+    triggered = designer.triggered()
+    moves = [i for i, path in enumerate(triggered) if path[0] in ('drag', 'wheel')]
+    assert moves and triggered[moves[0] - 1] == ('tool', 'Camera') and triggered[moves[-1] + 1] == ('tool', 'Light')
+    assert [path for path in triggered if path[0] == 'tool'] == [('tool', 'Camera'), ('tool', 'Light')]
+    assert designer.tool == 'Light'
+
+
+def test_under_the_camera_tool_no_tool_is_selected(helpers: types.ModuleType) -> None:
+    designer = Designer(helpers)
+    helpers.set_3d_view(view='Top', orbit=[90.0, 0.0], pan=[0.25, 0.0], zoom=2)
+    assert [path for path in designer.triggered() if path[0] == 'tool'] == []
+
+
+def test_without_orbit_pan_or_zoom_the_tools_are_left_alone(helpers: types.ModuleType) -> None:
+    designer = Designer(helpers, tool='Light', tools=())
+    helpers.set_3d_view('g', 'Plane', 'Top', tiling=2.0)  # no toolbar needed either
+    assert [path for path in designer.triggered() if path[0] == 'tool'] == []
+
+
+def test_a_toolbar_without_the_camera_tool_is_refused_before_anything_changes(helpers: types.ModuleType) -> None:
+    designer = Designer(helpers, tools=('Selection', 'Light'))
+    with pytest.raises(RuntimeError, match="the 3D view's toolbar has no Camera tool"):
+        helpers.set_3d_view(mesh='Plane', zoom=2)
+    assert designer.triggered() == []
+
+
+def test_the_light_tool_comes_back_when_a_drag_fails(helpers: types.ModuleType) -> None:
+    designer = Designer(helpers, tool='Light')
+
+    def failing(viewport: Any, button: Any, dx: int, dy: int, pressed: list[Any]) -> None:
+        raise RuntimeError('a drag failed')
+
+    vars(helpers)['_drag'] = failing
+    with pytest.raises(RuntimeError) as raised:
+        helpers.set_3d_view(view='Top', orbit=[90.0, 0.0])
+    assert str(raised.value) == 'a drag failed; the 3D view was already set: view Top, framed'
+    assert designer.tool == 'Light'
+
+
+def test_an_abort_landing_as_the_light_tool_comes_back_brings_it_back(helpers: types.ModuleType) -> None:
+    # as HLP-118 for the Parameters panel: one landing on the finally's first line skips its way back; the abort's
+    # handler, run untraced, takes it again
+    designer = Designer(helpers, tool='Light')
+    real = helpers._tool_back
+    calls: list[int] = []
+
+    def tool_back(light: Any, switched: bool) -> None:
+        calls.append(1)
+        if len(calls) == 1:
+            raise KeyboardInterrupt('an abort as the Light tool comes back')
+        real(light, switched)
+
+    vars(helpers)['_tool_back'] = tool_back
+    with pytest.raises(KeyboardInterrupt):
+        helpers.set_3d_view(zoom=2)
+    assert designer.tool == 'Light'
+
+
+def test_an_abort_that_skipped_a_drags_release_releases_its_button(helpers: types.ModuleType) -> None:
+    Designer(helpers)
+    released: list[tuple[Any, float, float]] = []
+
+    def aborted(viewport: Any, button: Any, dx: int, dy: int, pressed: list[Any]) -> None:
+        pressed.append((button, 0.0, 57.0))  # pressed, then the abort landing before its release
+        raise KeyboardInterrupt('an abort in a drag')
+
+    vars(helpers)['_drag'] = aborted
+    vars(helpers)['_release'] = lambda viewport, button, x, y: released.append((button, x, y))
+    with pytest.raises(KeyboardInterrupt):
+        helpers.set_3d_view(orbit=[0.0, 20.0])
+    assert released == [(qt('QtCore').Qt.MouseButton.LeftButton, 0.0, 57.0)]
+
+
+class Mouse:
+    """What _drag does to a 400 x 300 viewport, faked: (what, x, y) each, what its mouse events (press, move, release),
+    'pause' (x the seconds), 'guard on' or 'guard off' (the filter for the user's mouse installed or removed)."""
+
+    def __init__(self, fail_at_move: int = 0) -> None:
+        self.sent: list[tuple[str, float, float]] = []
+        core = qt('QtCore')
+        self.kinds = {
+            id(core.QEvent.Type.MouseButtonPress): 'press',
+            id(core.QEvent.Type.MouseMove): 'move',
+            id(core.QEvent.Type.MouseButtonRelease): 'release',
+        }
+        self.fail_at_move = fail_at_move
+        self.pressed: list[Any] = []  # the `pressed` handed to _drag
+        self.held: list[list[Any]] = []  # what it held at each mouse event
+        self.viewport = SimpleNamespace(
+            width=lambda: 400,
+            height=lambda: 300,
+            mapToGlobal=lambda point: point,
+            installEventFilter=lambda guard: self.sent.append(('guard on', 0.0, 0.0)),
+            removeEventFilter=lambda guard: self.sent.append(('guard off', 0.0, 0.0)),
+        )
+
+    def mouse(self, viewport: Any, kind: Any, x: float, y: float, button: Any, buttons: Any) -> None:
+        self.sent.append((self.kinds[id(kind)], x, y))
+        self.held.append(list(self.pressed))
+        if self.kinds[id(kind)] == 'move' and sum(what == 'move' for what, _, _ in self.sent) == self.fail_at_move:
+            raise RuntimeError('a move failed')
+
+    def what(self) -> list[str]:
+        return [what for what, _, _ in self.sent]
+
+
+def test_a_drag_is_a_press_moves_and_a_release_from_the_middle_then_a_pause_all_guarded(
+    helpers: types.ModuleType,
+) -> None:
+    # the pause: a drag right after another cancelled it, or part of it; the guard: the user's mouse moving over the
+    # viewport in a drag stopped it (REVIEW.md HLP-122), and a press in the pause would undo it (designer_helpers/view3d.py)
+    mouse = Mouse()
+    vars(helpers)['_mouse'] = mouse.mouse
+    vars(helpers)['_settle'] = lambda seconds: mouse.sent.append(('pause', seconds, 0.0))
+    pressed: list[Any] = []
+    helpers._drag(mouse.viewport, qt('QtCore').Qt.MouseButton.LeftButton, -200, 50, pressed)
+    moves = ['move'] * helpers.DRAG_MOVES
+    assert mouse.what() == ['guard on', 'press', *moves, 'release', 'pause', 'guard off']
+    assert mouse.sent[1] == ('press', 200.0, 150.0) and mouse.sent[-4:-2] == [
+        ('move', 0.0, 200.0),
+        ('release', 0.0, 200.0),
+    ]
+    assert mouse.sent[-2] == ('pause', helpers.DRAG_PAUSE, 0.0) and helpers.DRAG_PAUSE >= 0.1
+    assert pressed == []
+
+
+def test_a_drag_whose_move_fails_still_releases_its_button_and_removes_its_guard(helpers: types.ModuleType) -> None:
+    mouse = Mouse(fail_at_move=3)
+    vars(helpers)['_mouse'] = mouse.mouse
+    pressed: list[Any] = []
+    with pytest.raises(RuntimeError, match='a move failed'):
+        helpers._drag(mouse.viewport, qt('QtCore').Qt.MouseButton.MiddleButton, 100, 0, pressed)
+    assert mouse.what()[-2:] == ['release', 'guard off'] and mouse.sent[-2] == ('release', 300.0, 150.0)
+    assert pressed == []
+
+
+def test_a_drag_holds_its_button_where_the_abort_handler_looks_while_it_is_down(helpers: types.ModuleType) -> None:
+    # REVIEW.md TST-338: the abort's handler releases what `pressed` holds, at the drag's end
+    mouse = Mouse()
+    vars(helpers)['_mouse'] = mouse.mouse
+    left = qt('QtCore').Qt.MouseButton.LeftButton
+    helpers._drag(mouse.viewport, left, -200, 50, mouse.pressed)
+    assert mouse.held == [[(left, 0.0, 200.0)]] * (helpers.DRAG_MOVES + 2)  # the press, every move, the release
+    assert mouse.pressed == []
+
+
+@pytest.mark.parametrize('fails', [False, True], ids=['sent', 'sending raises'])
+def test_the_mouse_events_the_helpers_send_are_marked_for_the_guard_while_sent(
+    helpers: types.ModuleType, fails: bool
+) -> None:
+    # REVIEW.md HLP-122: the drag's guard lets through only the events _mouse is sending
+    marked: list[bool] = []
+
+    def send(viewport: Any, event: Any) -> None:
+        marked.append(helpers._OWN_MOUSE[0])
+        if fails:
+            raise RuntimeError('sendEvent failed')
+
+    qt('QtWidgets').QApplication.sendEvent.side_effect = send
+    viewport = SimpleNamespace(mapToGlobal=lambda point: point)
+    core = qt('QtCore')
+    if fails:
+        with pytest.raises(RuntimeError, match='sendEvent failed'):
+            helpers._mouse(viewport, core.QEvent.Type.MouseMove, 1.0, 2.0, core.Qt.MouseButton.NoButton, 0)
+    else:
+        helpers._mouse(viewport, core.QEvent.Type.MouseMove, 1.0, 2.0, core.Qt.MouseButton.NoButton, 0)
+    assert marked == [True] and helpers._OWN_MOUSE == [False]
 
 
 class Spin:

@@ -37,12 +37,14 @@ from test_all_tools.common import (
     designer_script,
     free_port,
     helpers_source,
+    new_dumps,
     normal_close,
     raw_request,
     skip,
     text,
 )
 from test_all_tools.crash_watch import watching_crashes
+from test_all_tools.lifecycle.crash_reports import uploads, uploads_off, uploads_on
 from test_all_tools.lifecycle.samples import sampled
 
 CLOSE_WINDOWS_ONLY = dedent("""\
@@ -181,6 +183,13 @@ async def check_launch_on_another_port(ctx: Ctx) -> None:
             if 'Designer started in' not in t:
                 return  # the check above failed, with why; the finally ends it
             theirs = os.path.join(agent_folder(other), 'home') + '/'
+            # Designer turns them on as it starts; its reports carry the user's Adobe account (DECISIONS.md)
+            check(
+                'launch_designer',
+                'turns crash uploads off in the Designer it starts',
+                uploads(theirs) == 'off',
+                'uploads: %s' % uploads(theirs),
+            )
             t = text(await c('read_designer_log', {'port': other, 'contains': 'listening on'}))
             mine = text(await c('read_designer_log', {'contains': ':%d' % other, 'since_last_start': False}))
             check(
@@ -223,6 +232,27 @@ async def check_launch_on_another_port(ctx: Ctx) -> None:
                 is not None,
                 status,
             )
+            # still off as it is quit, after the calls above (REVIEW.md TST-346)
+            check(
+                'launch_designer',
+                'keeps crash uploads off in the Designer it started, until it is quit',
+                uploads(theirs) == 'off',
+                'uploads: %s' % uploads(theirs),
+            )
+            # Designer turns them on at each start: a launch finding one an agent started already running turns them
+            # off too, as when an earlier call stopped waiting for it (REVIEW.md SRV-120)
+            uploads_on(theirs)
+            try:
+                t = text(await c('launch_designer', {'port': other}))
+                check(
+                    'launch_designer',
+                    "turns crash uploads off in an agent's Designer it finds already running",
+                    t.startswith('Designer already running') and uploads(theirs) == 'off',
+                    '%s | uploads: %s' % (t, uploads(theirs)),
+                )
+            finally:  # put back if it didn't, before the quit: a crash then would be uploaded (REVIEW.md SRV-120)
+                if uploads(theirs) == 'on':
+                    uploads_off(theirs)
             t = its_quit = text(await c('quit_designer', {'port': other, 'wait_s': 30}))
             status_after = await c('designer_status')
             check(
@@ -409,7 +439,7 @@ async def check_a_designer_sharing_the_temp_folder_hands_over(ctx: Ctx) -> None:
         finally:
 
             def remove_its_folder() -> None:  # once a late crash dump would be there
-                if not crash_dumps([port]) - step.before:  # a crash dump is kept, to read
+                if not new_dumps(crash_dumps([port]), step.before):  # a crash dump is kept, to read
                     shutil.rmtree(folder, ignore_errors=True)
 
             watch.later(remove_its_folder)

@@ -32,7 +32,7 @@ see a change to `server_tools/` or the helpers until `/mcp` reconnects), uses a 
 one, and refuses the user's (ask them to close it). It runs each category's checks as the suite does
 (`category_run.py`): on a `ctx` of their own, after the category's own preparation (`<category>/preparations.py`), then
 your `setup(ctx)` if the check needs more (graphs named starting `mcp_selftest`: the clean-up unloads every package
-holding one), then cleans up. It keeps that Designer open for the next runs; `alone.close()` ends it. `port=` (`run` and `close`) runs on
+holding one), then cleans up. It keeps that Designer open for the next runs; `alone.close()` ends it, and returns 1 naming any crash dump its quit left. `port=` (`run` and `close`) runs on
 a port and Designer of its own (server, `raw_request`, `sd_run`, snapshots too), so runs go side by side, except a scratch run of `lifecycle`, while no other run's Designer can start, and `facts` or `editor_panels_and_fit` beside another run of either, for the one clipboard (`alone.py`'s docstring). Exit code: 0
 every check passed, 1 a check failed, 2 no environment (the user's Designer, a launch, a preparation or a setup that
 failed) or no clean-up. A plugin change needs `install.py` and a restart of that Designer first (`alone.close()`, then the next run

@@ -38,6 +38,19 @@ reused ID doesn't count; on Windows nothing is recorded, so every Designer count
 whichever Designer holds the port, so it names the recorded process and any other refuses (`os.getpid()` inside Designer
 is that process, checked live). The plugin answers status from another thread, so a main thread frozen outside
 a job reads as idle (measured with a timer slot sleeping in a loop).
+
+Crash reports (measured 2026-11-12, macOS). Designer's crash reporter (Sentry, through Crashpad, in `Sentry-Crashpad`
+in Designer's data folder) uploads each crash's report to Adobe, with Designer's log, its settings and the user's Adobe
+account. Sentry turns uploads on in Crashpad's settings (`settings.dat`, bit 0 of the options) as Designer starts, and
+Crashpad's handler reads them before each upload. So once a Designer launch_designer started with a home of its own
+answers, it turns them off there (the user's choice: DECISIONS.md, Bridge and quitting), before leaving its Home screen,
+and again whenever a launch finds it already running (the call that started it may have stopped waiting) or refusing
+(another token, another protocol), and before quit_designer closes it or a launch ends it; never in the user's home. A crash before it answers may still be uploaded.
+Measured: one crash's report was uploaded 4 s after the crash. In another Designer, uploads were turned off after its
+start; they stayed off, and its crash's report was kept, never uploaded (Crashpad's own record on the file, its
+extended attributes). That crash also opened Adobe's crash window (`AdobeCrashReportWindow`, which the handler
+starts), and the crashed process stayed until the window was closed, so its quit was "could not be ended" (ROADMAP item
+95); the two crashes before quit within their wait. A check: lifecycle.check_launch_on_another_port.
 """
 
 import contextlib
@@ -576,10 +589,20 @@ def _end_if_past_startup(port: int) -> str | None:
     if found is None or _still_starting(port):
         return None
     own, seen = found
+    uploads = _crash_uploads_off(_home_in(seen))  # a crash in its teardown isn't uploaded (REVIEW.md SRV-124)
     sampled = _sampled_before_force(own, port)
     if not _force_end(own, port, seen):
-        raise ToolError(_could_not_end(own) + sampled)  # once is enough (REVIEW.md SRV-79)
-    return sampled
+        raise ToolError(_could_not_end(own) + sampled + uploads)  # once is enough (REVIEW.md SRV-79)
+    return sampled + uploads
+
+
+def _home_in(seen: bytes) -> str | None:
+    """The home a record of a Designer an agent started gives (_agent_record's), None without one."""
+    try:
+        home = json.loads(seen).get('home')
+    except (ValueError, AttributeError):
+        return None
+    return home if isinstance(home, str) else None
 
 
 def _could_not_end(pid: int) -> str:
@@ -678,11 +701,13 @@ def launch_designer(wait_s: int = 180, port: int | None = None) -> str:
     Override the app location with SD_DESIGNER_APP (on macOS the .app, whose own binary is started)."""
     port = _port(port)
     try:
-        return 'Designer already running on port %d: %s' % (port, _control('status', wait=5, port=port))
-    except _Refused:
-        raise  # it runs and answers: starting or waiting for another wouldn't help
+        status = _control('status', wait=5, port=port)
+    except _Refused as refused:  # it runs and answers: starting or waiting for another wouldn't help
+        raise _with_uploads_off(refused, _agent_home(port)) from None
     except ToolError:
         pass
+    else:
+        return _already_running(port, status)
     # A Designer process without an answering bridge (still starting, a dialog, the plugin didn't
     # load) is waited for, not started again (Windows would open a second instance). If it exits
     # while we wait (it was shutting down, or hung after a crash), a new one is started then.
@@ -691,6 +716,7 @@ def launch_designer(wait_s: int = 180, port: int | None = None) -> str:
     ended_note = 'Ended a Designer an agent started, which was not answering.%s\n'
     ended_sample = _end_if_past_startup(port)
     note = '' if ended_sample is None else ended_note % ended_sample
+    homes: list[str | None] = []  # of the Designers started here, the last one waited for
 
     def start() -> bool:
         """Start one, unless another launch on this port started one meanwhile: False then, and that one is waited
@@ -710,6 +736,7 @@ def launch_designer(wait_s: int = 180, port: int | None = None) -> str:
             if unwritable:  # unrecorded, it would count as the user's (REVIEW.md SRV-93)
                 raise _unrecorded(port, unwritable, note, 'No Designer was started')
             pid, home = _start_designer(app, port)
+            homes.append(home)
             try:
                 _remember_started(port, pid, home)
             except (OSError, _NoListing) as e:  # the folder filled, or its start can't be read (REVIEW.md SRV-97)
@@ -731,8 +758,8 @@ def launch_designer(wait_s: int = 180, port: int | None = None) -> str:
         time.sleep(2)
         try:
             status = _control('status', wait=5, port=port)
-        except _Refused:
-            raise
+        except _Refused as refused:
+            raise _with_uploads_off(refused, homes[-1] if homes else _agent_home(port)) from None
         except ToolError:
             ended_sample = _end_if_past_startup(port) if running else None
             if ended_sample is not None:
@@ -743,14 +770,17 @@ def launch_designer(wait_s: int = 180, port: int | None = None) -> str:
                 started = time.time()  # the new one gets the whole wait (REVIEW.md SRV-19)
             continue
         if running:
-            return note + 'Designer already running on port %d: %s' % (port, status)
+            return note + _already_running(port, status)
+        # Designer turns them on as it starts, so only now, before anything else that may fail (the module's
+        # docstring: Crash reports; REVIEW.md SRV-120)
+        uploads = _crash_uploads_off(homes[-1] if homes else None)
         # we started it, so nobody is using the Home screen: show the editor panels
         home = _bridge(_helpers_call('leave_home_screen()'), timeout=30, port=port).strip()
         return note + 'Designer started in %.0fs, on port %d%s: %s' % (
             time.time() - started,
             port,
             ' (%s)' % home if home else '',
-            status,
+            _with_uploads(status, uploads),
         )
     if not running:
         what_next = (
@@ -778,6 +808,60 @@ def launch_designer(wait_s: int = 180, port: int | None = None) -> str:
             what_next,
         )
     )
+
+
+CRASHPAD_MAGIC = 0x43506473  # Crashpad's settings file ('sdPC'); its options next but one, bit 0 uploads enabled
+CRASHPAD_VERSION = 1  # the layout read here; another may move the options (REVIEW.md SRV-122)
+
+
+def _already_running(port: int, status: str) -> str:
+    """The result for a Designer found answering. One an agent started gets its crash uploads turned off too: Designer
+    turns them on at each start, and the call that started it may have stopped waiting first (REVIEW.md SRV-120)."""
+    return 'Designer already running on port %d: %s' % (
+        port,
+        _with_uploads(status, _crash_uploads_off(_agent_home(port))),
+    )
+
+
+def _with_uploads_off(refused: _Refused, home: str | None) -> _Refused:
+    """A refusal from a Designer an agent started (its `home`), its crash uploads turned off first: a refusal is an
+    answer, so Designer has turned them on (REVIEW.md SRV-123); with the sentence if they couldn't be."""
+    uploads = _crash_uploads_off(home)
+    return _Refused(_with_uploads(str(refused), uploads)) if uploads else refused
+
+
+def _with_uploads(status: str, uploads: str) -> str:
+    """The plugin's status, then the sentence saying crash uploads couldn't be turned off, if any: the status ends with
+    no stop (REVIEW.md SRV-121)."""
+    return _sentence(status) + uploads if uploads else status
+
+
+def _crash_uploads_off(home: str | None) -> str:
+    """Crash uploads turned off in the Crashpad settings of the Designer started with `home`, a home of its own
+    (macOS; the module's docstring: Crash reports): '' once off, or with no such home, else the sentence for the result
+    saying why not. Under Crashpad's own lock, as its handler may read them at that moment."""
+    if not home:
+        return ''
+    import fcntl  # POSIX's: only a home of its own gets here
+
+    path = os.path.join(_designer_data_dir(home), 'Sentry-Crashpad', 'settings.dat')
+    try:
+        with open(path, 'r+b') as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            head = f.read(12)
+            version = int.from_bytes(head[4:8], 'little')
+            if len(head) < 12 or int.from_bytes(head[:4], 'little') != CRASHPAD_MAGIC:
+                why = "%s isn't Crashpad's settings" % path
+            elif version != CRASHPAD_VERSION:
+                why = "%s is Crashpad's settings of version %d, whose layout isn't known here" % (path, version)
+            else:
+                options = int.from_bytes(head[8:12], 'little')
+                f.seek(8)
+                f.write((options & ~1).to_bytes(4, 'little'))
+                return ''
+    except OSError as e:
+        why = str(e)
+    return ' Its crash reports may still be uploaded to Adobe: %s.' % why
 
 
 SAMPLE = '/usr/bin/sample'  # macOS's: the stacks of a process's threads, the process left running
@@ -829,6 +913,9 @@ def quit_designer(wait_s: int = 10, port: int | None = None) -> str:
             return _lines('No Designer is running on port %d.' % port, _others(port))
         raise ToolError("This Designer wasn't started by an agent: ask the user to save, close and reopen it.")
     own, seen = found
+    # the call that started it may have stopped waiting, so none turned them off: a crash as it quits isn't uploaded
+    # (REVIEW.md SRV-124)
+    uploads = _crash_uploads_off(_home_in(seen)).strip()
     try:
         state = _control('status', wait=5, port=port)
         if 'idle, 0 queued' not in state:  # the close would queue behind it, for up to 15 minutes (REVIEW.md SRV-74)
@@ -840,7 +927,7 @@ def quit_designer(wait_s: int = 10, port: int | None = None) -> str:
         notes = _checked(reply).replace('closing Designer', '').strip()
     except ToolError as e:  # it can't be asked, only ended; or the reply was lost as it quit
         notes = 'Designer was not asked to close, or did not reply: %s' % e
-    prefix = notes + '\n' if notes else ''
+    prefix = ''.join(line + '\n' for line in (notes, uploads) if line)
     started = time.time()
     while time.time() - started < wait_s:
         time.sleep(1)

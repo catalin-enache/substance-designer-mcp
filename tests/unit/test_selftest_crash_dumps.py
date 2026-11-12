@@ -12,6 +12,7 @@ import pytest
 from conftest import SELFTEST_DIR
 
 DUMPS = 'Library/Application Support/Adobe/Adobe Substance 3D Designer/Sentry-Crashpad/completed'
+PENDING = DUMPS.replace('/completed', '/pending')  # Crashpad's reports waiting for their upload
 
 
 def _common() -> Any:  # a module imported by name: PyCharm can't see its names
@@ -51,6 +52,38 @@ def test_crash_dumps_include_those_of_the_runs_own_designers(monkeypatch: pytest
     (beside / 'b.dmp').write_text('')
     assert common.new_crash_dumps(common.crash_dumps(), wait_s=0) == set()
     assert common.new_crash_dumps(set(), wait_s=0, ports=[9902]) >= {str(beside / 'b.dmp')}
+
+
+def _users_folders(common: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path]:
+    """The user's pending/ and completed/, made, with no Designer of the run's own."""
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    monkeypatch.setenv('HOME', str(tmp_path / 'user'))
+    monkeypatch.setitem(vars(common), 'SHORT_TEMP', str(tmp_path))
+    pending, completed = tmp_path / 'user' / PENDING, tmp_path / 'user' / DUMPS
+    pending.mkdir(parents=True)
+    completed.mkdir(parents=True)
+    return pending, completed
+
+
+def test_crash_dumps_include_reports_waiting_for_their_upload(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # REVIEW.md TST-351: a finished report waits in pending/ until its upload is done or skipped; a failed one stays
+    common = _common()
+    pending, _ = _users_folders(common, monkeypatch, tmp_path)
+    (pending / 'a.dmp').write_text('')
+    assert common.crash_dumps() == {str(pending / 'a.dmp')}
+
+
+def test_a_report_uploaded_meanwhile_is_no_new_crash_dump(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # REVIEW.md TST-351: the user's Designer crashed just before; its report, uploaded during the step, moves to
+    # completed/: the same report, not a crash of the step's
+    common = _common()
+    pending, completed = _users_folders(common, monkeypatch, tmp_path)
+    (pending / 'a.dmp').write_text('')
+    before = common.crash_dumps()
+    (pending / 'a.dmp').rename(completed / 'a.dmp')
+    assert common.new_crash_dumps(before, wait_s=0) == set()
+    (pending / 'b.dmp').write_text('')
+    assert common.new_crash_dumps(before, wait_s=0) == {str(pending / 'b.dmp')}
 
 
 class _Dumps:
@@ -242,3 +275,18 @@ def test_crash_watch_reports_a_dump_of_a_step_whose_checks_never_ran(monkeypatch
     watch.settle()
     assert [(tool, ok) for tool, _, ok, _ in seen] == [('self-test', False)]
     assert '/other/a.dmp' in seen[0][3]
+
+
+def test_crash_watch_takes_no_report_uploaded_meanwhile_for_a_crash(monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md TST-351: there before the step, waiting for its upload, then moved to completed/ during it
+    common, dumps = _common(), _Dumps()
+    seen = _results(common, monkeypatch)
+    dumps.write('/user/Sentry-Crashpad/pending/a.dmp')
+    watch = dumps.watch(common)
+    step = watch.step()
+    dumps.now += 5
+    del dumps.written['/user/Sentry-Crashpad/pending/a.dmp']
+    dumps.write('/user/Sentry-Crashpad/completed/a.dmp')
+    watch.check(step, 'quit_designer', 'quit', True)
+    watch.settle()
+    assert [(name, ok) for _, name, ok, _ in seen] == [('quit', True)]

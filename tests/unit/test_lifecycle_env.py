@@ -7,6 +7,7 @@ import os
 import re
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -648,6 +649,306 @@ def test_launch_says_it_ended_one_even_if_the_new_one_fails(
     monkeypatch.setenv('SD_DESIGNER_APP', '/no/such/Designer.app')
     with pytest.raises(server.ToolError, match=r'(?s)Ended .*Designer not found'):
         server.launch_designer(wait_s=30)
+
+
+# --- crash uploads: off in the Designer it starts (DECISIONS.md, the user's choice; server_tools/lifecycle.py)
+
+# homes of their own only there: elsewhere these settings would be the user's (REVIEW.md TST-343)
+_HOMES_OF_THEIR_OWN = pytest.mark.skipif(sys.platform == 'win32', reason='no home of its own there')
+CRASHPAD_SETTINGS = struct.pack('<IIIIq16s', 0x43506473, 1, 1, 0, 1794501016, b'client id 16 byt')  # uploads on
+
+
+def _crashpad_settings(home: Path, content: bytes | None = CRASHPAD_SETTINGS) -> Path:
+    """The Crashpad settings of the Designer started with `home`, as Designer leaves them once started (uploads on)."""
+    path = Path(server._designer_data_dir(str(home))) / 'Sentry-Crashpad' / 'settings.dat'
+    # Windows' data folder ignores the home: the user's real one, never written here (REVIEW.md TST-343)
+    assert path.is_relative_to(home), path
+    path.parent.mkdir(parents=True)
+    if content is not None:
+        path.write_bytes(content)
+    return path
+
+
+def test_crash_settings_are_planted_only_under_the_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # REVIEW.md TST-343: off macOS the data folder ignores the home: the helper wrote into the user's real one there
+    monkeypatch.setattr(sys, 'platform', 'win32')
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path / 'appdata'))
+    with pytest.raises(AssertionError):
+        _crashpad_settings(tmp_path / 'home')
+    assert not (tmp_path / 'appdata').exists()
+
+
+def _launch_with_home(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    home: Path | None,
+    home_screen: Exception | None = None,
+    refuses: bool = False,
+) -> str:
+    """launch_designer starting one with `home` (None: none of its own, as off macOS), which then answers (with a
+    refusal when `refuses`); leaving its Home screen raises `home_screen` when given."""
+    started = _launch_fakes(monkeypatch, tmp_path)
+    if home_screen is not None:
+
+        def fails(
+            code: str,
+            path: str | None = None,
+            timeout: float | None = None,
+            wait: float | None = None,
+            port: int | None = None,
+        ) -> str:
+            raise home_screen
+
+        patch_server(monkeypatch, '_bridge', fails)
+    processes = _Processes(monkeypatch)
+
+    def begin(cmd: list[str], **kw: Any) -> _FakeProcess:
+        started.append(cmd)
+        processes.pids.append(77)
+        return _FakeProcess(77)
+
+    monkeypatch.setattr(subprocess, 'Popen', begin)
+    patch_server(monkeypatch, '_own_home', lambda port: None if home is None else str(home))
+    answers = _answers_once_started(started)
+    patch_server(monkeypatch, '_send', _refusing(answers) if refuses else answers)
+    said: str = server.launch_designer(wait_s=30)
+    return said
+
+
+def _refusing(answers: Callable[[dict[str, Any], float], Reply]) -> Callable[..., Reply]:
+    """A plugin that refuses once it answers, as with another token (core._control: _Refused)."""
+
+    def bridge(request: dict[str, Any], wait: float, port: int | None = None) -> Reply:
+        answers(request, wait)  # not reachable until then
+        return {'ok': False, 'error': 'invalid token'}
+
+    return bridge
+
+
+@_HOMES_OF_THEIR_OWN
+def test_launch_turns_crash_uploads_off_in_the_designer_it_starts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
+) -> None:
+    settings = _crashpad_settings(tmp_path / 'home')
+    said = _launch_with_home(monkeypatch, tmp_path, tmp_path / 'home')
+    assert said.startswith('Designer started in') and 'upload' not in said
+    after = settings.read_bytes()
+    assert struct.unpack_from('<I', after, 8)[0] == 0, 'uploads off'
+    assert after[:8] + after[12:] == CRASHPAD_SETTINGS[:8] + CRASHPAD_SETTINGS[12:], 'the rest as Crashpad wrote it'
+
+
+@_HOMES_OF_THEIR_OWN
+@pytest.mark.parametrize(
+    'content, why',
+    [
+        (None, 'No such file'),
+        (b'not crashpad settings, 40 bytes long, at all', "isn't Crashpad's settings"),
+        # another version may have another layout: its bit 0 at offset 8 needn't be uploads (REVIEW.md SRV-122)
+        (struct.pack('<IIIIq16s', 0x43506473, 2, 1, 0, 1794501016, b'client id 16 byt'), 'version 2'),
+    ],
+    ids=['missing', 'not Crashpad', 'another version'],
+)
+def test_launch_says_when_crash_uploads_couldnt_be_turned_off(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, content: bytes | None, why: str
+) -> None:
+    settings = _crashpad_settings(tmp_path / 'home', content)
+    said = _launch_with_home(monkeypatch, tmp_path, tmp_path / 'home')
+    assert said.startswith('Designer started in')
+    # a sentence of its own after the plugin's status, which ends with no stop (REVIEW.md SRV-121)
+    assert ': idle. Its crash reports may still be uploaded to Adobe' in said and why in said, said
+    assert content is None or settings.read_bytes() == content, 'a file not known is left as it is'
+
+
+def test_launch_touches_no_crash_settings_without_a_home_of_its_own(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
+) -> None:
+    # off macOS, or the user's home: their own Designer's settings are never changed
+    patch_server(monkeypatch, '_designer_data_dir', lambda home=None: pytest.fail('crash settings read: %r' % home))
+    said = _launch_with_home(monkeypatch, tmp_path, None)
+    assert said.startswith('Designer started in') and 'upload' not in said
+
+
+@_HOMES_OF_THEIR_OWN
+def test_launch_turns_crash_uploads_off_before_leaving_the_home_screen(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
+) -> None:
+    # REVIEW.md SRV-120: leaving it failed (a bridge timeout), and the next call found it already running
+    settings = _crashpad_settings(tmp_path / 'home')
+    with pytest.raises(server.ToolError):
+        _launch_with_home(monkeypatch, tmp_path, tmp_path / 'home', server.ToolError('timed out'))
+    assert struct.unpack_from('<I', settings.read_bytes(), 8)[0] == 0, 'uploads off'
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='nothing is recorded there')
+@pytest.mark.parametrize('answers_at_once', [True, False], ids=['answering', 'waited for'])
+def test_launch_turns_crash_uploads_off_in_an_agents_designer_already_running(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, answers_at_once: bool
+) -> None:
+    # REVIEW.md SRV-120: started by an earlier call that stopped waiting (a short wait_s), it answers only now: found
+    # answering, or waited for as one already running, it gets them off too
+    settings = _crashpad_settings(tmp_path / 'home')
+    started = _launch_fakes(monkeypatch, tmp_path)
+    _Processes(monkeypatch, 11)
+    _an_agent_started(11, home=str(tmp_path / 'home'))
+    calls: list[int] = []
+
+    def answers(request: dict[str, Any], wait: float, port: int | None = None) -> Reply:
+        calls.append(1)
+        if not answers_at_once and len(calls) < 3:
+            raise server.ToolError('Designer is not reachable.')
+        return {'ok': True, 'output': 'idle'}
+
+    patch_server(monkeypatch, '_send', answers)
+    said = server.launch_designer(wait_s=30)
+    assert said.startswith('Designer already running') and 'upload' not in said and not started, said
+    after = settings.read_bytes()
+    assert struct.unpack_from('<I', after, 8)[0] == 0, 'uploads off'
+    assert after[:8] + after[12:] == CRASHPAD_SETTINGS[:8] + CRASHPAD_SETTINGS[12:], 'the rest as Crashpad wrote it'
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='nothing is recorded there')
+def test_launch_says_when_an_agents_designer_already_running_keeps_crash_uploads_on(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _launch_fakes(monkeypatch, tmp_path)
+    _Processes(monkeypatch, 11)
+    _an_agent_started(11, home=str(tmp_path / 'home'))  # its settings missing
+    patch_server(monkeypatch, '_send', lambda request, wait, port=None: {'ok': True, 'output': 'idle'})
+    said = server.launch_designer()
+    assert said.startswith('Designer already running')
+    assert ': idle. Its crash reports may still be uploaded to Adobe' in said and 'No such file' in said, said
+
+
+@_HOMES_OF_THEIR_OWN
+def test_a_designer_it_started_refusing_gets_crash_uploads_off_too(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
+) -> None:
+    # REVIEW.md SRV-123: a refusal is an answer, raised: Designer has turned them on
+    settings = _crashpad_settings(tmp_path / 'home')
+    with pytest.raises(server._Refused, match='invalid token') as refused:
+        _launch_with_home(monkeypatch, tmp_path, tmp_path / 'home', refuses=True)
+    assert struct.unpack_from('<I', settings.read_bytes(), 8)[0] == 0, 'uploads off'
+    assert 'upload' not in str(refused.value)
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='nothing is recorded there')
+@pytest.mark.parametrize('settings_there', [True, False], ids=['turned off', 'missing'])
+def test_an_agents_designer_refusing_gets_crash_uploads_off_too(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, settings_there: bool
+) -> None:
+    # REVIEW.md SRV-123: found refusing at once (another token, another protocol)
+    settings = _crashpad_settings(tmp_path / 'home', CRASHPAD_SETTINGS if settings_there else None)
+    _launch_fakes(monkeypatch, tmp_path)
+    _Processes(monkeypatch, 11)
+    _an_agent_started(11, home=str(tmp_path / 'home'))
+    patch_server(monkeypatch, '_send', lambda request, wait, port=None: {'ok': False, 'error': 'invalid token'})
+    with pytest.raises(server._Refused, match='invalid token') as refused:
+        server.launch_designer()
+    if settings_there:
+        assert struct.unpack_from('<I', settings.read_bytes(), 8)[0] == 0, 'uploads off'
+        assert 'upload' not in str(refused.value)
+    else:
+        said = str(refused.value)
+        assert 'invalid token. Its crash reports may still be uploaded to Adobe' in said and 'No such file' in said, (
+            said
+        )
+
+
+@_HOMES_OF_THEIR_OWN
+def test_the_users_designer_already_running_keeps_its_crash_settings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # no record: the user's, whose settings are never changed, even where a home of its own would be
+    settings = _crashpad_settings(tmp_path / 'home')
+    _launch_fakes(monkeypatch, tmp_path)
+    patch_server(monkeypatch, '_own_home', lambda port: str(tmp_path / 'home'))
+    patch_server(monkeypatch, '_send', lambda request, wait, port=None: {'ok': True, 'output': 'idle'})
+    said = server.launch_designer()
+    assert said.startswith('Designer already running') and 'upload' not in said
+    assert settings.read_bytes() == CRASHPAD_SETTINGS
+
+
+def _uploads(settings: Path) -> int:
+    """Bit 0 of the options in Crashpad's settings at `settings`: 1 while uploads are on."""
+    return int(struct.unpack_from('<I', settings.read_bytes(), 8)[0] & 1)
+
+
+@_HOMES_OF_THEIR_OWN
+@pytest.mark.parametrize('closes', [True, False], ids=['closes', 'forced'])
+def test_quit_turns_crash_uploads_off_before_closing_an_agents(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, closes: bool
+) -> None:
+    # REVIEW.md SRV-124: the call that started it may have stopped waiting, so no launch turned them off; a crash in
+    # its quit would be uploaded
+    settings = _crashpad_settings(tmp_path / 'home')
+    processes = _Processes(monkeypatch, 11)
+    _an_agent_started(11, home=str(tmp_path / 'home'))
+    asked = _closes(monkeypatch)
+    at_the_close: list[int] = []
+    at_the_end: list[int] = []
+    bridge = server._bridge
+    force_end = server._force_end
+
+    def close(
+        code: str,
+        path: str | None = None,
+        timeout: float | None = None,
+        wait: float | None = None,
+        port: int | None = None,
+    ) -> str:
+        at_the_close.append(_uploads(settings))
+        said: str = bridge(code, path, timeout, wait, port)
+        return said
+
+    def end(pid: int, port: int, seen: bytes) -> bool:
+        at_the_end.append(_uploads(settings))
+        return bool(force_end(pid, port, seen))
+
+    patch_server(monkeypatch, '_bridge', close)
+    patch_server(monkeypatch, '_force_end', end)
+    if closes:
+        monkeypatch.setattr(time, 'sleep', lambda seconds: processes.pids.clear())
+    said = server.quit_designer(wait_s=2)
+    assert 'Designer quit after' in said and 'upload' not in said and asked, said
+    assert at_the_close == [0] and at_the_end == ([] if closes else [0]), (at_the_close, at_the_end)
+
+
+@_HOMES_OF_THEIR_OWN
+def test_quit_says_when_crash_uploads_couldnt_be_turned_off(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    processes = _Processes(monkeypatch, 11)
+    _an_agent_started(11, home=str(tmp_path / 'home'))  # its settings missing
+    _closes(monkeypatch)
+    monkeypatch.setattr(time, 'sleep', lambda seconds: processes.pids.clear())
+    said = server.quit_designer()
+    assert 'Its crash reports may still be uploaded to Adobe' in said and 'Designer quit after' in said, said
+
+
+@_HOMES_OF_THEIR_OWN
+def test_launch_turns_crash_uploads_off_before_ending_an_agents_not_answering(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
+) -> None:
+    # REVIEW.md SRV-124: ended past its start-up, a crash in its teardown would be uploaded
+    settings = _crashpad_settings(tmp_path / 'home')
+    started = _launch_fakes(monkeypatch, tmp_path)
+    processes = _Processes(monkeypatch, 11)
+    _an_agent_started(11, age=server.STARTUP_LIMIT + 1, home=str(tmp_path / 'home'))
+    at_the_end: list[int] = []
+    force_end = server._force_end
+
+    def end(pid: int, port: int, seen: bytes) -> bool:
+        at_the_end.append(_uploads(settings))
+        return bool(force_end(pid, port, seen))
+
+    def begin(cmd: list[str], **kw: Any) -> _FakeProcess:
+        started.append(cmd)
+        processes.pids.append(77)
+        return _FakeProcess(77)
+
+    monkeypatch.setattr(subprocess, 'Popen', begin)
+    patch_server(monkeypatch, '_force_end', end)
+    patch_server(monkeypatch, '_send', _answers_once_started(started))
+    said = server.launch_designer(wait_s=30)
+    assert 'Ended' in said and 'upload' not in said and at_the_end[:1] == [0], (said, at_the_end)
 
 
 # --- who started it

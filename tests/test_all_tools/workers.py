@@ -56,6 +56,7 @@ from test_all_tools.common import (
     agents_designers,
     closed_by_quit,
     crash_dumps,
+    new_dumps,
     summarize,
     users_designer_running,
 )
@@ -250,7 +251,9 @@ def _read(path: str) -> dict[str, Any] | None:
 
 def _holds_a_crash_dump(folder: str) -> bool:
     return any(
-        files and os.path.basename(here) == 'completed' and os.path.basename(os.path.dirname(here)) == 'Sentry-Crashpad'
+        files
+        and os.path.basename(here) in ('completed', 'pending')  # waiting for its upload too (REVIEW.md TST-351)
+        and os.path.basename(os.path.dirname(here)) == 'Sentry-Crashpad'
         for here, _, files in os.walk(folder)
     )
 
@@ -263,7 +266,7 @@ def check_the_quits(parts: Mapping[str, dict[str, Any] | None], port_of: Mapping
     quits = [part['quit_at'] for part in parts.values() if part and part.get('quit_at')]
     if quits:
         sleep(max(0.0, max(quits) + CRASH_WAIT_S - time.time()))
-    new = crash_dumps(sorted(port_of.values()), run_port=False) - before
+    new = new_dumps(crash_dumps(sorted(port_of.values()), run_port=False), before)
     placed: set[str] = set()
     for name, part in parts.items():
         # every worker's dumps are its own, lifecycle's included, never "outside the run" (REVIEW.md TST-236)

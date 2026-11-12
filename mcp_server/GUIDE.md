@@ -115,8 +115,8 @@ grouping, no `ARGS`).
   not tried: `launch_designer`), each with its own temp folder, log, settings and crash dumps, recorded per port;
   `read_designer_log(port=...)` reads its log, also after it ended. The user's Designers share one log, their lines not
   told apart. All share the preferences plist, so none is started next to the user's.
-  Crash dumps: Designer's `Sentry-Crashpad/completed` (for one an agent started on macOS, under
-  `/tmp/sd_mcp_<uid>_<port>/home`). How: `server_tools/lifecycle.py`.
+  Crash dumps: Designer's `Sentry-Crashpad/completed` (`pending` while its upload waits; for one an agent started on
+  macOS, under `/tmp/sd_mcp_<uid>_<port>/home`). How: `server_tools/lifecycle.py`.
 
 ## First sd pitfalls
 
@@ -288,7 +288,8 @@ The rules and the first pitfalls are in the core, `get_guide()`.
   `server_tools/layout.py`). Use it for other things the API can't do: snapshot the live graph and copy the saved file,
   decide on the copy (no change → no save), save, edit the .sbs XML, then unload, load and reopen as **three separate
   bridge calls with short pauses** (back to back, Designer once crashed while tearing down the old views; returning to
-  its event loop between the steps lets that finish). If it recurs, read the newest crash dump's crashing module first.
+  its event loop between the steps lets that finish). If it recurs, read the newest crash dump's crashing module first
+  (in this repository: `scripts/read_crash_dump.py`).
   A package whose graphs were **never opened in a view** has nothing to tear down, so a script that builds one can save,
   edit and reload it in one call (the example script does, for its portals). Afterwards, check with `diff_graph` plus
   `node_stats`.
@@ -323,13 +324,19 @@ The rules and the first pitfalls are in the core, `get_guide()`.
   shows, no panel reports itself visible, so `launch_designer` and `open_graph` close it first.
 - PySide wrappers for Designer's Qt objects go stale ("Internal C++ object already deleted") unless you keep Python
   references to their parents; menus fill lazily (emit `menu.aboutToShow` first).
+- **Never install a Python event filter on the application** (`QApplication.instance().installEventFilter`): it is
+  called with Qt's own long-lived objects too (the pixmap cache, for its timer), which get Python wrappers, and
+  Designer aborts as it quits, after Python has shut down (a filter on 40 s, then a quit: a crash dump in PySide's
+  clean-up; without it, none; measured 2026-11-12). Filter the widget you mean and remove the filter when done, as
+  the 3D view's drags do (`designer_helpers/view3d.py`).
 - **Screenshots:** `QWidget.grab()` on Designer's widgets only. **Never use `QScreen.grabWindow`**, not even with
   Designer's own window id: on macOS both copy the screen area, capturing whatever covers Designer (the user's other
   apps). Widget capture can't see the GPU-drawn 3D view: use `screenshot_designer('3d')`. Never use "Save Render...":
   its modal file dialog blocks the bridge.
 - **The 3D view** has no API: `screenshot_designer('3d', ...)` drives its menus, the Explorer's context menu (opened
   on the Explorer's tree only; the warning above about the graph view stands, and an open menu holds the bridge until
-  it closes) and the material's Tiling field. What Designer does there, measured: `designer_helpers/view3d.py`.
+  it closes), the material's Tiling field, and left- and middle-drags on its viewport under its toolbar's Camera tool.
+  What Designer does there, measured: `designer_helpers/view3d.py`.
 - Dock titles change with content, so find panels by object name: `areaA_` explorer, `areaB_` graph, `areaC_`
   parameters, `areaD_` 3D view, `areaE_` 2D view, `areaF_` console (hidden by default; Windows > Console), `areaG_`
   library.
