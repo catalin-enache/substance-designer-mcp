@@ -1,6 +1,7 @@
 """What editor_panels_and_fit's checks read: the self-test graph in the editor (no Home screen; the selection is read
 from its view), with nodes spread apart and a frame around two of them: fitting the view to one item must leave a node
-out of view, and fitting the whole graph must show every frame whole."""
+out of view, and fitting the whole graph must show every frame whole. Then the 3D view's checks' graph, a checker in two
+outputs (VIEW3D_GRAPH), left closed."""
 
 from test_all_tools.common import TEST_GRAPH, Ctx, prepared_call, refs
 
@@ -33,9 +34,13 @@ async def prepare(ctx: Ctx) -> None:
     ctx.slope = added['slope']
     await prepared_call(c, 'add_frame', {'node_ids': [ctx.clouds, ctx.slope], 'title': 'Shape', **ctx.G})
     await prepared_call(c, 'open_graph', {'graph': TEST_GRAPH})
+    if not ctx.was_running:  # the 3D view's checks, which use it, skip in the user's Designer
+        await prepared_call(c, 'create_graph', {'name': VIEW3D_GRAPH, 'size_log2': 9})  # not opened: the editor stays
+        await prepared_call(c, 'apply_edits', {'graph': VIEW3D_GRAPH, 'ops': CHECKER_OPS})
 
 
 VIEW3D_GRAPH = 'mcp_selftest_view3d'  # the 3D view checks' own
+VIEW3D_ADDED = 'mcp_selftest_view3d_added'  # the designer fact's: opened, then given its outputs
 # a checker into two outputs, base colour and roughness: two, so Designer maps them by usage rather than asking which
 # channel to show a single one in (designer_helpers/view3d.py)
 CHECKER_OPS = [

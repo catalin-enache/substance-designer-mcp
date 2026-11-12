@@ -2,8 +2,6 @@
 `diffuse`, off by default and black on a metal. With sd and PySide6 faked; the live self-test uses a real material."""
 
 import os
-import re
-import sys
 import types
 from pathlib import Path
 from typing import Any
@@ -13,19 +11,12 @@ import pytest
 from mcp.server.mcpserver import Image
 from PIL import Image as PILImage
 
-import designer_helpers  # conftest puts mcp_server on sys.path
 from conftest import patch_server, server
 
 
 @pytest.fixture
-def helpers(monkeypatch: pytest.MonkeyPatch) -> Any:
-    fake = mock.MagicMock()
-    imported = re.findall(r'^\s*(?:from|import) ((?:sd|PySide6)(?:\.\w+)*)', designer_helpers.source(), re.M)
-    for name in sorted({'.'.join(m.split('.')[:i]) for m in imported for i in range(1, m.count('.') + 2)}):
-        monkeypatch.setitem(sys.modules, name, fake)
-    module: Any = types.ModuleType('helpers_under_test')
-    exec(compile(designer_helpers.source(), 'designer_helpers', 'exec'), module.__dict__)
-    module.APIException = type('APIException', (BaseException,), {})  # sd's derives from BaseException too
+def helpers(faked_helpers: types.ModuleType) -> types.ModuleType:
+    module = faked_helpers
     return module
 
 
@@ -41,9 +32,9 @@ OUT = object()
 
 
 @pytest.fixture
-def wired(helpers: Any) -> Any:
-    helpers.SDPropertyCategory = types.SimpleNamespace(Output=OUT, Input=object())
-    helpers._graph_to_edit = lambda g: mock.MagicMock()
+def wired(helpers: types.ModuleType) -> types.ModuleType:
+    vars(helpers)['SDPropertyCategory'] = types.SimpleNamespace(Output=OUT, Input=object())
+    vars(helpers)['_graph_to_edit'] = lambda g: mock.MagicMock()
     return helpers
 
 
@@ -57,10 +48,14 @@ def wired(helpers: Any) -> Any:
     ids=['first of several', 'told which', 'only one'],
 )
 def test_connect_says_when_it_took_the_first_of_several(
-    wired: Any, capsys: pytest.CaptureFixture[str], outputs: tuple[str, ...], chosen: str | None, note: bool
+    wired: types.ModuleType,
+    capsys: pytest.CaptureFixture[str],
+    outputs: tuple[str, ...],
+    chosen: str | None,
+    note: bool,
 ) -> None:
     src = _node(*outputs)
-    wired._node = lambda g, ident: src if ident == 'a' else _node('x')
+    vars(wired)['_node'] = lambda g, ident: src if ident == 'a' else _node('x')
     wired.connect('G', 'a', 'b', 'in', chosen)
     out = capsys.readouterr().out
     assert out.startswith('connected a.%s -> b.in' % (chosen or outputs[0]))
@@ -117,7 +112,7 @@ def _instance(*tagged: Any) -> Any:
 OUTPUTS = ['diffuse', 'basecolor', 'normal']
 
 
-def test_the_output_tagged_base_colour_is_taken(helpers: Any) -> None:
+def test_the_output_tagged_base_colour_is_taken(helpers: types.ModuleType) -> None:
     node = _instance(
         _output_node('diffuse', 'diffuse'), _output_node('basecolor', 'baseColor'), _output_node('normal', 'normal')
     )
@@ -127,18 +122,18 @@ def test_the_output_tagged_base_colour_is_taken(helpers: Any) -> None:
     )
 
 
-def test_an_output_without_a_tag_annotation_doesnt_stop_the_search(helpers: Any) -> None:
+def test_an_output_without_a_tag_annotation_doesnt_stop_the_search(helpers: types.ModuleType) -> None:
     untagged = types.SimpleNamespace(getAnnotationPropertyValueFromId=lambda name: None)
     node = _instance(untagged, _output_node('albedo', 'baseColor'))
     assert helpers._default_output(node, ['mask', 'albedo'])[0] == 'albedo'
 
 
-def test_a_custom_name_with_the_tag_is_taken(helpers: Any) -> None:
+def test_a_custom_name_with_the_tag_is_taken(helpers: types.ModuleType) -> None:
     node = _instance(_output_node('mask'), _output_node('albedo', 'baseColor'))
     assert helpers._default_output(node, ['mask', 'albedo'])[0] == 'albedo'
 
 
-def test_an_output_only_named_basecolor_isnt_taken(helpers: Any) -> None:
+def test_an_output_only_named_basecolor_isnt_taken(helpers: types.ModuleType) -> None:
     # the tag decides, not the name
     node = _instance(_output_node('mask'), _output_node('basecolor', 'mask'))
     assert helpers._default_output(node, ['mask', 'basecolor']) == ('mask', "'mask', the first of 2 (mask, basecolor)")
@@ -155,7 +150,7 @@ def test_an_output_only_named_basecolor_isnt_taken(helpers: Any) -> None:
     ],
     ids=['no tags', 'tag on another output', 'atomic', 'raises', 'not a graph'],
 )
-def test_anything_else_takes_the_first(helpers: Any, node: Any) -> None:
+def test_anything_else_takes_the_first(helpers: types.ModuleType, node: Any) -> None:
     assert helpers._default_output(node, ['height', 'normal']) == (
         'height',
         "'height', the first of 2 (height, normal)",
@@ -196,9 +191,9 @@ def _tagged_material() -> Any:
     return node
 
 
-def test_connect_wires_the_tagged_output(wired: Any, capsys: pytest.CaptureFixture[str]) -> None:
+def test_connect_wires_the_tagged_output(wired: types.ModuleType, capsys: pytest.CaptureFixture[str]) -> None:
     src = _tagged_material()
-    wired._node = lambda g, ident: src if ident == 'a' else _node('x')
+    vars(wired)['_node'] = lambda g, ident: src if ident == 'a' else _node('x')
     wired.connect('G', 'a', 'b', 'in')
     assert capsys.readouterr().out.startswith('connected a.basecolor -> b.in')
     src.newPropertyConnectionFromId.assert_called_once()
@@ -206,7 +201,9 @@ def test_connect_wires_the_tagged_output(wired: Any, capsys: pytest.CaptureFixtu
 
 
 @pytest.mark.parametrize(('named', 'expected'), [(None, 'basecolor'), ('normal', 'normal')], ids=['tagged', 'named'])
-def test_the_tools_that_look_use_the_tagged_output_unless_told(wired: Any, named: str | None, expected: str) -> None:
+def test_the_tools_that_look_use_the_tagged_output_unless_told(
+    wired: types.ModuleType, named: str | None, expected: str
+) -> None:
     seen: list[str] = []
     wired._with_node_texture(
         mock.MagicMock(), _tagged_material(), named, lambda texture, prop: seen.append(prop.getId())

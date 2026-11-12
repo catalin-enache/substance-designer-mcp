@@ -1,7 +1,6 @@
 """apply_edits' pre-check on an op's fields (designer_helpers/batch.py), with sd and PySide6 faked (REVIEW.md HLP-62):
 an unknown field was ignored, and the result said the op was applied."""
 
-import re
 import sys
 import types
 from typing import Any
@@ -9,18 +8,11 @@ from unittest import mock
 
 import pytest
 
-import designer_helpers  # conftest puts mcp_server on sys.path
-
 
 @pytest.fixture
-def helpers(monkeypatch: pytest.MonkeyPatch) -> Any:
-    fake = mock.MagicMock()
-    imported = re.findall(r'^\s*(?:from|import) ((?:sd|PySide6)(?:\.\w+)*)', designer_helpers.source(), re.M)
-    for name in sorted({'.'.join(m.split('.')[:i]) for m in imported for i in range(1, m.count('.') + 2)}):
-        monkeypatch.setitem(sys.modules, name, fake)
-    module: Any = types.ModuleType('helpers_under_test')
-    exec(compile(designer_helpers.source(), 'designer_helpers', 'exec'), module.__dict__)
-    return module
+def helpers(faked_helpers: types.ModuleType) -> types.ModuleType:
+    """The shared faked helpers (conftest), as they are."""
+    return faked_helpers
 
 
 def graph() -> Any:
@@ -44,7 +36,9 @@ TYPOS: list[tuple[dict[str, Any], str]] = [
 
 
 @pytest.mark.parametrize(('op', 'field'), TYPOS, ids=[t[0]['op'] for t in TYPOS])
-def test_a_field_the_op_doesnt_take_refuses_the_batch(helpers: Any, op: dict[str, Any], field: str) -> None:
+def test_a_field_the_op_doesnt_take_refuses_the_batch(
+    helpers: types.ModuleType, op: dict[str, Any], field: str
+) -> None:
     with pytest.raises(RuntimeError) as raised:
         helpers._check_batch(graph(), [{'op': 'add', 'definition': 'blur'}, op])
     message = str(raised.value)
@@ -79,7 +73,7 @@ def test_a_field_the_op_doesnt_take_refuses_the_batch(helpers: Any, op: dict[str
     ],
     ids=lambda op: op['op'],
 )
-def test_every_documented_field_passes(helpers: Any, op: dict[str, Any]) -> None:
+def test_every_documented_field_passes(helpers: types.ModuleType, op: dict[str, Any]) -> None:
     helpers._check_batch(graph(), [op])
 
 
@@ -131,7 +125,9 @@ REFUSED: list[tuple[list[dict[str, Any]], str]] = [
 
 
 @pytest.mark.parametrize(('ops', 'said'), REFUSED, ids=[str(i) for i in range(len(REFUSED))])
-def test_a_wrong_output_field_refuses_the_batch(helpers: Any, ops: list[dict[str, Any]], said: str) -> None:
+def test_a_wrong_output_field_refuses_the_batch(
+    helpers: types.ModuleType, ops: list[dict[str, Any]], said: str
+) -> None:
     with pytest.raises(RuntimeError) as raised:
         helpers._check_batch(outputs_graph('height'), ops)
     assert said in str(raised.value) and str(raised.value).endswith('; nothing was applied'), raised.value
@@ -155,11 +151,11 @@ def test_a_wrong_output_field_refuses_the_batch(helpers: Any, ops: list[dict[str
         [{'op': 'add', 'definition': 'output', 'ref': 'o'}, {'op': 'set', 'node': 'o', 'usage': 'normal'}],
     ],
 )
-def test_right_output_fields_pass_the_check(helpers: Any, ops: list[dict[str, Any]]) -> None:
+def test_right_output_fields_pass_the_check(helpers: types.ModuleType, ops: list[dict[str, Any]]) -> None:
     helpers._check_batch(outputs_graph('height'), ops)
 
 
-def test_a_ref_reused_for_another_node_is_judged_by_the_newer_one(helpers: Any) -> None:
+def test_a_ref_reused_for_another_node_is_judged_by_the_newer_one(helpers: types.ModuleType) -> None:
     ops: list[dict[str, Any]] = [
         {'op': 'add', 'definition': 'output', 'ref': 'n'},
         {'op': 'add', 'definition': 'levels', 'ref': 'n'},
@@ -180,14 +176,16 @@ def test_a_ref_reused_for_another_node_is_judged_by_the_newer_one(helpers: Any) 
         ('myMask', ('myMask', 'RGBA', 'Linear')),
     ],
 )
-def test_a_usage_gets_its_exact_name_and_colour_space(helpers: Any, given: str, tag: tuple[str, str, str]) -> None:
+def test_a_usage_gets_its_exact_name_and_colour_space(
+    helpers: types.ModuleType, given: str, tag: tuple[str, str, str]
+) -> None:
     node = _node(OUTPUT, 'o')
     helpers.set_output_tags(outputs_graph(), node, None, None, given)
     sys.modules['sd.api.sdusage'].SDUsage.sNew.assert_called_with(*tag)
     assert [c.args[0] for c in node.setAnnotationPropertyValueFromId.call_args_list] == ['usages']
 
 
-def test_only_what_was_given_is_set(helpers: Any) -> None:
+def test_only_what_was_given_is_set(helpers: types.ModuleType) -> None:
     node = _node(OUTPUT, 'o')
     helpers.set_output_tags(outputs_graph(), node, 'a', None, None)
     assert [c.args[0] for c in node.setAnnotationPropertyValueFromId.call_args_list] == ['identifier']
@@ -197,7 +195,7 @@ def test_only_what_was_given_is_set(helpers: Any) -> None:
 
 
 @pytest.mark.parametrize('taken', ['height', 'Height'])
-def test_a_name_another_output_has_is_refused_with_nothing_set(helpers: Any, taken: str) -> None:
+def test_a_name_another_output_has_is_refused_with_nothing_set(helpers: types.ModuleType, taken: str) -> None:
     # Designer takes it, and export_outputs then refuses the two; by case too, for a Mac's or Windows' file names
     g = outputs_graph('height', 'other')
     node = g.getNodeFromId('3')
@@ -206,7 +204,7 @@ def test_a_name_another_output_has_is_refused_with_nothing_set(helpers: Any, tak
     node.setAnnotationPropertyValueFromId.assert_not_called()
 
 
-def test_an_output_can_keep_its_own_name(helpers: Any) -> None:
+def test_an_output_can_keep_its_own_name(helpers: types.ModuleType) -> None:
     g = outputs_graph('height')
     node = g.getNodeFromId('2')
     node.getIdentifier.return_value = '2'
@@ -215,7 +213,7 @@ def test_an_output_can_keep_its_own_name(helpers: Any) -> None:
     node.setAnnotationPropertyValueFromId.assert_called_once()
 
 
-def test_renaming_an_existing_output_tells_the_agent_to_tell_the_user(helpers: Any, capsys: Any) -> None:
+def test_renaming_an_existing_output_tells_the_agent_to_tell_the_user(helpers: types.ModuleType, capsys: Any) -> None:
     # a closed graph using it keeps the old connector and computes black, with no error (REVIEW.md HLP-81)
     helpers.set_output_tags(outputs_graph(), _node(OUTPUT, 'old'), 'new', None, None, warn_rename=True)
     said = capsys.readouterr().out
@@ -233,12 +231,12 @@ def test_renaming_an_existing_output_tells_the_agent_to_tell_the_user(helpers: A
     ],
 )
 def test_no_warning_without_a_rename_of_an_existing_output(
-    helpers: Any, capsys: Any, identifier: str | None, label: str | None, warn: bool
+    helpers: types.ModuleType, capsys: Any, identifier: str | None, label: str | None, warn: bool
 ) -> None:
     helpers.set_output_tags(outputs_graph(), _node(OUTPUT, 'old'), identifier, label, None, warn_rename=warn)
     assert 'Tell the user' not in capsys.readouterr().out
 
 
-def test_only_a_change_of_case_still_warns(helpers: Any, capsys: Any) -> None:
+def test_only_a_change_of_case_still_warns(helpers: types.ModuleType, capsys: Any) -> None:
     helpers.set_output_tags(outputs_graph(), _node(OUTPUT, 'old'), 'OLD', None, None, warn_rename=True)
     assert 'Tell the user' in capsys.readouterr().out

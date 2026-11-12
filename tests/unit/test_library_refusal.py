@@ -4,11 +4,10 @@ what the message suggests (tests/test_all_tools/safeguards/checks.py)."""
 
 import ast
 import os
-import re
-import sys
 import types
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest import mock
 
 import pytest
@@ -45,24 +44,19 @@ def package(file: str, *graphs: str) -> Any:
 
 
 @pytest.fixture
-def helpers(monkeypatch: pytest.MonkeyPatch) -> Any:
+def helpers(faked_helpers: types.ModuleType) -> types.ModuleType:
     """The helpers as sent to Designer, a library package and a user's one open, the library graph in the editor."""
-    fake = mock.MagicMock()
-    imported = re.findall(r'^\s*(?:from|import) ((?:sd|PySide6)(?:\.\w+)*)', designer_helpers.source(), re.M)
-    for name in sorted({'.'.join(m.split('.')[:i]) for m in imported for i in range(1, m.count('.') + 2)}):
-        monkeypatch.setitem(sys.modules, name, fake)
-    module: Any = types.ModuleType('helpers_under_test')
-    exec(compile(designer_helpers.source(), 'designer_helpers', 'exec'), module.__dict__)
+    module = faked_helpers
     library, mine = package(LIBRARY, 'bevel', 'shared'), package('/p/mine.sbs', 'G', 'shared')
-    module._PM = mock.MagicMock()
+    vars(module)['_PM'] = mock.MagicMock()
     module._PM.getUserPackages.return_value = [library, mine]
-    module.SDSBSCompGraph = FakeGraph
-    module._is_library_package = lambda p: p.getFilePath() == LIBRARY
-    module._current_graph = lambda: library.getChildrenResources()[0]
+    vars(module)['SDSBSCompGraph'] = FakeGraph
+    vars(module)['_is_library_package'] = lambda p: p.getFilePath() == LIBRARY
+    vars(module)['_current_graph'] = lambda: library.getChildrenResources()[0]
     return module
 
 
-def real_check(helpers: Any) -> Any:
+def real_check(helpers: types.ModuleType) -> Callable[[Any], bool]:
     """_is_library_package as sent to Designer (the fixture replaces it for the other tests)."""
     namespace: dict[str, Any] = {'os': os, '_APP': helpers._APP, 'SDApplicationPath': mock.MagicMock()}
     tree = ast.parse(designer_helpers.source())
@@ -71,7 +65,7 @@ def real_check(helpers: Any) -> Any:
     for arg in found.args.args:
         arg.annotation = None
     exec(compile(ast.Module([found], []), 'designer_helpers', 'exec'), namespace)
-    return namespace['_is_library_package']
+    return cast(Callable[[Any], bool], namespace['_is_library_package'])
 
 
 REFUSALS = [
@@ -93,7 +87,9 @@ REFUSALS = [
 
 
 @pytest.mark.parametrize(('why', 'refused', 'start'), REFUSALS, ids=[r[0] for r in REFUSALS])
-def test_every_path_refuses_with_one_way_to_keep_a_copy(helpers: Any, why: str, refused: Any, start: str) -> None:
+def test_every_path_refuses_with_one_way_to_keep_a_copy(
+    helpers: types.ModuleType, why: str, refused: Any, start: str
+) -> None:
     with pytest.raises(RuntimeError) as raised:
         refused(helpers)
     message = str(raised.value)
@@ -103,18 +99,18 @@ def test_every_path_refuses_with_one_way_to_keep_a_copy(helpers: Any, why: str, 
     helpers._PM.savePackage.assert_not_called()
 
 
-def test_a_save_with_the_refused_graph_saves_nothing(helpers: Any) -> None:
+def test_a_save_with_the_refused_graph_saves_nothing(helpers: types.ModuleType) -> None:
     with pytest.raises(RuntimeError):
         helpers.package_file_of(None, save=True)
     helpers._PM.savePackage.assert_not_called()
 
 
-def test_a_name_in_no_package_is_still_just_not_found(helpers: Any) -> None:
+def test_a_name_in_no_package_is_still_just_not_found(helpers: types.ModuleType) -> None:
     with pytest.raises(RuntimeError, match=r"^Graph 'nope' not found in open user packages\.$"):
         helpers.find_graph('nope')
 
 
-def test_the_users_graph_wins_over_a_library_graph_of_the_same_name(helpers: Any) -> None:
+def test_the_users_graph_wins_over_a_library_graph_of_the_same_name(helpers: types.ModuleType) -> None:
     assert helpers.find_graph('shared').getPackage().getFilePath() == '/p/mine.sbs'
 
 
@@ -140,13 +136,13 @@ EDITS = [
 
 
 @pytest.mark.parametrize(('name', 'edit'), EDITS, ids=[e[0] for e in EDITS])
-def test_no_edit_reaches_a_library_graph_in_the_editor(helpers: Any, name: str, edit: Any) -> None:
+def test_no_edit_reaches_a_library_graph_in_the_editor(helpers: types.ModuleType, name: str, edit: Any) -> None:
     with pytest.raises(RuntimeError) as raised:
         edit(helpers)
     assert str(raised.value) == "Graph 'bevel' belongs to Designer's library, and tools don't edit it. " + WAY, name
 
 
-def test_every_helper_either_edits_through_the_check_or_only_reads(helpers: Any) -> None:
+def test_every_helper_either_edits_through_the_check_or_only_reads(helpers: types.ModuleType) -> None:
     # a new helper using find_graph has to be put in one group or the other
     reads = {
         '_found_by_name',
@@ -173,13 +169,13 @@ def test_every_helper_either_edits_through_the_check_or_only_reads(helpers: Any)
     assert uses == reads
 
 
-def test_a_library_graph_object_is_refused_too(helpers: Any) -> None:
+def test_a_library_graph_object_is_refused_too(helpers: types.ModuleType) -> None:
     library = helpers._PM.getUserPackages()[0].getChildrenResources()[0]
     with pytest.raises(RuntimeError, match="tools don't edit it"):
         helpers._graph_to_edit(library)
 
 
-def test_the_users_graph_passes_the_check(helpers: Any) -> None:
+def test_the_users_graph_passes_the_check(helpers: types.ModuleType) -> None:
     assert helpers._graph_to_edit('G').getIdentifier() == 'G'
 
 
@@ -197,18 +193,18 @@ LOCATIONS = [
 
 @pytest.mark.parametrize(('why', 'file', 'library'), LOCATIONS, ids=[c[0] for c in LOCATIONS])
 def test_a_library_package_is_any_file_under_the_folder(
-    helpers: Any, tmp_path: Path, why: str, file: str, library: bool
+    helpers: types.ModuleType, tmp_path: Path, why: str, file: str, library: bool
 ) -> None:
     (tmp_path / 'app/packages/materials/pbr').mkdir(parents=True)
-    helpers._APP = mock.MagicMock()
+    vars(helpers)['_APP'] = mock.MagicMock()
     helpers._APP.getPath.return_value = str(tmp_path / 'app')
     assert real_check(helpers)(package(str(tmp_path) + '/' + file)) is library, why
 
 
-def test_a_library_folder_reached_through_a_link_is_the_same_folder(helpers: Any, tmp_path: Path) -> None:
+def test_a_library_folder_reached_through_a_link_is_the_same_folder(helpers: types.ModuleType, tmp_path: Path) -> None:
     (tmp_path / 'app/packages').mkdir(parents=True)
     (tmp_path / 'link').symlink_to(tmp_path / 'app')
-    helpers._APP = mock.MagicMock()
+    vars(helpers)['_APP'] = mock.MagicMock()
     helpers._APP.getPath.return_value = str(tmp_path / 'link')
     assert real_check(helpers)(package(str(tmp_path / 'app/packages/bevel.sbs'))) is True
     helpers._APP.getPath.return_value = str(tmp_path / 'app')
@@ -216,9 +212,9 @@ def test_a_library_folder_reached_through_a_link_is_the_same_folder(helpers: Any
 
 
 def test_an_unsaved_package_or_another_drive_isnt_a_library_package(
-    helpers: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    helpers: types.ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    helpers._APP = mock.MagicMock()
+    vars(helpers)['_APP'] = mock.MagicMock()
     helpers._APP.getPath.return_value = str(tmp_path)
     assert real_check(helpers)(package('')) is False
 

@@ -1,27 +1,16 @@
 """_same_graph (designer_helpers): when two graphs are the same graph, run with fake graphs and
 packages. Packages are told apart by file; only two never saved by UID (REVIEW.md HLP-53, HLP-54)."""
 
-import re
-import sys
 import types
 from typing import Any
-from unittest import mock
 
 import pytest
 
-import designer_helpers  # conftest puts mcp_server on sys.path
-
 
 @pytest.fixture
-def helpers(monkeypatch: pytest.MonkeyPatch) -> Any:
-    """The helpers as sent to Designer (one script), with sd and PySide6 faked."""
-    fake = mock.MagicMock()
-    imported = re.findall(r'^\s*(?:from|import) ((?:sd|PySide6)(?:\.\w+)*)', designer_helpers.source(), re.M)
-    for name in sorted({'.'.join(m.split('.')[:i]) for m in imported for i in range(1, m.count('.') + 2)}):
-        monkeypatch.setitem(sys.modules, name, fake)
-    module: Any = types.ModuleType('helpers_under_test')
-    exec(compile(designer_helpers.source(), 'designer_helpers', 'exec'), module.__dict__)
-    return module
+def helpers(faked_helpers: types.ModuleType) -> types.ModuleType:
+    """The shared faked helpers (conftest), as they are."""
+    return faked_helpers
 
 
 def graph(identifier: str, file: str, uid: str) -> Any:
@@ -45,10 +34,12 @@ CASES = [
 
 
 @pytest.mark.parametrize(('a', 'b', 'same', 'why'), CASES, ids=[c[3] for c in CASES])
-def test_same_graph(helpers: Any, a: tuple[str, str, str], b: tuple[str, str, str], same: bool, why: str) -> None:
+def test_same_graph(
+    helpers: types.ModuleType, a: tuple[str, str, str], b: tuple[str, str, str], same: bool, why: str
+) -> None:
     assert helpers._same_graph(graph(*a), graph(*b)) is same, why
 
 
-def test_no_graph_is_never_the_same(helpers: Any) -> None:
+def test_no_graph_is_never_the_same(helpers: types.ModuleType) -> None:
     g = graph('G', '/p/A.sbs', U)
     assert helpers._same_graph(None, g) is False and helpers._same_graph(g, None) is False

@@ -1,10 +1,12 @@
 """Unit tests that run without Designer: import server.py and test its pure-Python parts."""
 
 import os
+import re
 import sys
 import tempfile
 import types
 from typing import Any, cast
+from unittest import mock
 
 import pytest
 
@@ -13,6 +15,7 @@ FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixtures')
 sys.path.insert(0, os.path.join(ROOT, 'mcp_server'))
 sys.path.insert(0, ROOT)
 
+import designer_helpers  # noqa: E402
 import project_constants  # noqa: E402
 import server as _server_module  # noqa: E402  (importing doesn't start the server or contact Designer)
 import server_tools  # noqa: E402  (server.py's code, one module per area)
@@ -73,6 +76,21 @@ SELFTEST_RUNNERS = ('alone.py',)
 def selftest_check_sources() -> dict[str, str]:
     """selftest_sources() without SELFTEST_RUNNERS: what the coverage checks read."""
     return {name: source for name, source in selftest_sources().items() if name not in SELFTEST_RUNNERS}
+
+
+@pytest.fixture
+def faked_helpers(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
+    """The helpers as Designer runs them (designer_helpers.source(), one script) in a module of their own, every sd and
+    PySide6 module they import faked by one MagicMock, and sd's APIException a BaseException, as in Designer. A test
+    file's `helpers` fixture takes it and adds what its tests need."""
+    fake = mock.MagicMock()
+    imported = re.findall(r'^\s*(?:from|import) ((?:sd|PySide6)(?:\.\w+)*)', designer_helpers.source(), re.M)
+    for name in sorted({'.'.join(m.split('.')[:i]) for m in imported for i in range(1, m.count('.') + 2)}):
+        monkeypatch.setitem(sys.modules, name, fake)
+    module = types.ModuleType('helpers_under_test')
+    exec(compile(designer_helpers.source(), 'designer_helpers', 'exec'), module.__dict__)
+    vars(module)['APIException'] = type('APIException', (BaseException,), {})
+    return module
 
 
 @pytest.fixture

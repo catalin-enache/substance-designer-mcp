@@ -2,27 +2,18 @@
 dialog, on its main thread, which a timer calling reject() didn't close (measured): the tools refuse before that.
 With sd and PySide6 faked; the live self-test uses real packages, and calls the tools only once this refusal works."""
 
-import re
-import sys
 import types
 from typing import Any
 from unittest import mock
 
 import pytest
 
-import designer_helpers  # conftest puts mcp_server on sys.path
-
 
 @pytest.fixture
-def helpers(monkeypatch: pytest.MonkeyPatch) -> Any:
-    fake = mock.MagicMock()
-    imported = re.findall(r'^\s*(?:from|import) ((?:sd|PySide6)(?:\.\w+)*)', designer_helpers.source(), re.M)
-    for name in sorted({'.'.join(m.split('.')[:i]) for m in imported for i in range(1, m.count('.') + 2)}):
-        monkeypatch.setitem(sys.modules, name, fake)
-    module: Any = types.ModuleType('helpers_under_test')
-    exec(compile(designer_helpers.source(), 'designer_helpers', 'exec'), module.__dict__)
-    module._PM = mock.MagicMock()
-    module._is_library_package = lambda p: False
+def helpers(faked_helpers: types.ModuleType) -> types.ModuleType:
+    module = faked_helpers
+    vars(module)['_PM'] = mock.MagicMock()
+    vars(module)['_is_library_package'] = lambda p: False
     return module
 
 
@@ -48,15 +39,15 @@ def _package(file: str, graph: str, *uses: Any) -> Any:
     return p
 
 
-def _wired(helpers: Any, host: Any) -> Any:
-    helpers.SDSBSCompGraph = FakeGraph
+def _wired(helpers: types.ModuleType, host: Any) -> types.ModuleType:
+    vars(helpers)['SDSBSCompGraph'] = FakeGraph
     real_find = helpers.find_graph
-    helpers.find_graph = lambda identifier=None: (
+    vars(helpers)['find_graph'] = lambda identifier=None: (
         host.getChildrenResources()[0] if identifier == 'host' else real_find(identifier)
     )
-    helpers._APP = mock.MagicMock()
-    helpers._package_of = lambda identifier: (host, None)
-    helpers._current_graph = lambda: None
+    vars(helpers)['_APP'] = mock.MagicMock()
+    vars(helpers)['_package_of'] = lambda identifier: (host, None)
+    vars(helpers)['_current_graph'] = lambda: None
     used = [d.getPackage() for d in host.getDependencies.return_value]
     helpers._PM.getUserPackages.return_value = [host, *[u for u in used if u is not None]]
     return helpers
@@ -75,7 +66,9 @@ SAVES = [
 
 
 @pytest.mark.parametrize(('why', 'call'), SAVES, ids=[s[0] for s in SAVES])
-def test_every_save_refuses_a_never_saved_dependency_before_saving(helpers: Any, why: str, call: Any) -> None:
+def test_every_save_refuses_a_never_saved_dependency_before_saving(
+    helpers: types.ModuleType, why: str, call: Any
+) -> None:
     _wired(helpers, _package('/p/host.sbs', 'host', UNSAVED))
     with pytest.raises(RuntimeError) as raised:
         call(helpers)
@@ -86,7 +79,7 @@ def test_every_save_refuses_a_never_saved_dependency_before_saving(helpers: Any,
         save.assert_not_called()
 
 
-def test_a_saved_dependency_saves(helpers: Any, tmp_path: Any) -> None:
+def test_a_saved_dependency_saves(helpers: types.ModuleType, tmp_path: Any) -> None:
     _wired(helpers, _package('/p/host.sbs', 'host', SAVED))
     helpers.save_package('host')
     helpers._PM.savePackage.assert_called_once()
@@ -94,13 +87,13 @@ def test_a_saved_dependency_saves(helpers: Any, tmp_path: Any) -> None:
     helpers._PM.saveCopyOfPackageAs.assert_called_once()
 
 
-def test_a_package_without_dependencies_saves(helpers: Any) -> None:
+def test_a_package_without_dependencies_saves(helpers: types.ModuleType) -> None:
     _wired(helpers, _package('/p/host.sbs', 'host'))
     helpers.save_package('host')
     helpers._PM.savePackage.assert_called_once()
 
 
-def test_a_dependency_with_its_file_gone_saves(helpers: Any) -> None:
+def test_a_dependency_with_its_file_gone_saves(helpers: types.ModuleType) -> None:
     # measured: a path and no package, and all three saves go through with no dialog
     host = _package('/p/host.sbs', 'host')
     host.getDependencies.return_value = [
@@ -111,14 +104,14 @@ def test_a_dependency_with_its_file_gone_saves(helpers: Any) -> None:
     helpers._PM.savePackage.assert_called_once()
 
 
-def test_only_direct_dependencies_count(helpers: Any) -> None:
+def test_only_direct_dependencies_count(helpers: types.ModuleType) -> None:
     # measured: a saved dependency using an unsaved package saves with no dialog
     _wired(helpers, _package('/p/host.sbs', 'host', _package('/p/mid.sbs', 'mid', UNSAVED)))
     helpers.save_package('host')
     helpers._PM.savePackage.assert_called_once()
 
 
-def test_every_dependency_is_named(helpers: Any) -> None:
+def test_every_dependency_is_named(helpers: types.ModuleType) -> None:
     _wired(helpers, _package('/p/host.sbs', 'host', UNSAVED, SAVED, _package('', 'other')))
     with pytest.raises(RuntimeError) as raised:
         helpers.save_package('host')
@@ -128,20 +121,20 @@ def test_every_dependency_is_named(helpers: Any) -> None:
 
 
 # REVIEW.md HLP-67: what the refusal says to do has to be doable, and it depends on whether a name reaches the package
-def _message(helpers: Any, host: Any, in_editor: Any = None) -> str:
+def _message(helpers: types.ModuleType, host: Any, in_editor: Any = None) -> str:
     _wired(helpers, host)
-    helpers._current_graph = lambda: in_editor
+    vars(helpers)['_current_graph'] = lambda: in_editor
     with pytest.raises(RuntimeError) as raised:
         helpers._refuse_unsaved_dependencies(host)
     return str(raised.value)
 
 
-def test_a_graph_a_name_reaches_is_told_by_name(helpers: Any) -> None:
+def test_a_graph_a_name_reaches_is_told_by_name(helpers: types.ModuleType) -> None:
     message = _message(helpers, _package('/p/host.sbs', 'host', _package('', 'dep_unsaved')))
     assert "save_package('dep_unsaved', save_as=...)" in message and 'in focus' not in message
 
 
-def test_one_name_with_the_host_in_the_editor_isnt_told_a_name_that_finds_the_host(helpers: Any) -> None:
+def test_one_name_with_the_host_in_the_editor_isnt_told_a_name_that_finds_the_host(helpers: types.ModuleType) -> None:
     # every new graph is "New_Graph": find_graph takes the one in the editor, and the same refusal comes back
     host = _package('', 'New_Graph', _package('', 'New_Graph'))
     host.getFilePath.return_value = '/p/host.sbs'
@@ -152,7 +145,7 @@ def test_one_name_with_the_host_in_the_editor_isnt_told_a_name_that_finds_the_ho
     assert 'UID {New_Graph}' in message  # tells it from the host, which has the same graph name
 
 
-def test_one_name_with_nothing_in_the_editor_isnt_told_an_ambiguous_name(helpers: Any) -> None:
+def test_one_name_with_nothing_in_the_editor_isnt_told_an_ambiguous_name(helpers: types.ModuleType) -> None:
     host = _package('/p/host.sbs', 'New_Graph', _package('', 'New_Graph'))
     host.getUID.return_value = '{host}'
     message = _message(helpers, host)
@@ -160,7 +153,9 @@ def test_one_name_with_nothing_in_the_editor_isnt_told_an_ambiguous_name(helpers
 
 
 @pytest.mark.parametrize('reachable', [True, False], ids=['a package object', 'no package object'])
-def test_a_closed_package_cant_be_saved_by_a_tool_and_the_refusal_says_so(helpers: Any, reachable: bool) -> None:
+def test_a_closed_package_cant_be_saved_by_a_tool_and_the_refusal_says_so(
+    helpers: types.ModuleType, reachable: bool
+) -> None:
     # measured: closed while the host keeps its node, it stays a dependency with no file, and the dialog opens;
     # deleting the node removes the dependency
     host = _package('/p/host.sbs', 'host')
@@ -175,7 +170,7 @@ def test_a_closed_package_cant_be_saved_by_a_tool_and_the_refusal_says_so(helper
     assert ("'dep_closed'" in message) is reachable
 
 
-def test_only_graphs_are_named_all_of_them_and_inside_groups(helpers: Any) -> None:
+def test_only_graphs_are_named_all_of_them_and_inside_groups(helpers: types.ModuleType) -> None:
     dep = _package('', 'first')
     folder = mock.MagicMock(**{'getIdentifier.return_value': 'Resources'})
     dep.getChildrenResources.return_value = [folder, FakeGraph('first', dep), FakeGraph('second', dep)]

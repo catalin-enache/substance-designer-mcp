@@ -16,7 +16,13 @@ from test_all_tools.common import (
     skip,
     text,
 )
-from test_all_tools.editor_panels_and_fit.preparations import CHECKER_OPS, PLAIN_OPS, VIEW3D_GRAPH, VIEW3D_PLAIN
+from test_all_tools.editor_panels_and_fit.preparations import (
+    CHECKER_OPS,
+    PLAIN_OPS,
+    VIEW3D_ADDED,
+    VIEW3D_GRAPH,
+    VIEW3D_PLAIN,
+)
 from test_all_tools.editor_panels_and_fit.renders import (
     difference,
     grey,
@@ -44,12 +50,12 @@ async def check_outputs_added_to_the_open_graph_reach_the_3d_view_once_applied(c
     if ctx.was_running:
         skip('screenshot_designer', 'graph= puts the outputs of the graph on the mesh', USERS_3D_VIEW)
         return
-    await prepared_call(c, 'create_graph', {'name': VIEW3D_GRAPH, 'size_log2': 9})
-    await prepared_call(c, 'open_graph', {'graph': VIEW3D_GRAPH})
+    await prepared_call(c, 'create_graph', {'name': VIEW3D_ADDED, 'size_log2': 9})
+    await prepared_call(c, 'open_graph', {'graph': VIEW3D_ADDED})
     before = await c('screenshot_designer', {**THREE_D, **TOP, 'tiling': 1.0})
-    await prepared_call(c, 'apply_edits', {'graph': VIEW3D_GRAPH, 'ops': CHECKER_OPS})
+    await prepared_call(c, 'apply_edits', {'graph': VIEW3D_ADDED, 'ops': CHECKER_OPS})
     after = await c('screenshot_designer', THREE_D)
-    applied = await c('screenshot_designer', {**THREE_D, 'graph': VIEW3D_GRAPH})
+    applied = await c('screenshot_designer', {**THREE_D, 'graph': VIEW3D_ADDED})
     shots = [before, after, applied]
     if not all(is_image(r) for r in shots):
         check('screenshot_designer', 'graph= puts the outputs of the graph on the mesh', False, 'a shot failed (below)')
@@ -66,7 +72,7 @@ async def check_outputs_added_to_the_open_graph_reach_the_3d_view_once_applied(c
     check(
         'screenshot_designer',
         'graph= puts the outputs of the graph on the mesh',
-        seen >= 6 and transitions(grey(after)) <= 2 and VIEW3D_GRAPH in text(applied),
+        seen >= 6 and transitions(grey(after)) <= 2 and VIEW3D_ADDED in text(applied),
         '%d dark-light changes across the plane, %d before | %s' % (seen, transitions(grey(after)), text(applied)),
     )
 
@@ -102,9 +108,6 @@ async def check_the_3d_view_zooms_and_tiles(ctx: Ctx) -> None:
     if ctx.was_running:
         skip('screenshot_designer', 'zoom and tiling', USERS_3D_VIEW)
         return
-    if (await c('describe_graph', {'graph': VIEW3D_GRAPH})).is_error:  # not built by the check before
-        await prepared_call(c, 'create_graph', {'name': VIEW3D_GRAPH, 'size_log2': 9})
-        await prepared_call(c, 'apply_edits', {'graph': VIEW3D_GRAPH, 'ops': CHECKER_OPS})
     base = await c('screenshot_designer', {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH, 'tiling': 1.0})
     tiled = await c('screenshot_designer', {**THREE_D, 'tiling': 2.0})
     closer = await c('screenshot_designer', {**THREE_D, 'view': 'Top', 'zoom': 3})
@@ -166,9 +169,6 @@ async def check_graph_finds_its_row_in_a_collapsed_package(ctx: Ctx) -> None:
     if ctx.was_running:
         skip('screenshot_designer', 'graph= finds its row in a collapsed package', USERS_3D_VIEW)
         return
-    if (await c('describe_graph', {'graph': VIEW3D_GRAPH})).is_error:  # not built by an earlier check
-        await prepared_call(c, 'create_graph', {'name': VIEW3D_GRAPH, 'size_log2': 9})
-        await prepared_call(c, 'apply_edits', {'graph': VIEW3D_GRAPH, 'ops': CHECKER_OPS})
     collapsed = text(await designer_script(c, 'editor_panels_and_fit/collapse_package', graph=VIEW3D_GRAPH))
     r = await c('screenshot_designer', {**THREE_D, 'graph': VIEW3D_GRAPH})
     check(
@@ -216,9 +216,6 @@ async def check_opening_the_editors_graph_again_leaves_the_outputs_on_the_mesh(c
     if ctx.was_running:
         skip('designer facts', "opening the editor's graph again doesn't put its outputs on the mesh", USERS_3D_VIEW)
         return
-    if (await c('describe_graph', {'graph': VIEW3D_GRAPH})).is_error:  # not built by an earlier check
-        await prepared_call(c, 'create_graph', {'name': VIEW3D_GRAPH, 'size_log2': 9})
-        await prepared_call(c, 'apply_edits', {'graph': VIEW3D_GRAPH, 'ops': CHECKER_OPS})
     await prepared_call(c, 'create_graph', {'name': VIEW3D_PLAIN, 'size_log2': 9})
     await prepared_call(c, 'apply_edits', {'graph': VIEW3D_PLAIN, 'ops': PLAIN_OPS})
     await prepared_call(c, 'open_graph', {'graph': VIEW3D_PLAIN})
@@ -262,9 +259,6 @@ async def check_a_set_up_checks_what_it_needs_first_and_says_what_it_set(ctx: Ct
     if ctx.was_running:
         skip('screenshot_designer', 'a set-up checks what it needs first, and says what it set', USERS_3D_VIEW)
         return
-    if (await c('describe_graph', {'graph': VIEW3D_GRAPH})).is_error:  # not built by an earlier check
-        await prepared_call(c, 'create_graph', {'name': VIEW3D_GRAPH, 'size_log2': 9})
-        await prepared_call(c, 'apply_edits', {'graph': VIEW3D_GRAPH, 'ops': CHECKER_OPS})
     before = await c('screenshot_designer', {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH, 'tiling': 1.0})
     hidden = text(await c('execute_designer_code', {'code': ctx.helper_source + PARAMETERS_HIDDEN}))
     after = await c('screenshot_designer', THREE_D)
@@ -322,9 +316,6 @@ async def check_a_material_the_mesh_doesnt_use_doesnt_stop_tiling(ctx: Ctx) -> N
     if ctx.was_running:
         skip('screenshot_designer', "tiling= isn't stopped by a material the mesh doesn't use", USERS_3D_VIEW)
         return
-    if (await c('describe_graph', {'graph': VIEW3D_GRAPH})).is_error:  # not built by an earlier check
-        await prepared_call(c, 'create_graph', {'name': VIEW3D_GRAPH, 'size_log2': 9})
-        await prepared_call(c, 'apply_edits', {'graph': VIEW3D_GRAPH, 'ops': CHECKER_OPS})
     await c('screenshot_designer', {**THREE_D, 'mesh': 'Sphere', 'view': 'Default', 'graph': VIEW3D_GRAPH})
     added = text(await c('execute_designer_code', {'code': ctx.helper_source + ADD_MATERIAL}))
     r = await c('screenshot_designer', {**THREE_D, 'tiling': 2.0})

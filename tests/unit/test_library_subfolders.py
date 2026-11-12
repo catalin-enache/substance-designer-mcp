@@ -2,8 +2,6 @@
 `definition` names them by path. Real files in a temporary folder; the live self-test uses Designer's own."""
 
 import os
-import re
-import sys
 import types
 from pathlib import Path
 from typing import Any
@@ -11,7 +9,6 @@ from unittest import mock
 
 import pytest
 
-import designer_helpers  # conftest puts mcp_server on sys.path
 from conftest import patch_server, server
 
 
@@ -139,15 +136,10 @@ def test_an_unreadable_library_subfolder_is_an_error(monkeypatch: pytest.MonkeyP
 
 
 @pytest.fixture
-def helpers(monkeypatch: pytest.MonkeyPatch, resources: Path) -> Any:
+def helpers(faked_helpers: types.ModuleType, resources: Path) -> types.ModuleType:
     """The helpers as sent to Designer, with sd and PySide6 faked and the library folder real."""
-    fake = mock.MagicMock()
-    imported = re.findall(r'^\s*(?:from|import) ((?:sd|PySide6)(?:\.\w+)*)', designer_helpers.source(), re.M)
-    for name in sorted({'.'.join(m.split('.')[:i]) for m in imported for i in range(1, m.count('.') + 2)}):
-        monkeypatch.setitem(sys.modules, name, fake)
-    module: Any = types.ModuleType('helpers_under_test')
-    exec(compile(designer_helpers.source(), 'designer_helpers', 'exec'), module.__dict__)
-    module._APP = mock.MagicMock()
+    module = faked_helpers
+    vars(module)['_APP'] = mock.MagicMock()
     module._APP.getPath.return_value = str(resources)
     return module
 
@@ -189,7 +181,7 @@ DEFINITIONS = [
 
 @pytest.mark.parametrize(('name', 'file', 'graph', 'why'), DEFINITIONS, ids=[d[3] + ': ' + d[0] for d in DEFINITIONS])
 def test_definition_names_a_package_and_a_graph(
-    helpers: Any, resources: Path, name: str, file: str, graph: str, why: str
+    helpers: types.ModuleType, resources: Path, name: str, file: str, graph: str, why: str
 ) -> None:
     assert helpers._library_path(name) == (os.path.join(str(resources), 'packages', *file.split('/')), graph), why
 
@@ -199,7 +191,7 @@ def test_definition_names_a_package_and_a_graph(
     ['../secret', '../secret.sbs', '../secret.sbs/secret', 'materials/../../secret', '{root}/secret.sbs'],
     ids=['up', 'up with extension', 'up with graph', 'up from a subfolder', 'absolute'],
 )
-def test_a_definition_never_leaves_the_library_folder(helpers: Any, resources: Path, name: str) -> None:
+def test_a_definition_never_leaves_the_library_folder(helpers: types.ModuleType, resources: Path, name: str) -> None:
     assert (resources / 'secret.sbs').exists()  # it would be found
     with pytest.raises(RuntimeError, match='neither an atomic node nor a library package'):
         path, _ = helpers._library_path(name.replace('{root}', str(resources)))
@@ -212,15 +204,17 @@ class FakeFolder:
     pass
 
 
-def _lookup_finding(helpers: Any, found: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    helpers.SDResourceFolder = FakeFolder
-    helpers.atomic_definition_ids = lambda g: set()
-    helpers._load_library = lambda path: types.SimpleNamespace(findResourceFromUrl=lambda url: found)
-    helpers._PM = mock.MagicMock()
+def _lookup_finding(helpers: types.ModuleType, found: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    vars(helpers)['SDResourceFolder'] = FakeFolder
+    vars(helpers)['atomic_definition_ids'] = lambda g: set()
+    vars(helpers)['_load_library'] = lambda path: types.SimpleNamespace(findResourceFromUrl=lambda url: found)
+    vars(helpers)['_PM'] = mock.MagicMock()
 
 
 @pytest.mark.parametrize('call', ['describe_node', '_resolve_definition'])
-def test_a_definition_naming_a_group_says_so(helpers: Any, monkeypatch: pytest.MonkeyPatch, call: str) -> None:
+def test_a_definition_naming_a_group_says_so(
+    helpers: types.ModuleType, monkeypatch: pytest.MonkeyPatch, call: str
+) -> None:
     # REVIEW.md HLP-63: findResourceFromUrl finds a group too, and newInstanceNode then raises NotSupported
     _lookup_finding(helpers, FakeFolder(), monkeypatch)
     args = (
@@ -232,7 +226,7 @@ def test_a_definition_naming_a_group_says_so(helpers: Any, monkeypatch: pytest.M
         getattr(helpers, call)(*args)
 
 
-def test_a_definition_naming_a_graph_passes(helpers: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_definition_naming_a_graph_passes(helpers: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     found = object()
     _lookup_finding(helpers, found, monkeypatch)
     g = mock.MagicMock()
