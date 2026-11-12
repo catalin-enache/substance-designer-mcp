@@ -25,7 +25,7 @@ def execute_designer_code(code: str, undo_label: str = 'Claude: code', timeout_s
     return _bridge(_with_undo(code, undo_label), '<execute_designer_code>', timeout_s)
 
 
-@_tool(scripting=True)
+@_tool(scripting=True, finite=False)  # its args reach Designer as JSON, which keeps inf and nan
 def run_designer_script(path: str, timeout_s: int = 600, args: dict[str, Any] | None = None) -> str:
     """Run a Python file inside Substance Designer; `__file__` is set to its absolute path.
     `args` (JSON values) reach the script as the global dict `ARGS`, empty without any; a script

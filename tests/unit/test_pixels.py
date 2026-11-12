@@ -1,6 +1,5 @@
 import os
-import re
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -118,11 +117,10 @@ def test_region_is_clamped_not_wrapped() -> None:
     assert server._crop(data, [8, 8, 50, 50], 'region').shape == (2, 2, 1)
 
 
-def test_sweep_reports_a_value_that_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sweep_reports_a_value_that_failed(monkeypatch: pytest.MonkeyPatch, temp_folders: list[str]) -> None:
     # REVIEW.md SRV-2: tiles for the first values, then an error, then "restored" from the finally
     def fake_bridge(code: str, path: str | None = None, timeout: float | None = None) -> str:
-        out_dir = cast(re.Match[str], re.search(r"(/[^'\\]*sd_sweep_\w+)", code)).group(1)
-        with open(os.path.join(out_dir, '0.raw'), 'wb') as f:
+        with open(os.path.join(temp_folders[-1], '0.raw'), 'wb') as f:  # the folder the server made
             f.write(bytes([128]))
         return (
             'SWEEP={"index": 0, "value": 0.1, "width": 1, "height": 1, "pitch": 1, "bpp": 1, "format": "LUM8"}\n'

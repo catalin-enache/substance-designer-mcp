@@ -4,7 +4,9 @@ gate on the guide), the bridge to the plugin inside Designer, and the helpers' c
 import functools
 import hashlib
 import hmac
+import inspect
 import json
+import math
 import os
 import platform
 import re
@@ -134,13 +136,37 @@ P = ParamSpec('P')
 R = TypeVar('R')
 
 
-def _tool(scripting: bool = False, gated: bool = True) -> Callable[[Callable[P, R]], Callable[P, R]]:
+def _not_finite(value: Any, where: str) -> tuple[str, float] | None:
+    """The first number in `value`, its lists and dicts walked, that isn't finite, and where it is; or None."""
+    if isinstance(value, float):
+        return None if math.isfinite(value) else (where, value)
+    if isinstance(value, dict):
+        items = [('%s[%r]' % (where, k), v) for k, v in value.items()]
+    elif isinstance(value, (list, tuple)):
+        items = [('%s[%d]' % (where, i), v) for i, v in enumerate(value)]
+    else:
+        return None
+    for inner, v in items:
+        found = _not_finite(v, inner)
+        if found:
+            return found
+    return None
+
+
+def _tool(
+    scripting: bool = False, gated: bool = True, finite: bool = True
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """server.tool(), refusing to run until the guide was read: any tool until get_guide() was called and, with
     `scripting`, a tool that runs code the caller wrote until get_guide('scripting') was too, so that nothing reaches
-    Designer first. `gated=False` for a tool that must always work."""
+    Designer first. `gated=False` for a tool that must always work. `finite`: a number that isn't (JSON's 1e999,
+    Infinity, NaN, which the arguments' validation turns into inf and nan) is refused by where it is, since written
+    into a helper call with %r it comes out as a name Designer doesn't know (REVIEW.md SRV-119); False for a tool that
+    sends its values as JSON."""
     register = server.tool()
 
     def decorate(fn: Callable[P, R]) -> Callable[P, R]:
+        signature = inspect.signature(fn)
+
         @functools.wraps(fn)
         def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             if gated:
@@ -149,6 +175,11 @@ def _tool(scripting: bool = False, gated: bool = True) -> Callable[[Callable[P, 
                     missing.append(SCRIPTING_NOT_READ)
                 if missing:
                     raise ToolError(' '.join(missing))
+            if finite:
+                for name, value in signature.bind_partial(*args, **kwargs).arguments.items():
+                    found = _not_finite(value, name)
+                    if found:
+                        raise ToolError("%s is %r, which isn't a finite number: nothing was sent to Designer" % found)
             return fn(*args, **kwargs)
 
         return register(wrapper)

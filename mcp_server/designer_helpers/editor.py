@@ -129,25 +129,36 @@ def _wheel_zoom(view: Any, notches: int) -> None:
     handling. Designer keeps its own zoom level besides the view's transform: setting the
     transform directly (fitInView, scale) leaves that level stale, and the user's next wheel
     step jumps from it. Wheel events keep the two in step (Designer 16: 1.2x per notch)."""
+    _wheel(view.viewport(), notches)
+
+
+def _wheel(viewport: Any, notches: int, pause: float = 0.0) -> None:
+    """Mouse-wheel notches (positive: in) at the middle of a widget, as Designer takes them from the mouse. pause:
+    seconds between notches, for a view that drops some sent back to back (the 3D view: designer_helpers/view3d.py)."""
+    import time
+
     from PySide6.QtCore import QPoint, QPointF, Qt
     from PySide6.QtGui import QWheelEvent
     from PySide6.QtWidgets import QApplication
 
-    viewport = view.viewport()
     centre = QPointF(viewport.width() / 2.0, viewport.height() / 2.0)
-    event = QWheelEvent(
-        centre,
-        QPointF(viewport.mapToGlobal(centre.toPoint())),
-        QPoint(0, 0),
-        QPoint(0, 120 if notches > 0 else -120),
-        Qt.MouseButton.NoButton,
-        Qt.KeyboardModifier.NoModifier,
-        Qt.ScrollPhase.NoScrollPhase,
-        False,
-    )
     for _ in range(abs(notches)):
+        event = QWheelEvent(
+            centre,
+            QPointF(viewport.mapToGlobal(centre.toPoint())),
+            QPoint(0, 0),
+            QPoint(0, 120 if notches > 0 else -120),
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+            Qt.ScrollPhase.NoScrollPhase,
+            False,
+        )
         QApplication.sendEvent(viewport, event)
         _process_events(2)
+        end = time.time() + pause
+        while time.time() < end:
+            _process_events(1)
+            time.sleep(0.02)
 
 
 def _whole_graph_rect(g: SDSBSCompGraph) -> tuple[float, float, float, float, str] | None:

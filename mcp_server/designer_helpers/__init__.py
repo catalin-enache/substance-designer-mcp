@@ -21,6 +21,7 @@ PARTS = (
     'core',
     'describe',
     'screenshots',
+    'view3d',
     'save_export',
     'edits',
     'quit',

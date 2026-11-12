@@ -33,3 +33,37 @@ async def prepare(ctx: Ctx) -> None:
     ctx.slope = added['slope']
     await prepared_call(c, 'add_frame', {'node_ids': [ctx.clouds, ctx.slope], 'title': 'Shape', **ctx.G})
     await prepared_call(c, 'open_graph', {'graph': TEST_GRAPH})
+
+
+VIEW3D_GRAPH = 'mcp_selftest_view3d'  # the 3D view checks' own
+# a checker into two outputs, base colour and roughness: two, so Designer maps them by usage rather than asking which
+# channel to show a single one in (designer_helpers/view3d.py)
+CHECKER_OPS = [
+    {'op': 'add', 'definition': 'pattern_checker_1.sbs/checker_1', 'ref': 'n', 'position': [-300, 0]},
+    {'op': 'add', 'definition': 'output', 'ref': 'o', 'usage': 'baseColor', 'identifier': 'basecolor'},
+    {'op': 'connect', 'from': 'n', 'to': 'o', 'input': 'inputNodeOutput'},
+    {
+        'op': 'add',
+        'definition': 'output',
+        'ref': 'r',
+        'usage': 'roughness',
+        'identifier': 'roughness',
+        'position': [0, 150],
+    },
+    {'op': 'connect', 'from': 'n', 'to': 'r', 'input': 'inputNodeOutput'},
+]
+VIEW3D_PLAIN = 'mcp_selftest_view3d_plain'  # one colour on the mesh: no pattern
+PLAIN_OPS = [
+    {'op': 'add', 'definition': 'uniform', 'ref': 'n', 'position': [-300, 0]},
+    {'op': 'add', 'definition': 'output', 'ref': 'o', 'usage': 'baseColor', 'identifier': 'basecolor'},
+    {'op': 'connect', 'from': 'n', 'to': 'o', 'input': 'inputNodeOutput'},
+    {
+        'op': 'add',
+        'definition': 'output',
+        'ref': 'r',
+        'usage': 'roughness',
+        'identifier': 'roughness',
+        'position': [0, 150],
+    },
+    {'op': 'connect', 'from': 'n', 'to': 'r', 'input': 'inputNodeOutput'},
+]

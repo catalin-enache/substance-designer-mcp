@@ -32,6 +32,9 @@ from test_all_tools.undo import checks as undo
 # in the pool's order (SOLO's start last), slowest first, so a pool's last ones are short (measured 2026-11-10, each
 # category's preparation, checks and clean-up: a run's summary lists them); one run (Windows) runs them in this order too
 CATEGORIES: list[Step] = [
+    # 40 s (2026-11-12, a scratch run: 46 s with its server's start): every panel's screenshot, the clipboard, fitting
+    # the whole graph, the 3D view set up
+    editor_panels_and_fit.run,
     render.run,  # 35 s: export_outputs, sbsar_info, render_sbs, preview_maps
     facts.run,  # 35 s: Designer facts GUIDE.md relies on
     safeguards.run,  # 23 s: refusals and failure paths
@@ -46,7 +49,6 @@ CATEGORIES: list[Step] = [
     discovery.run,  # 5 s: search_nodes, describe_node
     editor_open_and_zoom.run,  # 4 s: open_graph, screenshot_designer('graph') and crops
     bitmaps.run,  # 4 s: bitmap ops, compare_to_reference
-    editor_panels_and_fit.run,  # 3 s: every panel's screenshot, the clipboard, fitting the whole graph
     graph_edit_create.run,  # 3 s: create_graph, add ops
     layout.run,  # 2 s: snapshot_graph, list_snapshots, diff_graph, arrange_graph, add_frame, add_comment
     save.run,  # 2 s: save_package, snapshots of a saved package, copied bitmaps

@@ -444,6 +444,31 @@ async def check_a_designer_of_its_own(ctx: Ctx) -> bool:
     return started
 
 
+# the 3D view's dock looked up, then a set-up with no render: a 3D shot would go through the clipboard, which the
+# categories of categories.CLIPBOARD use beside this one
+WAITS_FOR_A_GRAPH = dedent("""
+    mw = _APP.getQtForPythonUIMgr().getMainWindow()
+    for step in (lambda: _3d_dock(mw), lambda: set_3d_view(None, 'Plane')):
+        try:
+            step()
+            print('BUILT')
+        except RuntimeError as e:
+            print('REFUSED: %s' % e)""")
+
+
+async def check_the_3d_view_waits_for_a_graph(ctx: Ctx) -> None:
+    """Designer builds its 3D view (the menu bar and the viewport) once a graph is opened, so in a Designer just started
+    the 3D view's dock, which screenshot_designer('3d') and its set-up both go through, says to open one (REVIEW.md
+    HLP-115). Measured right after its Designer starts, before any graph is opened."""
+    t = text(await ctx.c('execute_designer_code', {'code': ctx.helper_source + WAITS_FOR_A_GRAPH}))
+    check(
+        'screenshot_designer',
+        '3d with no graph opened yet says to open one, a set-up too',
+        t.count("REFUSED: the 3D view isn't built yet") == 2 and 'open_graph' in t and 'BUILT' not in t,
+        t.strip()[-300:],
+    )
+
+
 async def run(ctx: Ctx) -> None:
     with watching_crashes(ctx):  # one wait for crash dumps, at the end, for every check below
         # in a pool, no other Designer starts from before its own does until the hand-over check has used it: that one
@@ -452,6 +477,7 @@ async def run(ctx: Ctx) -> None:
             if not await check_a_designer_of_its_own(ctx):
                 return
             await check_a_designer_sharing_the_temp_folder_hands_over(ctx)
+        await check_the_3d_view_waits_for_a_graph(ctx)  # before any graph is opened: the hand-over check opens none
         await check_launch_on_another_port(ctx)
         await check_launch_refuses_a_port_another_program_holds(ctx)
         await check_quitting_and_starting_again(ctx)

@@ -44,7 +44,8 @@ Parameters are in each tool's description; this is when to reach for which.
 - **Look:** `preview_node` (any node, even one feeding no output), `screenshot_designer` (what the user sees),
   `open_graph` (open the graph first, so the user and screenshots see it; `frame=` or `node_ids=` zooms to one
   section). A screenshot costs about width × height / 750 tokens: keep `max_size` small, `crop`, and zoom with
-  `open_graph` rather than shooting the whole graph big.
+  `open_graph` rather than shooting the whole graph big. A material on a mesh, in Designer's own renderer:
+  `screenshot_designer('3d', graph=...)`; `mesh='Plane'`, `view='Top'` and `tiling=2` show how it repeats.
 - **Measure:** `node_stats` (exact numbers; prefer them to eyeballing), `check_tiling` (trim sheets only need
   horizontal), `compare_to_reference` for tones against a reference image (add it to the graph with an `apply_edits`
   `bitmap` op if wanted). Compare **like with like**: a `reference_region` of plain, lit material against the matching
@@ -70,8 +71,8 @@ Parameters are in each tool's description; this is when to reach for which.
   (exposed params, size, formats); `preview_maps` for rendered files.
 
 **Loop:** search/describe → build (script or `apply_edits`) → `describe_graph` + `preview_node` on intermediate nodes →
-`sweep_param` → `node_stats` / `check_tiling` → render or export → `preview_maps` → fix → repeat. Look at the result
-before telling the user it works.
+`sweep_param` → `node_stats` / `check_tiling` → render or export → `preview_maps` → fix → repeat. Look at the result,
+on a mesh too (`screenshot_designer('3d', graph=...)`), before telling the user it works.
 
 Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `-c CODE`, `--status`, `--cancel` (no undo
 grouping, no `ARGS`).
@@ -326,6 +327,9 @@ The rules and the first pitfalls are in the core, `get_guide()`.
   Designer's own window id: on macOS both copy the screen area, capturing whatever covers Designer (the user's other
   apps). Widget capture can't see the GPU-drawn 3D view: use `screenshot_designer('3d')`. Never use "Save Render...":
   its modal file dialog blocks the bridge.
+- **The 3D view** has no API: `screenshot_designer('3d', ...)` drives its menus, the Explorer's context menu (opened
+  on the Explorer's tree only; the warning above about the graph view stands, and an open menu holds the bridge until
+  it closes) and the material's Tiling field. What Designer does there, measured: `designer_helpers/view3d.py`.
 - Dock titles change with content, so find panels by object name: `areaA_` explorer, `areaB_` graph, `areaC_`
   parameters, `areaD_` 3D view, `areaE_` 2D view, `areaF_` console (hidden by default; Windows > Console), `areaG_`
   library.

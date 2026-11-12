@@ -26,6 +26,22 @@ def _visible_dock(mw: Any, prefix: str) -> Any:
     return None
 
 
+def _3d_dock(mw: Any) -> Any:
+    """The 3D View's dock; refused when it isn't visible, or not built yet: Designer builds its menu bar and viewport
+    once a graph is opened (REVIEW.md HLP-115)."""
+    from PySide6 import QtWidgets
+
+    dock = _visible_dock(mw, _PANEL_AREAS['3d'])
+    if dock is None:
+        raise RuntimeError(
+            'the 3D View panel is not visible in Designer'
+            + (" (it's showing its Home screen; open_graph closes it)" if _home_screen() is not None else '')
+        )
+    if not dock.findChildren(QtWidgets.QMenuBar):
+        raise RuntimeError("the 3D view isn't built yet: Designer builds it once a graph is opened (open_graph)")
+    return dock
+
+
 def _save_3d_render(mw: Any, out_path: str) -> tuple[int, int]:
     """The 3D view is GPU-drawn, so a QWidget.grab() of its viewport is leftover black or grey
     blocks, varying between calls. Use the view's own
@@ -37,12 +53,7 @@ def _save_3d_render(mw: Any, out_path: str) -> tuple[int, int]:
     from PySide6 import QtCore, QtWidgets
 
     app = cast(QtWidgets.QApplication, QtWidgets.QApplication.instance())  # Designer's own: always there
-    dock = _visible_dock(mw, _PANEL_AREAS['3d'])
-    if dock is None:
-        raise RuntimeError(
-            'the 3D View panel is not visible in Designer'
-            + (" (it's showing its Home screen; open_graph closes it)" if _home_screen() is not None else '')
-        )
+    dock = _3d_dock(mw)
     bars = dock.findChildren(QtWidgets.QMenuBar)
     if not bars:
         raise RuntimeError('3D View menu bar not found')

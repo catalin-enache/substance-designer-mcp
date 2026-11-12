@@ -214,6 +214,13 @@ may update the names and paths an entry points at; changing what was decided, or
   the text comes back. The self-test's clipboard checks keep only the user's text too. README says so. The user's
   decision, 2026-11-10.
   Reopen if: the user wants the whole clipboard kept, or the text is seen not to come back.
+- **After setting the 3D view's tiling, the Parameters panel goes back to the graph in the editor, not to the node that
+  was selected.** `screenshot_designer('3d', tiling=...)` sets the tiling through the Parameters panel, then turns the
+  panel back to the graph in the editor (how, as measured: `designer_helpers/view3d.py`). Turning it back to a
+  selected node would take a click on that node in the user's graph view, since the API can't show a node in the panel
+  (GUIDE.md, Designer UI). Nothing in the graph changes, and one click on the node shows its parameters again. The
+  user's decision, 2026-11-12.
+  Reopen if: the user wants the selected node back, or the API gains a way to show a node in the Parameters panel.
 - **Why `open_graph`'s wheel steps once did nothing is unknown, and isn't being chased.** It happened in one self-test
   run of four. Not reproduced: 200 wheel steps and 40 fits in a fresh Designer gave no stuck step, idle and under
   load. `_fit_view_to` no longer reports such a view as fitted, and gives the view's size and whether Designer's

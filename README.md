@@ -89,7 +89,7 @@ saved file (details: [mcp_server/GUIDE.md](mcp_server/GUIDE.md), Portals).
 | Tuning | `sweep_param` (try several values of a parameter side by side; the original value is restored) |
 | Safety | `snapshot_graph`, `list_snapshots`, `diff_graph` (what changed vs the saved file or a snapshot) |
 | Readability | `arrange_graph` (tidy layout by data flow), `add_frame`, `add_comment`, `set_link_display` (show wires as portals to hide clutter; saves and reloads the package after a snapshot) |
-| Viewing | `screenshot_designer` (window, graph, 2D view, 3D view, panels; only Designer is captured, never other apps), `open_graph` (open a graph, fitted whole, zoomed to a frame, nodes or rectangle, or centred on a node) |
+| Viewing | `screenshot_designer` (window, graph, 2D view, 3D view, panels; only Designer is captured, never other apps; the 3D view optionally set up first: a graph's outputs on a chosen mesh, viewpoint, zoom and tiling), `open_graph` (open a graph, fitted whole, zoomed to a frame, nodes or rectangle, or centred on a node) |
 | Editing | `apply_edits` (add nodes and image files, set parameters, name and tag output nodes, connect, disconnect, move, delete, expose parameters as graph inputs: one or many edits per call, one undo step; a typo'd node id changes nothing), `create_graph`, `set_graph_size` |
 | Controls | `remove_graph_input` (exposing a parameter is `apply_edits`' `expose` op) |
 | Scripting | `execute_designer_code`, `run_designer_script` (with timeout and `args`) |
@@ -238,7 +238,7 @@ or, in a full run, a tool no check exercised; 2: nothing was run (a Designer of 
 | `discovery` | Finding nodes: `search_nodes` and `describe_node` |
 | `editor_open_and_zoom` | The editor: `open_graph`'s targets and zoom, `screenshot_designer('graph')` with crops |
 | `bitmaps` | Bitmaps: `apply_edits`' bitmap op and `compare_to_reference` |
-| `editor_panels_and_fit` | The editor: every panel's screenshot, the clipboard, `open_graph` fitting the whole graph |
+| `editor_panels_and_fit` | The editor: every panel's screenshot, the clipboard, `open_graph` fitting the whole graph, the 3D view set up |
 | `graph_edit_create` | `create_graph` and `apply_edits`' add op |
 | `layout` | Snapshots, diffs and readable graphs: `snapshot_graph`, `list_snapshots`, `diff_graph`, `arrange_graph` |
 | `save` | Saving: `save_package`, snapshots of a saved package, a diff against a `.sbs`, copied bitmaps |

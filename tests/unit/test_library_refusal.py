@@ -160,6 +160,7 @@ def test_every_helper_either_edits_through_the_check_or_only_reads(helpers: Any)
         'package_file_of',
         'save_node_output',
         'save_package_copy',
+        'set_3d_view',  # computes the graph and reads its outputs
     }
     tree = ast.parse(designer_helpers.source())
     uses = {

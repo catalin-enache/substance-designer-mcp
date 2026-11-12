@@ -2,6 +2,7 @@
 
 import os
 import sys
+import tempfile
 import types
 from typing import Any, cast
 
@@ -72,6 +73,22 @@ SELFTEST_RUNNERS = ('alone.py',)
 def selftest_check_sources() -> dict[str, str]:
     """selftest_sources() without SELFTEST_RUNNERS: what the coverage checks read."""
     return {name: source for name, source in selftest_sources().items() if name not in SELFTEST_RUNNERS}
+
+
+@pytest.fixture
+def temp_folders(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The folders tempfile.mkdtemp makes, newest last, each named with a backslash where paths don't use one (macOS),
+    as a Windows path has: a fake bridge takes its folder from here, never back out of the helper call, whose %r
+    doubles a backslash (REVIEW.md TST-325, TST-330)."""
+    made: list[str] = []
+    real = tempfile.mkdtemp
+
+    def mkdtemp(suffix: str | None = None, prefix: str | None = None, dir: str | None = None) -> str:
+        made.append(real(suffix, (prefix or 'tmp') + ('back\\slash_' if os.sep == '/' else ''), dir))
+        return made[-1]
+
+    monkeypatch.setattr(tempfile, 'mkdtemp', mkdtemp)
+    return made
 
 
 @pytest.fixture(autouse=True)

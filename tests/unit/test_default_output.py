@@ -1,6 +1,7 @@
 """Tools that pick a node's first output say so when it has several (REVIEW.md HLP-65): a material's first is
 `diffuse`, off by default and black on a metal. With sd and PySide6 faked; the live self-test uses a real material."""
 
+import os
 import re
 import sys
 import types
@@ -67,25 +68,31 @@ def test_connect_says_when_it_took_the_first_of_several(
     assert ('the first of 3 (diffuse, basecolor, normal); pass output' in out) is note
 
 
-def _preview(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, printed: str) -> Any:
+def _preview(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, printed: str, folders: list[str]) -> Any:
+    """preview_node with a bridge saving its image in the folder the server made (folders: the temp_folders fixture),
+    not one read back out of the call, which a Windows path's backslashes defeat (REVIEW.md TST-330)."""
+
     def bridge(code: str, path: str | None = None, timeout: float | None = None) -> str:
-        out = re.search(r"""([^'"\\ ]+node\.png)""", code)  # inside the quoted, wrapped call
-        assert out is not None
-        PILImage.new('RGB', (4, 4)).save(out.group(1))
+        out = os.path.join(folders[-1], 'node.png')
+        PILImage.new('RGB', (4, 4)).save(out)
         return printed
 
     patch_server(monkeypatch, '_bridge', bridge)
     return server.preview_node('1')
 
 
-def test_preview_returns_the_note_beside_the_image(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_preview_returns_the_note_beside_the_image(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, temp_folders: list[str]
+) -> None:
     note = "no output given: 'basecolor', tagged base colour, of 9 (diffuse, basecolor); pass output to pick another"
-    result = _preview(monkeypatch, tmp_path, '%s\n1 a.diffuse 4x4 RGBA8\n' % note)
+    result = _preview(monkeypatch, tmp_path, '%s\n1 a.diffuse 4x4 RGBA8\n' % note, temp_folders)
     assert isinstance(result[0], Image) and result[1] == note  # the image first, as before
 
 
-def test_preview_returns_only_the_image_when_there_is_no_note(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    result = _preview(monkeypatch, tmp_path, '1 a.height 4x4 RGBA8\n')
+def test_preview_returns_only_the_image_when_there_is_no_note(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, temp_folders: list[str]
+) -> None:
+    result = _preview(monkeypatch, tmp_path, '1 a.height 4x4 RGBA8\n', temp_folders)
     assert len(result) == 1 and isinstance(result[0], Image)
 
 
@@ -155,11 +162,10 @@ def test_anything_else_takes_the_first(helpers: Any, node: Any) -> None:
     )
 
 
-def _pixels_bridge(monkeypatch: pytest.MonkeyPatch, printed: str) -> None:
+def _pixels_bridge(monkeypatch: pytest.MonkeyPatch, printed: str, folders: list[str]) -> None:
     def bridge(code: str, path: str | None = None, timeout: float | None = None) -> str:
-        out = re.search(r"""([^'"\\\\ ]+pixels\.raw)""", code)
-        assert out is not None
-        with open(out.group(1), 'wb') as f:
+        out = os.path.join(folders[-1], 'pixels.raw')
+        with open(out, 'wb') as f:
             f.write(bytes(4 * 4 * 4))
         meta = '{"width": 4, "height": 4, "pitch": 16, "bpp": 4, "format": "RGBA8", "node": "1 m.basecolor"}'
         return '%s\nPIXELS=%s\n' % (printed, meta)
@@ -175,10 +181,10 @@ NOTE = "no output given: 'basecolor', tagged base colour, of 9 (diffuse, basecol
     [lambda: server.node_stats('1'), lambda: server.check_tiling('1')],
     ids=['node_stats', 'check_tiling'],
 )
-def test_the_pixel_tools_carry_the_note(monkeypatch: pytest.MonkeyPatch, call: Any) -> None:
-    _pixels_bridge(monkeypatch, NOTE)
+def test_the_pixel_tools_carry_the_note(monkeypatch: pytest.MonkeyPatch, call: Any, temp_folders: list[str]) -> None:
+    _pixels_bridge(monkeypatch, NOTE, temp_folders)
     assert NOTE in call()
-    _pixels_bridge(monkeypatch, '')
+    _pixels_bridge(monkeypatch, '', temp_folders)
     assert 'no output given' not in call()
 
 
@@ -209,14 +215,12 @@ def test_the_tools_that_look_use_the_tagged_output_unless_told(wired: Any, named
 
 
 def test_a_failed_restore_is_reported_with_an_output_named_like_restored(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, temp_folders: list[str]
 ) -> None:
     # REVIEW.md SRV-61: the note puts output names in the text, so "'restored' in text" was true with no such line,
     # and the warning for a failed restore became an AttributeError
     def bridge(code: str, path: str | None = None, timeout: float | None = None) -> str:
-        folder = re.search(r"""([^'"\\ ]*sd_sweep_[^'"\\ ]+)""", code)
-        assert folder is not None
-        with open(folder.group(1) + '/0.raw', 'wb') as f:
+        with open(os.path.join(temp_folders[-1], '0.raw'), 'wb') as f:
             f.write(bytes(16 * 4))
         meta = '{"index": 0, "value": 1, "width": 4, "height": 4, "pitch": 16, "bpp": 4, "format": "RGBA8"}'
         return (
