@@ -14,6 +14,10 @@ from .output import _load_8bit
 
 # screenshot_designer('3d', zoom=...): wheel steps either way (their size: designer_helpers/view3d.py)
 ZOOM_STEPS = 30
+# the lines of a 3D shot that come beside its image, in the order printed: what was done to Designer's window, what was
+# set up, and a render that may not have followed the set-up (designer_helpers/shot3d.py)
+WINDOW = "Designer's window: "
+NOTES = (WINDOW, '3D view: ', '3D render: ')
 
 
 @_tool()
@@ -66,7 +70,11 @@ def screenshot_designer(
     'graph' is the node view alone (no title bar or toolbars); open_graph(frame=... / node_ids=...)
     zooms it to a section first. '3d' returns the 3D view's own render (material on the mesh);
     it goes through the clipboard: its text is put back, anything else on it may be lost. Inside 'window' the
-    3D area doesn't show the render.
+    3D area doesn't show the render. The 3D view draws only while Designer's window is on screen: on macOS '3d'
+    un-minimizes it (it stays so), or brings it in front of covering windows or shows a hidden Designer and puts it
+    back as it was after (left up if the user clicked into Designer meanwhile), never taking focus, and says so. After a
+    set-up that moved the camera or switched the mesh, a render identical to the one before is said: shoot again with
+    no set-up (pan, orbit and zoom move from where the camera is).
     '3d' can set up the view first and says what it set (stopped partway, the steps it began); it stays set, for
     later shots and in the user's view:
     graph puts that graph's outputs on the mesh, selecting it in the Explorer (outputs added to the graph open
@@ -111,15 +119,18 @@ def screenshot_designer(
     tmp_dir = tempfile.mkdtemp(prefix='sd_shot_')
     out_path = os.path.join(tmp_dir, 'shot.png')
     call = 'save_screenshot(%r, %r)' % (panel, out_path)
-    if given:
-        setup = (graph or None, mesh, view, zoom, tiling, options['orbit'], options['pan'])
-        call = 'set_3d_view(%r, %r, %r, %r, %r, %r, %r); %s' % (*setup, call)
+    if panel == '3d':  # Designer's window on screen through the set-up and the render (designer_helpers/shot3d.py)
+        setup = (graph or None, mesh or None, view or None, zoom, tiling, options['orbit'], options['pan'])  # '': none
+        call = 'shoot_3d(%r, %r, %r, %r, %r, %r, %r, %r)' % (out_path, *setup)
     try:
         text = _bridge(_helpers_call(call), timeout=120 if given else 60)
-        set_up = [line for line in text.splitlines() if line.startswith('3D view: ')]
-        begun = [line for line in text.splitlines() if line.startswith('3D view, setting: ')]
-        # an error after the set-up, or partway (an abort: the steps it began): the user's 3D view changed all the same
-        said = ''.join('\n' + line for line in set_up or begun)
+        lines = text.splitlines()
+        window = [line for line in lines if line.startswith(WINDOW)]
+        set_up = [line for line in lines if line.startswith('3D view: ')]
+        begun = [line for line in lines if line.startswith('3D view, setting: ')]
+        # an error after the set-up, or partway (an abort: the steps it began): the user's 3D view changed all the same,
+        # and their window too
+        said = ''.join('\n' + line for line in window + (set_up or begun))
         if not os.path.exists(out_path):
             raise ToolError((text.strip().splitlines()[-1] if text.strip() else 'screenshot failed') + said)
         im = PILImage.open(out_path).convert('RGB')
@@ -132,7 +143,7 @@ def screenshot_designer(
         im.thumbnail((max_size, max_size))
         buf = io.BytesIO()
         im.save(buf, format='PNG')
-        return [Image(data=buf.getvalue(), format='png'), *set_up]
+        return [Image(data=buf.getvalue(), format='png'), *[line for line in lines if line.startswith(NOTES)]]
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 

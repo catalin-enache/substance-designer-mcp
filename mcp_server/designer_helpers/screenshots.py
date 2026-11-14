@@ -42,12 +42,11 @@ def _3d_dock(mw: Any) -> Any:
     return dock
 
 
-def _save_3d_render(mw: Any, out_path: str) -> tuple[int, int]:
-    """The 3D view is GPU-drawn, so a QWidget.grab() of its viewport is leftover black or grey
-    blocks, varying between calls. Use the view's own
-    Camera > 'Copy Render to Clipboard' (the renderer's image, never screen pixels), then put
-    back what Qt can copy of the user's clipboard: its text; the rest may be lost (DECISIONS.md,
-    the user's choice)."""
+def _3d_render(mw: Any) -> Any:  # Any: a Qt widget, and a QImage (Qt widgets are Any in signatures, above)
+    """The 3D view's render, a QImage. The 3D view is GPU-drawn, so a QWidget.grab() of its viewport is leftover black
+    or grey blocks, varying between calls. Use the view's own Camera > 'Copy Render to Clipboard' (the renderer's image,
+    never screen pixels; its last frame while Designer's window is off screen: shot3d.py), then put back what Qt can
+    copy of the user's clipboard: its text; the rest may be lost (DECISIONS.md, the user's choice)."""
     import time
 
     from PySide6 import QtCore, QtWidgets
@@ -58,7 +57,7 @@ def _save_3d_render(mw: Any, out_path: str) -> tuple[int, int]:
     if not bars:
         raise RuntimeError('3D View menu bar not found')
     # Keep Python references alive: Designer rebuilds these menus and stale wrappers raise
-    keep: list[Any] = []
+    keep: list[object] = []
     copy_action = None
     for top in list(bars[0].actions()):
         if top.text().replace('&', '') != 'Camera':
@@ -91,9 +90,7 @@ def _save_3d_render(mw: Any, out_path: str) -> tuple[int, int]:
             time.sleep(0.05)
         if image is None or image.isNull():
             raise RuntimeError('the 3D view did not produce a render (is a material shown?)')
-        if not image.save(out_path):
-            raise RuntimeError('could not save the 3D render')
-        return image.width(), image.height()
+        return image
     finally:
         clipboard.setMimeData(backup)
         app.processEvents()
@@ -114,17 +111,15 @@ def _graph_view(mw: Any) -> Any:
 
 
 def save_screenshot(panel: str, out_path: str) -> None:
-    """Render one of Designer's own widgets to PNG with QWidget.grab(), or the 3D view via its
-    own render. Screen/window grabs are deliberately not used: on macOS they copy whatever
+    """Render one of Designer's own widgets to PNG with QWidget.grab(); not the 3D view, which shoot_3d renders.
+    Screen/window grabs are deliberately not used: on macOS they copy whatever
     covers Designer, i.e. other apps. 'graph' is the node view alone, without the dock's
     title bar and toolbars."""
     from PySide6 import QtWidgets
 
     mw = _APP.getQtForPythonUIMgr().getMainWindow()  # type: ignore[no-untyped-call]  # sd: no annotations
     if panel == '3d':
-        width, height = _save_3d_render(mw, out_path)
-        print("3d render %dx%d (the clipboard's text put back)" % (width, height))
-        return
+        raise RuntimeError("the 3D view is shot by shoot_3d, which puts Designer's window on screen first (shot3d.py)")
     if panel == 'window':
         widget = mw
     else:

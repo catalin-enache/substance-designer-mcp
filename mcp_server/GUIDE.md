@@ -45,7 +45,11 @@ Parameters are in each tool's description; this is when to reach for which.
   `open_graph` (open the graph first, so the user and screenshots see it; `frame=` or `node_ids=` zooms to one
   section). A screenshot costs about width × height / 750 tokens: keep `max_size` small, `crop`, and zoom with
   `open_graph` rather than shooting the whole graph big. A material on a mesh, in Designer's own renderer:
-  `screenshot_designer('3d', graph=...)`; `mesh='Plane'`, `view='Top'` and `tiling=2` show how it repeats.
+  `screenshot_designer('3d', graph=...)`; `mesh='Plane'`, `view='Top'` and `tiling=2` show how it repeats. The 3D view
+  draws only while Designer's window is on screen, so on macOS the tool puts it there first and says so: tell the user
+  when it un-minimized their window. A 3D shot that doesn't show what the call set (the mesh, the view, the material)
+  may be the view's last frame: shoot again with no set-up before judging, since pan, orbit and zoom move from where
+  the camera is (ROADMAP item 83).
 - **Measure:** `node_stats` (exact numbers; prefer them to eyeballing), `check_tiling` (trim sheets only need
   horizontal), `compare_to_reference` for tones against a reference image (add it to the graph with an `apply_edits`
   `bitmap` op if wanted). Compare **like with like**: a `reference_region` of plain, lit material against the matching
@@ -114,7 +118,8 @@ grouping, no `ARGS`).
 - **Several Designers side by side:** `launch_designer(port=...)` runs one per bridge port, on macOS (other platforms
   not tried: `launch_designer`), each with its own temp folder, log, settings and crash dumps, recorded per port;
   `read_designer_log(port=...)` reads its log, also after it ended. The user's Designers share one log, their lines not
-  told apart. All share the preferences plist, so none is started next to the user's.
+  told apart. All share the preferences plist (the window layout), so none is started next to the user's; what they
+  change in it is put back once none runs (`launch_designer`, `quit_designer`; how: `designer_preferences.py`).
   Crash dumps: Designer's `Sentry-Crashpad/completed` (`pending` while its upload waits; for one an agent started on
   macOS, under `/tmp/sd_mcp_<uid>_<port>/home`). How: `server_tools/lifecycle.py`.
 

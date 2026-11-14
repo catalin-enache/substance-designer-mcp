@@ -14,8 +14,10 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from fake_defaults import FakeDefaults
 from selftest_fakes import Designer, Done, FakeRun, OpenGate, fresh, part, pool, unit_log
 
+import designer_preferences
 import project_constants
 from conftest import SELFTEST_DIR
 
@@ -429,9 +431,10 @@ def test_the_pool_runs_every_category_once_and_prints_one_summary(
     assert all('check of %s' % name in out for name in names)
     # the run's start checks (get_guide, the Home screen) once, in the first category started, not lifecycle
     assert [n for n in workers.started if n.startswith('--first')] == ['--first ' + names[1]]
-    # each worker's check, each category's quit (not lifecycle's: it ends its own), the unit suite's, and the run's
-    # count of quits forced during their shutdown
-    assert 'checks passed: %d/%d' % (2 * len(names) + 1, 2 * len(names) + 1) in out
+    # each worker's check, each category's quit (not lifecycle's: it ends its own), the unit suite's, the run's
+    # count of quits forced during their shutdown, and (macOS) Designer's preferences as before the run
+    checks = 2 * len(names) + (2 if sys.platform == 'darwin' else 1)
+    assert 'checks passed: %d/%d' % (checks, checks) in out
     assert 'quit_designer' in out and not (tmp_path / 'root').exists()
 
 
@@ -798,6 +801,9 @@ def test_the_folders_are_kept_while_a_designer_of_the_run_may_run(
     out = capsys.readouterr().out
     kept = sorted(p.name for p in tmp_path.glob('agent_*'))
     assert (tmp_path / 'root').is_dir() and 'folders kept, a Designer of the run may still be open' in out
+    if sys.platform == 'darwin':  # where the plist is
+        preferences = next(line for line in out.splitlines() if PREFERENCES in line)
+        assert preferences.startswith('FAIL'), "nothing could put them back, or that can't be told: %s" % preferences
     if listing == 'one still running':
         assert kept == ['agent_5002'], 'only the folder of the one still running'
     else:
@@ -972,3 +978,255 @@ def test_a_pool_of_lifecycle_alone_has_no_first_category(
     workers = pool(monkeypatch, tmp_path, lambda name, folder, port: part(name))
     assert workers.run_pool(4, unit=False, only=['lifecycle']) == 0
     assert workers.started == ['lifecycle', 'lifecycle'], 'no --first: the start checks need a category of their own'
+
+
+# --- Designer's preferences plist, as before the run once its Designers ended (ROADMAP item 67)
+
+PREFERENCES = "Designer's preferences are as before the run, once its Designers ended"
+_MACOS = pytest.mark.skipif(sys.platform != 'darwin', reason='the plist is macOS only')
+
+
+def _the_line(out: str) -> str:
+    return next(line for line in out.splitlines() if PREFERENCES in line)
+
+
+@_MACOS
+@pytest.mark.parametrize('put_back', [True, False], ids=['put back', 'left changed'])
+def test_the_pool_checks_designers_preferences_are_as_before_it(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    defaults: FakeDefaults,
+    put_back: bool,
+) -> None:
+    defaults.domain = {
+        'session.mainWindow.state': b'the user',
+        'session.instancePID': 10,
+        'session.lastSession.files': [],
+    }
+
+    def write(name: str, folder: str, port: int) -> dict[str, object]:
+        if not put_back:  # as agents' Designers may leave it, nothing having put it back
+            defaults.domain['session.instancePID'] = port
+            defaults.domain['session.graph.thumbnail_mode.%s' % name] = 1
+            defaults.domain.pop('session.lastSession.files', None)  # a key removed (REVIEW.md TST-358)
+        return part(name)
+
+    workers = pool(monkeypatch, tmp_path, write)
+    assert workers.run_pool(4) == (0 if put_back else 1)
+    out = capsys.readouterr().out
+    if put_back:
+        assert 'PASS  self-test              %s | 0 values changed, 0 keys added' % PREFERENCES in out, out
+    else:
+        n = len(workers.names())
+        line = _the_line(out)
+        # the counts first: a check's detail is cut at 150 characters (REVIEW.md TST-361)
+        assert (
+            line.startswith('FAIL') and '| 2 values changed, %d keys added (changed: session.instancePID, ' % n in line
+        )
+        # and every key whole, on lines of their own
+        assert '      values changed: session.instancePID, session.lastSession.files' in out, out
+        added = ', '.join(sorted('session.graph.thumbnail_mode.%s' % name for name in workers.names()))
+        assert '      keys added: %s' % added in out, out
+
+
+@_MACOS
+@pytest.mark.parametrize('unread', ['the file', 'the copy kept'])
+def test_the_preferences_check_fails_when_the_run_couldnt_read_them_as_it_started(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    defaults: FakeDefaults,
+    unread: str,
+) -> None:
+    # REVIEW.md TST-372: with nothing to compare the file with, the check can't pass
+    defaults.domain = {'session.mainWindow.state': b'the user'}
+    outside: list[int] = []
+    if unread == 'the file':
+        defaults.fail['export'] = 'defaults export: exit code 1'
+    else:  # kept for a Designer outside the run (REVIEW.md TST-357), and unopenable as the run starts
+        with designer_preferences.saved(lambda: False, ended=False):
+            pass
+        outside.append(78)
+
+        def opening(file: str, mode: str = 'r', encoding: str | None = None) -> object:
+            if file == designer_preferences.saved_file():
+                raise PermissionError(13, 'Permission denied')
+            return open(file, mode, encoding=encoding)
+
+        monkeypatch.setitem(vars(designer_preferences), 'open', opening)  # the module's own name, before the builtin
+
+    def write(name: str, folder: str, port: int) -> dict[str, object]:
+        defaults.fail.clear()  # readable again once the run started
+        monkeypatch.delitem(vars(designer_preferences), 'open', raising=False)
+        outside.clear()
+        return part(name)
+
+    workers = pool(monkeypatch, tmp_path, write)
+    monkeypatch.setitem(vars(workers), 'designer_pids', lambda: list(outside))
+    assert workers.run_pool(4) == 1
+    line = _the_line(capsys.readouterr().out)
+    why = 'defaults export: exit code 1' if unread == 'the file' else "the copy kept couldn't be read ([Errno 13]"
+    assert line.startswith('FAIL') and "| they couldn't be read as the run started: %s" % why in line, line
+
+
+@_MACOS
+def test_the_preferences_check_skips_once_the_users_designer_ran_during_the_run(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path, defaults: FakeDefaults
+) -> None:
+    # the file may hold the user's own changes then, which quit_designer leaves (designer_preferences.py)
+    def write(name: str, folder: str, port: int) -> dict[str, object]:
+        defaults.domain['changed by %s' % name] = 1
+        _users_log(defaults, time.time() + 5)
+        return part(name)
+
+    workers = pool(monkeypatch, tmp_path, write)
+    assert workers.run_pool(4) == 0
+    out = capsys.readouterr().out
+    assert "SKIP  self-test              %s | the user's Designer ran during the run" % PREFERENCES in out, out
+
+
+@_MACOS
+def test_the_preferences_check_still_fails_with_a_users_log_from_before_the_run(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path, defaults: FakeDefaults
+) -> None:
+    # REVIEW.md TST-358: the user's machine always has their log; only one written during the run skips the check
+    _users_log(defaults, time.time() - 3600)
+
+    def write(name: str, folder: str, port: int) -> dict[str, object]:
+        defaults.domain['changed by %s' % name] = 1
+        return part(name)
+
+    workers = pool(monkeypatch, tmp_path, write)
+    assert workers.run_pool(4) == 1
+    assert _the_line(capsys.readouterr().out).startswith('FAIL')
+
+
+def _users_log(defaults: FakeDefaults, at: float) -> None:
+    log = defaults.users_data / '16.0' / 'log.txt'
+    log.parent.mkdir(exist_ok=True)
+    log.write_text('the user opened theirs\n')
+    os.utime(log, (at, at))
+
+
+@_MACOS
+@pytest.mark.parametrize('whose', ['the run', 'another'])
+def test_the_preferences_check_with_a_designer_still_running(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path, whose: str
+) -> None:
+    # one of the run's: nothing could put the file back, a failure; another's (an alone.run Designer kept open): the
+    # put-back waits for its end, so the check can't tell
+    workers = pool(monkeypatch, tmp_path, lambda name, folder, port: part(name))
+    monkeypatch.setitem(vars(workers), 'agents_designers', lambda: {5001: 77} if whose == 'the run' else {9500: 78})
+    monkeypatch.setitem(vars(workers), 'designer_pids', lambda: [77] if whose == 'the run' else [78])
+    workers.run_pool(4)
+    line = _the_line(capsys.readouterr().out)
+    if whose == 'the run':
+        assert line.startswith('FAIL') and "the run's Designers still run, on ports [5001]" in line, line
+    else:
+        assert line.startswith('SKIP') and 'a Designer outside the run runs (78)' in line, line
+
+
+@_MACOS
+def test_a_copy_left_from_before_the_run_is_put_back_before_the_pool_reads_the_file(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path, defaults: FakeDefaults
+) -> None:
+    # agents' Designers that ended outside the tools left a copy and their change: put back as the run starts, as its
+    # first launch would, and said
+    defaults.domain = {'session.mainWindow.state': b'the user'}
+    with designer_preferences.saved(lambda: False, ended=False):
+        pass
+    defaults.domain['session.mainWindow.state'] = b'a crashed agent'
+
+    def write(name: str, folder: str, port: int) -> dict[str, object]:
+        designer_preferences.put_back(lambda: False, ended=True)  # as each worker's quit_designer does, once none runs
+        return part(name)
+
+    workers = pool(monkeypatch, tmp_path, write)
+    assert workers.run_pool(4) == 0
+    out = capsys.readouterr().out
+    assert "Designer's preferences put back from their copy: 1 value put back." in out
+    assert defaults.domain == {'session.mainWindow.state': b'the user'}
+
+
+@_MACOS
+def test_a_copy_too_old_to_put_back_is_dropped_before_the_pool_reads_the_file(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path, defaults: FakeDefaults
+) -> None:
+    # REVIEW.md TST-367, TST-368: the run's first launch would drop it (past LEFTOVER_HOURS, the user may have worked
+    # since) and save the file as it is, which the run's last quit puts back: so the file is what the run should leave
+    defaults.domain = {'session.mainWindow.state': b'the user'}
+    with designer_preferences.saved(lambda: False, ended=False):
+        pass
+    old = time.time() - (designer_preferences.LEFTOVER_HOURS + 1) * 3600
+    os.utime(designer_preferences.saved_file(), (old, old))
+    defaults.domain['session.mainWindow.state'] = b'a crashed agent, or the user since'
+
+    def write(name: str, folder: str, port: int) -> dict[str, object]:
+        with designer_preferences.saved(lambda: False, ended=False):  # as each worker's launch_designer does
+            pass
+        designer_preferences.put_back(lambda: False, ended=True)  # and its quit_designer, once none runs
+        return part(name)
+
+    workers = pool(monkeypatch, tmp_path, write)
+    assert workers.run_pool(4) == 0
+    assert 'PASS' in _the_line(capsys.readouterr().out)
+    assert defaults.domain == {'session.mainWindow.state': b'a crashed agent, or the user since'}, (
+        'dropped, not put back'
+    )
+
+
+@_MACOS
+def test_the_check_compares_with_the_file_once_the_users_designer_ran_since_the_copy(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path, defaults: FakeDefaults
+) -> None:
+    # REVIEW.md TST-367: an alone.run Designer open (its copy C0 kept), and the user opened and closed theirs since: the
+    # run's first launch saves the file again, which the run's last quit puts back, not C0
+    defaults.domain = {'session.mainWindow.state': b'the user'}
+    with designer_preferences.saved(lambda: False, ended=False):
+        pass
+    made = time.time() - 60
+    os.utime(designer_preferences.saved_file(), (made, made))
+    defaults.domain['session.instancePID'] = 9500  # the outside Designer's
+    _users_log(defaults, made + 30)
+    defaults.domain['session.mainWindow.state'] = b"the user's new layout"
+    outside = [78]
+    launches: list[str] = []
+
+    def write(name: str, folder: str, port: int) -> dict[str, object]:
+        launches.append(name)
+        with designer_preferences.saved(lambda: True, ended=False):  # each worker's launch: another Designer runs
+            pass
+        outside.clear()  # the outside one quit meanwhile; then, as each worker's quit_designer does once none runs
+        designer_preferences.put_back(lambda: False, ended=True)
+        return part(name)
+
+    workers = pool(monkeypatch, tmp_path, write)
+    monkeypatch.setitem(vars(workers), 'designer_pids', lambda: list(outside))
+    assert workers.run_pool(4) == 0
+    assert launches and 'PASS' in _the_line(capsys.readouterr().out)
+    assert defaults.domain == {'session.mainWindow.state': b"the user's new layout", 'session.instancePID': 9500}
+
+
+@_MACOS
+def test_the_check_compares_with_the_copy_kept_for_a_designer_outside_the_run(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path, defaults: FakeDefaults
+) -> None:
+    # REVIEW.md TST-357: an alone.run Designer open as the run starts (its copy C0 kept, the file F1 its own), quit
+    # during the run: the run's last quit puts C0 back, which is the file as before any agent's Designer
+    defaults.domain = {'session.mainWindow.state': b'the user'}
+    with designer_preferences.saved(lambda: False, ended=False):
+        pass
+    defaults.domain['session.instancePID'] = 9500  # the outside Designer's
+    outside = [78]
+
+    def write(name: str, folder: str, port: int) -> dict[str, object]:
+        outside.clear()  # quit meanwhile; then, as each worker's quit_designer does once none runs
+        designer_preferences.put_back(lambda: False, ended=True)
+        return part(name)
+
+    workers = pool(monkeypatch, tmp_path, write)
+    monkeypatch.setitem(vars(workers), 'designer_pids', lambda: list(outside))
+    assert workers.run_pool(4) == 0
+    assert 'PASS' in _the_line(capsys.readouterr().out)
+    assert defaults.domain == {'session.mainWindow.state': b'the user'}

@@ -30,6 +30,7 @@ AGENTS_SECTIONS = (
     '## Working on this project',
     '### Running the tests',
     '### Keeping the docs current',
+    '### Writing docs and comments',
     '### Deploying and diagnosing',
 )
 # what the guide holds, as a link to it names it: its sections and the bold paragraphs other files point to

@@ -58,7 +58,7 @@ viewpoint, the camera turned and panned, the zoom and the tiling (ROADMAP items 
 - What is set stays: for the next shots, and in the user's 3D view.
 """
 
-from .core import _APP, Any, APIException, SDUIMgr, _current_graph, cast, find_graph
+from .core import _APP, Any, APIException, Callable, SDSBSCompGraph, SDUIMgr, _current_graph, cast, find_graph
 from .editor import _process_events, _wheel
 from .screenshots import _PANEL_AREAS, _3d_dock, _visible_dock
 
@@ -467,24 +467,10 @@ def _drag(viewport: Any, button: Any, dx: int, dy: int, pressed: list[Any]) -> N
         viewport.removeEventFilter(guard)
 
 
-def set_3d_view(
-    graph: str | None = None,
-    mesh: str | None = None,
-    view: str | None = None,
-    zoom: int = 0,
-    tiling: float | None = None,
-    orbit: list[float] | None = None,
-    pan: list[float] | None = None,
-) -> None:
-    """Set up the 3D view as the user sees it too: `graph`'s outputs on the mesh, the mesh (MESHES), the viewpoint
-    (VIEWS, then framed), the camera turned `orbit` [right, up] degrees around the point it looks at and moved `pan`
-    [right, up] fractions of the view sideways, `zoom` wheel steps closer (negative: away), in that order, and the
-    material's tiling. The graph, the panels, the menu entries and the tools it needs are checked before anything
-    changes (with mesh=, the new mesh's material once it shows). Prints '3D view, setting: <step>' before each change,
-    so an abort leaves the steps it began said; an error after a change says what was set; then one line,
-    '3D view: ...', of what it set."""
-    from PySide6 import QtCore, QtWidgets
-
+def _set_up_checked(graph: str | None, mesh: str | None, view: str | None) -> SDSBSCompGraph | None:
+    """The graph `graph` names (None without one), once what the arguments alone rule out is refused: a mesh or view
+    the 3D view's menus don't have (MESHES, VIEWS), and a graph with fewer than two outputs. Nothing in Designer's UI
+    is looked at or changed."""
     if mesh is not None and mesh not in MESHES:
         raise RuntimeError('unknown mesh %r; the 3D view has %s' % (mesh, ', '.join(MESHES)))
     if view is not None and view not in VIEWS:
@@ -499,8 +485,26 @@ def set_3d_view(
                 'graph %s has one output: Designer would ask which channel of the material to show it in; '
                 'preview_node shows it' % g.getIdentifier()
             )
+    return g
+
+
+def _3d_set_up(
+    graph: str | None = None,
+    mesh: str | None = None,
+    view: str | None = None,
+    zoom: int = 0,
+    tiling: float | None = None,
+    orbit: list[float] | None = None,
+    pan: list[float] | None = None,
+) -> Callable[[], None]:
+    """set_3d_view checked, changing nothing: what the arguments rule out, the graph, the panels, the menu entries and
+    the tools it needs, an orbit or pan of less than a pixel's drag; refused here (shoot_3d calls it before it puts
+    Designer's window on screen: REVIEW.md HLP-127). Returns its steps, to run: set_3d_view's docstring."""
+    from PySide6 import QtCore, QtGui, QtWidgets
+
+    g = _set_up_checked(graph, mesh, view)
     mw = _APP.getQtForPythonUIMgr().getMainWindow()  # type: ignore[no-untyped-call]  # sd: no annotations
-    keep: list[Any] = [mw]
+    keep: list[object] = [mw]
     dock = _3d_dock(mw)
     bars = dock.findChildren(QtWidgets.QMenuBar)
     viewports = [
@@ -514,8 +518,9 @@ def set_3d_view(
     orbit_drags, turned = _orbit_drags(orbit) if orbit else ([], [])
     pan_drags, panned = _pan_drags(pan, viewport.width(), viewport.height()) if pan else ([], [])
     moving = bool(orbit_drags or pan_drags or zoom)
-    camera: Any = None  # the toolbar's tools, looked up only when a drag or the wheel goes to the viewport
-    light: Any = None
+    # the toolbar's tools, looked up only when a drag or the wheel goes to the viewport
+    camera: QtGui.QAction | None = None
+    light: QtGui.QAction | None = None
     if moving:
         camera, light = _navigation_tools(dock, keep)
     tree = _explorer_tree(mw, keep) if g is not None else None
@@ -532,72 +537,99 @@ def set_3d_view(
         needed.append(('Materials',) if mesh is not None else ('Materials', _material(bar, keep), 'Edit properties'))
     for path in needed:
         _menu_action(bar, keep, *path)  # there; looked up again as it is used, after the mesh may have changed
-    done: list[str] = []
-    tiling_begun = False  # an abort's handler then turns the Parameters panel back
-    switched = False  # the Light tool was selected, the Camera tool selected for the drags and the wheel
-    pressed: list[Any] = []  # a drag's button down: (button, x, y)
 
-    def begin(step: str) -> str:
-        """Says the step before its change: no abort can land between a change and its record (REVIEW.md HLP-119)."""
-        print('3D view, setting: ' + step)
-        return step
+    def run() -> None:
+        """The set-up's steps, checked by _3d_set_up."""
+        done: list[str] = []
+        tiling_begun = False  # an abort's handler then turns the Parameters panel back
+        switched = False  # the Light tool was selected, the Camera tool selected for the drags and the wheel
+        pressed: list[tuple[QtCore.Qt.MouseButton, float, float]] = []  # a drag's button down: _drag's own record
 
-    try:
-        if mesh is not None:
-            step = begin(mesh)
-            _menu_action(bar, keep, 'Scene', mesh).trigger()
+        def begin(step: str) -> str:
+            """Says the step before its change: no abort can land between a change and its record (REVIEW.md
+            HLP-119)."""
+            print('3D view, setting: ' + step)
+            return step
+
+        try:
+            if mesh is not None:
+                step = begin(mesh)
+                _menu_action(bar, keep, 'Scene', mesh).trigger()
+                _settle(0.5)
+                done.append(step)
+            if g is not None:
+                step = begin("graph %s's outputs on the mesh" % g.getIdentifier())
+                g.compute()  # its outputs ready for the mesh
+                _apply_outputs(tree, g, keep)
+                _settle(1.0)
+                done.append(step)
+            if view is not None:
+                step = begin('view %s, framed' % view)
+                _menu_action(bar, keep, 'Camera', view).trigger()
+                _settle(VIEW_TURN)  # Frame at once cancels the camera's turn
+                _menu_action(bar, keep, 'Camera', 'Frame').trigger()
+                _settle(0.3)
+                done.append(step)
+            if camera is not None and light is not None:  # moving: looked up above
+                switched = light.isChecked()  # read before the change: an abort landing on it finds nothing changed
+                try:
+                    if switched:
+                        camera.trigger()
+                        _process_events()
+                    if orbit_drags:
+                        step = begin('orbit ' + _directions(turned, ' degrees'))
+                        for dx, dy in orbit_drags:
+                            _drag(viewport, QtCore.Qt.MouseButton.LeftButton, dx, dy, pressed)
+                        done.append(step)
+                    if pan_drags:
+                        step = begin('pan ' + _directions(panned, ' of the view'))
+                        for dx, dy in pan_drags:
+                            _drag(viewport, QtCore.Qt.MouseButton.MiddleButton, dx, dy, pressed)
+                        done.append(step)
+                    if zoom:
+                        step = begin('%+d wheel steps' % zoom)
+                        _wheel(viewport, zoom, WHEEL_PAUSE)
+                        done.append(step)
+                finally:
+                    _tool_back(light, switched)
+            if tiling is not None:
+                begin('tiling %g' % tiling)
+                tiling_begun = True
+                done.append(_set_tiling(params, bar, tiling, keep))
+            print('3D view: ' + ', '.join(done))
             _settle(0.5)
-            done.append(step)
-        if g is not None:
-            step = begin("graph %s's outputs on the mesh" % g.getIdentifier())
-            g.compute()  # its outputs ready for the mesh
-            _apply_outputs(tree, g, keep)
-            _settle(1.0)
-            done.append(step)
-        if view is not None:
-            step = begin('view %s, framed' % view)
-            _menu_action(bar, keep, 'Camera', view).trigger()
-            _settle(VIEW_TURN)  # Frame at once cancels the camera's turn
-            _menu_action(bar, keep, 'Camera', 'Frame').trigger()
-            _settle(0.3)
-            done.append(step)
-        if moving:
-            switched = light.isChecked()  # read before the change: an abort landing on it finds nothing changed
-            try:
-                if switched:
-                    camera.trigger()
-                    _process_events()
-                if orbit_drags:
-                    step = begin('orbit ' + _directions(turned, ' degrees'))
-                    for dx, dy in orbit_drags:
-                        _drag(viewport, QtCore.Qt.MouseButton.LeftButton, dx, dy, pressed)
-                    done.append(step)
-                if pan_drags:
-                    step = begin('pan ' + _directions(panned, ' of the view'))
-                    for dx, dy in pan_drags:
-                        _drag(viewport, QtCore.Qt.MouseButton.MiddleButton, dx, dy, pressed)
-                    done.append(step)
-                if zoom:
-                    step = begin('%+d wheel steps' % zoom)
-                    _wheel(viewport, zoom, WHEEL_PAUSE)
-                    done.append(step)
-            finally:
+        except (Exception, APIException) as e:  # the sd API's error is a BaseException too
+            if not done:
+                raise
+            raise RuntimeError('%s; the 3D view was already set: %s' % (e, ', '.join(done))) from e
+        except (
+            BaseException
+        ):  # an abort (the plugin's ScriptAborted): its steps said as begun; this handler runs untraced
+            for button, x, y in pressed:  # one landing on a drag's finally skipped its release
+                _release(viewport, button, x, y)
+            if light is not None:  # or the Light tool's way back
                 _tool_back(light, switched)
-        if tiling is not None:
-            begin('tiling %g' % tiling)
-            tiling_begun = True
-            done.append(_set_tiling(params, bar, tiling, keep))
-        print('3D view: ' + ', '.join(done))
-        _settle(0.5)
-    except (Exception, APIException) as e:  # the sd API's error is a BaseException too
-        if not done:
+            if tiling_begun:  # one landing on _set_tiling's finally's first line skipped its turn-back
+                _parameters_back()
             raise
-        raise RuntimeError('%s; the 3D view was already set: %s' % (e, ', '.join(done))) from e
-    except BaseException:  # an abort (the plugin's ScriptAborted): its steps said as begun; this handler runs untraced
-        for button, x, y in pressed:  # one landing on a drag's finally skipped its release
-            _release(viewport, button, x, y)
-        if light is not None:  # or the Light tool's way back
-            _tool_back(light, switched)
-        if tiling_begun:  # one landing on _set_tiling's finally's first line skipped its turn-back
-            _parameters_back()
-        raise
+
+    return run
+
+
+def set_3d_view(
+    graph: str | None = None,
+    mesh: str | None = None,
+    view: str | None = None,
+    zoom: int = 0,
+    tiling: float | None = None,
+    orbit: list[float] | None = None,
+    pan: list[float] | None = None,
+) -> None:
+    """Set up the 3D view as the user sees it too: `graph`'s outputs on the mesh, the mesh (MESHES), the viewpoint
+    (VIEWS, then framed), the camera turned `orbit` [right, up] degrees around the point it looks at and moved `pan`
+    [right, up] fractions of the view sideways, `zoom` wheel steps closer (negative: away), in that order, and the
+    material's tiling. The graph, the panels, the menu entries and the tools it needs are checked before anything
+    changes (with mesh=, the new mesh's material once it shows). Prints '3D view, setting: <step>' before each change,
+    so an abort leaves the steps it began said; an error after a change says what was set; then one line,
+    '3D view: ...', of what it set."""
+    _3d_set_up(graph, mesh, view, zoom, tiling, orbit, pan)()

@@ -5,6 +5,7 @@ import re
 import sys
 import tempfile
 import types
+from pathlib import Path
 from typing import Any, cast
 from unittest import mock
 
@@ -15,7 +16,10 @@ FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixtures')
 sys.path.insert(0, os.path.join(ROOT, 'mcp_server'))
 sys.path.insert(0, ROOT)
 
+from fake_defaults import FakeDefaults  # noqa: E402  (imports designer_preferences, from ROOT)
+
 import designer_helpers  # noqa: E402
+import designer_preferences  # noqa: E402
 import project_constants  # noqa: E402
 import server as _server_module  # noqa: E402  (importing doesn't start the server or contact Designer)
 import server_tools  # noqa: E402  (server.py's code, one module per area)
@@ -31,6 +35,9 @@ REAL_DESIGNER_PIDS = server._designer_pids  # runs pgrep
 REAL_DESIGNER_RUNNING = server._designer_running  # runs pgrep (tasklist on Windows)
 REAL_PROCESS_START = server._process_start  # runs ps
 REAL_SAMPLE = server._sample  # runs macOS's sample on a process
+REAL_PLUGIN_PATHS = server._plugin_paths  # reads the user's newest Designer project file
+REAL_RUN_DEFAULTS = designer_preferences.run_defaults  # runs macOS's defaults, on the user's preferences
+REAL_USERS_DATA_DIR = designer_preferences.users_data_dir  # the user's Designer's folder, its log in it
 # as the test run found it, before the autouse fixture below replaces it
 REAL_SNAPSHOT_DIR = os.environ.get('SD_SNAPSHOT_DIR') or os.path.join(os.path.expanduser('~'), '.sd_mcp', 'snapshots')
 
@@ -124,10 +131,10 @@ def sbs_path() -> str:
 
 @pytest.fixture(autouse=True)
 def no_real_designer_process(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, tmp_path_factory: pytest.TempPathFactory
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
-    """No unit test looks at, or ends, a Designer really running here, reads the real record of who started it or
-    the real bridge token, or removes the self-test's real snapshots."""
+    """No unit test looks at, or ends, a Designer really running here, reads the real record of who started it, the
+    real bridge token or the user's project file, or removes the self-test's real snapshots."""
     patch_server(monkeypatch, '_designer_pids', list)
     # follows whatever _designer_pids gives now (REVIEW.md TST-147: it ran the real pgrep)
     patch_server(monkeypatch, '_designer_running', lambda: bool(server._designer_pids()))
@@ -136,6 +143,8 @@ def no_real_designer_process(
     patch_server(monkeypatch, '_sample', lambda pid, path: pytest.fail('a real process sampled: %d' % pid))
     patch_server(monkeypatch, '_own_temp', lambda port: str(tmp_path / ('T_%d' % port)) + os.sep)
     patch_server(monkeypatch, '_own_home', lambda port: None)
+    # a launch with a home of its own: not the plugin folders the user's own project file lists (REVIEW.md TST-379)
+    patch_server(monkeypatch, '_plugin_paths', lambda: str(tmp_path / 'plugins'))
     # beside tmp_path, not in it: tests list what they put there (test_install.py)
     own = tmp_path_factory.mktemp('no_real_designer')
     (own / 'short').mkdir()  # exists, as /tmp does
@@ -152,3 +161,18 @@ def no_real_designer_process(
     token.write_text('t' * 64)
     patch_server(monkeypatch, 'TOKEN_FILE', str(token))
     monkeypatch.setitem(vars(project_constants), 'TOKEN_FILE', str(token))
+
+
+@pytest.fixture(autouse=True)
+def defaults(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> FakeDefaults:
+    """No unit test reads or writes the user's preferences plist, or reads their Designer's log: `defaults` is a fake
+    holding one domain (empty until a test fills it), and the user's data folder and plist file the test's (the folder
+    empty, the file not there). Its copy goes in AGENT_RECORD_DIR, the test's (no_real_designer_process). `defaults`
+    itself points nowhere, so a call that bypassed run_defaults would fail rather than reach the user's file (REVIEW.md
+    TST-360)."""
+    fake = FakeDefaults(tmp_path_factory.mktemp('users_designer_data'), tmp_path_factory.mktemp('users_preferences'))
+    monkeypatch.setitem(vars(designer_preferences), 'run_defaults', fake)
+    monkeypatch.setitem(vars(designer_preferences), 'users_data_dir', lambda: str(fake.users_data))
+    monkeypatch.setitem(vars(designer_preferences), 'plist_file', lambda: str(fake.plist))
+    monkeypatch.setitem(vars(designer_preferences), 'DEFAULTS', str(fake.users_data / 'no_defaults_here'))
+    return fake

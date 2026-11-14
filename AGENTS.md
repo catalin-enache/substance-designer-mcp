@@ -121,9 +121,28 @@ checked against Designer's own `sd` package and PySide6 stubs (found in the Desi
 Python 3.13, which evaluates annotations when a `def` runs: every name in an annotation there must exist at runtime
 (import real types, `from sd.api.sdnode import SDNode`, never only under `if TYPE_CHECKING:`), and no `from __future__
 import annotations` (the helpers are joined into one script, where it can't come first). The standalone scripts
-(`install.py`, `uninstall.py`, `client/sd_run.py`, `scripts/review_lookup.py`, `scripts/read_crash_dump.py`) are the opposite: they run on the system
+(`install.py`, `uninstall.py`, `client/sd_run.py`, `scripts/review_lookup.py`, `scripts/read_crash_dump.py`), and the
+modules they import (`designer_preferences.py`, `project_constants.py`), are the opposite: they run on the system
 Python, maybe 3.9, so they do start with `from __future__ import annotations` and evaluate no `X | None` at module level
-(`tests/unit/test_old_python.py` runs them on an older Python when one is installed).
+(`tests/unit/test_old_python.py` runs them on an older Python when one is installed; the modules only through the
+scripts that import them).
+
+**The most specific type that fits; `Any` is the last resort.** mypy strict accepts `Any` anywhere, and checks nothing
+through it, so before writing `Any` (or a `dict`, `list` or `tuple` whose items' types say less than is known: a
+record's `dict[str, object]` where a `TypedDict` fits; a bare one strict mypy refuses already) look for what the value
+really is: a type of the code it comes from (`SDNode`, `Reply`,
+`subprocess.CompletedProcess[str]`), a union of the few it can be, a `TypedDict` for a dict with known keys (a record,
+a reply, a worker's results), a `Protocol` for an object of which only some attributes are used, `Callable[[...], ...]`
+for a function, a `TypeVar` for a value passed through, `object` for one only stored, printed or compared, or for
+parsed JSON before it is checked (it makes the checks explicit). `Any` stays where nothing narrower is true or can be
+checked (a fake standing in for a type it can't subclass, what sd's own stubs leave untyped), marked as an exception
+with its reason on the same line: `# type: ignore[explicit-any]  # <reason>` in a module where mypy's
+`disallow_any_explicit` is on (ROADMAP item 99), `# Any: <reason>` elsewhere, since strict mypy refuses that ignore
+as unused without the flag (measured, mypy 2.4.1). An `Any` so marked, with a reason that holds, is accepted; one
+without is narrowed or marked. A function you change gets the same look: an `Any`, or a `dict`, `list` or `tuple`
+whose items' types say less than is known, that it holds and could be narrower is narrowed in the same change (the rest
+of its file is ROADMAP item 98's). Reviewers report what is left in the functions a branch's diff adds or changes (the
+`project-code-review` skill; DECISIONS.md, Project rules).
 
 **Strings of code** (`tests/unit/test_selftest_safety.py` checks the self-test's and the server's modules). A string of
 several lines is written `dedent("""...""")` (`textwrap`), not joined pieces with `\n`; the server's own calls into the
@@ -157,6 +176,30 @@ deliberate: the sentence saying what REVIEW.md and DECISIONS.md each remember.
 
 Open work lives in [ROADMAP.md](ROADMAP.md): check it before proposing improvements, and add new ideas there.
 
+### Writing docs and comments
+
+Docs, docstrings, comments and the lines the tools return are read by people and agents who didn't write the code,
+often in a hurry. Write them so that one reading, top to bottom, is enough:
+
+- **Subject and verb first.** Say who or what does what: "The first launch saves a copy of the file, unless one is
+  there already", not "Saved as the first Designer starts, unless one is there already: a copy of the file".
+- **One idea per sentence.** Split a sentence that chains clauses with colons or semicolons into several sentences, or
+  into a list.
+- **At most one parenthetical per sentence.** Give the others a sentence of their own, or drop them.
+- **Name what you mean.** Write "the copy" or "the user's Designer" instead of "it", "one" or "theirs" when the reader
+  would have to look back to know which.
+- **Plain words.** "If the start fails, a copy made for it is removed. A copy made again is kept", not "A copy made
+  here, not again, is removed when the start raises".
+- **The main point first.** A docstring opens with what the function does, returns and raises. Reasons, history and
+  REVIEW.md IDs come after that, or in a comment beside the line they explain.
+- **Lists for parallel cases.** Put three or more cases, steps or exceptions in a list, not in one long sentence.
+- **No filler.** Leave out "note that", "it's worth noting", "simply", and words that only add emphasis.
+
+Rewriting for style never changes what a sentence claims. Reviews check each claim against its test, so the new
+wording must say exactly what the old one did. This applies to the text you write or change. Don't rewrite untouched
+text only for its style: a rewrite can change a claim, and it adds noise to the diff. Reviews report a sentence only
+when it misleads, never for its style alone.
+
 ### Deploying and diagnosing
 
 - **Fresh clone, or a deleted `mcp_server/venv`:** run `python3 install.py` (Windows: `py -3 install.py`) first;
@@ -176,8 +219,8 @@ Open work lives in [ROADMAP.md](ROADMAP.md): check it before proposing improveme
   module per area (`core` holds the bridge and the `_tool` decorator; a new module goes into `MODULES` in its
   `__init__.py`). Unit tests replace a name with `patch_server` (`tests/unit/conftest.py`), which patches every module
   binding it: patching `server` alone doesn't reach the tools.
-- **How changes reach Designer:** `server.py`, `server_tools/` and `designer_helpers/` changes take effect when the MCP
-  server restarts (helpers are re-sent with every call; the user reconnects in `/mcp`, or test with a fresh MCP client
+- **How changes reach Designer:** `server.py`, `server_tools/`, `designer_helpers/` and `designer_preferences.py` changes
+  take effect when the MCP server restarts (helpers are re-sent with every call; the user reconnects in `/mcp`, or test with a fresh MCP client
   such as the self-test). **Plugin** changes must be copied into Designer's plugin folder (re-run `install.py`; paths in
   README.md, Install) and need a **Designer restart**: for a Designer an agent started, `quit_designer` then
   `launch_designer` without asking (say that you did); for the user's, ask them to save, close and reopen it.

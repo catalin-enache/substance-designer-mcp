@@ -2,8 +2,10 @@
 environment-variable overrides (README, Configuration), log filtering and the missing-tools message."""
 
 import contextlib
+import errno
 import json
 import os
+import plistlib
 import re
 import signal
 import socket
@@ -17,10 +19,12 @@ import types
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from textwrap import dedent
-from typing import Any, NoReturn
+from typing import IO, Any, NoReturn
 
 import pytest
+from fake_defaults import FakeDefaults, lock_held
 
+import designer_preferences
 import project_constants
 import server_tools
 from conftest import (
@@ -28,6 +32,7 @@ from conftest import (
     REAL_DESIGNER_PIDS,
     REAL_OWN_HOME,
     REAL_OWN_TEMP,
+    REAL_PLUGIN_PATHS,
     REAL_PROCESS_START,
     REAL_SAMPLE,
     REAL_SHORT_TEMP,
@@ -499,6 +504,43 @@ def test_launch_state_not_running(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     assert server._agent_designer(server.PORT) == 77, 'it remembers the one it started'
 
 
+def test_a_designer_started_gives_the_keyboard_back_once_its_home_screen_is_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
+) -> None:
+    # REVIEW.md SRV-148: it became the active app as it started, the user's keyboard in it
+    started = _launch_fakes(monkeypatch, tmp_path)
+    calls: list[str] = []
+    processes = _Processes(monkeypatch)
+
+    def begin(cmd: list[str], **kw: Any) -> _FakeProcess:
+        started.append(cmd)
+        processes.pids.append(77)
+        return _FakeProcess(77)
+
+    said = {
+        'leave_home_screen()': 'closed the Home screen',
+        'give_back_activation()': 'gave the keyboard back to the app in front before it',
+    }
+
+    def bridge(
+        code: str,
+        path: str | None = None,
+        timeout: float | None = None,
+        wait: float | None = None,
+        port: int | None = None,
+    ) -> str:
+        call = code.strip().splitlines()[-1]  # the helpers' source comes first
+        calls.append(call)
+        return said[call] + '\n'
+
+    monkeypatch.setattr(subprocess, 'Popen', begin)
+    patch_server(monkeypatch, '_send', _answers_once_started(started))
+    patch_server(monkeypatch, '_bridge', bridge)
+    result = server.launch_designer(wait_s=30)
+    assert calls == ['leave_home_screen()', 'give_back_activation()']
+    assert '(closed the Home screen; gave the keyboard back to the app in front before it)' in result
+
+
 def test_a_user_opening_one_at_the_same_moment_doesnt_confuse_the_record(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
 ) -> None:
@@ -684,9 +726,11 @@ def _launch_with_home(
     home: Path | None,
     home_screen: Exception | None = None,
     refuses: bool = False,
+    at_start: Callable[[], None] = lambda: None,
 ) -> str:
     """launch_designer starting one with `home` (None: none of its own, as off macOS), which then answers (with a
-    refusal when `refuses`); leaving its Home screen raises `home_screen` when given."""
+    refusal when `refuses`); leaving its Home screen raises `home_screen` when given; `at_start` runs as its process
+    starts."""
     started = _launch_fakes(monkeypatch, tmp_path)
     if home_screen is not None:
 
@@ -702,7 +746,8 @@ def _launch_with_home(
         patch_server(monkeypatch, '_bridge', fails)
     processes = _Processes(monkeypatch)
 
-    def begin(cmd: list[str], **kw: Any) -> _FakeProcess:
+    def begin(cmd: list[str], **kw: object) -> _FakeProcess:
+        at_start()
         started.append(cmd)
         processes.pids.append(77)
         return _FakeProcess(77)
@@ -1976,12 +2021,12 @@ def test_the_plugin_folders_are_those_the_users_designer_loads(monkeypatch: pyte
     os.utime(data / '15.0', (0, 0))
     patch_server(monkeypatch, '_designer_data_dir', lambda home=None: str(data))
     monkeypatch.delenv('SBS_DESIGNER_PYTHON_PATH', raising=False)
-    assert server._plugin_paths() == '/Users/me/My Plugins'
+    assert REAL_PLUGIN_PATHS() == '/Users/me/My Plugins'
     monkeypatch.setenv('SBS_DESIGNER_PYTHON_PATH', '/their/own')
-    assert server._plugin_paths() == '/Users/me/My Plugins' + os.pathsep + '/their/own'
+    assert REAL_PLUGIN_PATHS() == '/Users/me/My Plugins' + os.pathsep + '/their/own'
     patch_server(monkeypatch, '_designer_data_dir', lambda home=None: str(tmp_path / 'none'))
     monkeypatch.delenv('SBS_DESIGNER_PYTHON_PATH')
-    assert server._plugin_paths() == os.path.join(
+    assert REAL_PLUGIN_PATHS() == os.path.join(
         os.path.expanduser('~'), 'Documents', 'Adobe', 'Adobe Substance 3D Designer', 'python', 'sduserplugins'
     ), "no project file yet: Designer's default, where install.py puts it"
 
@@ -2702,7 +2747,7 @@ def test_a_project_file_that_cant_be_read_gives_designers_default(
     patch_server(monkeypatch, '_designer_data_dir', lambda home=None: str(data))
     monkeypatch.delenv('SBS_DESIGNER_PYTHON_PATH', raising=False)
     try:
-        assert server._plugin_paths() == os.path.join(
+        assert REAL_PLUGIN_PATHS() == os.path.join(
             os.path.expanduser('~'), 'Documents', 'Adobe', 'Adobe Substance 3D Designer', 'python', 'sduserplugins'
         )
     finally:
@@ -2715,7 +2760,7 @@ def test_a_plugin_folder_with_an_xml_entity_is_decoded(monkeypatch: pytest.Monke
     _project_file(data, '16.0', 'file:///Users/me/A&amp;B plugins')
     patch_server(monkeypatch, '_designer_data_dir', lambda home=None: str(data))
     monkeypatch.delenv('SBS_DESIGNER_PYTHON_PATH', raising=False)
-    assert server._plugin_paths() == '/Users/me/A&B plugins'
+    assert REAL_PLUGIN_PATHS() == '/Users/me/A&B plugins'
 
 
 def test_no_unit_test_sees_a_designer_really_running(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2728,3 +2773,526 @@ def test_no_unit_test_sees_a_designer_really_running(monkeypatch: pytest.MonkeyP
     )
     assert server._designer_pids() == []
     assert server._designer_running() is False
+
+
+def test_no_unit_test_reads_the_users_project_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md TST-379: a launch with a home of its own read the plugin folders from the user's newest project file, in
+    # their Designer's folder
+    patch_server(monkeypatch, '_designer_data_dir', lambda home=None: pytest.fail("the user's Designer folder read"))
+    assert server._plugin_paths()
+
+
+# --- Designer's preferences plist, saved as an agent's Designer starts, put back once none runs (ROADMAP item 67)
+
+_USERS = {'session.mainWindow.state': b"the user's layout", 'session.lastSession.files': ['/Users/me/brick.sbs']}
+_MACOS_PLIST = pytest.mark.skipif(sys.platform != 'darwin', reason='the preferences plist is macOS only')
+_PUT_BACK = "Designer's preferences put back from their copy"
+_NOT_SAVED = (
+    "Designer's preferences couldn't be saved first (defaults export: exit code 1): if a Designer is started now, its "
+    "changes to them won't be put back."
+)
+
+
+def _saved_as_by_a_launch(defaults: FakeDefaults, hours_ago: float = 0) -> None:
+    """The user's file as it was, saved as a launch saves it (`hours_ago`), then changed as an agent's Designer may."""
+    defaults.domain = dict(_USERS)
+    with designer_preferences.saved(lambda: False, ended=False):
+        pass
+    at = time.time() - hours_ago * 3600
+    os.utime(designer_preferences.saved_file(), (at, at))
+    defaults.domain['session.instancePID'] = 11
+    defaults.domain['session.mainWindow.state'] = b'floating'
+
+
+@_MACOS_PLIST
+def test_launch_saves_designers_preferences_before_its_designer_starts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, defaults: FakeDefaults
+) -> None:
+    defaults.domain = dict(_USERS)
+    copies: list[dict[str, object]] = []
+    locked: list[bool] = []
+
+    def at_start() -> None:
+        with open(designer_preferences.saved_file(), 'rb') as f:
+            copies.append(plistlib.load(f))
+        # and held till it is started: a put-back finding none running meanwhile would drop the copy
+        locked.append(lock_held())
+
+    said = _launch_with_home(monkeypatch, tmp_path, tmp_path / 'home', at_start=at_start)
+    assert copies == [_USERS] and locked == [True], 'saved before it starts, held while it starts'
+    assert said.startswith('Designer started in') and 'preferences' not in said, said
+
+
+@_MACOS_PLIST
+def test_a_launch_that_times_out_still_says_what_its_save_did(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, defaults: FakeDefaults
+) -> None:
+    defaults.fail['export'] = 'defaults export: exit code 1'
+    started: list[object] = []
+    patch_server(monkeypatch, '_send', _no_bridge)
+    monkeypatch.setenv('SD_DESIGNER_APP', str(tmp_path))
+    monkeypatch.setattr(subprocess, 'Popen', _popen(started))
+    patch_server(monkeypatch, '_own_home', lambda port: str(tmp_path / 'home'))
+    clock = iter(range(0, 1000, 10))
+    monkeypatch.setattr(time, 'time', lambda: next(clock))
+    with pytest.raises(server.ToolError) as raised:
+        server.launch_designer(wait_s=30)
+    assert started and str(raised.value).startswith(_NOT_SAVED + '\nDesigner did not answer within 30s'), raised.value
+
+
+@_MACOS_PLIST
+def test_a_launch_whose_designer_exits_during_the_wait_puts_back(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, defaults: FakeDefaults
+) -> None:
+    # REVIEW.md SRV-135: it crashed as it started; none runs then, and no quit follows
+    defaults.domain = dict(_USERS)
+    started: list[object] = []
+
+    def changes(cmd: list[str]) -> list[str]:
+        defaults.domain['session.instancePID'] = 77  # as it starts, before it crashes
+        return cmd
+
+    patch_server(monkeypatch, '_send', _no_bridge)
+    monkeypatch.setenv('SD_DESIGNER_APP', str(tmp_path))
+    monkeypatch.setattr(subprocess, 'Popen', _popen(started, entry=changes))  # no process listed: it is gone
+    patch_server(monkeypatch, '_own_home', lambda port: str(tmp_path / 'home'))
+    clock = iter(range(0, 1000, 10))
+    monkeypatch.setattr(time, 'time', lambda: next(clock))
+    with pytest.raises(server.ToolError) as raised:
+        server.launch_designer(wait_s=30)
+    assert started and defaults.domain == _USERS, raised.value
+    said = str(raised.value)
+    assert said.startswith(_PUT_BACK) and '\nDesigner did not answer within 30s' in said, said
+
+
+@_MACOS_PLIST
+@pytest.mark.parametrize('after', ['a refusal', 'the Home screen failing'])
+def test_a_launch_that_fails_once_started_still_says_what_its_save_did(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, defaults: FakeDefaults, after: str
+) -> None:
+    # REVIEW.md SRV-129
+    defaults.fail['export'] = 'defaults export: exit code 1'
+    with pytest.raises(server.ToolError) as raised:
+        _launch_with_home(
+            monkeypatch,
+            tmp_path,
+            tmp_path / 'home',
+            refuses=after == 'a refusal',
+            home_screen=server.ToolError('the Home screen could not be left') if after != 'a refusal' else None,
+        )
+    assert str(raised.value).startswith(_NOT_SAVED + '\n'), raised.value
+    assert isinstance(raised.value, server._Refused) == (after == 'a refusal'), 'a refusal still raised as one'
+
+
+@_MACOS_PLIST
+def test_a_launch_whose_designer_cant_be_started_still_says_what_its_save_did(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, defaults: FakeDefaults
+) -> None:
+    # REVIEW.md SRV-129: a copy left behind put back, then the process doesn't start
+    _saved_as_by_a_launch(defaults)
+    _launch_fakes(monkeypatch, tmp_path)
+    patch_server(monkeypatch, '_send', _no_bridge)
+    patch_server(monkeypatch, '_own_home', lambda port: str(tmp_path / 'home'))
+
+    def fails(cmd: list[str], **kw: object) -> NoReturn:
+        raise PermissionError(13, 'Permission denied')
+
+    monkeypatch.setattr(subprocess, 'Popen', fails)
+    with pytest.raises(server.ToolError) as raised:
+        server.launch_designer(wait_s=30)
+    assert defaults.domain == _USERS
+    # the copy its start made: none started on it, and none would put it back (REVIEW.md SRV-138)
+    assert not os.path.exists(designer_preferences.saved_file()), raised.value
+    assert str(raised.value).startswith(_PUT_BACK) and '\nDesigner could not be started from' in str(raised.value), (
+        raised.value
+    )
+
+
+def _unrecorded(port: int, pid: int, home: str | None) -> NoReturn:
+    raise OSError(28, 'No space left on device')
+
+
+@_MACOS_PLIST
+@pytest.mark.parametrize('ended', [True, False], ids=['then ended', 'not ended'])
+def test_a_launch_it_couldnt_record_still_says_what_its_save_did(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, defaults: FakeDefaults, ended: bool
+) -> None:
+    # REVIEW.md TST-358, TST-368: told() in both raises after a start
+    defaults.fail['export'] = 'defaults export: exit code 1'
+    patch_server(monkeypatch, '_remember_started', _unrecorded)
+    patch_server(monkeypatch, '_force_end', lambda pid, port, seen: ended)
+    with pytest.raises(server.ToolError) as raised:
+        _launch_with_home(monkeypatch, tmp_path, tmp_path / 'home')
+    how = 'was started, then ended' if ended else 'was started and could not be ended'
+    assert str(raised.value).startswith(_NOT_SAVED + '\nDesigner (process 77) ' + how), raised.value
+
+
+@_MACOS_PLIST
+def test_a_launch_that_ends_the_designer_it_couldnt_record_puts_back(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, defaults: FakeDefaults
+) -> None:
+    # REVIEW.md SRV-135: none of its Designers runs then, and no quit follows
+    defaults.domain = dict(_USERS)
+    patch_server(monkeypatch, '_remember_started', _unrecorded)
+
+    def end(pid: int, port: int, seen: bytes) -> bool:
+        patch_server(monkeypatch, '_designer_pids', list)  # it is gone
+        return True
+
+    patch_server(monkeypatch, '_force_end', end)
+    with pytest.raises(server.ToolError) as raised:
+        _launch_with_home(
+            monkeypatch,
+            tmp_path,
+            tmp_path / 'home',
+            at_start=lambda: defaults.domain.update({'session.instancePID': 77}),
+        )
+    said = str(raised.value)
+    assert defaults.domain == _USERS and said.startswith(_PUT_BACK), said
+    assert '\nDesigner (process 77) was started, then ended' in said, said
+
+
+@_MACOS_PLIST
+def test_a_launch_ends_the_designer_it_couldnt_record_before_letting_the_preferences_lock_go(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, defaults: FakeDefaults
+) -> None:
+    # REVIEW.md SRV-144: running unrecorded once that lock goes, another launch's look would take it for the user's
+    defaults.domain = dict(_USERS)
+    patch_server(monkeypatch, '_remember_started', _unrecorded)
+    locked: list[bool] = []
+
+    def end(pid: int, port: int, seen: bytes) -> bool:
+        locked.append(lock_held())
+        patch_server(monkeypatch, '_designer_pids', list)  # it is gone
+        return True
+
+    patch_server(monkeypatch, '_force_end', end)
+    with pytest.raises(server.ToolError) as raised:
+        _launch_with_home(monkeypatch, tmp_path, tmp_path / 'home')
+    assert locked == [True], raised.value
+    assert str(raised.value).startswith('Designer (process 77) was started, then ended'), raised.value
+
+
+@_MACOS_PLIST
+def test_a_launch_whose_save_and_start_fail_speaks_of_no_designer_it_started(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, defaults: FakeDefaults
+) -> None:
+    # REVIEW.md SRV-145: "this Designer's changes" was said just before saying none was started
+    defaults.fail['export'] = 'defaults export: exit code 1'
+    _launch_fakes(monkeypatch, tmp_path)
+    patch_server(monkeypatch, '_send', _no_bridge)
+    patch_server(monkeypatch, '_own_home', lambda port: str(tmp_path / 'home'))
+
+    def fails(cmd: list[str], **kw: object) -> NoReturn:
+        raise PermissionError(13, 'Permission denied')
+
+    monkeypatch.setattr(subprocess, 'Popen', fails)
+    with pytest.raises(server.ToolError) as raised:
+        server.launch_designer(wait_s=30)
+    assert str(raised.value).startswith(_NOT_SAVED + '\nDesigner could not be started from'), raised.value
+
+
+def _no_home(port: int) -> NoReturn:
+    raise server.ToolError('its folder is not one launch_designer made')
+
+
+@_MACOS_PLIST
+def test_a_launch_that_ended_a_designer_and_starts_none_says_its_put_backs_in_order(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, defaults: FakeDefaults
+) -> None:
+    # REVIEW.md SRV-138: the put-back before the start failing, the start failing, then the put-back after it working:
+    # said as they happened, the last word not that the copy is kept
+    _saved_as_by_a_launch(defaults)
+    _launch_fakes(monkeypatch, tmp_path)
+    _Processes(monkeypatch, 11)
+    _an_agent_started(11, age=server.STARTUP_LIMIT + 1, home=str(tmp_path / 'home'))
+    patch_server(monkeypatch, '_send', _no_bridge)
+    patch_server(monkeypatch, '_own_home', lambda port: str(tmp_path / 'home'))
+    defaults.fail['import'] = 'the disk is full'
+
+    def fails(cmd: list[str], **kw: object) -> NoReturn:
+        del defaults.fail['import']  # the next put-back works
+        raise PermissionError(13, 'Permission denied')
+
+    monkeypatch.setattr(subprocess, 'Popen', fails)
+    with pytest.raises(server.ToolError) as raised:
+        server.launch_designer(wait_s=30)
+    said = str(raised.value)
+    assert defaults.domain == _USERS and not os.path.exists(designer_preferences.saved_file()), said
+    failed, put_back, start = (
+        said.find(text)
+        for text in (
+            "couldn't be put back (the disk is full)",
+            "Designer's preferences put back from",
+            'Designer could not be started',
+        )
+    )
+    assert said.startswith('Ended a Designer an agent started') and -1 < failed < put_back < start, said
+
+
+@_MACOS_PLIST
+def test_a_launch_refuses_once_a_designer_starts_during_its_put_back(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, defaults: FakeDefaults
+) -> None:
+    # REVIEW.md SRV-139: the user's (other launches wait for the lock), not yet listening anywhere: it stops the
+    # put-back of a copy left behind, and none is started next to it, as none is next to one already running
+    _saved_as_by_a_launch(defaults)
+    _launch_fakes(monkeypatch, tmp_path)
+    processes = _Processes(monkeypatch)
+    patch_server(monkeypatch, '_send', _no_bridge)  # not the real port, where a Designer may answer (REVIEW.md TST-376)
+    patch_server(monkeypatch, '_own_home', lambda port: str(tmp_path / 'home'))
+    patch_server(monkeypatch, '_listening_ports', lambda pid: set())
+
+    def as_the_user_opens_theirs(*args: str) -> bytes:
+        if args[0] == 'delete':
+            processes.pids.append(555)
+        return defaults(*args)
+
+    monkeypatch.setitem(vars(designer_preferences), 'run_defaults', as_the_user_opens_theirs)
+
+    def starts(cmd: list[str], **kw: object) -> NoReturn:
+        raise AssertionError('started next to the Designer that appeared')
+
+    monkeypatch.setattr(subprocess, 'Popen', starts)
+    with pytest.raises(server.ToolError) as raised:
+        server.launch_designer(wait_s=30)
+    said = str(raised.value)
+    assert said.startswith(
+        "Designer's preferences couldn't be put back (a Designer started meanwhile, or Designers couldn't be listed)"
+    ), said
+    assert '\nA Designer started as this one was about to (process 555): none is started next to it' in said, said
+
+
+@_MACOS_PLIST
+def test_a_launch_records_its_designer_before_letting_the_preferences_lock_go(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, defaults: FakeDefaults
+) -> None:
+    # REVIEW.md SRV-141: another server's launch, which waits for that lock, would otherwise find it unrecorded,
+    # listening nowhere yet, and take it for the user's (_appeared)
+    defaults.domain = dict(_USERS)
+    locked: list[bool] = []
+    remember = server._remember_started
+
+    def recorded(port: int, pid: int, home: str | None) -> None:
+        locked.append(lock_held())
+        remember(port, pid, home)
+
+    patch_server(monkeypatch, '_remember_started', recorded)
+    said = _launch_with_home(monkeypatch, tmp_path, tmp_path / 'home')
+    assert locked == [True] and said.startswith('Designer started in'), said
+
+
+@_MACOS_PLIST
+def test_a_launch_refuses_a_designer_that_appears_as_it_starts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, defaults: FakeDefaults
+) -> None:
+    # REVIEW.md SRV-141: every launch records its Designer before that lock goes, so one that appears meanwhile, not
+    # recorded, is the user's, also when nothing was put back or saved again
+    defaults.domain = dict(_USERS)
+    _launch_fakes(monkeypatch, tmp_path)
+    processes = _Processes(monkeypatch)
+    patch_server(monkeypatch, '_send', _no_bridge)
+    patch_server(monkeypatch, '_own_home', lambda port: str(tmp_path / 'home'))
+    lock = designer_preferences._lock
+
+    def as_the_user_opens_theirs() -> IO[str]:
+        held = lock()
+        processes.pids.append(555)
+        return held
+
+    monkeypatch.setitem(vars(designer_preferences), '_lock', as_the_user_opens_theirs)
+
+    def starts(cmd: list[str], **kw: object) -> NoReturn:
+        raise AssertionError('started next to the Designer that appeared')
+
+    monkeypatch.setattr(subprocess, 'Popen', starts)
+    with pytest.raises(server.ToolError) as raised:
+        server.launch_designer(wait_s=30)
+    said = str(raised.value)
+    assert said.startswith('A Designer started as this one was about to (process 555): none is started'), said
+    assert not os.path.exists(designer_preferences.saved_file()), 'the copy saved for it removed (SRV-138)'
+
+
+@_MACOS_PLIST
+def test_a_launch_without_the_preferences_lock_takes_no_designer_for_the_users(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, defaults: FakeDefaults
+) -> None:
+    # REVIEW.md SRV-141: without that lock no launch waits for another, so one another server has just started, not yet
+    # recorded, can't be told from the user's; and nothing was put back meanwhile
+    started = _launch_fakes(monkeypatch, tmp_path)
+    processes = _Processes(monkeypatch)
+    patch_server(monkeypatch, '_send', _answers_once_started(started))
+    patch_server(monkeypatch, '_own_home', lambda port: str(tmp_path / 'home'))
+
+    def no_lock() -> NoReturn:
+        processes.pids.append(556)  # another server's, started as this launch looks
+        raise PermissionError(13, 'Permission denied')
+
+    monkeypatch.setitem(vars(designer_preferences), '_lock', no_lock)
+    said = server.launch_designer(wait_s=30)
+    assert started and said.startswith(
+        "Designer's preferences couldn't be saved first ([Errno 13] Permission denied)"
+    ), said
+
+
+@_MACOS_PLIST
+@pytest.mark.parametrize('refusal', ['port taken', 'not found', "the user's next to it", 'no record', 'no home'])
+def test_a_launch_that_ended_a_designer_and_starts_none_puts_back_first(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, defaults: FakeDefaults, refusal: str
+) -> None:
+    # REVIEW.md SRV-130, SRV-135, TST-368: it ended an agent's hung Designer, then refuses: none runs, and nothing else
+    # would put the file back before the user's Designer next reads it; the copy old, as a Designer has just ended
+    _saved_as_by_a_launch(defaults, hours_ago=designer_preferences.LEFTOVER_HOURS + 1)
+    _launch_fakes(monkeypatch, tmp_path)
+    processes = _Processes(monkeypatch, 11)
+    _an_agent_started(11, age=server.STARTUP_LIMIT + 1, home=str(tmp_path / 'home'))
+    patch_server(monkeypatch, '_send', _no_bridge)
+    if refusal == 'port taken':
+        patch_server(monkeypatch, '_bind_error', lambda port: OSError(errno.EADDRINUSE, 'Address already in use'))
+    elif refusal == 'not found':
+        monkeypatch.setenv('SD_DESIGNER_APP', str(tmp_path / 'no Designer here'))
+    elif refusal == "the user's next to it":
+        patch_server(monkeypatch, '_users_next_to', lambda port, note: server.ToolError("the user's Designer runs"))
+    elif refusal == 'no record':
+        patch_server(monkeypatch, '_record_error', lambda port: PermissionError(13, 'Permission denied'))
+    else:  # before saved(): _own_home or _own_temp refusing the port's folder
+        patch_server(monkeypatch, '_own_home', _no_home)
+    with pytest.raises(server.ToolError) as raised:
+        server.launch_designer(wait_s=30)
+    assert not processes.pids and defaults.domain == _USERS, raised.value
+    said = str(raised.value)
+    assert said.startswith('Ended a Designer an agent started') and ('\n' + _PUT_BACK) in said, said
+    why = {
+        'port taken': 'is held by another program',
+        'not found': 'Designer not found at',
+        "the user's next to it": "the user's Designer runs",
+        'no record': 'its record could not be written',
+        'no home': 'its folder is not one launch_designer made',
+    }
+    assert why[refusal] in said, said
+
+
+@_MACOS_PLIST
+def test_a_launch_that_ended_a_designer_puts_back_an_old_copy_before_its_start(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, defaults: FakeDefaults
+) -> None:
+    # REVIEW.md TST-368: launch_designer passes ended=True when it ended one: that one's changes are fresh, however old
+    # the copy
+    _saved_as_by_a_launch(defaults, hours_ago=designer_preferences.LEFTOVER_HOURS + 1)
+    started = _launch_fakes(monkeypatch, tmp_path)
+    processes = _Processes(monkeypatch, 11)
+    _an_agent_started(11, age=server.STARTUP_LIMIT + 1, home=str(tmp_path / 'home'))
+    patch_server(monkeypatch, '_own_home', lambda port: str(tmp_path / 'home'))
+    at_the_start: list[dict[str, object]] = []
+
+    def begin(cmd: list[str], **kw: object) -> _FakeProcess:
+        at_the_start.append(dict(defaults.domain))
+        started.append(cmd)
+        processes.pids.append(77)
+        return _FakeProcess(77)
+
+    monkeypatch.setattr(subprocess, 'Popen', begin)
+    patch_server(monkeypatch, '_send', _answers_once_started(started))
+    said = server.launch_designer(wait_s=30)
+    assert at_the_start == [_USERS], said
+    assert said.startswith('Ended a Designer an agent started') and ('\n' + _PUT_BACK) in said, said
+
+
+def test_launch_of_a_designer_without_a_home_of_its_own_saves_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, defaults: FakeDefaults
+) -> None:
+    # off macOS: no plist, and every Designer counts as the user's
+    _launch_with_home(monkeypatch, tmp_path, None)
+    assert not defaults.calls and not os.path.exists(designer_preferences.saved_file())
+
+
+@_MACOS_PLIST
+@pytest.mark.parametrize('old', [False, True], ids=['young', 'old'])
+def test_launch_puts_back_a_copy_left_by_designers_ended_outside_the_tools(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, defaults: FakeDefaults, old: bool
+) -> None:
+    # a Designer an agent started crashed, or was ended outside quit_designer: none runs now; past LEFTOVER_HOURS the
+    # user may have worked since, so it is dropped (REVIEW.md TST-368: the launch passes ended=False when it ended none)
+    _saved_as_by_a_launch(defaults, hours_ago=designer_preferences.LEFTOVER_HOURS + 1 if old else 0)
+    changed = dict(defaults.domain)
+    at_the_start: list[dict[str, object]] = []
+    said = _launch_with_home(
+        monkeypatch, tmp_path, tmp_path / 'home', at_start=lambda: at_the_start.append(dict(defaults.domain))
+    )
+    assert at_the_start == [changed if old else _USERS], 'put back before the next one starts, if young enough'
+    done = "Designer's preferences left as they are: their copy" if old else _PUT_BACK
+    assert said.startswith(done), 'said first, as it happened first: %s' % said
+
+
+@_MACOS_PLIST
+@pytest.mark.parametrize('closes', [True, False], ids=['closes', 'forced'])
+def test_quit_puts_designers_preferences_back_once_its_designer_has_ended(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, defaults: FakeDefaults, closes: bool
+) -> None:
+    # however old the copy: its Designer has just ended through the tools (an agent's long session)
+    _saved_as_by_a_launch(defaults, hours_ago=designer_preferences.LEFTOVER_HOURS + 5)
+    processes = _Processes(monkeypatch, 11)
+    _an_agent_started(11, home=str(tmp_path / 'home'))
+    _closes(monkeypatch)
+    if closes:
+        monkeypatch.setattr(time, 'sleep', lambda seconds: processes.pids.clear())
+    said = server.quit_designer(wait_s=2)
+    assert defaults.domain == _USERS and not os.path.exists(designer_preferences.saved_file())
+    assert 'Designer quit after' in said and said.endswith(
+        _PUT_BACK + ': 1 key added since removed and 1 value put back.'
+    ), said
+
+
+@_MACOS_PLIST
+def test_quit_leaves_designers_preferences_while_another_designer_runs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, defaults: FakeDefaults
+) -> None:
+    _saved_as_by_a_launch(defaults)
+    changed = dict(defaults.domain)
+    processes = _Processes(monkeypatch, 11, 12)
+    _an_agent_started(12, home=str(tmp_path / 'home'))
+    _closes(monkeypatch)
+    monkeypatch.setattr(time, 'sleep', lambda seconds: processes.pids.remove(12) if 12 in processes.pids else None)
+    said = server.quit_designer(wait_s=2)
+    assert 'Designer quit after' in said and 'preferences' not in said, said
+    assert defaults.domain == changed and os.path.exists(designer_preferences.saved_file()), 'left for the last one'
+
+
+@_MACOS_PLIST
+def test_quit_with_no_designer_running_puts_back_a_copy_left(defaults: FakeDefaults) -> None:
+    _saved_as_by_a_launch(defaults)
+    said = server.quit_designer()
+    assert defaults.domain == _USERS
+    assert said.startswith('Designer is not running.\n') and 'preferences put back' in said, said
+
+
+@_MACOS_PLIST
+def test_quit_with_no_designer_running_drops_a_copy_left_too_long(defaults: FakeDefaults) -> None:
+    # REVIEW.md SRV-125: none ended through the tools, and the user may have worked since with no log to show it
+    hours = designer_preferences.LEFTOVER_HOURS + 1
+    _saved_as_by_a_launch(defaults, hours_ago=hours)
+    changed = dict(defaults.domain)
+    said = server.quit_designer()
+    assert defaults.domain == changed and not os.path.exists(designer_preferences.saved_file())
+    assert said == (
+        "Designer is not running.\nDesigner's preferences left as they are: their copy is over %d hours old and this "
+        'call ended no Designer, so it was dropped: the user may have worked since.'
+        % designer_preferences.LEFTOVER_HOURS
+    ), said
+
+
+@_MACOS_PLIST
+def test_quit_puts_nothing_back_while_designers_cant_be_listed(
+    monkeypatch: pytest.MonkeyPatch, defaults: FakeDefaults
+) -> None:
+    # pgrep failing: one may run, so the file is left (REVIEW.md SRV-83: an empty list would read as none running)
+    _saved_as_by_a_launch(defaults)
+    changed = dict(defaults.domain)
+
+    def unlisted() -> list[int]:
+        raise server._NoListing("Designer's processes couldn't be listed (pgrep exit code 3: out of memory)")
+
+    patch_server(monkeypatch, '_designer_pids', unlisted)
+    patch_server(monkeypatch, '_designer_running', lambda: False)
+    said = server.quit_designer()
+    assert defaults.domain == changed and os.path.exists(designer_preferences.saved_file()), said

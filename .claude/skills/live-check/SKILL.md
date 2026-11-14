@@ -74,7 +74,8 @@ seen failing and passing):
   returned), Designer started, and the Home screen check (no panel visible while it shows), measurable only right
   after a fresh start, since Home can't be shown again once closed.
 - **What the pool's parent checks** (`workers.py`): every worker's quit and the crash dumps (`check_the_quits`), every
-  tool exercised over all the workers (and which were all skipped), the `unit tests` check; and its scheduling: the
+  tool exercised over all the workers (and which were all skipped), the `unit tests` check, Designer's preferences
+  plist as before the run (`check_the_preferences`: `--only` runs it too, through the pool); and its scheduling: the
   launch lock, `CLIPBOARD`, `SOLO`.
 - **In the user's Designer,** only in a run there (Windows today): their graph back in the editor, and that it still
   runs with no new crash dump.
@@ -83,7 +84,7 @@ seen failing and passing):
 them) with lint and types; a live check in a scratch run (failing only in the full run: run it beside other Designers, with
 `port=`, or in a Designer just started, `alone.close()` first). Then tell the user which suites failed; they ask for those again. When only unit
 tests failed, the live self-test needs to run again only if the fixes touch code it reaches (`mcp_server/` (not GUIDE.md alone, which is docs: AGENTS.md, Running the tests), `plugin/`,
-`client/`, `examples/`, `tests/test_all_tools/`, `project_constants.py`): its pass was for the code as it was, so tell
+`client/`, `examples/`, `tests/test_all_tools/`, `project_constants.py`, `designer_preferences.py`): its pass was for the code as it was, so tell
 the user it must run again. Fixes only elsewhere (`tests/unit/`, `install.py`, `uninstall.py`, `scripts/`, the tool
 configs) need only the unit suite again.
 

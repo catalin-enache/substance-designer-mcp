@@ -8,6 +8,7 @@ import re
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -311,7 +312,7 @@ def test_every_category_function_is_run() -> None:
     selftest = _selftest()
     package = sys.modules['test_all_tools']
     run = set(selftest.CATEGORIES) | {selftest.lifecycle.run}  # lifecycle: a worker of its own (workers.py)
-    defined: set[Any] = set()
+    defined: set[Callable[..., object]] = set()
     # every module of every category's folder (<category>/checks.py and its helpers), not the Designer scripts
     found = [
         info.name
@@ -322,6 +323,7 @@ def test_every_category_function_is_run() -> None:
     for name in found:
         module = importlib.import_module(name)
         source = inspect.getsource(module)
+        checks = inspect.getsource(importlib.import_module('test_all_tools.%s.checks' % name.split('.')[1]))
         defined |= {
             f
             for f in vars(module).values()
@@ -330,6 +332,9 @@ def test_every_category_function_is_run() -> None:
             # a check of its own, check_<what>(ctx), runs when a category function of its module awaits it
             # (the live-check skill); alone.py runs it on its own too
             and not (f.__name__.startswith('check_') and re.search(r'await\s+%s\(' % f.__name__, source))
+            # a helper of another module the category's checks await (renders.with_checker): it runs when they do,
+            # and a check that never runs is reported itself
+            and not (not name.endswith('.checks') and re.search(r'await\s+%s\(' % f.__name__, checks))
             # a category's preparation: category_run.py runs it before the category
             and not (name.endswith('.preparations') and f.__name__ == 'prepare')
         }

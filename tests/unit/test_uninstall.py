@@ -7,12 +7,15 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import types
 from pathlib import Path
 from typing import Any
 
 import pytest
+from fake_defaults import FakeDefaults
 
+import designer_preferences
 from conftest import ROOT
 from project_constants import PLUGIN, PLUGIN_DIR
 
@@ -482,3 +485,231 @@ def test_keeps_a_folder_another_account_owns_though_named_for_this_one(
     (theirs / 'home').mkdir(parents=True)
     run(env, monkeypatch, '--yes')
     assert theirs.is_dir() and 'not a folder launch_designer made' in capsys.readouterr().out
+
+
+def _preferences_saved_and_changed(defaults: FakeDefaults) -> None:
+    """A copy of Designer's preferences as launch_designer saves one, and the file changed since by an agent's
+    Designer that ended outside the tools, so nothing put it back (designer_preferences.py, ROADMAP item 67)."""
+    defaults.domain = {'session.mainWindow.state': b'the user'}
+    with designer_preferences.saved(lambda: False, ended=False):
+        pass
+    defaults.domain['session.instancePID'] = 11
+
+
+_COPY_ITEM = (
+    "the copy of Designer's preferences launch_designer saved, put back first unless your own Designer ran since or "
+    'it is over %d hours old: %%s' % designer_preferences.LEFTOVER_HOURS
+)
+_MACOS = pytest.mark.skipif(sys.platform != 'darwin', reason='the plist is macOS only')
+
+
+@_MACOS
+def test_puts_designers_preferences_back_and_removes_their_copy(
+    env: types.SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    defaults: FakeDefaults,
+) -> None:
+    _preferences_saved_and_changed(defaults)
+    Path(designer_preferences.saved_file() + '.new').write_bytes(b'half')  # a save cut short (REVIEW.md INS-34)
+    run(env, monkeypatch, '--yes')
+    out = capsys.readouterr().out
+    assert defaults.domain == {'session.mainWindow.state': b'the user'}, out
+    assert not any(
+        os.path.exists(path)
+        for path in (
+            designer_preferences.saved_file(),
+            designer_preferences.saved_file() + '.new',
+            designer_preferences.lock_file(),
+        )
+    ), out
+    assert ("Removed %s (Designer's preferences put back" % (_COPY_ITEM % designer_preferences.saved_file())) in out, (
+        out
+    )
+
+
+@_MACOS
+def test_a_copy_dropped_as_the_users_says_so(
+    env: types.SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    defaults: FakeDefaults,
+) -> None:
+    # REVIEW.md INS-34: their Designer ran since, so the file is left as theirs, and the item's label says it may be
+    _preferences_saved_and_changed(defaults)
+    changed = dict(defaults.domain)
+    log = defaults.users_data / '16.0' / 'log.txt'
+    log.parent.mkdir()
+    log.write_text('the user ran it\n')
+    later = os.path.getmtime(designer_preferences.saved_file()) + 5
+    os.utime(log, (later, later))
+    run(env, monkeypatch, '--yes')
+    out = capsys.readouterr().out
+    assert defaults.domain == changed and not os.path.exists(designer_preferences.saved_file()), out
+    assert (
+        "Removed %s (Designer's preferences left as they are: the user's Designer ran since"
+        % (_COPY_ITEM % designer_preferences.saved_file())
+    ) in out, out
+    assert 'Some items were not removed' not in out, out
+
+
+@_MACOS
+def test_an_old_copy_of_designers_preferences_is_dropped_as_the_label_says(
+    env: types.SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    defaults: FakeDefaults,
+) -> None:
+    # REVIEW.md INS-35, TST-368: uninstall ends no Designer (ended=False), so a copy past LEFTOVER_HOURS is dropped: the
+    # user may have worked since
+    _preferences_saved_and_changed(defaults)
+    changed = dict(defaults.domain)
+    old = time.time() - (designer_preferences.LEFTOVER_HOURS + 1) * 3600
+    os.utime(designer_preferences.saved_file(), (old, old))
+    run(env, monkeypatch, '--yes')
+    out = capsys.readouterr().out
+    assert defaults.domain == changed and not os.path.exists(designer_preferences.saved_file()), out
+    assert (
+        "Removed %s (Designer's preferences left as they are: their copy is over"
+        % (_COPY_ITEM % designer_preferences.saved_file())
+    ) in out, out
+
+
+@_MACOS
+def test_keeps_the_copy_of_designers_preferences_while_a_designer_runs(
+    env: types.SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    defaults: FakeDefaults,
+) -> None:
+    # put back only once none runs: that Designer writes the file again as it quits
+    _preferences_saved_and_changed(defaults)
+    changed = dict(defaults.domain)
+    monkeypatch.setitem(vars(env.module), 'folders_in_use', lambda: 'Designer runs')
+    run(env, monkeypatch, '--yes')
+    out = capsys.readouterr().out
+    assert defaults.domain == changed and os.path.exists(designer_preferences.saved_file())
+    assert (
+        "the copy of Designer's preferences launch_designer saved, kept while Designer runs: %s"
+        % designer_preferences.saved_file()
+    ) in out, out
+
+
+_NO_LISTING = "Designer's processes couldn't be listed (pgrep exit code 3: fork failed)"
+
+
+@_MACOS
+@pytest.mark.parametrize('how', ['import fails', 'a Designer started meanwhile', 'the listing fails'])
+def test_says_when_designers_preferences_couldnt_be_put_back(
+    env: types.SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    defaults: FakeDefaults,
+    how: str,
+) -> None:
+    # REVIEW.md INS-34: the copy kept, to put back later
+    _preferences_saved_and_changed(defaults)
+    if how == 'import fails':
+        defaults.domain['session.mainWindow.state'] = (
+            b'floating'  # a value to put back: no import without one (SRV-140)
+        )
+        defaults.fail['import'] = 'the disk is full'
+    else:  # none at the listing, then one by the put-back, or the listing failing then (REVIEW.md TST-358, INS-36)
+        then = 'Designer runs' if how == 'a Designer started meanwhile' else _NO_LISTING
+        answers = iter([None, then])
+        monkeypatch.setitem(vars(env.module), 'folders_in_use', lambda: next(answers, then))
+    run(env, monkeypatch, '--yes')
+    out = capsys.readouterr().out
+    assert "Could not remove the copy of Designer's preferences" in out and 'Some items were not removed' in out, out
+    why = {
+        'import fails': 'the disk is full',
+        'a Designer started meanwhile': 'a Designer runs',
+        'the listing fails': _NO_LISTING,
+    }
+    assert why[how] in out, out
+    assert how != 'the listing fails' or 'a Designer runs' not in out, out
+    assert os.path.exists(designer_preferences.saved_file()), 'kept, to put back later'
+
+
+@_MACOS
+def test_a_copy_of_designers_preferences_that_isnt_a_plist_is_removed_with_its_lock(
+    env: types.SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    defaults: FakeDefaults,
+) -> None:
+    # REVIEW.md INS-35: the put-back removes it, saying nothing was put back: removed, with what is left beside it, not
+    # "Could not remove ... so it was removed"
+    _preferences_saved_and_changed(defaults)
+    Path(designer_preferences.saved_file()).write_bytes(b'not a plist')
+    Path(designer_preferences.saved_file() + '.new').write_bytes(b'half')
+    run(env, monkeypatch, '--yes')
+    out = capsys.readouterr().out
+    assert (
+        "Removed %s (Designer's preferences couldn't be put back: their copy could not be read"
+        % (_COPY_ITEM % designer_preferences.saved_file())
+    ) in out, out
+    assert 'Could not remove' not in out and 'Some items were not removed' not in out, out
+    left = [
+        designer_preferences.saved_file(),
+        designer_preferences.saved_file() + '.new',
+        designer_preferences.lock_file(),
+    ]
+    assert not any(os.path.exists(path) for path in left), out
+
+
+@_MACOS
+@pytest.mark.parametrize('cut_short', [False, True], ids=['alone', 'with a save cut short'])
+def test_removes_the_lock_of_designers_preferences_left_with_no_copy(
+    env: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], cut_short: bool
+) -> None:
+    # every launch_designer that starts one on macOS leaves it, the copy gone once put back; a first save cut short
+    # leaves the user's settings beside it, with no copy (REVIEW.md INS-35)
+    Path(designer_preferences.lock_file()).write_text('')
+    new = designer_preferences.saved_file() + '.new'
+    if cut_short:
+        Path(new).write_bytes(b'half')
+    run(env, monkeypatch, '--yes')
+    out = capsys.readouterr().out
+    assert not os.path.exists(designer_preferences.lock_file()) and not os.path.exists(new), out
+    what = 'lock and a save cut short' if cut_short else 'lock'
+    files = designer_preferences.lock_file() + (', ' + new if cut_short else '')
+    assert ("Removed %s of the copy of Designer's preferences launch_designer saved: %s" % (what, files)) in out, out
+
+
+@_MACOS
+def test_lists_the_lock_of_designers_preferences_kept_while_a_designer_runs(
+    env: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # REVIEW.md INS-34: a launch may hold it; unlinked, a later one would lock a new file beside the holder's
+    Path(designer_preferences.lock_file()).write_text('')
+    monkeypatch.setitem(vars(env.module), 'folders_in_use', lambda: 'Designer runs')
+    run(env, monkeypatch, '--yes')
+    out = capsys.readouterr().out
+    assert os.path.exists(designer_preferences.lock_file())
+    assert (
+        "lock of the copy of Designer's preferences launch_designer saved, kept while Designer runs: %s"
+        % designer_preferences.lock_file()
+    ) in out, out
+
+
+@_MACOS
+def test_a_lock_that_cant_be_removed_after_a_put_back_is_no_failure(
+    env: types.SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    defaults: FakeDefaults,
+) -> None:
+    # REVIEW.md INS-34: the file was put back and the copy removed
+    _preferences_saved_and_changed(defaults)
+    real = os.remove
+
+    def remove(path: str) -> None:
+        if path == designer_preferences.lock_file():
+            raise PermissionError(1, 'Operation not permitted')
+        real(path)
+
+    monkeypatch.setattr(os, 'remove', remove)
+    run(env, monkeypatch, '--yes')
+    out = capsys.readouterr().out
+    assert defaults.domain == {'session.mainWindow.state': b'the user'} and 'Could not remove' not in out, out

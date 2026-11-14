@@ -9,9 +9,10 @@ Uninstaller: undoes what install.py set up (macOS and Windows).
 Removes: the Designer plugin and its token, the Claude Code skill, every folder's
 `claude mcp add --scope local` registration of this server (and a user-scope one, if someone
 added it), mcp_server/venv, and what launch_designer left for the Designers it started: their
-records and their folders in /tmp (kept while a Designer runs). Only things that are this project's are touched: a plugin, skill
-or registration with the same name that points elsewhere is reported and left alone. This folder
-itself is left for you to delete.
+records, their folders in /tmp and, on macOS, the copy it keeps of Designer's preferences, put back
+first unless your own Designer ran since or it is over 6 hours old (both kept while a Designer runs).
+Only things that are this project's are touched: a plugin, skill or registration with the same name
+that points elsewhere is reported and left alone. This folder itself is left for you to delete.
 """
 
 # Annotations stay unevaluated: this script must run, or refuse with a message, on the system Python,
@@ -19,6 +20,7 @@ itself is left for you to delete.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -31,6 +33,7 @@ from typing import Any, cast
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import designer_preferences  # noqa: E402  (the copy launch_designer keeps of Designer's preferences)
 import install  # noqa: E402  (shares paths, names and the skill marker with the installer)
 import project_constants  # noqa: E402  (AGENT_RECORD_DIR, read when called)
 from project_constants import PLUGIN, TOKEN_FILE, agent_designer_file, agent_designer_folders, agent_designer_ports  # noqa: E402
@@ -175,6 +178,66 @@ def folders_in_use() -> str | None:
     return "Designer's processes couldn't be listed (pgrep exit code %d: %s)" % (done.returncode, done.stderr.strip())
 
 
+def put_back_preferences() -> str | None:
+    """Designer's preferences put back from the copy launch_designer kept, unless the user's Designer ran since or it
+    is over LEFTOVER_HOURS old (designer_preferences.py), then the files beside it removed. The error text while the
+    copy is kept: why it couldn't be put back, or what folders_in_use() saw (a Designer runs, or Designer's processes
+    couldn't be listed). One that isn't a plist of keys is removed, and said."""
+    seen: list[str] = []
+
+    def running() -> bool:
+        in_use = folders_in_use()
+        if in_use is not None:
+            seen.append(in_use)
+        return in_use is not None
+
+    said = designer_preferences.put_back(running, ended=False)
+    if os.path.exists(designer_preferences.saved_file()):
+        # the check's own words: it is True when the listing fails too (REVIEW.md INS-36)
+        why = seen[-1] if seen else 'Designer runs'
+        return said or ('a Designer runs' if why == 'Designer runs' else why)
+    for leftover in _beside_the_copy().values():
+        with contextlib.suppress(OSError):  # the copy is gone: these hold nothing of the user's work
+            os.remove(leftover)
+    return Kept(said) if said else None
+
+
+def _beside_the_copy() -> dict[str, str]:
+    """{what: path} of what launch_designer leaves beside the copy of Designer's preferences, if there: its lock, and a
+    save of it cut short (REVIEW.md INS-35)."""
+    paths = {'lock': designer_preferences.lock_file(), 'a save cut short': designer_preferences.saved_file() + '.new'}
+    return {name: path for name, path in paths.items() if os.path.exists(path)}
+
+
+def _remove_all(paths: list[str]) -> None:
+    for path in paths:
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(path)
+
+
+def _preferences_items() -> list[tuple[str, Action | None]]:
+    """The copy of Designer's preferences launch_designer keeps while agents' Designers run, put back first unless the
+    user's Designer ran since or it is over LEFTOVER_HOURS old, with its lock and a save of it cut short (macOS); kept
+    while a Designer runs, which writes the file again as it quits, and whose launch may hold the lock."""
+    copy, beside = designer_preferences.saved_file(), _beside_the_copy()
+    if sys.platform != 'darwin' or not (os.path.exists(copy) or beside):
+        return []
+    in_use = folders_in_use()
+    what = "the copy of Designer's preferences launch_designer saved"
+    why = '' if not in_use else 'while Designer runs' if in_use == 'Designer runs' else 'since %s' % in_use
+    if not os.path.exists(copy):
+        listed, files = '%s of %s' % (' and '.join(beside), what), list(beside.values())
+        if why:
+            return [('%s, kept %s: %s' % (listed, why, ', '.join(files)), None)]
+        return [('%s: %s' % (listed, ', '.join(files)), cast(Action, lambda: _remove_all(files)))]
+    if why:
+        return [('%s, kept %s: %s' % (what, why, copy), None)]
+    first = 'put back first unless your own Designer ran since or it is over %d hours old' % (
+        designer_preferences.LEFTOVER_HOURS
+    )
+    return [('%s, %s: %s' % (what, first, copy), put_back_preferences)]
+
+
 def plan(args: argparse.Namespace) -> list[tuple[str, Action | None]]:
     """[(description, action or None)]; an action of None is only reported. An action returns
     None when done, or an error text."""
@@ -227,6 +290,7 @@ def plan(args: argparse.Namespace) -> list[tuple[str, Action | None]]:
             agent_folders.append(agent_folder)
         else:  # a link, or not this user's: not one launch_designer made
             items.append(('%s is not a folder launch_designer made; left as it is' % agent_folder, None))
+    items += _preferences_items()
     in_use = folders_in_use() if agent_folders else None  # one an agent started uses its folder as its home
     if in_use:
         why = 'while Designer runs' if in_use == 'Designer runs' else 'since %s' % in_use

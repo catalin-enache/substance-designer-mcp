@@ -492,6 +492,29 @@ def test_the_main_threads_heaviest_calls_are_read_from_a_sample() -> None:
     assert samples.main_thread('Call graph:\n    820 Thread_1\n') == 'no main thread in the sample'
 
 
+# the same Designer sampled while its shutdown was still stopping Adobe's sign-in, before the pool's wait (REVIEW.md
+# TST-400: seen in a full run)
+SIGNING_OUT = SAMPLE.replace(
+    '    +       820 QThreadPool::waitForDone(QDeadlineTimer)  (in QtCore) + 44  [0x119af21cc]\n',
+    '    +       820 adobe::ngl::internal::NglSSOHandler::Stop()  (in libngl.dylib) + 96  [0x11a2c3d40]\n',
+)
+
+
+@pytest.mark.parametrize(
+    'stacks, waiting',
+    [
+        (SAMPLE, True),
+        (SIGNING_OUT, True),
+        (SAMPLE.replace('QThreadPool::waitForDone', 'QEventLoop::exec'), False),
+        ('', False),
+    ],
+    ids=['the pool', 'the sign-in stop', 'running', 'no sample'],
+)
+def test_a_sample_shows_designer_at_one_of_its_shutdowns_waits(stacks: str, waiting: bool) -> None:
+    # REVIEW.md TST-400: the shutdown stops Adobe's sign-in, then waits for the pool held by hold_thread_pool
+    assert _samples().in_shutdown(stacks) is waiting
+
+
 def test_a_result_naming_a_sample_gives_its_text_and_where_the_main_thread_was(tmp_path: Path) -> None:
     samples = _samples()
     path = tmp_path / 'forced_quit_11.sample.txt'

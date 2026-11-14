@@ -22,6 +22,8 @@ PARTS = (
     'describe',
     'screenshots',
     'view3d',
+    'mac_window',
+    'shot3d',
     'save_export',
     'edits',
     'quit',

@@ -7,6 +7,8 @@ both plugin/<PLUGIN>/ folders to match. tests/unit/test_constants.py checks that
 match, that no other code spells the name out, and that README.md, AGENTS.md and GUIDE.md mention it.
 """
 
+from __future__ import annotations
+
 import os
 import re
 

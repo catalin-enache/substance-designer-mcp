@@ -49,6 +49,7 @@ There are two programs, plus Designer's own command-line tools:
 | **Designer helpers** (`mcp_server/designer_helpers/`) | Sent to Designer with each request | The library of functions that actually do the work inside Designer: describing nodes, editing graphs, computing previews, layout, exposing inputs and so on. One file per area (`edits.py`, `editor.py`, `screenshots.py`...), joined into one script in the order of `PARTS` in its `__init__.py`, so they share one namespace. Each part imports what it uses from the others (`from .core import ...`) so editors see where names come from; those lines are dropped when the parts are joined. It's re-sent with every call, so updating it never needs a Designer restart. |
 | **sbscooker / sbsrender** | Separate processes | Designer's own tools for compiling a saved `.sbs` into `.sbsar` and rendering its outputs, independently of the open Designer. |
 | **CLI client** (`client/sd_run.py`) | Your terminal | The same connection to the plugin without MCP, for running scripts by hand. |
+| `designer_preferences.py` | The MCP server, `uninstall.py` and the self-test's pool | On macOS, Designer keeps your window layout and last session in a preferences file every Designer shares, the ones an agent starts too, which change it. So `launch_designer` saves it as the first one starts, and `quit_designer` puts it back once none runs (for ones that ended otherwise, the next launch or quit does, if the copy is under 6 hours old), and says so; if your own Designer ran meanwhile, the file is left as yours. |
 | `scripts/review_lookup.py` | Your terminal | Finds a code review finding by its ID, in `REVIEW.md` or its git history. Used by the review skills. |
 | `install.py`, `uninstall.py`, `tests/` | Your terminal | Installation (including the Claude Code skill that tells sessions in other folders about the server), clean removal, the end-to-end self-test (on macOS several worker processes at once, each with a Designer and an MCP server of its own: `tests/test_all_tools/workers.py`), and unit tests that need no Designer (`tests/unit`). |
 
@@ -265,7 +266,9 @@ checks the Security promises below (unsigned and wrongly signed requests refused
 reachable from the network, private token file), the command-line client, that the plugin Designer loaded matches
 this repo (re-run `install.py` if not), and that the example trim sheet still builds (a renamed
 copy, so a trim sheet you have open is never touched). The screenshot of a panel not visible in your Designer (Windows) is skipped; the clipboard checks run
-on macOS only: they use your clipboard for a few seconds, then put your text back (only the text). Exit code 0 means everything that ran passed; the summary lists tools whose checks
+on macOS only: they use your clipboard for a few seconds, then put your text back (only the text). On macOS the 3D
+view's checks minimize, cover and hide the self-test's own Designer for a few seconds each, never making it the active
+app. Exit code 0 means everything that ran passed; the summary lists tools whose checks
 were all skipped (`quit_designer` on Windows) instead of counting them as
 covered. Run it after installing, after updates, and
 after a Designer update (`--no-unit` where the unit tests' packages aren't installed). To run chosen checks on their own, in an environment built for them (how agents see a check
@@ -362,6 +365,10 @@ python client/sd_run.py --cancel              # abort the running script
 - Screenshots only ever capture Designer's own panels. The 3D view uses Designer's own render
   through the clipboard, then puts back its text; anything else on it (an image, formatting, copied files) may
   be lost.
+- The 3D view draws only while Designer's window is on screen. So on macOS a 3D screenshot un-minimizes your
+  Designer's window, which then stays up. If other windows cover Designer, or Designer is hidden, it is brought in
+  front for the shot and put back where it was afterwards. If you click into Designer while it is up, it stays up.
+  None of this takes the keyboard from the app you are using.
 - To turn the bridge off, disable it in Tools > Plugin Manager or delete the `sd_claude_bridge_kve`
   folder from the plugin directory.
 
@@ -382,12 +389,14 @@ snapshots (`~/.sd_mcp/snapshots`) stay unless you pass `--remove-snapshots`; eve
 snapshot taken by this version that you opened in Designer and saved in place stays (it may hold your
 work), and is listed; older snapshots can't be told apart and are deleted. Pass
 `--plugins-dir` if you installed with it. It also removes what `launch_designer` left for the
-Designers an agent started: their records (`~/.sd_claude_bridge_kve_agent_designer_<port>.json`) and
+Designers an agent started: their records (`~/.sd_claude_bridge_kve_agent_designer_<port>.json`),
 their folders (`/tmp/sd_mcp_<user ID>_<port>/`, each one's settings, log, crash dumps and, for one that was about
-to be forced, a sample of its threads, about 300 KB).
+to be forced, a sample of its threads, about 300 KB) and, on macOS, the copy of Designer's preferences it keeps
+while they run (`~/.sd_claude_bridge_kve_preferences.plist`, put back into Designer's first unless your own Designer
+ran since or it is over 6 hours old) with its lock (`~/.sd_claude_bridge_kve_preferences.lock`).
 While any Designer runs, or when that can't be told (its processes couldn't be listed, or not on
-macOS), those folders are kept and listed instead, since one an agent started uses its own. Then
-restart Designer and delete this folder.
+macOS), those folders, that copy and its lock are kept instead, the folders and the copy (else the lock) listed, since
+one an agent started uses its own folder and writes Designer's preferences as it quits. Then restart Designer and delete this folder.
 
 ## Troubleshooting
 
@@ -397,6 +406,7 @@ restart Designer and delete this folder.
 | `No bridge token found` | The plugin has never run. Restart Designer and check its console. |
 | `Designer is not reachable` | Designer isn't running, or the plugin failed to load. Check the Designer log. |
 | Every call returns `invalid token`, or says the plugin `speaks another bridge protocol` | The plugin and the server are different versions (for example after `git pull`): re-run `install.py`, restart Designer and reconnect `/mcp`. |
+| `Designer's preferences couldn't be put back` (macOS) | The copy `launch_designer` saved stays in `~/.sd_claude_bridge_kve_preferences.plist`, and the next `quit_designer` or `launch_designer` with no Designer running tries again while the copy is under 6 hours old, then drops it (a copy that isn't a plist is dropped at once: the message says so). To put its values back yourself, with every Designer closed and only if you haven't opened your own Designer since (otherwise just delete the copy): `defaults import 'com.adobe.Adobe Substance 3D Designer' ~/.sd_claude_bridge_kve_preferences.plist`, then delete the copy (keys an agent's Designer added stay). |
 | `This Designer wasn't started by an agent` | The tools never close a Designer you opened. Save, close and reopen it yourself. |
 | `Designer ... did not answer` and it may be stuck closing | If its windows closed but the process stayed, end it in Activity Monitor, or with the `kill` command the message gives. On Windows, in Task Manager. Nothing is lost then. If its windows are open, save and close it as usual: ending it would lose unsaved work. |
 | Bridge accepts connections but never answers | The plugin code was replaced while running (for example by a hot reload). Restart Designer. |

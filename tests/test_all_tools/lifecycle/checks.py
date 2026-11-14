@@ -45,7 +45,7 @@ from test_all_tools.common import (
 )
 from test_all_tools.crash_watch import watching_crashes
 from test_all_tools.lifecycle.crash_reports import uploads, uploads_off, uploads_on
-from test_all_tools.lifecycle.samples import sampled
+from test_all_tools.lifecycle.samples import in_shutdown, sampled
 
 CLOSE_WINDOWS_ONLY = dedent("""\
     from PySide6.QtCore import QTimer
@@ -55,6 +55,9 @@ CLOSE_WINDOWS_ONLY = dedent("""\
             if w.isVisible():
                 w.close()
     QTimer.singleShot(300, close_windows)""")
+
+# whether Designer is the active app, the one the keyboard types into (macOS: the helpers' _MacWindow)
+IS_ACTIVE = "print('ACTIVE=%s' % _MacWindow(_APP.getQtForPythonUIMgr().getMainWindow()).active())\n"
 
 BUSY_LOOP = dedent("""\
     import time
@@ -579,6 +582,14 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
         watch.check(step, 'quit_designer', 'a normal close leaves no crash dump', True, t)
         t = text(await c('launch_designer', {'wait_s': 240}))
         check('launch_designer', 'starts again after a quit', 'Designer started in' in t and 'ERROR' not in t, t)
+        if sys.platform == 'darwin':  # it became the active app as it started, the user's keyboard in it (SRV-148)
+            active = text(await c('execute_designer_code', {'code': ctx.helper_source + IS_ACTIVE}))
+            check(
+                'launch_designer',
+                'leaves the app in front before it the active app, not the Designer it started',
+                'ACTIVE=False' in active,
+                '%s | %s' % (active.strip()[-40:], t),
+            )
 
         # windows ignoring Close, as under a blocking dialog: past its wait it is forced, with no aboutToQuit
         step = watch.step()
@@ -608,13 +619,14 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
             'HELD=True' in held and QUIT_FORCED_IN_SHUTDOWN in t and has_ended(quitting),
             held + t,
         )
-        # its threads sampled before the force, for the cause of a hang (ROADMAP item 70): this one waits for the pool;
+        # its threads sampled before the force, for the cause of a hang (ROADMAP item 70): this one waits for the pool, or
+        # still stops Adobe's sign-in before it (samples.SHUTDOWN_WAITS);
         # the detail says where its main thread was, as the pool deletes lifecycle's folder (REVIEW.md TST-310)
         stacks, where = sampled(t)
         check(
             'quit_designer',
-            "samples one stuck in its shutdown before forcing it, the thread pool's wait shown",
-            'QThreadPool::waitForDone' in stacks,
+            "samples one stuck in its shutdown before forcing it, its shutdown's wait shown",
+            in_shutdown(stacks),
             where,
         )
         t = text(await c('launch_designer', {'wait_s': 240}))
@@ -687,8 +699,8 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
         stacks, where = sampled(t)  # it can be one hung in its shutdown, as this one is (REVIEW.md SRV-113)
         check(
             'launch_designer',
-            "samples the agent's Designer it ends before forcing it, the thread pool's wait shown",
-            'QThreadPool::waitForDone' in stacks,
+            "samples the agent's Designer it ends before forcing it, its shutdown's wait shown",
+            in_shutdown(stacks),
             where,
         )
 

@@ -35,8 +35,9 @@ def _bridge(
 
 
 def _call(code: str) -> str:
-    """The helper call after the helpers' source (_helpers_call: the source, a blank line, the call)."""
-    return code[code.rindex('\n\n') + 2 :]
+    """The helper call after the helpers' source (_helpers_call: the source, a blank line, the call, a newline), without
+    the newline."""
+    return code[code.rindex('\n\n') + 2 :].rstrip('\n')
 
 
 OPTIONS = {
@@ -85,15 +86,24 @@ def test_options_out_of_range_are_refused(
     assert sent == []
 
 
-def test_the_3d_view_is_set_up_in_the_same_job_before_its_render(
+def test_the_3d_view_is_set_up_and_shot_in_one_helper_call(
     monkeypatch: pytest.MonkeyPatch, temp_folders: list[str]
 ) -> None:
+    # shoot_3d keeps Designer's window on screen through both (REVIEW.md SRV-146)
     sent = _bridge(monkeypatch, temp_folders, NOTE + '\n3d render 4x4\n')
     server.screenshot_designer('3d', **OPTIONS)
     assert len(sent) == 1
-    call = _call(sent[0])
-    setup = call.index("set_3d_view('g', 'Plane', 'Top', 2, 2.0, [90.0, -30.0], [0.25, 0.5])")
-    assert setup < call.index("save_screenshot('3d', ")
+    shot = os.path.join(temp_folders[-1], 'shot.png')
+    assert _call(sent[0]) == "shoot_3d(%r, 'g', 'Plane', 'Top', 2, 2.0, [90.0, -30.0], [0.25, 0.5])" % shot
+
+
+def _plain(panel: str, folders: list[str]) -> str:
+    """The helper call of a shot with nothing set up: the 3D view's shoot_3d with no set-up, another panel's
+    save_screenshot."""
+    shot = os.path.join(folders[-1], 'shot.png')
+    if panel == '3d':
+        return 'shoot_3d(%r, None, None, None, 0, None, None, None)' % shot
+    return 'save_screenshot(%r, %r)' % (panel, shot)
 
 
 STEPS = '3D view, setting: Plane\n3D view, setting: view Top, framed\n'
@@ -121,17 +131,49 @@ def test_a_set_up_that_stopped_says_the_steps_it_began(
     ]
 
 
+FRONT = "Designer's window: brought in front without taking focus, as its 3D view isn't drawn while covered"
+BACK = "Designer's window: put back behind the window that was in front of it"
+STALE = '3D render: identical to the render before the set-up, though the set-up moved the camera or switched the mesh.'
+
+
+def test_what_was_done_to_designers_window_and_a_stale_render_come_beside_the_image(
+    monkeypatch: pytest.MonkeyPatch, temp_folders: list[str]
+) -> None:
+    # REVIEW.md SRV-146: the user's window changed, or the render may be the view's last frame
+    printed = FRONT + '\n' + STEPS + NOTE + '\n3d render 4x4\n' + STALE + '\n' + BACK + '\n'
+    _bridge(monkeypatch, temp_folders, printed)
+    result: list[str | Image] = server.screenshot_designer('3d', mesh='Plane')
+    assert isinstance(result[0], Image) and result[1:] == [FRONT, NOTE, STALE, BACK]
+
+
+def test_a_shot_that_failed_says_what_was_done_to_designers_window(
+    monkeypatch: pytest.MonkeyPatch, temp_folders: list[str]
+) -> None:
+    printed = FRONT + '\n' + STEPS + '--- ERROR ---\nScriptAborted: cancelled by client after 3.0s\n'
+    _bridge(monkeypatch, temp_folders, printed, shot=False)
+    with pytest.raises(ToolError) as raised:
+        server.screenshot_designer('3d', mesh='Plane', view='Top')
+    assert str(raised.value).splitlines() == [
+        'ScriptAborted: cancelled by client after 3.0s',
+        FRONT,
+        '3D view, setting: Plane',
+        '3D view, setting: view Top, framed',
+    ]
+
+
 @pytest.mark.parametrize('panel', ['3d', 'graph'])
 @pytest.mark.parametrize(
-    'option, value', [('orbit', [0.0, 0.0]), ('pan', [0.0, 0.0]), ('zoom', 0)], ids=['orbit', 'pan', 'zoom']
+    'option, value',
+    [('orbit', [0.0, 0.0]), ('pan', [0.0, 0.0]), ('zoom', 0), ('graph', ''), ('mesh', ''), ('view', '')],
+    ids=['orbit', 'pan', 'zoom', 'graph', 'mesh', 'view'],
 )
-def test_a_turn_pan_or_zoom_of_zero_sets_nothing_up(
-    monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], panel: str, option: str, value: Any
+def test_a_turn_pan_or_zoom_of_zero_or_an_empty_name_sets_nothing_up(
+    monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], panel: str, option: str, value: object
 ) -> None:
-    # REVIEW.md TST-336: nothing to set, so not sent, and not refused with another panel
+    # REVIEW.md TST-336: nothing to set, so not sent, and not refused with another panel; SRV-147: '' is no name
     sent = _bridge(monkeypatch, temp_folders)
-    result: Any = server.screenshot_designer(panel, **{option: value})
-    assert 'set_3d_view' not in _call(sent[0])
+    result: list[str | Image] = server.screenshot_designer(panel, **{option: value})
+    assert _call(sent[0]) == _plain(panel, temp_folders)
     assert len(result) == 1 and isinstance(result[0], Image)
 
 
@@ -140,8 +182,8 @@ def test_without_options_nothing_is_set_up_and_only_the_image_comes_back(
     monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], panel: str
 ) -> None:
     sent = _bridge(monkeypatch, temp_folders)
-    result: Any = server.screenshot_designer(panel)
-    assert 'set_3d_view' not in _call(sent[0])
+    result: list[str | Image] = server.screenshot_designer(panel)
+    assert _call(sent[0]) == _plain(panel, temp_folders)
     assert len(result) == 1 and isinstance(result[0], Image)
 
 

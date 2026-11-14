@@ -62,6 +62,13 @@ may update the names and paths an entry points at; changing what was decided, or
   Reopen if: such a finding turns out to have hidden a real break, or the user changes the rule. (The user's decision,
   2026-11-07.)
 
+- **Vague types are reported only in the functions a branch's diff adds or changes.** AGENTS.md asks for the most
+  specific type, `Any` the last resort, and has a change narrow the ones in the functions it changes; reviewers report
+  what is left there, the lines the diff leaves as they were included, so authors and reviewers go by one line. The
+  `Any` elsewhere (about a thousand) is ROADMAP item 98's work, so a whole-project review reports none while that item
+  is open, rather than filling REVIEW.md with it (the `project-code-review` skill). Reopen if: item 98 is done, or the
+  user changes the rule. (The user's decisions, 2026-11-13: the diff's code, then its whole functions.)
+
 - **A category's preparation opens its graph in the editor only where its checks read the editor.** Each category of
   the self-test starts from its own preparation in a Designer just started, and most never open their graph, where in
   `main`'s one run earlier categories had left one open. Measured (2026-11-11): `params`, `inputs`, `bitmaps` and
@@ -197,6 +204,23 @@ may update the names and paths an entry points at; changing what was decided, or
   what was measured.
   Reopen if: the wait shows too short (that check failing), or what Designer needs the moment for is found.
 
+- **On macOS, the server saves Designer's preferences plist as the first Designer an agent starts is started, and
+  puts it back once no Designer runs.** No way to give a Designer a file of its own was found, and agents' Designers
+  changed the user's. `launch_designer` saves it; `quit_designer` puts it back once none runs, and so does the next
+  call finding none, for Designers that ended outside the tools, only within 6 hours of the copy (older, it is
+  dropped: the user may have worked since); never while one runs, nor once the user's own Designer ran since (the
+  file is left as theirs), and a launch after the user's run saves it again. A launch records the Designer it starts,
+  or ends it when it can't, before letting go of the lock the file is saved under, so that another launch, looking
+  under it for a Designer that appeared as it was starting one, never takes an agent's for the user's (one it can
+  neither record nor end counts as the user's, as its error says). The user's own Designer, an agent working in it
+  included, is never involved. How, as measured: `designer_preferences.py`; checked by the pool's
+  `workers.check_the_preferences`. The user's choices, 2026-11-13: in the server rather than only in the self-test;
+  then the 6 hours, and saving again after their run; then the record written under that lock rather than the look
+  made only after a put-back; then a Designer that can't be recorded ended under that lock, one that can be neither
+  recorded nor ended counting as the user's.
+  Reopen if: Designer gains a way to keep its preferences elsewhere, a put-back loses a change of the user's, or
+  holding the lock through the record or that end (up to about 10 s) makes launches side by side wait noticeably.
+
 - **Designers an agent starts don't upload their crash reports to Adobe.** Designer's crash reporter uploads a crash's
   report with Designer's log, its settings and the user's Adobe account, and turns uploads on as Designer starts; a
   probe's crash was uploaded so. `launch_designer` turns them off in the Designer it started, in its own home, once it
@@ -229,6 +253,12 @@ may update the names and paths an entry points at; changing what was decided, or
   (GUIDE.md, Designer UI). Nothing in the graph changes, and one click on the node shows its parameters again. The
   user's decision, 2026-11-12.
   Reopen if: the user wants the selected node back, or the API gains a way to show a node in the Parameters panel.
+- **A 3D screenshot un-minimizes Designer's window and leaves it up; a covered window or a hidden Designer is put
+  back after.** The 3D view doesn't draw off screen (`designer_helpers/shot3d.py`). The user chose this over refusing
+  the shot, 2026-11-13: "Restore: un-minimize your window, take the shot ... I'm fine with that", then "Bring
+  forward, then back". If the user makes Designer the active app during the shot, it is left on screen (the user's
+  agreement, 2026-11-13).
+  Reopen if: the user wants the shot refused or the window minimized again, or showing it makes Designer the active app.
 - **Why `open_graph`'s wheel steps once did nothing is unknown, and isn't being chased.** It happened in one self-test
   run of four. Not reproduced: 200 wheel steps and 40 fits in a fresh Designer gave no stuck step, idle and under
   load. `_fit_view_to` no longer reports such a view as fitted, and gives the view's size and whether Designer's

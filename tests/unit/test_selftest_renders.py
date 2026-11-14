@@ -1,8 +1,10 @@
 """What the 3D view checks measure in a render (editor_panels_and_fit/renders.py), on made-up images."""
 
+import asyncio
 import base64
 import io
-from types import SimpleNamespace
+from collections.abc import Awaitable, Callable
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -42,6 +44,31 @@ def test_the_planes_height_is_measured_on_the_rows(renders: Any) -> None:
 def test_a_checker_twice_as_fine_has_about_twice_the_transitions(renders: Any) -> None:
     coarse, fine = renders.transitions(_checker(8)), renders.transitions(_checker(16))
     assert coarse == 7 and fine == 15
+
+
+def test_a_middle_row_on_the_edge_between_two_rows_of_squares_still_counts_the_checker(renders: ModuleType) -> None:
+    # REVIEW.md TST-395: a render blends the two rows of squares into one grey along their edge (a 442x345 render's
+    # middle row read 160 to 171 grey levels there, the rows around it 15 transitions)
+    a = _checker(8)
+    a[40, 10:58] = 165.0
+    assert renders.transitions(a) == 7
+
+
+def _plane_at(left: int, width: int = 850, plane: int = 250) -> 'np.ndarray[tuple[int, int], np.dtype[np.float64]]':
+    a = np.full((300, width), BACKGROUND)
+    a[50:250, left : left + plane] = 200.0
+    return a
+
+
+def test_a_planes_move_is_measured_as_a_fraction_of_each_renders_width(renders: ModuleType) -> None:
+    # REVIEW.md TST-396: a tool's shot is shrunk to max_size, a render saved by shoot_3d isn't; a quarter of an 850
+    # pixel render measured 0.196 against a shot shrunk to 700
+    before, after = _plane_at(300), _plane_at(300 - 212)  # moved a quarter of 850 left
+    shot = PILImage.fromarray(before.astype(np.uint8))
+    shot.thumbnail((700, 700))
+    small = np.asarray(shot, dtype=float)
+    assert renders.moved_left(before, after) == pytest.approx(0.25, abs=0.002)
+    assert renders.moved_left(small, after) == pytest.approx(0.25, abs=0.005)
 
 
 def test_shading_on_a_plain_plane_is_no_pattern(renders: Any) -> None:
@@ -90,3 +117,90 @@ def test_two_shots_of_two_sizes_are_said(renders: Any, capsys: pytest.CaptureFix
 def test_shots_that_worked_say_nothing(renders: Any, capsys: pytest.CaptureFixture[str]) -> None:
     renders.say_failed('the set-up check', _shot(_checker(8)), _shot(_checker(16)))
     assert capsys.readouterr().out == ''
+
+
+def _plain(size: int = 80) -> 'np.ndarray[tuple[int, int], np.dtype[np.float64]]':
+    """The plane with nothing on it: the 3D view before a graph's material shows on the mesh."""
+    a = np.full((size, size), BACKGROUND)
+    a[10:58, 10:58] = 150.0
+    return a
+
+
+def _said(shot: SimpleNamespace, line: str) -> SimpleNamespace:
+    """`shot` with `line` as its text, after its image, as screenshot_designer gives what it set."""
+    shot.content.append(SimpleNamespace(type='text', text=line))
+    return shot
+
+
+Calls = list[tuple[str, dict[str, object] | None]]
+
+
+def _shots_in_turn(
+    monkeypatch: pytest.MonkeyPatch, shots: list[SimpleNamespace]
+) -> tuple[Callable[[str, dict[str, object] | None], Awaitable[SimpleNamespace]], Calls, list[float]]:
+    """A fake tool call giving `shots` in turn, the last again once they run out, the calls it got, and the pauses
+    asked of asyncio.sleep, which returns at once."""
+    calls: Calls = []
+    pauses: list[float] = []
+
+    async def c(name: str, args: dict[str, object] | None = None) -> SimpleNamespace:
+        calls.append((name, args))
+        return shots.pop(0) if len(shots) > 1 else shots[0]
+
+    async def no_pause(seconds: float) -> None:
+        pauses.append(seconds)
+
+    monkeypatch.setattr(asyncio, 'sleep', no_pause)
+    return c, calls, pauses
+
+
+ARGS: dict[str, object] = {'panel': '3d', 'max_size': 700, 'mesh': 'Rounded cube', 'graph': 'g', 'view': 'Front'}
+
+
+def test_a_shot_is_taken_again_until_the_checker_shows_on_the_mesh(
+    renders: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # REVIEW.md TST-383, TST-388: in a full run the 3D shots once didn't follow the camera for about 20 s, the cause
+    # unknown; a second apart, so that the retakes last (TST-386)
+    c, calls, pauses = _shots_in_turn(monkeypatch, [_shot(_plain()), _shot(_plain()), _shot(_checker(8))])
+    r = asyncio.run(renders.with_checker(c, ARGS))
+    assert renders.transitions(renders.grey(r)) >= renders.CHECKER and pauses == [1.0, 1.0]
+    assert calls == [('screenshot_designer', ARGS)] + [('screenshot_designer', {'panel': '3d', 'max_size': 700})] * 2
+    assert 'the checker showed on the mesh after 2 retakes' in capsys.readouterr().out
+
+
+def test_a_retaken_shot_keeps_the_text_of_what_the_call_set(
+    renders: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # REVIEW.md TST-384: a retake says nothing of what was set, and two checks read it
+    first = _said(_shot(_plain()), "3D view: Plane, graph g's outputs on the mesh, view Top, framed")
+    c, _calls, _pauses = _shots_in_turn(monkeypatch, [first, _said(_shot(_checker(8)), '')])
+    r = asyncio.run(renders.with_checker(c, ARGS))
+    assert renders.transitions(renders.grey(r)) >= renders.CHECKER
+    assert renders.text(r).strip() == "3D view: Plane, graph g's outputs on the mesh, view Top, framed"
+
+
+def test_a_shot_with_the_checker_at_once_is_taken_once(
+    renders: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    edge = _shot(_checker(7))  # exactly CHECKER changes: the checker shows (TST-386)
+    assert renders.transitions(renders.grey(edge)) == renders.CHECKER
+    for shot in (_shot(_checker(8)), edge):
+        c, calls, pauses = _shots_in_turn(monkeypatch, [shot])
+        asyncio.run(renders.with_checker(c, ARGS))
+        assert calls == [('screenshot_designer', ARGS)] and pauses == [] and capsys.readouterr().out == ''
+
+
+def test_a_shot_waits_for_the_checker_only_so_long(
+    renders: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    c, calls, _pauses = _shots_in_turn(monkeypatch, [_shot(_plain())])
+    r = asyncio.run(renders.with_checker(c, ARGS))
+    assert renders.transitions(renders.grey(r)) == 0 and len(calls) == 1 + renders.RETAKES
+    assert "the checker didn't show on the mesh after %d retakes" % renders.RETAKES in capsys.readouterr().out
+
+
+def test_a_shot_that_failed_isnt_taken_again(renders: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    failed = SimpleNamespace(content=[SimpleNamespace(type='text', text='Error executing tool')], is_error=True)
+    c, calls, _pauses = _shots_in_turn(monkeypatch, [failed])
+    assert asyncio.run(renders.with_checker(c, ARGS)) is failed and len(calls) == 1

@@ -1,5 +1,6 @@
 """The editor: every panel's screenshot, the clipboard, open_graph fitting the whole graph, then the 3D view set up."""
 
+import os
 import re
 import sys
 from textwrap import dedent
@@ -16,6 +17,7 @@ from test_all_tools.common import (
     skip,
     text,
 )
+from test_all_tools.editor_panels_and_fit import window_states
 from test_all_tools.editor_panels_and_fit.preparations import (
     CHECKER_OPS,
     PLAIN_OPS,
@@ -26,12 +28,15 @@ from test_all_tools.editor_panels_and_fit.preparations import (
 from test_all_tools.editor_panels_and_fit.renders import (
     difference,
     grey,
+    grey_file,
+    moved_left,
     plane_columns,
     plane_height,
     plane_middle,
     plane_width,
     say_failed,
     transitions,
+    with_checker,
 )
 
 TEXT = b'mcp_selftest: the text a 3D capture puts back'
@@ -56,7 +61,7 @@ async def check_outputs_added_to_the_open_graph_reach_the_3d_view_once_applied(c
     before = await c('screenshot_designer', {**THREE_D, **TOP, 'tiling': 1.0})
     await prepared_call(c, 'apply_edits', {'graph': VIEW3D_ADDED, 'ops': CHECKER_OPS})
     after = await c('screenshot_designer', THREE_D)
-    applied = await c('screenshot_designer', {**THREE_D, 'graph': VIEW3D_ADDED})
+    applied = await with_checker(c, {**THREE_D, 'graph': VIEW3D_ADDED})
     shots = [before, after, applied]
     if not all(is_image(r) for r in shots):
         check('screenshot_designer', 'graph= puts the outputs of the graph on the mesh', False, 'a shot failed (below)')
@@ -86,7 +91,8 @@ async def check_a_view_turns_the_camera(ctx: Ctx) -> None:
     if ctx.was_running:
         skip('screenshot_designer', 'view= turns the camera', USERS_3D_VIEW)
         return
-    slanted = await c('screenshot_designer', {**THREE_D, 'mesh': 'Plane', 'view': 'Default'})
+    # its own graph's checker: the check before it may not have run (REVIEW.md TST-386)
+    slanted = await with_checker(c, {**THREE_D, 'mesh': 'Plane', 'view': 'Default', 'graph': VIEW3D_GRAPH})
     above = await c('screenshot_designer', {**THREE_D, 'view': 'Top'})
     if not (is_image(slanted) and is_image(above)):
         check('screenshot_designer', 'view= turns the camera', False, text(slanted) + ' | ' + text(above))
@@ -109,7 +115,7 @@ async def check_the_3d_view_zooms_and_tiles(ctx: Ctx) -> None:
     if ctx.was_running:
         skip('screenshot_designer', 'zoom and tiling', USERS_3D_VIEW)
         return
-    base = await c('screenshot_designer', {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH, 'tiling': 1.0})
+    base = await with_checker(c, {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH, 'tiling': 1.0})
     tiled = await c('screenshot_designer', {**THREE_D, 'tiling': 2.0})
     closer = await c('screenshot_designer', {**THREE_D, 'view': 'Top', 'zoom': 3})
     back = await c('screenshot_designer', {**THREE_D, 'zoom': -3})  # from the camera closer was left at
@@ -173,7 +179,7 @@ async def check_orbit_turns_the_camera_around_what_it_looks_at(ctx: Ctx) -> None
     if ctx.was_running:
         skip('screenshot_designer', 'orbit= turns the camera', USERS_3D_VIEW)
         return
-    first = await c('screenshot_designer', {**THREE_D, 'graph': VIEW3D_GRAPH, 'mesh': 'Rounded cube', 'view': 'Front'})
+    first = await with_checker(c, {**THREE_D, 'graph': VIEW3D_GRAPH, 'mesh': 'Rounded cube', 'view': 'Front'})
     views = {
         view: await c('screenshot_designer', {**THREE_D, 'view': view}) for view in ('Front', 'Right', 'Left', 'Top')
     }
@@ -217,7 +223,7 @@ async def check_pan_moves_the_view_and_zoom_comes_closer_to_the_middle(ctx: Ctx)
     if ctx.was_running:
         skip('screenshot_designer', 'pan= moves the view', USERS_3D_VIEW)
         return
-    small = await c('screenshot_designer', {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH, 'zoom': -4})
+    small = await with_checker(c, {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH, 'zoom': -4})
     panned = await c('screenshot_designer', {**THREE_D, 'pan': [0.25, 0.25]})  # from where zoom left the camera
     # far enough for the plane, zoomed 4 steps closer from its corner, to stay inside the panel
     far = await c('screenshot_designer', {**THREE_D, 'view': 'Top', 'zoom': -10})
@@ -290,7 +296,7 @@ async def check_the_camera_moves_under_the_light_tool_too(ctx: Ctx) -> None:
         skip('screenshot_designer', 'zoom and pan under the Light tool', USERS_3D_VIEW)
         return
     try:
-        base = await c('screenshot_designer', {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH})
+        base = await with_checker(c, {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH})
         light = text(await designer_script(c, 'editor_panels_and_fit/tool_3d', tool='Light'))
         sent = text(await c('execute_designer_code', {'code': ctx.helper_source + MOVES_UNDER_ANY_TOOL}))
         wheeled = await c('screenshot_designer', THREE_D)
@@ -348,14 +354,12 @@ async def check_a_drag_turns_the_camera_alike_with_selection_on(ctx: Ctx) -> Non
         skip('designer facts', 'drags with Selection on', USERS_3D_VIEW)
         return
     try:
-        front = await c(
-            'screenshot_designer', {**THREE_D, 'graph': VIEW3D_GRAPH, 'mesh': 'Rounded cube', 'view': 'Front'}
-        )
+        front = await with_checker(c, {**THREE_D, 'graph': VIEW3D_GRAPH, 'mesh': 'Rounded cube', 'view': 'Front'})
         right = await c('screenshot_designer', {**THREE_D, 'view': 'Right'})
         panel = text(await designer_script(c, 'editor_panels_and_fit/parameters_panel'))
         selection = text(await designer_script(c, 'editor_panels_and_fit/tool_3d', tool='', selection=True))
         turned = await c('screenshot_designer', {**THREE_D, 'view': 'Front', 'orbit': [90, 0]})
-        small = await c('screenshot_designer', {**THREE_D, **TOP, 'zoom': -4})
+        small = await with_checker(c, {**THREE_D, **TOP, 'zoom': -4})
         panned = await c('screenshot_designer', {**THREE_D, 'pan': [0.25, 0]})
         panel_after = text(await designer_script(c, 'editor_panels_and_fit/parameters_panel'))
     finally:
@@ -366,7 +370,7 @@ async def check_a_drag_turns_the_camera_alike_with_selection_on(ctx: Ctx) -> Non
         say_failed('Selection', *shots)
         return
     near, far = difference(grey(turned), grey(right)), difference(grey(turned), grey(front))
-    moved = (plane_middle(grey(small))[0] - plane_middle(grey(panned))[0]) / grey(small).shape[1]
+    moved = moved_left(grey(small), grey(panned))
     check(
         'designer facts',
         "with the 3D view's Selection toggle on, a turn and a pan come out alike and the Parameters panel is kept",
@@ -405,12 +409,12 @@ async def check_the_users_mouse_doesnt_stop_a_turn_or_pan(ctx: Ctx) -> None:
     if ctx.was_running:
         skip('screenshot_designer', "the user's mouse in a drag", USERS_3D_VIEW)
         return
-    first = await c('screenshot_designer', {**THREE_D, 'graph': VIEW3D_GRAPH, 'mesh': 'Rounded cube', 'view': 'Front'})
+    first = await with_checker(c, {**THREE_D, 'graph': VIEW3D_GRAPH, 'mesh': 'Rounded cube', 'view': 'Front'})
     right = await c('screenshot_designer', {**THREE_D, 'view': 'Right'})
     turn = 'VIEW, ORBIT, PAN = %r, %r, %r\n' % ('Front', [90.0, 0.0], None)
     turned_said = text(await c('execute_designer_code', {'code': ctx.helper_source + turn + HOVER_IN_A_DRAG}))
     turned = await c('screenshot_designer', THREE_D)
-    small = await c('screenshot_designer', {**THREE_D, **TOP, 'zoom': -4})
+    small = await with_checker(c, {**THREE_D, **TOP, 'zoom': -4})
     pan = 'VIEW, ORBIT, PAN = %r, %r, %r\n' % (None, None, [0.25, 0.0])
     panned_said = text(await c('execute_designer_code', {'code': ctx.helper_source + pan + HOVER_IN_A_DRAG}))
     panned = await c('screenshot_designer', THREE_D)
@@ -426,7 +430,7 @@ async def check_the_users_mouse_doesnt_stop_a_turn_or_pan(ctx: Ctx) -> None:
         'HOVERED' in turned_said and near < min(3.0, 0.5 * far),
         '%.2f from Right, %.2f from Front | %s' % (near, far, turned_said.strip()[-90:]),
     )
-    moved = (plane_middle(grey(small))[0] - plane_middle(grey(panned))[0]) / grey(small).shape[1]
+    moved = moved_left(grey(small), grey(panned))
     check(
         'screenshot_designer',
         "the user's mouse moving in a drag doesn't stop pan=",
@@ -493,7 +497,7 @@ async def check_opening_the_editors_graph_again_leaves_the_outputs_on_the_mesh(c
     await prepared_call(c, 'create_graph', {'name': VIEW3D_PLAIN, 'size_log2': 9})
     await prepared_call(c, 'apply_edits', {'graph': VIEW3D_PLAIN, 'ops': PLAIN_OPS})
     await prepared_call(c, 'open_graph', {'graph': VIEW3D_PLAIN})
-    r = await c('screenshot_designer', {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH, 'tiling': 1.0})
+    r = await with_checker(c, {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH, 'tiling': 1.0})
     seen = transitions(grey(r)) if is_image(r) else 0
     check(
         'designer facts',
@@ -533,7 +537,7 @@ async def check_a_set_up_checks_what_it_needs_first_and_says_what_it_set(ctx: Ct
     if ctx.was_running:
         skip('screenshot_designer', 'a set-up checks what it needs first, and says what it set', USERS_3D_VIEW)
         return
-    before = await c('screenshot_designer', {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH, 'tiling': 1.0})
+    before = await with_checker(c, {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH, 'tiling': 1.0})
     hidden = text(await c('execute_designer_code', {'code': ctx.helper_source + PARAMETERS_HIDDEN}))
     after = await c('screenshot_designer', THREE_D)
     changed = difference(grey(before), grey(after)) if is_image(before) and is_image(after) else 255.0
@@ -644,6 +648,383 @@ async def check_a_timer_goes_with_the_parent_its_function_held(ctx: Ctx) -> None
         'a timer goes with the parent its function held; with none, it outlives the function',
         m is not None and int(m.group(1)) > 0 and int(m.group(2)) == 0,
         t.strip()[-200:],
+    )
+
+
+async def check_the_3d_view_isnt_drawn_while_designers_window_is_off_screen(ctx: Ctx) -> None:
+    """While macOS has Designer's window minimized, covered by a window of Designer's own or hidden, the 3D view's
+    render stays the last frame it drew: a pan by the helpers' own drag leaves it identical, where on screen, and with
+    the window partly covered, it changes it. Qt minimizing getMainWindow() stops the drawing too. macOS minimizing
+    the window leaves getMainWindow()'s isMinimized() False, the top-level window's True, and the window not exposed
+    (designer facts: designer_helpers/shot3d.py, REVIEW.md SRV-146, TST-391). macOS only, in a Designer the self-test
+    started."""
+    c = ctx.c
+    if ctx.was_running or sys.platform != 'darwin':
+        skip('designer facts', "the 3D view isn't drawn off screen", USERS_3D_VIEW if ctx.was_running else 'macOS only')
+        return
+    await with_checker(c, {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH, 'zoom': -4})
+    seen: dict[str, str] = {}
+    states: dict[str, dict[str, str]] = {}
+    for way in (None, *window_states.WAYS, *window_states.DRAWN):
+        t = text(await c('execute_designer_code', {'code': ctx.helper_source + window_states.panned(way)}))
+        m = re.search(r'SAME=(\w+)', t)
+        seen[way or 'on screen'] = m.group(1) if m else t.strip().splitlines()[-1] if t.strip() else '?'
+        states[way or 'on screen'] = window_states.states(t.split('SAME=')[0]).get('STATE', {})
+    off = [way for way in window_states.WAYS if seen[way] == 'True']
+    drawn = [way for way in ('on screen', *window_states.DRAWN) if seen[way] == 'False']
+    check(
+        'designer facts',
+        "the 3D view's render is drawn while Designer's window is partly covered, not minimized, covered or hidden",
+        off == list(window_states.WAYS) and drawn == ['on screen', *window_states.DRAWN],
+        'render unchanged by a pan: %s' % ', '.join('%s %s' % item for item in seen.items()),
+    )
+    minimized = states['minimized']
+    check(
+        'designer facts',
+        "macOS minimizing Designer's window: getMainWindow() not minimized for Qt, the top-level window minimized",
+        minimized.get('minimized') == 'True'
+        and minimized.get('qt_minimized') == 'False'
+        and minimized.get('top_minimized') == 'True'
+        and minimized.get('exposed') == 'False',
+        ' '.join('%s=%s' % item for item in minimized.items()) or 'no state read',
+    )
+
+
+SHOWN = {
+    'minimized': "Designer's window: un-minimized, as its 3D view isn't drawn while minimized; it stays so",
+    'qt minimized': "Designer's window: un-minimized, as its 3D view isn't drawn while minimized; it stays so",
+    'covered': "Designer's window: brought in front without taking focus, as its 3D view isn't drawn while covered",
+    'hidden': "Designer's window: shown without taking focus, as its 3D view isn't drawn while Designer is hidden",
+}
+# the state each way leaves after the shot: minimized ones stay shown (the user's choice: DECISIONS.md)
+AFTER = {
+    'minimized': ('minimized', 'False'),
+    'qt minimized': ('qt_minimized', 'False'),
+    'covered': ('covered', 'True'),
+    'hidden': ('hidden', 'True'),
+}
+
+
+async def check_a_3d_shot_puts_designers_window_on_screen_without_taking_focus(ctx: Ctx) -> None:
+    """screenshot_designer('3d') with Designer's window minimized, covered or hidden (window_states) puts it on screen
+    first, without making Designer the active app, so its render follows the pan: the plane moves a quarter of the
+    view from where a shot on screen just before showed it (REVIEW.md SRV-146: that shot came back, the view's last
+    frame). It says what it did; a covered window is sent back behind and a hidden Designer hidden again; a minimized
+    one stays shown (DECISIONS.md). The covered window goes back right behind the window in front of it, not behind
+    every window: Designer's own window behind it stays behind it (REVIEW.md HLP-126). Focus is judged when Designer
+    wasn't the active app before (window_states.focus; REVIEW.md TST-392). macOS only, in a Designer the self-test
+    started."""
+    c = ctx.c
+    if ctx.was_running or sys.platform != 'darwin':
+        skip(
+            'screenshot_designer',
+            "3d with Designer's window off screen",
+            USERS_3D_VIEW if ctx.was_running else 'macOS only',
+        )
+        return
+    await with_checker(c, {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH})
+    for way in window_states.WAYS:
+        base = await c('screenshot_designer', {**THREE_D, 'view': 'Top', 'zoom': -4})  # the frame a stale shot repeats
+        put = text(await c('execute_designer_code', {'code': ctx.helper_source + window_states.put(way)}))
+        try:
+            # the pan alone: set up with the zoom, it comes before it, and the zoom shrinks it (view3d.py's order)
+            r = await c('screenshot_designer', {**THREE_D, 'pan': [0.25, 0.0]})
+            after = window_states.states(
+                text(await c('execute_designer_code', {'code': ctx.helper_source + window_states.read()}))
+            )
+        finally:
+            await c('execute_designer_code', {'code': ctx.helper_source + window_states.clear()})
+        before, off = window_states.states(put).get('BEFORE', {}), window_states.states(put).get('STATE', {})
+        what = "3d with Designer's window %s: put on screen without taking focus" % way
+        if not (is_image(base) and is_image(r)):
+            check('screenshot_designer', what, False, 'a shot failed (below)')
+            say_failed(way, base, r)
+            continue
+        moved = moved_left(grey(base), grey(r))
+        key, value = AFTER[way]
+        state = after.get('STATE', {})
+        kept = window_states.focus(before, state)
+        ok = (
+            0.24 <= moved <= 0.26
+            and SHOWN[way] in text(r)
+            and state.get(key) == value
+            and (way != 'covered' or state.get('order') == off.get('order') == 'cover,main,below')
+            and kept is not False
+        )
+        check('screenshot_designer', what, ok, 'the plane moved %.3f of the view left' % moved)
+        if kept is None:
+            print("      focus not judged: Designer was the active app before the shot, or its state wasn't read")
+        if not ok:  # a check's detail is cut at 150 characters (REVIEW.md TST-334)
+            for label, seen in (('before', before), ('off screen', off), ('after the shot', state)):
+                print('      %s: %s' % (label, ' '.join('%s=%s' % item for item in seen.items()) or 'not read'))
+            lines = [line for line in text(r).splitlines() if line.startswith("Designer's window: ")]
+            print("      the shot's lines about the window: %s" % (' / '.join(lines) or 'none'))
+
+
+# shoot_3d with a pan, the image removed
+PAN = dedent("""
+    import os, tempfile
+    out = os.path.join(tempfile.mkdtemp(prefix='mcp_selftest_'), 'shot.png')
+    shoot_3d(out, pan=[0.25, 0.0])
+    os.remove(out)
+    os.rmdir(os.path.dirname(out))
+""")
+# Designer's window left as it is by the shot: no _MacWindow, as elsewhere than macOS
+AS_IT_IS = '_mac_window = lambda mw: None\n'
+
+
+async def check_a_render_that_didnt_follow_a_pan_is_said(ctx: Ctx) -> None:
+    """A render identical to the one before a pan is said, after its retakes (designer_helpers/shot3d.py, STALE; REVIEW.md
+    SRV-146): with Designer's window covered and left so, the render is the view's last frame. On screen the pan
+    changes the render, and nothing is said: Designer's QImage compares pixels. macOS only (the window covered through
+    _MacWindow), in a Designer the self-test started."""
+    c = ctx.c
+    if ctx.was_running or sys.platform != 'darwin':
+        skip(
+            'screenshot_designer',
+            "3d: a render that didn't follow a pan",
+            USERS_3D_VIEW if ctx.was_running else 'macOS only',
+        )
+        return
+    await with_checker(c, {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH, 'zoom': -4})
+    # on screen as the shot puts it: a window over Designer's would leave the render stale (REVIEW.md TST-390)
+    on = text(await c('execute_designer_code', {'code': ctx.helper_source + PAN}))
+    try:
+        put = window_states.put('covered')
+        off = text(await c('execute_designer_code', {'code': ctx.helper_source + put + AS_IT_IS + PAN}))
+    finally:
+        await c('execute_designer_code', {'code': ctx.helper_source + window_states.clear()})
+    said_on, said_off = ('3D render: identical' in t for t in (on, off))
+    check(
+        'screenshot_designer',
+        "3d: a render that didn't follow a pan is said; one that did isn't",
+        said_off and not said_on and 'pan 0.25 of the view right' in off,
+        'said with the window covered: %s; on screen: %s' % (said_off, said_on),
+    )
+    if not said_off or said_on:  # a check's detail is cut at 150 characters (REVIEW.md TST-334)
+        for label, t in (('on screen', on), ('covered', off)):
+            print('      %s: %s' % (label, ' / '.join(t.strip().splitlines()[-3:])))
+
+
+AGAIN = "Designer's window: brought in front again without taking focus, as another window covered it during the shot"
+NOT_JUDGED = 'Designer became the active app during the shot, which leaves its window up (REVIEW.md TST-399)'
+
+
+async def check_a_window_covered_during_a_3d_shot_is_put_in_front_again(ctx: Ctx) -> None:
+    """A window brought over Designer's as screenshot_designer('3d')'s pan begins, as a user's click on their own window
+    would, is seen before the render: Designer's window comes in front again, without taking focus, and the render
+    follows the pan, the plane moving a quarter of the view (REVIEW.md HLP-124: the render was the view's last frame,
+    and nothing was said). It goes back behind that window after. When Designer became the active app during the shot,
+    which brings its windows in front and leaves them up, only the pan is judged (REVIEW.md TST-399). Through shoot_3d,
+    the helper the tool calls, to bring the window over during the shot. macOS only, in a Designer the self-test
+    started."""
+    c = ctx.c
+    if ctx.was_running or sys.platform != 'darwin':
+        skip(
+            'screenshot_designer',
+            "3d with a window brought over Designer's during the shot",
+            USERS_3D_VIEW if ctx.was_running else 'macOS only',
+        )
+        return
+    await with_checker(c, {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH})
+    base = await c('screenshot_designer', {**THREE_D, 'view': 'Top', 'zoom': -4})
+    path = os.path.join(ctx.scratch, 'covered_during_pan.png')
+    try:
+        t = text(
+            await c('execute_designer_code', {'code': ctx.helper_source + window_states.during_pan(path, 'cover')})
+        )
+        after = window_states.states(
+            text(await c('execute_designer_code', {'code': ctx.helper_source + window_states.read()}))
+        )
+    finally:
+        await c('execute_designer_code', {'code': ctx.helper_source + window_states.clear()})
+    what = "3d with a window brought over Designer's during the shot: in front again, the render following the pan"
+    if not (is_image(base) and os.path.exists(path)):
+        check('screenshot_designer', what, False, 'a shot failed (below)')
+        say_failed('before the pan', base)
+        print('      the pan: %s' % ' / '.join(t.strip().splitlines()[-3:]))
+        return
+    moved = moved_left(grey(base), grey_file(path))
+    state = after.get('STATE', {})
+    # Designer made the active app meanwhile brings its windows in front, and is left up: only the pan is judged then
+    judged = not window_states.became_active(t, window_states.states(t).get('BEFORE', {}), state)
+    ok = 0.24 <= moved <= 0.26 and (not judged or (AGAIN in t and state.get('covered') == 'True'))
+    check('screenshot_designer', what, ok, 'the plane moved %.3f of the view left' % moved)
+    if not judged:
+        print('      put-back not judged: ' + NOT_JUDGED)
+    if not ok:  # a check's detail is cut at 150 characters (REVIEW.md TST-334)
+        lines = [line for line in t.splitlines() if line.startswith(("Designer's window: ", '3D render: ', 'covered'))]
+        print("      the shot's lines: %s" % (' / '.join(lines) or 'none'))
+        print('      after the shot: %s' % (' '.join('%s=%s' % item for item in state.items()) or 'not read'))
+
+
+# where a shot puts back Designer's window, covered at its start, by what became of the windows meanwhile: the way it
+# was covered, what happens as the pan begins (window_states.EVENTS), what is expected, the put-back lines it may say,
+# and Designer's windows each pair lists, the first in front of the second after the shot. A normal window coming in
+# front of Designer's meanwhile (another worker's Designer opening, in the full run) is then the one in front: the
+# window goes back behind it, still not behind every window, which the order shows (REVIEW.md HLP-130)
+BEHIND = 'put back behind the window that was in front of it'
+GONE = 'left in front, as the window that was in front of it is no longer on screen'
+NONE_FOUND = 'left in front, as no window was found in front of it'
+STAYS = 'left in front, or behind a window come in front of it meanwhile'
+PUT_BACK = {
+    'covered again during the shot': (
+        'covered',
+        'later',
+        'put back behind its first cover',
+        (BEHIND,),
+        (('cover', 'main'), ('main', 'below')),
+    ),
+    'its cover closed during the shot': ('covered', 'close', STAYS, (GONE, BEHIND), (('main', 'below'),)),
+    'its cover minimized during the shot': ('covered', 'minimize', STAYS, (GONE, BEHIND), (('main', 'below'),)),
+    window_states.ON_TOP: (window_states.ON_TOP, None, STAYS, (NONE_FOUND, BEHIND), (('main', 'below'),)),
+}
+
+
+async def check_a_covered_window_goes_back_behind_its_cover_or_stays_in_front_once_the_cover_is_gone(
+    ctx: Ctx,
+) -> None:
+    """Designer's window, covered as screenshot_designer('3d') starts, goes back right behind the window that covered
+    it, also when another window comes over it during the shot (REVIEW.md HLP-131: it went back behind that later
+    window, in front of its cover). It stays in front when that cover is closed or minimized during the shot, or when
+    no normal window covered it (an always-on-top window), unless a normal window came in front of it meanwhile:
+    behind a window off screen, or sent to the back, it went behind every window (REVIEW.md HLP-130). Read in the
+    order of Designer's own windows, a window of its own behind it. Not judged when Designer became the active app
+    during the shot, which leaves its window up (REVIEW.md TST-399). Through shoot_3d, to act on the windows during
+    the shot. macOS only, in a Designer the self-test started."""
+    c = ctx.c
+    if ctx.was_running or sys.platform != 'darwin':
+        skip(
+            'screenshot_designer',
+            "3d with Designer's window covered: put back behind its cover, or left in front once it is gone",
+            USERS_3D_VIEW if ctx.was_running else 'macOS only',
+        )
+        return
+    await with_checker(c, {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH})
+    for case, (way, event, expected, said, pairs) in PUT_BACK.items():
+        await c('screenshot_designer', {**THREE_D, 'view': 'Top'})  # framed again: each case pans
+        path = os.path.join(ctx.scratch, 'put_back.png')
+        try:
+            await c('execute_designer_code', {'code': ctx.helper_source + window_states.put(way)})
+            t = text(
+                await c('execute_designer_code', {'code': ctx.helper_source + window_states.during_pan(path, event)})
+            )
+            after = window_states.states(
+                text(await c('execute_designer_code', {'code': ctx.helper_source + window_states.read()}))
+            )
+        finally:
+            await c('execute_designer_code', {'code': ctx.helper_source + window_states.clear()})
+        order = after.get('STATE', {}).get('order', '')
+        put_back = [one for one in said if ("Designer's window: " + one) in t]
+        state = after.get('STATE', {})
+        judged = not window_states.became_active(t, window_states.states(t).get('BEFORE', {}), state)
+        ok = not judged or (bool(put_back) and all(window_states.ahead(order, a, b) for a, b in pairs))
+        what = "3d with Designer's window %s: %s" % (case, expected)
+        seen = (put_back[0] if put_back else 'not said') if judged else 'not judged: ' + NOT_JUDGED
+        check('screenshot_designer', what, ok, '%s; order after: %s' % (seen, order))
+        if not ok:  # a check's detail is cut at 150 characters (REVIEW.md TST-334)
+            lines = [one for one in t.splitlines() if one.startswith(("Designer's window: ", 'cover', 'its cover'))]
+            print("      the shot's lines: %s" % ' / '.join(lines or t.strip().splitlines()[-3:]))
+
+
+async def check_a_refused_3d_set_up_leaves_designers_window_as_it_was(ctx: Ctx) -> None:
+    """screenshot_designer('3d') refusing a set-up the 3D view rules out (an orbit of less than a pixel's drag) refuses
+    before it puts Designer's window on screen: a minimized window stays minimized, and nothing is said of it
+    (REVIEW.md HLP-127). macOS only, in a Designer the self-test started."""
+    c = ctx.c
+    if ctx.was_running or sys.platform != 'darwin':
+        skip(
+            'screenshot_designer',
+            "3d: a refused set-up leaves Designer's window as it was",
+            USERS_3D_VIEW if ctx.was_running else 'macOS only',
+        )
+        return
+    await with_checker(c, {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH})
+    try:
+        await c('execute_designer_code', {'code': ctx.helper_source + window_states.put('minimized')})
+        r = await c('screenshot_designer', {**THREE_D, 'orbit': [0.2, 0.0]})
+        after = window_states.states(
+            text(await c('execute_designer_code', {'code': ctx.helper_source + window_states.read()}))
+        )
+    finally:
+        await c('execute_designer_code', {'code': ctx.helper_source + window_states.clear()})
+    minimized = after.get('STATE', {}).get('minimized')
+    check(
+        'screenshot_designer',
+        "3d: a set-up the view rules out is refused before Designer's window changes",
+        not is_image(r)
+        and 'less than one pixel' in text(r)
+        and "Designer's window" not in text(r)
+        and minimized == 'True',
+        'refused: %s; minimized after: %s' % (not is_image(r), minimized),
+    )
+    if is_image(r) or "Designer's window" in text(r):
+        print('      the result: %s' % ' / '.join(text(r).strip().splitlines()))
+
+
+async def check_a_plain_3d_shot_shows_a_change_made_while_designers_window_was_off_screen(ctx: Ctx) -> None:
+    """A plain screenshot_designer('3d'), nothing set up, of Designer's window minimized, covered or hidden shows the
+    3D view as it was changed off screen (a pan by the helpers' own drag, which the view doesn't draw there): the shot
+    is the one taken on screen afterwards, and differs from the one before the change (REVIEW.md TST-393: the commonest
+    call, with no comparison to tell a stale render). macOS only, in a Designer the self-test started."""
+    c = ctx.c
+    if ctx.was_running or sys.platform != 'darwin':
+        skip(
+            'screenshot_designer',
+            "3d, nothing set up, with Designer's window off screen",
+            USERS_3D_VIEW if ctx.was_running else 'macOS only',
+        )
+        return
+    await with_checker(c, {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH, 'zoom': -4})
+    for way in window_states.WAYS:
+        await c('execute_designer_code', {'code': ctx.helper_source + window_states.clear()})  # on screen, in front
+        base = await c('screenshot_designer', THREE_D)
+        try:
+            await c('execute_designer_code', {'code': ctx.helper_source + window_states.put_and_drag(way, 40)})
+            plain = await c('screenshot_designer', THREE_D)
+        finally:
+            await c('execute_designer_code', {'code': ctx.helper_source + window_states.clear()})
+        later = await c('screenshot_designer', THREE_D)
+        await c('execute_designer_code', {'code': ctx.helper_source + window_states.drag(-40)})
+        what = "3d, nothing set up, with Designer's window %s: the view as changed off screen" % way
+        if not (is_image(base) and is_image(plain) and is_image(later)):
+            check('screenshot_designer', what, False, 'a shot failed (below)')
+            say_failed(way, base, plain, later)
+            continue
+        changed, same = difference(grey(base), grey(plain)), difference(grey(plain), grey(later))
+        check(
+            'screenshot_designer',
+            what,
+            changed > 1 and same < 0.5,
+            'differs from the view before by %.2f grey levels, from one on screen after by %.2f' % (changed, same),
+        )
+
+
+SHOWN_MESH = dedent("""
+    mw = _APP.getQtForPythonUIMgr().getMainWindow()
+    print('SHOWN=%s' % _mesh_shown(mw, [mw]))
+""")
+
+
+async def check_the_3d_views_scene_menu_checks_the_mesh_shown(ctx: Ctx) -> None:
+    """The 3D view's Scene menu checks the mesh the view shows: after Sphere, then Plane, each is the one checked
+    (designer facts: shot3d.py's _mesh_shown reads it, to tell a mesh switched from the one shown; REVIEW.md TST-391).
+    In a Designer the self-test started."""
+    c = ctx.c
+    if ctx.was_running:
+        skip('designer facts', "the 3D view's Scene menu checks the mesh shown", USERS_3D_VIEW)
+        return
+    seen: list[str] = []
+    for mesh in ('Sphere', 'Plane'):
+        await c('screenshot_designer', {**THREE_D, 'mesh': mesh})
+        t = text(await c('execute_designer_code', {'code': ctx.helper_source + SHOWN_MESH}))
+        m = re.search(r'SHOWN=(.*)', t)
+        seen.append(m.group(1).strip() if m else (t.strip().splitlines() or ['nothing printed'])[-1])
+    check(
+        'designer facts',
+        "the 3D view's Scene menu checks the mesh it shows",
+        seen == ['Sphere', 'Plane'],
+        'checked after Sphere, then Plane: %s' % ', '.join(seen),
     )
 
 
@@ -927,3 +1308,11 @@ async def run(ctx: Ctx) -> None:
     await check_opening_the_editors_graph_again_leaves_the_outputs_on_the_mesh(ctx)
     await check_a_material_the_mesh_doesnt_use_doesnt_stop_tiling(ctx)
     await check_a_timer_goes_with_the_parent_its_function_held(ctx)
+    await check_the_3d_view_isnt_drawn_while_designers_window_is_off_screen(ctx)
+    await check_a_3d_shot_puts_designers_window_on_screen_without_taking_focus(ctx)
+    await check_a_render_that_didnt_follow_a_pan_is_said(ctx)
+    await check_a_window_covered_during_a_3d_shot_is_put_in_front_again(ctx)
+    await check_a_covered_window_goes_back_behind_its_cover_or_stays_in_front_once_the_cover_is_gone(ctx)
+    await check_a_refused_3d_set_up_leaves_designers_window_as_it_was(ctx)
+    await check_a_plain_3d_shot_shows_a_change_made_while_designers_window_was_off_screen(ctx)
+    await check_the_3d_views_scene_menu_checks_the_mesh_shown(ctx)

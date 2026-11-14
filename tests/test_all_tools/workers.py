@@ -31,8 +31,9 @@ at once (2026-11-11), lifecycle (about 3.8 minutes) and then undo alone setting 
 
 The workers count as started by the test, decided here once: a worker asking for itself could take another's Designer,
 just started and not yet recorded, for the user's. With a Designer running that no agent started (the user's) the run
-asks for it to be closed and starts nothing (all share the preferences plist: ROADMAP item 67). Off macOS, where
-launch_designer starts one per port only there, it is one run in one Designer (`__main__.py`'s docstring)."""
+asks for it to be closed and starts nothing (all share the preferences plist, which quit_designer puts back once none
+runs: check_the_preferences). Off macOS, where launch_designer starts one per port only there, it is one run in one
+Designer (`__main__.py`'s docstring)."""
 
 import json
 import os
@@ -46,6 +47,7 @@ import time
 from collections.abc import Callable, Collection, Mapping, Sequence
 from typing import Any, Protocol
 
+import designer_preferences
 from test_all_tools import common
 from test_all_tools.categories import CATEGORIES, CLIPBOARD, SOLO, category_name
 from test_all_tools.common import (
@@ -56,6 +58,7 @@ from test_all_tools.common import (
     agents_designers,
     closed_by_quit,
     crash_dumps,
+    designer_pids,
     new_dumps,
     summarize,
     users_designer_running,
@@ -240,6 +243,14 @@ def merge(
     return sorted(tools), results, skipped, times
 
 
+def _quit_to_keep(part: Mapping[str, object]) -> bool:
+    """Whether a worker's Designer had its quit forced, or sampled as it ended by itself: its folder is kept then
+    (REVIEW.md SRV-115)."""
+    quit = part.get('quit')
+    said = quit if isinstance(quit, str) else ''
+    return 'forced' in said or QUIT_SAMPLED in said or bool(part.get('forced_in_shutdown'))
+
+
 def _read(path: str) -> dict[str, Any] | None:
     try:
         with open(path, encoding='utf-8') as f:
@@ -304,6 +315,95 @@ def check_the_quits(parts: Mapping[str, dict[str, Any] | None], port_of: Mapping
         common.check('self-test', 'no new crash dump outside the run', False, str(sorted(new - placed)))
 
 
+PREFERENCES = "Designer's preferences are as before the run, once its Designers ended"
+# when they were read, and the file's keys or why they couldn't be read
+Preferences = tuple[float, dict[str, object] | str]
+
+
+def preferences_before() -> Preferences | None:
+    """Designer's preferences plist as the run should leave it (macOS: None elsewhere), for check_the_preferences. A
+    copy left by agents' Designers that ended outside the tools is put back, or dropped, first, as the run's first
+    launch would. A copy still kept (a Designer outside the run runs, an `alone.run` one for instance) is what the
+    run's last quit puts back, so it is what the file should be (REVIEW.md TST-357); unless the user's Designer ran
+    since it was made: the run's first launch makes it again then, from the file (kept_copy(), REVIEW.md TST-367)."""
+    if sys.platform != 'darwin':
+        return None
+    said = designer_preferences.put_back(_any_designer, ended=False)
+    if said:
+        print(said)
+    at = time.time()
+    try:
+        kept = designer_preferences.kept_copy()
+    except (designer_preferences.PreferencesError, OSError) as e:  # as the file can't be told then
+        return at, "the copy kept couldn't be read (%s)" % e
+    if kept is not None:
+        return at, kept
+    try:
+        return at, designer_preferences.current()
+    except designer_preferences.PreferencesError as e:
+        return at, str(e)
+
+
+def _any_designer() -> bool:
+    """Whether a Designer runs; True when that can't be told."""
+    try:
+        return bool(designer_pids())
+    except NoListing:
+        return True
+
+
+def check_the_preferences(before: Preferences | None, ports: Collection[int]) -> None:
+    """Designer's preferences plist, which every Designer shares, as `before` the run once its Designers have ended:
+    launch_designer saved it and quit_designer put it back once none ran (designer_preferences.py, ROADMAP item 67).
+    Skipped when the user's Designer ran during the run (what the file holds may be theirs then: it is left) or a
+    Designer outside the run still runs (the put-back waits for its end); failed while one of the run's still runs,
+    when that can't be told, or when the file, or the copy kept, couldn't be read as the run started."""
+    if before is None:
+        return
+    at, saved = before
+    if designer_preferences.users_log_time() > at:
+        common.skip('self-test', PREFERENCES, "the user's Designer ran during the run: the file is left as theirs")
+        return
+    try:
+        left = sorted(set(ports) & set(agents_designers()))
+        running = designer_pids()
+        now = designer_preferences.current()
+    except Exception as e:  # a listing or a read failing: can't tell (as _clean_up)
+        common.check('self-test', PREFERENCES, False, "can't be told: %s" % e)
+        return
+    if left:
+        common.check('self-test', PREFERENCES, False, "the run's Designers still run, on ports %s" % left)
+        return
+    if running:
+        why = 'a Designer outside the run runs (%s): the put-back waits for its end' % ', '.join(map(str, running))
+        common.skip('self-test', PREFERENCES, why)
+        return
+    if isinstance(saved, str):
+        common.check('self-test', PREFERENCES, False, "they couldn't be read as the run started: %s" % saved)
+        return
+    added = sorted(set(now) - set(saved))
+    changed = sorted(key for key in saved if key not in now or now[key] != saved[key])
+    # the counts first: a check's detail is cut at 150 characters; every key whole on lines of their own (TST-361)
+    if changed:
+        print('      values changed: %s' % ', '.join(changed))
+    if added:
+        print('      keys added: %s' % ', '.join(added))
+    names = '; '.join(
+        '%s: %s' % (how, ', '.join(keys)) for how, keys in (('changed', changed), ('added', added)) if keys
+    )
+    common.check(
+        'self-test',
+        PREFERENCES,
+        not added and not changed,
+        '%s, %s%s'
+        % (_count(changed, 'value', 'changed'), _count(added, 'key', 'added'), ' (%s)' % names if names else ''),
+    )
+
+
+def _count(keys: list[str], what: str, how: str) -> str:
+    return '%d %s%s %s' % (len(keys), what, '' if len(keys) == 1 else 's', how)
+
+
 def run_pool(slots: int, unit: bool = True, only: Sequence[str] | None = None) -> int:
     """The pool, with the unit suite beside it unless `unit` is False; `only`: those categories alone, in the pool's
     order, the coverage of every tool left to a full run. Its exit code: 0 every check passed and, in a full run, every
@@ -321,6 +421,7 @@ def run_pool(slots: int, unit: bool = True, only: Sequence[str] | None = None) -
     what = '%d at once%s' % (slots, ' and the unit tests' if unit else '')
     print('%d categories, %s; their folders in %s\n' % (len(order), what, root))
     before = crash_dumps(chosen, run_port=False)
+    preferences = preferences_before()
     began: dict[str, float] = {}
     took: dict[str, float] = {}
     # the first to start after lifecycle (which runs none of them), not the one SOLO keeps for last unless it is alone
@@ -361,7 +462,7 @@ def run_pool(slots: int, unit: bool = True, only: Sequence[str] | None = None) -
     )
     unit_code = unit_proc.wait() if unit_proc else None
     wall = time.monotonic() - started
-    parts: dict[str, dict[str, Any] | None] = {}
+    parts: dict[str, dict[str, object] | None] = {}
     for name in order:
         print('\n===== worker %s (exit code %d, %.0f s) =====' % (name, codes[name], took.get(name, 0.0)))
         with open(os.path.join(folder_of[name], name + '.log'), encoding='utf-8', errors='replace') as log:
@@ -380,6 +481,7 @@ def run_pool(slots: int, unit: bool = True, only: Sequence[str] | None = None) -
     common.skipped.extend(skipped)
     common.times.update(times)
     check_the_quits(parts, port_of, before)
+    check_the_preferences(preferences, chosen)
     if unit_code is not None:
         last = unit_lines.splitlines()[-1] if unit_lines else 'no output'
         common.check(UNIT, 'the whole unit suite passes, beside the workers', unit_code == 0, last)
@@ -392,16 +494,7 @@ def run_pool(slots: int, unit: bool = True, only: Sequence[str] | None = None) -
     summary, ok = summarize(tools, common.results, common.skipped, common.times)
     print(summary)
     print('wall time %.0f s, %d categories, %s' % (wall, len(order), what))
-    keep = {  # a quit forced, or sampled as it ended by itself (REVIEW.md SRV-115)
-        port_of[n]
-        for n, part in parts.items()
-        if part
-        and (
-            'forced' in (part.get('quit') or '')
-            or QUIT_SAMPLED in (part.get('quit') or '')
-            or part.get('forced_in_shutdown')
-        )
-    }
+    keep = {port_of[n] for n, part in parts.items() if part and _quit_to_keep(part)}
     _clean_up(root, chosen, keep)
     return 0 if ok else 1
 

@@ -14,6 +14,17 @@ CALL = re.compile(r' *\+[ !:|+]*?(\d+) (.+?) {2}\(in (.+?)\)')
 SYSTEM = ('libsystem_kernel', 'libsystem_pthread')
 
 
+# where Designer's shutdown waits with Qt's thread pool held (lifecycle/hold_thread_pool): stopping Adobe's sign-in,
+# left within about 2.5 s idle but still there once in a full run, then the pool's wait for good (measured 2026-11-14:
+# REVIEW.md TST-400)
+SHUTDOWN_WAITS = ('NglSSOHandler::Stop', 'QThreadPool::waitForDone')
+
+
+def in_shutdown(stacks: str) -> bool:
+    """Whether a sample shows Designer at one of its shutdown's waits with the thread pool held (SHUTDOWN_WAITS)."""
+    return any(wait in stacks for wait in SHUTDOWN_WAITS)
+
+
 def sampled(result: str) -> tuple[str, str]:
     """From a tool's result naming a sample: its text, and the detail for a check, where the main thread was (the path
     left out: check() prints 150 characters, which the calls fill: REVIEW.md TST-312); ('', the result) when it names

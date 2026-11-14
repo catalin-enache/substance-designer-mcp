@@ -149,7 +149,13 @@ line of the review log, with the decision's title. An answer in `REVIEW.md` can 
    have their own rules: see **Follow-up chains** below.
 3. **Split the work by area** and give each reviewer (a subagent, changing nothing in the repo) one area: the files
    to read in full, AGENTS.md and `mcp_server/GUIDE.md` as context, what to look for (correctness, data safety, security,
-   misreported results, docs that contradict the code), that they run no tests and don't probe Designer (above), and the report format: severity, file and
+   misreported results, docs that contradict the code, and types, in the functions a branch's diff adds or changes,
+   their lines it leaves as they were too (the rest is ROADMAP item 98's, so a whole-project review reports none while
+   that item is open): an `Any`, or a `dict`, `list` or `tuple` whose items' types say less than is known, where a
+   more specific type fits, as AGENTS.md's typing rules say, the more specific the better: one finding per pattern with
+   every location and the type each should have, Low unless the vague type hides a defect, which then sets the
+   severity; an `Any` marked as an exception with its reason on its line, as those rules say, is not reported unless
+   the reason doesn't hold or a narrower type does fit), that they run no tests and don't probe Designer (above), and the report format: severity, file and
    line, one-sentence defect, concrete scenario, suggested fix, and whether reading settles it or what would (a
    probe's outline: what to build, what to measure, what result would prove it). Reviewers must quote
    the code for every finding, and drop only what reading disproves: a suspicion reading can't settle is reported,
