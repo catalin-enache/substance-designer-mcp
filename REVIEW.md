@@ -23,7 +23,7 @@ with one of these wordings: done, not a bug, not reproducible, won't fix. Format
 `mcp_server/server.py`, `server_tools/` and `designer_preferences.py`, **HLP** `mcp_server/designer_helpers/`, **INS** installer, uninstaller,
 command-line client, example and `scripts/`, **TST** tests and docs. A new area gets a new prefix, added here.
 
-**Last used:** PLG-42, SRV-148, HLP-132, INS-36, TST-400.
+**Last used:** PLG-42, SRV-148, HLP-146, INS-36, TST-418.
 
 A new finding takes the next number for its area, and whoever writes it updates this line in the same edit. Only a
 new finding raises it, and a cleanup leaves it as it is. Nothing lowers a committed number; dropping a finding before
@@ -40,10 +40,10 @@ of the repo. If it can't, it says why: the ID never existed, a squash lost it, o
 |---|---|---|
 | High | 0 | 0 |
 | Medium-high | 0 | 0 |
-| Medium | 0 | 2 |
-| Low-medium | 0 | 14 |
-| Low | 0 | 65 |
-| **Total** | **0** | **81** |
+| Medium | 0 | 3 |
+| Low-medium | 0 | 20 |
+| Low | 0 | 90 |
+| **Total** | **0** | **113** |
 
 ## Review log
 
@@ -478,6 +478,330 @@ of the repo. If it can't, it says why: the ID never existed, a squash lost it, o
   → HLP-127, TST-391 → TST-398; → HLP-129 → HLP-132. HLP-130 and HLP-131 are the tools' code (entries at any
   generation); TST-396 and TST-398 tests and docs (a corrected measurement, smaller claims). TST-397 is generation 2.
 
+### 2026-11-14: the invisible-3d-shot branch against main (the diff only)
+
+- **How:** two reviewers read the diff: the helpers' code (`shot3d.py`, `mac_window.py`), and the tests and docs. The
+  lead settled what reading couldn't in one probe, in one Designer an agent started (`alone.run` on
+  `editor_panels_and_fit`'s preparation); the user's preferences were exported before and were identical after. It
+  measured:
+  - Designer's windows (NSApp's): four, three of Qt's, all opaque (`isOpaque`), the main window the only one visible,
+    and AppKit's text-input window (`TUINSWindow`), not opaque, not visible;
+  - a window of Designer's own fully under the main window: covered with the main window opaque, and still covered
+    with it transparent, click-through or not (HLP-133);
+  - `shoot_3d(graph=...)` with the window minimized: a popup-level window of Designer's (`QNSPanel`, level 101) on
+    screen at opacity 1 on three of a 20 ms timer's ticks, Designer not made the active app (HLP-134);
+  - a window minimized, then Designer hidden, then a shot: minimized and hidden after, still minimized once shown
+    again;
+  - `orderFrontRegardless` then `miniaturize:` at once on a minimized window: minimized, off screen, 3 s later.
+
+  Settled as wrong:
+  - a window both minimized and hidden left un-minimized by the `hide:` right after the `miniaturize:` (the product
+    reviewer; measured minimized);
+  - `miniaturize:` ignored while the window is still coming out of the Dock, leaving it up and saying "minimized
+    again" (the product reviewer; measured minimized);
+  - a set-up step making Designer the active app, which the put-back would blame on the user (the product reviewer):
+    not with `graph=` (above), nor any step in the tenth review's probe of the preferences-put-back branch;
+  - `setIgnoresMouseEvents:` NO, set explicitly by the restore, making a window take clicks on its transparent pixels
+    (the product reviewer): Designer's windows are opaque; only AppKit's text-input window isn't, and only a shot of a
+    hidden Designer sets it;
+  - an abort landing in `contextlib`'s own frames leaving the windows transparent (the product reviewer): the plugin's
+    `_run` catches the abort and frees its traceback as its `except` ends, which closes the generator; its `finally`
+    and handler then put the window back and make it opaque, within the same job. Only the put-back's lines are lost
+    to the reply.
+- **Not verified:** the Dock during a shot of a minimized window (the product reviewer): `orderFrontRegardless`
+  takes the window's tile out of the Dock's minimized section and `miniaturize:` adds it back, and the thumbnail may be
+  taken while the window is transparent, so blank. Tried: the user watched one such shot and saw nothing but didn't know
+  where in the Dock to look; the window they restored from the Dock afterwards was opaque and not click-through.
+  Limitation: checking needs the user's eyes, or a capture of their screen, which isn't taken without their consent.
+  What would check it: the user watching the right end of the Dock during a shot of a minimized window. Also, as in
+  the earlier reviews: Spaces, a full-screen app, a locked screen, Stage Manager.
+- **Resolutions assessed:** those whose fixes this diff changes, `_Screen`'s look and put-back: HLP-124, HLP-125,
+  HLP-126, HLP-130, HLP-131, TST-393, TST-397, TST-399. They hold: `again()` before each render, the active check
+  before any put-back, the first window found kept while on screen, each named test still there and failing without
+  its fix. HLP-125's **Also covered** ("a minimized window stays up anyway") no longer holds, since a minimized window
+  is now minimized again: the code still leaves it up when the user made Designer the active app, unguarded
+  (TST-402).
+- **Findings:** 7: Low-medium HLP-133, HLP-134, TST-401; Low TST-402, TST-403, TST-404, HLP-135. Merged: HLP-135 (both
+  reviewers), TST-402 (the tests reviewer's two).
+- **Not raised:**
+  - README's and the tool docstring's "puts it back as it was" leaving out the window left in front once its cover is
+    gone (HLP-130's case): the same wording as `main`'s, which the tenth review checked, and the result's lines say it.
+  - An abort landing on the put-back leaving the window up, now opaque: ROADMAP item 91.
+  - `_wait_off_screen` giving up after 3 s without a line: the case behind it was measured not to happen (above).
+  - A window minimized and hidden at once named only "minimized" on the way in: as on `main`.
+- **Suggested order:** HLP-133 and HLP-134 first, since they decide whether "the user sees nothing" holds: each fix
+  needs a measurement, and HLP-133's may need the user's choice; then TST-401, TST-402, TST-404, TST-403, HLP-135.
+- **Checked and found fine:** the objc_msgSend prototypes (`alphaValue` and `ignoresMouseEvents` read, their setters'
+  double and BOOL arguments, `windows`/`count`/`objectAtIndex:`, `retain`/`release`, `miniaturize:`); NSApp's windows
+  listed and held with no event processed in between, the main window's pointer the same key as its entry; every hold
+  let go of once, never twice, an abort at worst leaking one; an abort in the helpers' own frames (the body, `_bring`,
+  `_fade`, `put_back`'s body and `finally`, the handler) ending with every recorded window opaque; GeneratorExit
+  caught and raised again; the state combinations (covered then hidden or minimized during the shot, Qt and macOS
+  minimized at once, a Qt-minimized page also covered, Designer made active in each state); HLP-127's refusals and
+  `_mesh_shown` before the window changes; drags and the wheel sent as Qt events, which click-through doesn't affect;
+  every new path returning early off macOS; types (`_faded`'s dict typed, no unmarked `Any`); the new live check's
+  `finally: clear()`, its `_3d_render` rebinding through the shared namespace, and its failing before the change;
+  `AFTER['minimized']` and the opacity assertion of the tool's shot check; the click-through check's normal cover and
+  its own `finally`; the unit tests of `_on_screen`, each failing without its behaviour, the abort parameters all
+  landing; no strings of code joined with "\n"; DECISIONS.md's entry against `put_back`; GUIDE.md's Look bullet.
+- **Chains:** all seven are generation 1: the branch's new code. The longest still growing from the last branch stays
+  generation 3 (SRV-146 → HLP-124/HLP-126 → HLP-130, HLP-131), unchanged.
+
+### 2026-11-14: the invisible-3d-shot branch against main, second review (the diff only)
+
+- **How:** two reviewers read the diff. One took the helpers' code and the docs that describe it (`shot3d.py`,
+  `mac_window.py`, `view3d.py`, `views.py`, README, GUIDE.md, DECISIONS.md), the other the tests. No tests were run.
+  The lead settled what reading couldn't in probes run one at a time in one Designer an agent started (`alone.run` on
+  `editor_panels_and_fit`'s preparation). The user's preferences were exported before and were identical after. It
+  measured:
+  - the Explorer's menu the fade made transparent, in two shots with `graph=`: destroyed by the time each shot returned
+    (`destroyed` fired, `shiboken6.isValid` False), so no later menu opens transparent, the user's own included;
+  - NSWindow's `windowNumberAtPoint` at the menu's middle while it was open, the point inside its frame as read back:
+    never the menu's number, at opacity 0, at 0.02 with clicks explicitly taken, and at 1. So the call can't tell
+    whether a click there would reach the menu (**Not verified**);
+  - the menu made click-through too as it was made transparent, by `setIgnoresMouseEvents:` YES on its NSWindow or by
+    Qt's `WindowTransparentForInput` on its QWindow: the pick still worked, and the shot came back.
+
+  Settled as wrong:
+  - the transparent menu reused later, so the user's right-clicks in the Explorer would open an invisible menu (the
+    helpers reviewer): measured destroyed, above;
+  - a second popup showing at full opacity, since only the first is made transparent (the helpers reviewer): the one
+    known, the channel menu of a graph with one output, is refused before the menu opens (`view3d.py`'s docstring);
+  - the lines for a page Qt minimized misreporting it (the helpers reviewer): only a script minimizes the page through
+    Qt. Alone, its line is as on `main`. Minimized by macOS too, each line is true of its layer: the page stays
+    restored, and the window is minimized again.
+- **Not verified:**
+  - Whether the Explorer's menu, transparent but not click-through, takes a click the user makes at its place during
+    the quarter second it is open (the helpers reviewer). README says the user's clicks go to the window under
+    Designer's. Tried: `windowNumberAtPoint` (above), which never reported the menu, even opaque. Limitation: only a
+    real click settles it, and none is made on the user's screen without their consent. What would check it: with
+    their consent, a click posted at the menu's middle during a shot (CGEventPost) while they leave the mouse alone.
+    Making the menu click-through as it is made transparent was measured to keep the pick working.
+  - Whether the menu's last milliseconds at full opacity show on screen (the tests reviewer): 0, 9 and 0 ms measured,
+    and the check allows 20 ms. The watch reads the window server's list, not what was drawn. What would check it: the
+    user's eyes, or a capture of their screen at 120 fps, with their consent.
+  - As in the first review: the Dock during a shot of a minimized window; Spaces, a full-screen app, a locked screen,
+    Stage Manager.
+- **Resolutions assessed:** the seven of the first review, whose fixes are in this diff. Each fix addresses its cause,
+  and each named test exists and fails without it. Questioned:
+  - HLP-133: its README sentence gives the shot a duration no check measures (TST-408);
+  - HLP-134: its live check passes with a watch that sees none of Designer's windows (TST-405), and its unit tests
+    don't see the fade's timing or its looking again (TST-406).
+
+  TST-401 to TST-404 and HLP-135 hold.
+- **Findings:** 6, all Low: HLP-136, HLP-137, TST-405, TST-406, TST-407, TST-408.
+- **Not raised:**
+  - An abort landing after `minimize()` or `hide()` in `put_back`, whose `finally` then makes the window opaque before
+    it is off screen, which `_on_screen`'s "leaves the window on screen" doesn't cover (the helpers reviewer): aborts
+    skipping the put-back's steps are ROADMAP item 91.
+  - `_PUT` recording a look before holding the window, `_UNDER`'s window not registered for `clear()`, and the facts
+    loop with no `finally` (the tests reviewer): they show only after a failure, in an agent's Designer.
+- **Suggested order:** HLP-136 first, as it changes what the user gets when they switch to Designer; then TST-407,
+  TST-405, TST-406, TST-408, HLP-137.
+- **Checked and found fine:**
+  - the fade timer: it skips `before` as `pick` does; its first tick runs in the menu's nested loop, after the menu
+    opened; its 0 ms restart runs only while no new popup is open, bounded by `sendEvent`; all three timers are
+    parented and stopped, an abort as the third starts included; the opacity doesn't change the pick, which triggers
+    the action from code;
+  - `_bring`'s fade before `unhide` and `show` in each case; `put_back`'s early returns inside its `try`; the handler's
+    `unfade`, then `opaque_first`; the holds balanced; the objc prototypes;
+  - `popups.py`: its ctypes prototypes against the C signatures, the three keys present in every entry, the list and
+    keys released, the layer and alpha filters, the thread stopped and joined on an exception too, `shown_ms`
+    conservative;
+  - every new check clearing the window state in a `finally`; `SHOWN` and `AGAIN` against `BROUGHT`; no strings of
+    code joined with "\n"; no unmarked `Any` in the tests, nor in the functions of `shot3d.py` and `mac_window.py`
+    the diff changes.
+- **Chains:** HLP-133 → TST-408 and HLP-134 → TST-405, TST-406 reach generation 2. The other three are generation 1.
+  The longest from the last branch stays generation 3, unchanged.
+
+### 2026-11-14: the invisible-3d-shot branch against main, third review (the diff only)
+
+- **How:** two reviewers read the diff. One took the helpers' code and the docs that describe it, the other the
+  tests. No tests were run and no probe was needed: reading settled every suspicion.
+
+  Settled as wrong or dropped:
+  - the popup watch's `listed` count seeing Designer's main window, not its popups, so a later macOS listing popups
+    below layer 100 still passes (the tests reviewer, questioning TST-405): generation 3, about a test alone, and no
+    sentence claims the check sees that. `popups.py`'s docstring claims only that a watch seeing none of Designer's
+    windows is caught, which it is.
+- **Not verified:** as in the earlier reviews: the Dock during a shot of a minimized window; whether the menu's last
+  milliseconds at full opacity show; Spaces, a full-screen app, a locked screen, Stage Manager. Also whether a click
+  passes through the click-through menu: only its `ignoresMouseEvents` was read, and a click on the user's screen
+  isn't made without their consent.
+- **Resolutions assessed:** the six of the second review, whose fixes are in this diff. Each fix addresses its cause,
+  and each named test exists and fails without it. Questioned:
+  - HLP-136: a user already in Designer as the shot began, who leaves and comes back, still sees no window (HLP-138);
+    its live check can't tell `between` before a set-up step from `between` before the render, and no test sees its
+    guard (TST-409); the transparency check now fails if Designer becomes the active app during a shot (TST-410); the
+    tool's docstring and two comments say more than the code (HLP-140);
+  - TST-403: its hidden case counts Designer's windows through the code's own `windows(True)` (TST-411);
+  - HLP-133: its fact check has no reading of the window under it uncovered (TST-412).
+
+  HLP-137, TST-405 to TST-408 hold.
+- **Findings:** 8, all Low: HLP-138, HLP-139, HLP-140, TST-409 to TST-413.
+- **Not raised:**
+  - DECISIONS.md's "If the user makes Designer the active app during the shot, it is left on screen": the code leaves
+    it up only if Designer is still the active app as the shot ends, as on `main` (HLP-125). Its wording takes the
+    user (the helpers reviewer).
+  - `fade` not filtering to a QMenu as `pick` does: no other popup opens first (the helpers reviewer).
+- **Suggested order:** HLP-138 and HLP-139 first, as they change what the user sees; then TST-410, which the final
+  check could hit; then TST-409, TST-411, TST-412, HLP-140, TST-413.
+- **Checked and found fine:**
+  - `between()` in each state: minimized, covered, hidden, a page Qt minimized (nothing made transparent, so nothing
+    done); run before `_bring` in `again()`, so a window isn't brought back opaque while others are still
+    transparent; the user switching to Designer then away, the window put back as found; the user hiding Designer
+    while in it, which makes it not the active app; hidden and taken up at once unreachable; the first `_bring`'s
+    lines without "transparent" reachable only if Designer became the active app within microseconds of the shot's
+    start;
+  - aborts in `between` or `unfade` partway, and in `begin` before its line: `run`'s handler, then `put_back`'s
+    `finally`, end every hold once;
+  - `begin` running `between` before each of the seven steps; `set_3d_view` passing None, unchanged;
+  - the menu made click-through only once it isn't `before`, only during `sendEvent`'s loop, destroyed after each
+    shot (measured in the second review), the pick triggering its action from code; on Windows only transparent;
+  - `views.py` collecting every "Designer's window: " line, the new one included;
+  - the snippets' rebindings (`_MacWindow.active`, `_3d_set_up`, `_MenuPick.pick`) living only in their call's
+    namespace, `state()` reading `isActive` directly;
+  - the popup watch's unit tests (the fake writing through `byref`, the second window's popup caught, the list
+    released), `Timer.starts`, the `Shot` fake's `given`, TST-407's parametrization, the clean-up of every new check
+    in a `finally`; no older test weakened; no strings of code joined with "\n"; no unmarked `Any` in the helpers'
+    functions the diff changes.
+- **Chains:** HLP-136 → HLP-138, TST-409, TST-410, HLP-140; TST-403 → TST-411; HLP-133 → TST-412, all
+  generation 2. HLP-139 and TST-413 are generation 1. The longest from the last branch stays generation 3, unchanged.
+
+---
+
+### 2026-11-14: the invisible-3d-shot branch against main, fourth review (the diff only)
+
+- **How:** two reviewers read the diff, the third review's fixes most closely. One took the helpers' code and the
+  docs that describe it, the other the tests. No tests were run and no probe was needed: reading settled every
+  suspicion.
+- **Not verified:** as in the earlier reviews: the Dock during a shot of a minimized window; whether the menu's last
+  milliseconds at full opacity show; whether a click passes through the click-through menu; Spaces, a full-screen
+  app, a locked screen, Stage Manager.
+- **Resolutions assessed:** the eight of the third review and HLP-141, whose fixes are in this diff. Each fix
+  addresses its cause, and each named test exists and fails without it: HLP-138's without the forget, HLP-139's two
+  unit tests with the window directly in front kept, its live case on the old put-back (in its scratch run).
+  Questioned:
+  - HLP-138, HLP-140 and HLP-141: four sentences say more than the code and tests (HLP-142);
+  - HLP-139: `mac_window.py`'s docstring still names `on_screen` as the guard (HLP-143), and its live case can't see
+    a raise that does nothing (TST-415);
+  - TST-410: its not-judged path (TST-414).
+
+  TST-409, TST-411, TST-412 and TST-413 hold.
+- **Findings:** 4, all Low: HLP-142, HLP-143, TST-414, TST-415. Merged: HLP-142's class docstring sentence (both
+  reviewers).
+- **Not raised:**
+  - A user in Designer minimizing its window, or covering it with a window of Designer's own, during the shot: the
+    window is brought back opaque and left up. DECISIONS.md, the 3D screenshot's window: left on screen when the user
+    made Designer the active app, and none of its Reopen if holds (the helpers reviewer).
+  - README's "If you switch to Designer during the shot, it becomes visible", for a user who leaves Designer and comes
+    back between two looks (HLP-142's third sentence): it misleads only about a switch there and back within one
+    step.
+  - `put()`'s docstring listing `WAYS, DRAWN, ON_TOP` and not `TWO`, and the fake `Mac`'s docstring naming "the window
+    in front of it" (the tests reviewer): they mislead no one.
+  - `_UNDER` showing the window under in front before its `try` (the tests reviewer): as the second review's "Not
+    raised".
+- **Suggested order:** HLP-142 and HLP-143 (docs), then TST-415, then TST-414.
+- **Checked and found fine:**
+  - `between()` clearing `_was_active` only when a look sees Designer not active, and nothing the shot does
+    (orderFrontRegardless, unhideWithoutActivation, the Explorer's menu, the clipboard render) taking the active app
+    from Designer; `again()` running it before `_bring`, so `fade` reads the updated flag; an abort in it losing
+    nothing;
+  - `in_front()` read before `_fade` and `show()` at each bring. After the first bring Designer's window is in front
+    of every normal window, so a window recorded later was raised or opened during the shot. The window goes behind
+    the lowest recorded window still on screen in each case traced: several displays, a window behind it raised, its
+    cover closed, minimized or raised again, its cover's app hidden, Designer's own windows among the covers, an
+    always-on-top cover, minimized, covered then hidden. The BEHIND, GONE and NONE_FOUND lines match their branches;
+  - the fake `Mac`'s `in_front` and `lowest` against the real ones; HLP-131's two unit tests still guarding their
+    cases with the default `order`;
+  - the `TWO` set-up: the raise leaves `later` only partly over the main window, so it isn't brought in front again;
+    `clear()` closes `later`;
+  - TST-409's order requirement; TST-410's `switched` read only from the shot's own lines; TST-411's
+    `listed('windows')`, its pointers matching `mac._window`; TST-412's alone reading after `orderFrontRegardless`
+    and 1 s, cleaned up in a `finally`;
+  - no `above()` or `_behind` left; no unmarked `Any` or vague container in the functions the diff adds or changes;
+    every multi-line snippet written with `dedent`; no older test weakened.
+- **Chains:** HLP-136 → HLP-140 → HLP-142 and TST-410 → TST-414 reach generation 3, both about docs or a test's
+  report, so their fixes make claims smaller. HLP-143 and TST-415 are generation 2. The longest from the last branch
+  stays generation 3, unchanged.
+
+---
+
+### 2026-11-14: the invisible-3d-shot branch against main, fifth review (the diff only)
+
+- **How:** two reviewers read the diff, the fourth review's fixes most closely. One took the helpers' code and the
+  docs that describe it, the other the tests. No tests were run and no probe was needed: reading settled every
+  suspicion.
+- **Dropped by a decision:** the module docstring's "re-measures ... the second [point]" leaving out "covered once it
+  is opaque again" (the helpers reviewer): DECISIONS.md, "Low-value findings about the tests and docs are not
+  raised". It is generation 4, and the self-test reads the window under covered while the main window is opaque,
+  the same state, though before the transparent reading rather than after it.
+- **Not verified:** as in the earlier reviews: the Dock during a shot of a minimized window; whether the menu's last
+  milliseconds at full opacity show; whether a click passes through the click-through menu; Spaces, a full-screen
+  app, a locked screen, Stage Manager.
+- **Resolutions assessed:** the four of the fourth review, whose fixes are in this diff. HLP-142's four sentences and
+  HLP-143's `lowest` match the code. TST-415's readings each fail on a no-op event, as its scratch run showed, and
+  pass on the code. Questioned: TST-415's `AGAIN` needs a wording the shot doesn't always say, and TST-414's
+  docstring says the windows stay opaque from then on (TST-416).
+- **Findings:** 2, both Low: HLP-144, TST-416.
+- **Not raised:** `views.py`'s sentence leaving out a switch there and back between two looks (the helpers reviewer):
+  as the fourth review's "Not raised" for README, which now says the same.
+- **Suggested order:** TST-416, which the final check could hit, then HLP-144.
+- **Checked and found fine:**
+  - `cover_on_screen`: a cover never made reads None, so its event isn't seen and the case fails; `_CLEAR` removes
+    the attribute before its last `state()`; only the HLP-124 check makes the cover again, and it doesn't use
+    `event_seen`; a cover closed or minimized reads False only off screen, the minimize animation having more than
+    1.5 s before `read()`;
+  - the extra key in the state line: every older check's judged keys still come before the 150-character cut, the
+    RENDER lines gain one key, `order` is unchanged;
+  - `SEEN_BY['raise']` failing without the raise; the unit tests pinning each reading, so a constant or reversed one
+    fails; `test_every_event_has_a_way_to_be_seen`; the transparency check's detail starting with the state after;
+  - the code paths re-traced against the docstrings: Designer active as the shot began, left and back, seen at a
+    look or not; a switch to Designer and away for each way; hidden, made active, hidden again; the first `_bring`
+    without fading reachable only within microseconds; `_covers` giving the window its place back after a raise, a
+    close or a cover's app hidden;
+  - the Explorer's menu on Windows, only transparent, no riskier than on `main`; GUIDE.md's and README's 3D bullets;
+    types, `dedent`, clean-up in a `finally`, no stale `AGAIN` or `above()` left.
+- **Chains:** TST-414 and TST-415 → TST-416 reach generation 3, about a test's match and two sentences, so its fix
+  makes claims smaller. HLP-144 is generation 2. The fourth review's HLP-142 chain stopped. The longest from the last
+  branch stays generation 3, unchanged.
+
+---
+
+### 2026-11-14: the invisible-3d-shot branch's final check
+
+- **How:** both suites in full (`tests/test_all_tools`): 23 categories, four Designers at once, the unit suite beside
+  them. 1633 unit tests passed, and 731 of 735 live checks. The four failures, all in `editor_panels_and_fit`: the
+  click fact and the window-under fact (TST-417), and the focus check's covered and hidden cases (TST-418). Each
+  failing check passed in two scratch runs right after, in a Designer just started. No crash dump; the user's
+  preferences as before the run.
+- **Not verified:** a shot of a hidden Designer refused, twice, each time in the focus check's hidden way in a
+  Designer just started: in the first of those scratch runs, and in one of TST-418's. The second kept its error:
+  "the 3D view isn't drawn: Designer's window isn't on screen 3 s after it was shown", after "shown, transparent
+  and without taking focus" and before "hidden again". So the first bring's wait for Qt's exposure ran out, where
+  about 0.3 s was measured. Tried, in Designers just started and not:
+  - 8 trials of the shot's own steps (its windows made transparent, then `unhideWithoutActivation` and
+    `orderFrontRegardless`), half with the windows left opaque: exposed after 0.07 to 0.08 s each time;
+  - 21 hidden shots through the tool in the check's sequence (the shot before, `put('hidden')`, the pan shot), with
+    macOS's state added to the refusal (a temporary copy of `shot3d.py`, put back): every one taken.
+
+  Limitation: a race that doesn't reproduce on demand. What would check it: the next full run, or a refusal with
+  macOS's state in its message. Later the same day, five refusals in 13 runs of the check itself, one of them with
+  macOS's state in its message: HLP-145.
+- **Findings:** 3: Medium HLP-145; Low-medium TST-417, TST-418.
+- **The second final check** (after TST-417, TST-418 and HLP-145): 1646 unit tests passed, and 733 of 735 live
+  checks. The two failures, both TST-417's facts (its note): TST-417 open again. HLP-145's hidden shots and the focus
+  check passed, the focus check not judging focus three times, Designer the active app before the shot.
+- **The third final check** (after TST-417's launch lock): 1650 unit tests passed, and 731 of 735 live checks. The
+  four checks holding the lock passed. The four failures are all the transparency check's cases: after each shot,
+  one of Designer's windows other than the main one wasn't opaque and clickable (`faded=1`), and it already wasn't
+  during the first case's renders (2 faded, 1 expected). Not settled yet: whether that window's own look is so (a
+  tooltip's, say, click-through by design), which the check's count takes for one left faded, or the shot left it.
+  Settled the next day: a tooltip leaves no such window; the check's own set-up shot with `graph=` had been refused,
+  its Explorer's menu closed before its pick and left transparent and click-through (HLP-146).
+- **The fourth final check** (after HLP-146): passed, 736 of 736 live checks in 23 categories, 1653 unit tests; the
+  user's preferences as before the run.
+
 ---
 
 ## High
@@ -564,6 +888,41 @@ of the repo. If it can't, it says why: the ID never existed, a squash lost it, o
     snippet: a pan that fails leaves the window off screen, which the next check's first shot puts back (the tests
     reviewer; not an entry).
   - Questioned by TST-397 (2026-11-14).
+
+- [x] **HLP-145 · A 3D shot of a hidden Designer is refused about one time in three: its window comes back on screen, but macOS counts it as covered** · `mcp_server/designer_helpers/shot3d.py:82-96,198-216` · measured · found 2026-11-14
+  - **Defect.** For a hidden Designer, `_bring` makes every window of its own transparent, then calls
+    `unhideWithoutActivation` and `orderFrontRegardless`, and `_wait_on_screen` waits for Qt to say the main window
+    is exposed. Sometimes it never is. The shot is refused after 3 s ("the 3D view isn't drawn: Designer's window
+    isn't on screen 3 s after it was shown; ask the user to show it"), and Designer is hidden again.
+  - **Scenario.** Measured: the focus check's hidden way was refused in 5 of 13 runs of the check, each in a Designer
+    just started (the final check's follow-ups, TST-418's scratch runs, the category's). With macOS's state added to
+    the refusal (a temporary copy of `shot3d.py`, put back), it read `hidden=False covered=True cg=True
+    page_visible=True page_exposed=False active=False`, the page's native window the same throughout. So Designer was
+    shown again and CoreGraphics listed its window on screen, but the window's occlusionState said not visible, so Qt
+    never exposed it and the view didn't draw. Reading the top-level window's QWindow then raised "Internal C++ object
+    (PySide6.QtGui.QWindow) already deleted". The same steps run 8 times in a snippet, and 25 hidden shots through
+    the tool in the check's own sequence, were never refused; what makes the check's runs differ isn't known. On
+    `main` the window came back opaque. An agent told "ask the user to show it" interrupts the user, which the shot
+    was made to spare.
+  - **Fix.** Measure first, in the check's own runs, what brings the window's occlusion back: ordering it in front
+    again once Designer is no longer hidden, or during the wait; or an opacity just above 0. Then fix it, with the
+    hidden way run until the refusal would have shown.
+  - **Resolution: done.**
+    - **Measured first:** in the check's own runs, a temporary copy of `shot3d.py` did two things once the wait ran
+      past a time: past 0.5 s it ordered the window in front again, and past 1.5 s it gave the window an opacity of
+      1/255. In 3 of 14 runs the window was still covered for macOS at 0.5 s (`hidden=False covered=True`). Ordered in
+      front again, it was exposed within 0.06 s each time, and the opacity step was never reached.
+    - **Test:** `test_a_window_not_yet_on_screen_after_a_while_is_put_in_front_again_once` (minimized, covered,
+      hidden), with the window exposed only once put in front twice: refused before the fix, the shot taken after.
+      `test_a_window_still_not_on_screen_is_refused_and_put_back` now expects the second showing. Live, the focus
+      check ran in 10 Designers just started, on the fixed code (a copy saying when it put the window in front
+      again). 5 runs needed it, and every shot was taken.
+    - **Cause:** the shot ordered the window in front once, as Designer was shown again, then only waited. macOS
+      sometimes didn't count the window visible after that, and nothing ordered it in front again.
+    - **Fix:** `_wait_on_screen` puts the window in front again (`_MacWindow.show`), once, when it isn't exposed after
+      `SHOW_AGAIN` (0.5 s). The measurement is in the module docstring.
+    - **Also covered:** every way the window is brought on screen (minimized, covered, hidden, a page Qt minimized)
+      goes through the same wait, so each gets the second try; only the hidden way was seen to need it.
 
 ## Low-medium
 
@@ -955,6 +1314,205 @@ of the repo. If it can't, it says why: the ID never existed, a squash lost it, o
     - **Also covered:** only a Designer the call started gets it: one found running is left as it is. TST-399's "not
       judged" stays, for a click into Designer during a shot. The start checks' regex on the parenthesis still
       matches.
+
+- [x] **HLP-133 · While the shot runs, Designer's transparent window still counts as covering the windows under it** · `mcp_server/designer_helpers/shot3d.py:184-187` · measured · found 2026-11-14
+  - **Defect.** `_bring` makes the window transparent and click-through (`self._fade(...)`, then `mac.show()`), but
+    macOS still reports the windows under it as covered: the user sees them, their apps are told they can't be seen.
+  - **Scenario.** Probe: a window of Designer's own, fully under the main window, read `occlusionState` as covered
+    with the main window opaque, and still covered with it at opacity 0, click-through or not. During a 3D shot of a
+    minimized, covered or hidden Designer (one to several seconds), the user's windows under that area are told they
+    are covered: apps that stop drawing covered windows (browsers, video players) may freeze on screen, then catch up.
+  - **Fix.** Measure first whether the window also marked non-opaque while transparent (`setOpaque:` NO, put back
+    after) stops covering what is under it, and use that if it does. If not, keep it covering as little as possible
+    (the first probe of this feature drew the view with all but 6 px of the window off the screen), or say the side
+    effect in DECISIONS.md and README: the user's choice, as it changes what they see.
+  - **Resolution: done**, as the user chose: said, not changed.
+    - **Test:** `check_a_window_under_designers_transparent_window_still_counts_as_covered` ("designer facts"), passing
+      in its scratch run (`opaque=True transparent=True`). A probe first marked the window non-opaque too
+      (`setOpaque:` NO): it still reported itself opaque, the window under it was still covered, and the view drew.
+    - **Cause:** macOS counts a window under one in front as covered whatever the front window's opacity, and
+      `setOpaque:` NO doesn't take on Designer's window.
+    - **Fix:** none in the shot. The user chose "Document it (Recommended)" (2026-11-14) over moving the window mostly
+      off screen for the shot. README's 3D bullet says apps under it may pause drawing, DECISIONS.md's entry records it
+      (with its Reopen if), and `shot3d.py`'s docstring has the measured fact.
+    - **Also covered:** GUIDE.md and the tool's docstring are unchanged: an agent has nothing to do about it.
+  - Questioned by TST-408 (2026-11-14), and by TST-412 and HLP-141 (2026-11-14).
+
+- [x] **HLP-134 · With `graph=`, the Explorer's context menu shows on the user's screen during an otherwise invisible shot** · `mcp_server/designer_helpers/view3d.py:236-273` (`_apply_outputs`), `mcp_server/designer_helpers/shot3d.py:92-110` (`_Screen`'s docstring) · measured · found 2026-11-14
+  - **Defect.** The set-up opens Designer's own context menu on the graph's Explorer row
+    (`app.sendEvent(viewport, event)  # returns once the menu has closed`). The menu is a new popup window, made after
+    `_fade` ran, so it shows at full opacity above every app's windows, while the docs say the user sees none of the
+    shot (`_Screen`: "so the user sees none of it"; the tool's docstring: "transparent so the user doesn't see it").
+  - **Scenario.** Probe: Designer's window minimized, `shoot_3d(path, graph=...)`, a 20 ms timer listing Designer's
+    visible windows other than the main one: a `QNSPanel` at level 101 (popup menus) at opacity 1, on screen on three
+    ticks. The user sees a context menu flash where the Explorer would be; Designer stayed not the active app.
+  - **Fix.** Make the menu transparent as soon as it exists (the timer that picks its action finds it), and measure
+    how long it still shows; if a flash remains, say so in the docs and DECISIONS.md, for `graph=` only.
+  - **Resolution: done.**
+    - **Test:** `check_a_3d_shot_with_graph_keeps_the_explorers_menu_off_the_screen`: a watch of the window server's
+      list from the self-test's own process (`editor_panels_and_fit/popups.py`, unit-tested in
+      `test_selftest_popups.py`). In the scratch run it failed before the fix (Designer's popups on screen for 237 ms,
+      in 818 of 13360 samples) and passed after (0 ms, in 0 of 13348). Unit tests in `test_view3d_helpers.py`, failing
+      before (no fade, two timers): `test_the_menu_is_made_transparent_once_it_opens`,
+      `test_a_popup_open_before_the_menu_isnt_made_transparent`,
+      `test_the_menu_opened_is_made_transparent_before_its_action_is_picked`, and the timers' tests with a third timer
+      (an abort as it starts too).
+    - **Cause:** the set-up opens a new popup after the shot made Designer's windows transparent, and the pick closed
+      it 100 ms later, after it had been on screen about 240 ms.
+    - **Fix:** `_apply_outputs` starts a third timer at 0 ms (`_MenuPick.fade`), which makes the menu opened since
+      transparent (`setWindowOpacity(0)`), starting again until it opens; parented and stopped like the other two.
+      Measured first, three shots each: picked at 100 ms, 240 ms on screen; picked at 0 ms, about 155 ms (the menu stays
+      while its action runs); made transparent at 0 ms, 0, 9 and 0 ms. `view3d.py`'s docstring has them.
+    - **Also covered:** the set-up's other steps open no window: the Scene and Camera menus are triggered as actions,
+      filled by `aboutToShow`, never shown; tiling goes through the Parameters panel; the render through its action.
+      Every window check sets `graph=` up first, and all passed with the menu transparent.
+  - Questioned by TST-405 and TST-406 (2026-11-14), and by HLP-144 (2026-11-14).
+  - Note (2026-11-14): on macOS the menu is made click-through too, the user's choice after the second review left
+    it under **Not verified** (DECISIONS.md). `_MenuPick.fade` sets Qt's `WindowTransparentForInput`, which
+    `test_the_menu_made_transparent_lets_clicks_through_on_macos` checks. The live
+    `check_a_3d_shot_with_graph_makes_the_explorers_menu_click_through` failed in its scratch run before the change
+    (`through=False`) and passed after, the shot taken.
+
+- [x] **TST-401 · The "transparent in front" designer fact uses an always-on-top cover and never reads the window's state** · `tests/test_all_tools/editor_panels_and_fit/window_states.py:68-80`, `tests/test_all_tools/editor_panels_and_fit/checks.py:654-692` · confirmed · found 2026-11-14
+  - **Defect.** `_PUT` makes the cover with `window(..., way != 'covered')`, so 'transparent in front' gets an
+    always-on-top cover (layer 8), which `mac.show()` doesn't bring Designer's window in front of. The check then
+    reads only `states['minimized']`: neither that the window was in front nor that it was transparent.
+  - **Scenario.** The fact passes with the window still under its cover, or with `set_appearance` doing nothing (an
+    opaque window in front draws too). Its docstring, `window_states.py`'s and `shot3d.py`'s module docstring ("the
+    self-test re-measures ... the second") claim a transparent window in front.
+  - **Fix.** Give that way a normal cover (always on top only for `ON_TOP`), and have the check read its STATE:
+    `opacity=0`, `through=True`, `covered=False`, `main` ahead of `cover` in `order`.
+  - **Resolution: done.**
+    - **Test:** the facts check now reads the transparent way's state. In the scratch run it failed before the fix
+      (`covered=True`, `order=cover,main,below`: under the always-on-top cover) and passed after (`opacity=0`,
+      `through=True`, `covered=False`, `main` ahead of `cover`).
+    - **Cause:** `_PUT` gave every way but 'covered' an always-on-top cover (`way != 'covered'`), and the new way went
+      into that branch.
+    - **Fix:** the cover is always on top for `ON_TOP` alone, and the check reads opacity, click-through, covered and
+      the order.
+    - **Also covered:** 'covered' and `ON_TOP` keep their covers; `hits()` uses `put('covered')`.
+
+- [x] **TST-417 · Three designer facts read Designer's windows as if no other app's window could come in front, and fail in the full run when one does** · `tests/test_all_tools/editor_panels_and_fit/checks.py:654-760`, `tests/test_all_tools/editor_panels_and_fit/window_states.py` (`_HITS`, `_UNDER`, `panned`) · measured · found 2026-11-14
+  - **Defect.** The click fact (`_HITS`) and the window-under fact (`_UNDER`) read with Designer's window, or the
+    window under it, brought in front. The not-drawn fact's drawn ways need Designer's window drawn. Each reads once,
+    so a window of another app coming in front during the readings changes them, and the check fails though Designer
+    behaved as the fact says. The first two facts are new on this branch, and so is the not-drawn fact's transparent
+    way (TST-401).
+  - **Scenario.** Measured in the branch's final check, 731 of 735 live checks, four Designers at once. The click fact
+    read `opaque=another transparent=another through=another`: a window the check didn't make was at the middle of
+    Designer's window. The window-under fact read `alone=True opaque=True transparent=True`: the window under was
+    covered even alone. Both passed in two scratch runs right after. The pool's other Designers come in front and
+    take activation as they start (mac_window.py's docstring), and the user's own windows may come in front too. The
+    not-drawn fact passed in that run, but another app's window over Designer's during its drawn ways would stop the
+    drawing.
+  - **Fix.** Each reading also notes the windows in front of the window it reads, other than those the check put
+    there (`in_front()`). A try with one is taken again, up to three tries, and the check fails, saying so, when no
+    try was clear. Scratch: a window brought in front of the read window right after it is shown, in the first try
+    only, then in every try.
+  - **Resolution: done.**
+    - **Test:** in their scratch run, a window the checks didn't make, brought in front of the window read right after
+      it was shown (scratch only), gave the full run's readings: `opaque=another transparent=another
+      through=another`, `alone=True opaque=True transparent=True`, and the not-drawn fact's 'on screen' way not drawn.
+      All three facts failed. After the change, with that window in the first try only, all three pass, saying "2
+      tries". With it in every try, all three fail: "another app in front in each of 3 tries". Unit test:
+      `test_a_reading_is_clear_only_when_no_window_was_found_in_front`, failing before `nothing_in_front` existed.
+    - **Cause:** each fact read once, with nothing to tell whether a window had come in front of the window it read.
+    - **Fix:** the snippets print `IN_FRONT n`: the windows found in front of the window read, at each reading, but
+      those the checks made (`in_front_of` in `_WINDOW`, through `_MacWindow.in_front`). The checks take a reading
+      again while one was found, up to three tries (`retries.without_others_in_front`, a module of its own), and fail
+      when no try was clear. The not-drawn fact does so for its drawn ways only: another window can't make an
+      off-screen way draw.
+    - **Also covered:** the other window checks of the category, searched for a reading another app's window could
+      change. The put-back, transparency, HLP-124 and HLP-136 checks don't judge when Designer becomes the active app
+      (TST-399, TST-410), and they read only Designer's own windows' order. The focus check is TST-418.
+  - Note (2026-11-14): the branch's second final check failed two of these facts again (733 of 735 live checks):
+    - the not-drawn fact found another app's window in front of Designer's in all three tries of each of its drawn
+      ways;
+    - the click fact's second try found none in front, yet its click-through reading reached "another" window.
+      `in_front_of` counts normal windows only (layer 0), and a window at another level, most likely the splash
+      screen of a Designer starting, is missed.
+  - **Resolution: done** (after the second final check).
+    - **Test:** `test_the_window_checks_the_pool_disturbed_read_while_no_designer_starts`, for the three facts and the
+      focus check, failed before the change: none held the pool's launch lock. A scratch run can't show the lock at
+      work, as outside a pool it holds nothing; the four checks still pass there. The final check is what shows it.
+    - **Cause:** the retries met the windows of a Designer starting, splash screen included, for longer than three
+      tries; the splash screen isn't a normal window, which `in_front_of` counts.
+    - **Fix:** the four checks read while holding the pool's launch lock (`retries.no_designer_starting`, through
+      `launch_lock.held`, as lifecycle holds it). No Designer of the run starts or quits meanwhile, so none brings
+      windows in front or hands activation over. The retries stay, for the windows the lock doesn't stop: the
+      user's, and another Designer's own work.
+
+    The windows the pool's Designers bring as they start come in bursts longer than three tries.
+
+- [x] **TST-418 · The focus check blames the shot for activation the pool hands to Designer, before or during the shot** · follows TST-392 and TST-399, generation 3 · `tests/test_all_tools/editor_panels_and_fit/checks.py:844-900`, `tests/test_all_tools/editor_panels_and_fit/window_states.py` (`focus`) · measured · found 2026-11-14
+  - **Defect.**
+    - `kept = window_states.focus(before, state)` compares the state after the shot with the one read before `put`
+      sent the window off screen. Designer made the active app between that set-up and the shot is blamed on the
+      shot.
+    - Designer made the active app from outside during the shot makes the shot leave its window up (HLP-125). The
+      check then fails on focus and on the state after, though the shot did what it should. TST-399 made the
+      during-pan checks not judge then; this check still judges, to catch a shot that takes focus itself.
+  - **Scenario.** Measured in the branch's final check:
+    - covered: active=False before, active=True off screen and after; it failed on focus alone, the window put back
+      behind its cover;
+    - hidden: active=False before and off screen; the shot said "made opaque at once, as Designer became the active
+      app during the shot" and "left on screen ..."; active=True after; it failed.
+  - **Resolution: done** (generation 3: a smaller claim).
+    - **Test:** in its scratch run, the state line read Designer as the active app from the moment the covered window
+      was set up (scratch only). The covered way failed before the change, as in the full run (active=False before,
+      True off screen and after). It passes after, focus not judged. Unit test:
+      `test_designer_made_the_active_app_during_a_shot_is_told_from_the_shot_and_the_states`, failing before
+      `activated` existed. Making Designer the active app for real during a shot would take the user's keyboard, so
+      the retry is seen only in the unit test and passing live.
+    - **Cause:** focus was judged against the state before `put`, and a Designer made the active app from outside
+      during the shot, which then leaves its window up, failed the way.
+    - **Fix:** focus is judged from the state just before the shot (`off`). A way in which the shot says Designer
+      became the active app, or focus was lost, is taken again, up to three tries (`window_states.activated`). It
+      fails when every try was so, saying so. `MADE_OPAQUE` and `LEFT_UP` moved to `window_states`.
+
+    Hiding Designer hands activation to the app active before it. If that is another of the pool's Designers and it
+    quits during the shot, it hands activation back to this one (mac_window.py's docstring). Both passed in two
+    scratch runs right after.
+  - **Fix (generation 3: a smaller claim).** Judge focus from the state just before the shot (`off`). Take a way
+    again, up to three tries, when the shot says Designer became the active app during it or focus was lost: a shot
+    that takes focus itself does so every time, and fails. Unit tests for the decision. Live, the state's `active`
+    reading rebound after `put` (scratch only) for the first part; making Designer the active app for real during the
+    shot would take the user's keyboard.
+
+- [x] **HLP-146 · An Explorer menu closed before its action is picked is said not to have opened, and is left transparent and click-through** · `mcp_server/designer_helpers/view3d.py:168-235,280-310` (`_MenuPick`, `_apply_outputs`) · measured · found 2026-11-15
+  - **Defect.** `_MenuPick.fade` makes the menu transparent and click-through at the fade timer's first tick (0 ms);
+    `pick` first looks at 100 ms. A menu closed by something else in between is never picked: `failure()` says
+    "didn't open", since `menus` counts only what `pick` saw. Nothing gives the closed menu its look back.
+  - **Scenario.** Measured. In the branch's third final check, the transparency check's own set-up shot with `graph=`
+    was refused with "the Explorer's menu for graph mcp_selftest_view3d didn't open". From then on Designer had a
+    fifth window, not opaque and clickable, and all four of the check's cases failed on it (`faded=1`). In a scratch
+    run, closing the menu right after the fade (`_MenuPick.fade` rebound in the snippet alone) gave the same: the
+    refusal, then 5 windows, one a hidden `QNSPanel` at (0.0, True). It stayed after the Explorer's next menu in one
+    run, and was gone after it in another. That next menu, opened as a user's right-click would get it, was opaque and
+    clickable. So the user isn't left an invisible menu, but the shot misreports what happened and leaves a window of
+    Designer's transparent and click-through. What closed the menu in the full run wasn't seen; a change of the
+    active app, which the pool's Designers cause, closes popups.
+  - **Fix.** Once the menu is closed, give the menu the fade changed its look back, if it still exists. Say the menu
+    closed before its action was picked when the fade saw one that the pick didn't. Test: a unit test with the menu
+    closing between the fade and the pick, and a live check closing it so, both seen failing first.
+  - **Resolution: done.**
+    - **Measured first:** the menu closed between the fade and the pick is deleted by the Explorer before the shot
+      returns ("Internal C++ object (PySide6.QtWidgets.QMenu) already deleted"), and its window stays (`QNSPanel`,
+      (0.0, True), hidden). So the look can't be given back through Qt, only to the window.
+    - **Test:** `check_an_explorers_menu_closed_before_its_pick_is_said_so_and_gets_its_look_back`, new, closes the
+      menu from a timer as soon as the fade made it transparent. In its scratch run it failed before the fix: "didn't
+      open", and the menu's window at (0, True); the transparency check after it failed all four cases, as in the
+      final check (`faded=1`). Both pass after it. Unit tests, failing before:
+      `test_a_menu_closed_before_its_pick_is_said_so_and_its_window_gets_its_look_back` (macOS and Windows) and
+      `test_a_menu_picked_has_its_window_given_its_look_back_once_closed`.
+    - **Cause:** the fade changed the menu's window and nothing changed it back. The Explorer deletes the menu as it
+      closes, and the window of one closed that way was kept. `failure()` counted only the menus the pick saw.
+    - **Fix:** on macOS the fade holds the menu's window before changing it, and `_apply_outputs`' `finally` gives
+      it its look back once the menu closed, then lets go (`_MenuPick.unfade`). A menu the fade saw and the pick didn't
+      is said to have closed before its action was picked. Off macOS the menu is only made transparent, and nothing
+      was measured there. The module docstring has the measurement.
+    - **Also covered:** a menu picked as usual gets its window's look back too. The shots of Designer's own windows
+      already give each window its look back (`_Screen.unfade`).
 
 ## Low
 
@@ -2423,3 +2981,536 @@ of the repo. If it can't, it says why: the ID never existed, a squash lost it, o
       - Check 1's label: "the 3D view's render is drawn while Designer's window is partly covered, not minimized,
         covered or hidden".
       - `renders.py`'s module docstring: a row near its middle, the most of three, and the move between two renders.
+
+- [x] **TST-402 · Two put-back orderings no unit test guards: a minimized window left up when Designer became active, and a hidden Designer waited for before its windows turn opaque** · `tests/unit/test_shot3d.py:444-456`, `mcp_server/designer_helpers/shot3d.py:207-237` · confirmed · found 2026-11-14
+  - **Defect.** `put_back` checks `mac.active() and not self._was_active` before `mac.minimize()`, and waits off screen
+    for `self._minimized or self._hidden`. The active test is parametrized for 'hidden' and 'covered' only, and the
+    wait is tested only with a minimized window. HLP-125's "a minimized window stays up anyway" no longer holds: a
+    minimized window is now minimized again.
+  - **Scenario.** `minimize()` moved above the active check minimizes the window from under a user who switched to
+    Designer during the shot; `or self._hidden` dropped makes a hidden Designer's windows opaque while still on
+    screen. Every unit test passes either way.
+  - **Fix.** Add `('minimized', ['fade', 'show', 'unfade'])` to the active test, its last line LEFT; and a hidden
+    Designer with `mac.slow = 2`, the two waits before `*EVERY_BACK`.
+  - **Resolution: done.**
+    - **Test:** the 'minimized' parameter of
+      `test_a_designer_the_user_made_the_active_app_during_the_shot_is_left_on_screen`, and
+      `test_a_window_put_back_off_screen_is_made_opaque_only_once_off_screen[hidden]`. Both pass on the code,
+      which was right; each failed on a mutant of `put_back`: `minimize()` moved above the active check, and
+      `or self._hidden` dropped from the wait.
+    - **Fix:** the two tests.
+    - **Also covered:** HLP-125's "a minimized window stays up anyway" is out of date; this test guards that case.
+
+- [x] **TST-403 · No live check reads a hidden Designer's other windows, and the clean-up restores only the main one** · `tests/test_all_tools/editor_panels_and_fit/window_states.py:47-50,93-104`, `tests/test_all_tools/editor_panels_and_fit/checks.py:805-855` · confirmed · found 2026-11-14
+  - **Defect.** For a hidden Designer the shot makes every window of Designer's transparent (`_fade(every=True)`),
+    but `state()` and `_CLEAR` read and restore `mac.windows(False)[0]` only.
+  - **Scenario.** `windows(every=True)` misreading NSApp's array, or `unfade` missing a window, passes every live
+    check: the user's other Designer windows show during the shot, or stay invisible after it, and a window left so
+    stays for the category's later checks.
+  - **Fix.** In the hidden cases, read each window's look before the put, at each render and after the shot (the
+    count that differs from before), and have the clean-up put back the looks read before, not force them opaque.
+  - **Resolution: done.**
+    - **Test:** the transparency check reads, at each render and after the shot, how many of Designer's windows aren't
+      opaque and clickable (`state()`'s `windows=` and `faded=`): all of them for a hidden Designer, one otherwise, none
+      after. It passed on the code, and failed in a scratch run whose shot's `_fade` ignored `every` (the hidden case:
+      1 of 8).
+    - **Fix:** `state()` counts them; `_PUT` records each window's look, holding each, and `_CLEAR` puts them back and
+      ends the holds.
+    - **Also covered:** the clean-up after every window check now puts back every window's look, not only the main
+      window's.
+  - Questioned by TST-411 (2026-11-14).
+
+- [x] **TST-404 · The transparency check requires exactly two renders, so a retaken render fails it** · `tests/test_all_tools/editor_panels_and_fit/checks.py:837` · confirmed · found 2026-11-14
+  - **Defect.** `len(seen) == 2  # before the pan and after it`, but `shoot_3d` takes a render identical to the one
+    before the pan again, up to RETAKES times, and each prints a RENDER line.
+  - **Scenario.** Under the full run's load the first render after the pan is still the last frame: three or more
+    RENDER lines, all transparent, and the check fails on transparency in the final check.
+  - **Fix.** `len(seen) >= 2`; `looks == [during]` still judges each render.
+  - **Resolution: done.**
+    - **Test:** the transparency check run with the first render after the pan made stale once (a scratch-only
+      rebinding of `_3d_render`): it failed before the fix (3 renders, in all four cases) and passed after.
+    - **Fix:** `len(seen) >= 2`.
+
+- [x] **HLP-135 · `shot3d.py`'s abort claims say more than the code does, a docstring misleads on the Qt-minimized page, and `opaque_first`'s change isn't recorded** · `mcp_server/designer_helpers/shot3d.py:105-106,124-133,135-144,244,253-256` · confirmed · found 2026-11-14
+  - **Defect.**
+    - `_fade`'s docstring: "each held first ..., then how it looked recorded, so an abort leaves no change
+      unrecorded". The hold is the change before its record: an abort between them leaks a retain (never a release
+      too many), and so does one between `del self._faded[window]` and `mac.let_go(window)`.
+    - The handler's comment: "an abort landing in put_back skips the rest of it, the windows' opacity too".
+      `put_back`'s own `finally` restores the look for an abort anywhere in its body; the handler is needed only for
+      one before that `try` or inside `unfade`.
+    - `_Screen`'s "brought in front too, as before" reads as transparent like the cases above it; that window is
+      brought in front opaque and left there.
+    - `opaque_first` sets the opacity, then click-through, unrecorded: an abort between the two leaves the window
+      opaque but click-through until the next shot.
+  - **Scenario.** A maintainer takes `put_back`'s `finally` for dead code, or the hold order for safe; an abort landing
+    in `opaque_first` (after a shot that left the window transparent) leaves Designer looking frozen to clicks.
+  - **Fix.** Narrow the docstring and the comment to what the code does; say "opaque, and left in front" for the
+    Qt-minimized page; have the handler run `opaque_first` again too.
+  - **Resolution: done.**
+    - **Test:** `test_an_abort_while_a_window_left_transparent_is_made_opaque_still_leaves_it_opaque_and_clickable`
+      failed before the fix (the window stayed transparent: nothing recorded `opaque_first`'s change) and passes after.
+    - **Fix:** `_on_screen`'s handler runs `opaque_first` after `unfade`. `_fade`'s and `unfade`'s docstrings say an
+      abort may leak a hold and never ends one twice. The handler's comment says which aborts it is for. `_Screen`
+      says the Qt-minimized page's window is brought in front opaque and left there.
+    - **Also covered:** no other docstring or comment says an abort leaves no change unrecorded.
+
+- [x] **HLP-136 · A user who switches to Designer during a shot sees no window until it ends, and a click then undoes the switch** · `mcp_server/designer_helpers/shot3d.py:198-200,223-225` · confirmed · found 2026-11-14
+  - **Defect.** Only `put_back` checks whether the user made Designer the active app
+    (`if mac.active() and not self._was_active:`). Until then the window stays transparent and click-through:
+    `again()` looks only for a window covered, minimized or hidden.
+  - **Scenario.** A shot with `graph=`, `view=` and `tiling=` keeps the window in front for several seconds. The user
+    switches to Designer (Cmd-Tab). They see its menu bar but no window, and what they type goes to that invisible
+    window. A click on it goes through to the window under it (the measured click-through fact), which makes that
+    app the active one. `put_back` then finds Designer not active and minimizes or hides the window again, though
+    README says "If you switch to Designer during the shot, it stays up".
+  - **Fix.** Once `mac.active() and not self._was_active`, make the windows opaque and clickable at once (`unfade`)
+    and record it, so `put_back` leaves the window up. Check in `again()`, and between the set-up's steps where that
+    is cheap. A unit test with `active()` turning True before a render.
+  - **Resolution: done.**
+    - **Test:** `check_a_3d_shot_makes_designers_window_opaque_at_once_once_designer_is_the_active_app`, Designer the
+      active app from the set-up's start as the helpers see it (`window_states.switched`), so the user's keyboard
+      stays where it is. In its scratch run it failed before the fix (the render after the set-up transparent and
+      click-through, nothing said) and passed after (opaque at that render, said, left up). Unit tests failing before:
+      in `test_shot3d.py`, `test_designer_made_the_active_app_during_the_shot_is_made_opaque_at_once_and_left_up`
+      (minimized, covered and hidden, before a set-up step and before a render),
+      `test_a_window_put_on_screen_again_while_the_user_is_in_designer_isnt_made_transparent`,
+      `test_designer_made_the_active_app_then_left_during_the_shot_is_put_back`,
+      `test_a_designer_already_the_active_app_before_the_shot_stays_transparent_during_it` and
+      `test_the_set_up_is_given_the_screens_look_at_the_active_app_for_each_step`; in `test_view3d_helpers.py`,
+      `test_the_set_up_runs_the_shots_look_at_the_active_app_before_each_step`.
+    - **Cause:** only `put_back` asked whether the user had made Designer the active app. Until then nothing gave the
+      windows their look back.
+    - **Fix:** `_Screen.between()` makes the windows opaque and clickable at once, and says so, once Designer is the
+      active app and wasn't as the shot began. `again()` runs it before each render. The set-up runs it before each
+      step: `_3d_set_up`'s steps take it, and `shoot_3d` passes `screen.between`. While Designer is that app, a window
+      put on screen again isn't made transparent, and its line leaves out "transparent". Unlike the suggested fix,
+      nothing is recorded: a user who goes back to another app before the shot ends finds the window put back as it
+      was found, as on `main`. README says the window stays up if Designer is still the app in front when the shot
+      ends.
+    - **Also covered:** `set_3d_view` runs the same steps without the look, as no window is changed there.
+  - Questioned by HLP-138, TST-409, TST-410 and HLP-140 (2026-11-14).
+
+- [x] **TST-405 · The menu check passes when the popup watch sees none of Designer's windows** · follows HLP-134, generation 2 · `tests/test_all_tools/editor_panels_and_fit/popups.py:45-62,89-100`, `tests/test_all_tools/editor_panels_and_fit/checks.py:785`, `tests/unit/test_selftest_popups.py:25` · confirmed · found 2026-11-14
+  - **Defect.** `_watch` counts every try (`self.samples += 1`), also when the list is empty or holds no window of
+    `pid`, and the check asks only `watch.samples > 100 and watch.shown_ms <= POPUP_MS`. The unit test watches a
+    process with no windows, so a `_popup_shown` that always returns False passes it.
+  - **Scenario.** A wrong pid, a self-test process the window server lists nothing to, or a later macOS listing popups
+    below layer 100: the watch sees nothing, and the check passes as "0 ms" with the menu fully on screen.
+  - **Fix.** Count the samples whose list held a window of `pid`, and require more than 100. The shot keeps Designer's
+    main window on screen, transparent: measure that it is listed then. Unit-test `_popup_shown`'s pid, layer and
+    alpha filters with fake `cg` and `cf`.
+  - **Resolution: done.**
+    - **Test:** in `test_selftest_popups.py`, the tests of `_seen` (the pid, layer and alpha filters, no list, the list
+      released) and the watch's `listed` count on a process with no window, failing before (no `_seen`, no `listed`).
+      The live menu check failed in its scratch run before the change (no `listed`) and passed after: 0 ms on screen,
+      and 12,460 samples of 12,626 listing one of Designer's windows. Watching a wrong pid (a scratch-only subclass of
+      `PopupWatch`), it now fails with 0 listing, where by reading it passed before.
+    - **Cause:** the watch counted every sample, whether the list held a window of Designer's or not.
+    - **Fix:** `_seen` says whether the list holds a window of the pid, and whether a popup of its is shown.
+      `PopupWatch.listed` counts the first, and the check needs more than 100. `popups.py`'s docstring has the count
+      measured.
+    - **Also covered:** the other window checks read Designer's windows from inside Designer, not through this watch.
+
+- [x] **TST-406 · The unit tests don't see the fade timer's interval or its looking again** · follows HLP-134, generation 2 · `tests/unit/test_view3d_helpers.py:222,289-302`, `mcp_server/designer_helpers/view3d.py:274-276,283-287` · confirmed · found 2026-11-14
+  - **Defect.** The fake `Timer.start(after)` drops `after`.
+    `test_the_menu_opened_is_made_transparent_before_its_action_is_picked` runs `timers[2]` before `timers[0]`
+    itself, so the order its name claims is the test's, not the code's. No test
+    runs `fade()` while no popup is open, so `timers[2].start(0)` is never reached.
+  - **Scenario.** Every unit test passes with the fade started at 100 ms, with its restart dropped, or with it
+    restarting after it made the menu transparent. Only the first is caught by the live check (about 155 ms on
+    screen).
+  - **Fix.** Have the fake record `after`, and assert `[100, MENU_GUARD, 0]`. Run `timers[2]` with no popup open (it
+    is active again), then with the menu (opacity 0, not active again).
+  - **Resolution: done.**
+    - **Test:** `test_the_pick_the_guard_and_the_fade_start_at_their_times` and
+      `test_the_fade_looks_again_until_the_menu_opens_then_stops`, with the fake timer recording each start's interval.
+      They pass on the code, which was right. Each failed on a mutant of `_apply_outputs`: the fade started at 100 ms,
+      its restart dropped, and its restart after it made the menu transparent.
+    - **Fix:** the two tests.
+
+- [x] **TST-407 · No test sees the window made opaque before it is brought on screen** · `tests/unit/test_shot3d.py:322-331`, `tests/test_all_tools/editor_panels_and_fit/checks.py:893-907`, `mcp_server/designer_helpers/shot3d.py:253-254` · confirmed · found 2026-11-14
+  - **Defect.** `_on_screen` runs `screen.opaque_first()` before `screen._bring(again=False)`, so `_fade` records the
+    window's look once it is opaque. Both tests of a window an earlier shot left transparent start with it on screen,
+    where `_bring` does nothing: the unit test with `Mac()`'s defaults, the live `LEFT_TRANSPARENT` case after
+    `clear()`.
+  - **Scenario.** `opaque_first` moved after `_bring` passes every test. A minimized, covered or hidden window an
+    earlier shot left transparent then has its transparent look recorded. It is made opaque in front for the shot, so
+    the user sees it, and is put back transparent and click-through, so Designer looks gone.
+  - **Fix.** Parametrize the unit test over minimized, covered and hidden with `looks[MAIN] = (0.0, True)`: `done`
+    starts `['unfade', 'fade', ...]`, and the window ends `OPAQUE`.
+  - **Resolution: done.**
+    - **Test:** `test_a_window_an_earlier_shot_left_transparent_is_made_opaque_first`, parametrized over the window on
+      screen, minimized, covered and hidden. It passes on the code, which was right, and failed with `opaque_first`
+      moved after `_bring`: in 3 of the 4 cases, all but the window on screen.
+    - **Fix:** the test.
+
+- [x] **TST-408 · README gives the shot a duration no check measures** · follows HLP-133, generation 2 · `README.md:370-372` · confirmed · found 2026-11-14
+  - **Defect.** README says "some may pause drawing them for the shot's second or so". The window stays in front from
+    before the set-up to the last render. That is about 0.8 s before the first render (`_wait_on_screen`, then
+    `DRAW_WAIT`), plus the set-up's waits (`graph=` about 1.25 s, a view `VIEW_TURN` and 0.3 s, a mesh 0.5 s), plus up
+    to `RETAKES` × `DRAW_WAIT` for renders taken again.
+  - **Scenario.** GUIDE.md's suggested `graph=`, `view='Top'`, `tiling=2` takes several seconds: a user told "a
+    second or so" sees their apps pause for longer.
+  - **Fix.** Make the claim smaller: drop the duration ("may pause drawing them during the shot").
+  - **Resolution: done.**
+    - **Test:** none: the claim is removed.
+    - **Fix:** README says "some may pause drawing them during the shot", with no duration.
+    - **Also covered:** the next sentence, changed for HLP-136, says the window stays up if Designer is still the app
+      in front when the shot ends, which `test_designer_made_the_active_app_then_left_during_the_shot_is_put_back`
+      checks.
+
+- [x] **HLP-137 · Vague types in the functions the diff adds or changes in `view3d.py`** · `mcp_server/designer_helpers/view3d.py:194,249,280` · confirmed · found 2026-11-14
+  - **Defect.** `_MenuPick.fade(self, menu: Any)` is new, and its `Any` is unmarked. `_apply_outputs(tree: Any,
+    graph: Any, keep: list[Any])`, which the diff changes, holds `timers: list[Any] = []`.
+  - **Scenario.** mypy checks nothing through them: a wrong call on the graph or a timer goes unseen (AGENTS.md,
+    Typing).
+  - **Fix.** `graph: SDSBSCompGraph` (already imported; the caller's `g` comes from `_set_up_checked`),
+    `keep: list[object]` (the caller's), `timers: list[QtCore.QTimer]` (a local annotation, not evaluated at runtime).
+    `tree` and `menu` stay `Any`, marked `# Any: a Qt widget (screenshots.py)`.
+  - **Resolution: done.**
+    - **Test:** no behaviour changes. The tests of `_apply_outputs` and `_MenuPick` in `test_view3d_helpers.py` pass
+      before and after, and so does mypy strict.
+    - **Fix:** `graph: SDSBSCompGraph`, `keep: list[object]`, `timers: list[QtCore.QTimer]`. `tree` and `menu` stay
+      `Any`, marked `# Any: a Qt widget (screenshots.py)`.
+    - **Also covered:** `sys`, which `fade` now uses, moved into `core.py`'s shared imports, as two parts may not both
+      import it (`test_designer_helpers.py`); `mac_window.py` takes it from there, its tests passing before and after.
+
+- [x] **HLP-138 · A user already in Designer as the shot began, who leaves and comes back, still sees no window** · follows HLP-136, generation 2 · `mcp_server/designer_helpers/shot3d.py:123,164-166,171,193` · confirmed · found 2026-11-14
+  - **Defect.** `self._was_active = mac is not None and mac.active()` is read once, and `_taken_up()` is
+    `self._mac.active() and not self._was_active`. With Designer the active app as the shot began, `between()` never
+    makes the windows opaque, `_bring` goes on making them transparent, and `put_back` never leaves the window up.
+  - **Scenario.** The user is in Designer as an agent's shot starts. They switch to a terminal that covers Designer's
+    window, so the next render brings it in front, transparent. They switch back to Designer: they see the terminal
+    through the invisible window, their clicks go to the terminal, and their keys to that invisible window. Then
+    `put_back` puts it behind the terminal. README says "If you switch to Designer during the shot, it becomes
+    visible". `test_a_designer_already_the_active_app_before_the_shot_stays_transparent_during_it` covers only a user
+    who never left.
+  - **Fix.** Forget `_was_active` once Designer is seen not to be the active app: in `between()`, which `again()` runs
+    before each `_bring`, so every bring during the shot comes after that look. A unit test: `Mac(covered=True,
+    active=True)`, the user away (`is_active = False`), the window covered again and `again()`, then back
+    (`is_active = True`) and `between()`: made opaque, and left up.
+  - **Resolution: done.**
+    - **Test:** `test_a_user_in_designer_as_the_shot_began_who_left_and_came_back_sees_its_window_at_once` failed
+      before the fix (the window still transparent once the user was back in Designer) and passes after. The live
+      path, the windows made opaque and the window left up, is HLP-136's check, which passes.
+    - **Cause:** `_was_active` was read once, as the shot began, so a user who left Designer and came back never
+      counted as having made it the active app.
+    - **Fix:** `between()` forgets `_was_active` once Designer is seen not to be the active app; `again()` runs it
+      before each bring.
+    - **Also covered:** `put_back`'s active check reads the same `_was_active`, so the window is left up too.
+  - Questioned by HLP-142 (2026-11-14).
+
+- [x] **HLP-139 · A window covered by several windows can come back in front of one of them, now that clicks go through it** · `mcp_server/designer_helpers/shot3d.py:195-200,246-248`, `mcp_server/designer_helpers/mac_window.py:129-133` · confirmed · found 2026-11-14
+  - **Defect.** `_bring` keeps only the nearest window in front of Designer's (`found = mac.above()`, `found[-1]` in
+    `above()`), and `put_back` puts it right behind that one (`mac.put_below(self._behind)`). That restores the window
+    covered only while that window is still the lowest of those that covered it. During the shot the user's clicks go
+    through Designer's window to theirs, so they can reorder them.
+  - **Scenario.** Windows A, in front, and B together cover Designer's window D: `_behind` is B. The shot orders them
+    D, A, B, with D transparent and click-through. The user clicks B through D, as README says they can: B, D, A.
+    `put_back` puts D right behind B, so B, D, A, and makes it opaque: D shows over A wherever B doesn't cover it,
+    and the tool says "put back behind the window that was in front of it". B closed during the shot, its close button
+    reached through D, leaves D "left in front" (HLP-130), opaque over A, which still covers its place. On `main` a
+    click inside D's area reached D, which made Designer the active app and left it up.
+  - **Fix.** At the first bring, record every normal window above D (`_listed(CG_ABOVE, number)`, layer 0). At the
+    put-back, put D right behind the one of them still on screen that is lowest in the current order. Measure first,
+    in a Designer an agent started, with two windows of Designer's own covering it together.
+  - **Resolution: done.**
+    - **Measured first:** two windows of Designer's own, overlapping, each over a half of its main window, don't make
+      it covered for macOS: the view draws, and the shot doesn't bring it in front. So the scenario as written doesn't
+      arise. The defect does whenever the window directly in front of Designer's isn't the one covering it.
+    - **Test:** the live put-back check's new case (`window_states.TWO`): a window covering Designer's whole, and a
+      smaller window of Designer's own in front of it, under the cover, raised during the shot. In its scratch run it
+      failed before the fix (`later,main,cover,below`: back in front of its cover, said "put back behind the window
+      that was in front of it") and passed after (`later,cover,main,below`). Unit tests failing before:
+      `test_a_covered_window_goes_back_behind_its_cover_once_the_user_raised_the_window_in_front_of_it` and
+      `test_a_covered_window_goes_back_behind_its_cover_once_the_window_in_front_of_it_closed`.
+    - **Cause:** the put-back kept only the window directly in front of Designer's (`above()`), which needn't be the
+      one covering it, and which the user can raise during the shot.
+    - **Fix:** `_bring` records every normal window in front of Designer's each time it brings it
+      (`_MacWindow.in_front`), and `put_back` puts it right behind the one of them still on screen nearest the back
+      (`_MacWindow.lowest`). `above()` is gone.
+    - **Also covered:** HLP-126's, HLP-130's and HLP-131's cases, unit and live, pass unchanged: one cover, a cover
+      closed or minimized, a later window over it, an always-on-top cover. The lines are unchanged, as the window is
+      still put right behind a window that was in front of it.
+  - Questioned by HLP-143 and TST-415 (2026-11-14).
+
+- [x] **HLP-140 · The tool's docstring and two comments say more than the code does** · follows HLP-136, generation 2 · `mcp_server/server_tools/views.py:75`, `mcp_server/designer_helpers/view3d.py:206`, `mcp_server/designer_helpers/shot3d.py:193` · confirmed · found 2026-11-14
+  - **Defect.**
+    - `views.py`: "(left up if the user switched to Designer meanwhile)". The code leaves it up only if Designer is
+      the active app as the shot ends: a user who switched there and back finds it put back
+      (`test_designer_made_the_active_app_then_left_during_the_shot_is_put_back`). README says this exactly; the
+      docstring, which agents read and pass on, doesn't.
+    - `view3d.py`: `# measured there only: a click at its place reaches the window under it`. What was measured for
+      the menu is that the flag sets its `ignoresMouseEvents`, and that the pick still works. That a click goes
+      through was measured for Designer's main window only; `windowNumberAtPoint` never reported the menu.
+    - `shot3d.py`: `# the user, in Designer, sees it put back`: the line brings the window on screen, and "put back"
+      reads as `put_back`.
+  - **Scenario.** An agent tells the user their window stays up once they switch to Designer; a maintainer takes the
+    menu's click-through for measured.
+  - **Fix.** Make each claim smaller: "(left up if Designer is the app in front as the shot ends)"; "measured there
+    only: the flag sets the menu's ignoresMouseEvents, and its action is still picked"; "sees it brought back".
+  - **Resolution: done.**
+    - **Test:** none: the claims are made smaller.
+    - **Fix:** `views.py` says "(left up if Designer is the app in front as the shot ends)"; `view3d.py`'s comment, "it
+      sets the menu window's ignoresMouseEvents, and the action is still picked"; `shot3d.py`'s, "sees it brought
+      back".
+    - **Also covered:** DECISIONS.md's sentence on the active app reworded to what the code does, the user's choice
+      ("Reword to match (Recommended)", 2026-11-14).
+  - Questioned by HLP-142 (2026-11-14).
+
+- [x] **TST-409 · HLP-136's live check can't tell `between` before a set-up step from `between` before a render, and no test sees its guard** · follows HLP-136, generation 2 · `tests/test_all_tools/editor_panels_and_fit/checks.py:971-1013`, `tests/test_all_tools/editor_panels_and_fit/window_states.py:227-242`, `tests/unit/test_shot3d.py:519-536`, `mcp_server/designer_helpers/shot3d.py:171` · confirmed · found 2026-11-14
+  - **Defect.**
+    - The live check reads the window's look only at each render. With `between` dropped from the set-up's steps, the
+      `between()` that `again()` runs before the next render does the same work: the RENDER lines, the line said and
+      the state after are the same, and the check passes. The unit tests guard each half.
+    - `between()`'s `if self._faded and ...` has no test: dropped, the second `again()` in
+      `test_a_window_put_on_screen_again_while_the_user_is_in_designer_isnt_made_transparent` says "made opaque at
+      once" again, but the test compares only the last two lines.
+  - **Scenario.** A regression repeats "made opaque at once" before every later step and render, or says it for a
+    window that was never transparent: agents would tell the user their window was invisible. The live check doesn't
+    see the steps' half go.
+  - **Fix.** In the live check, require the line before the first step's line
+    (`t.index(MADE_OPAQUE) < t.index('3D view, setting: ')`); in the unit test, compare every line; a unit test with
+    the window on screen, Designer made the active app, then `again()`: nothing said.
+  - **Resolution: done.**
+    - **Test:** the live check now needs "made opaque at once" before the first set-up step's line. In its scratch run
+      it failed with `shoot_3d` giving the set-up None (the steps' look gone) and passes on the code.
+      `test_a_window_put_on_screen_again_while_the_user_is_in_designer_isnt_made_transparent` compares every line, and
+      `test_nothing_is_said_when_designer_becomes_the_active_app_with_no_window_made_transparent` is new: both failed
+      with `between()`'s `self._faded` guard dropped, and pass on the code.
+    - **Fix:** the checks.
+
+- [x] **TST-410 · The transparency check fails if Designer becomes the active app during one of its shots, which the tool now acts on** · follows HLP-136, generation 2 · `tests/test_all_tools/editor_panels_and_fit/checks.py:907-965` · confirmed · found 2026-11-14
+  - **Defect.** The check expects every render transparent (`looks == [during]`, `fadings == faded`) in four shots,
+    with no guard for Designer becoming the active app. TST-399 saw that happen during a shot in a final run (another
+    Designer of the pool handing activation over as it quits, or a click), and the during-pan checks skip judging
+    then (`window_states.became_active`). Since HLP-136, that makes the window opaque at the next step or render.
+  - **Scenario.** In the final check, a Designer of the pool quits during one of the four shots and hands activation
+    to this one: the renders after it are opaque, and the check fails though the tool did what it should.
+  - **Fix.** When the shot says "made opaque at once" or "left on screen, as Designer became the active app", judge
+    only the renders before it, or say "not judged" as the during-pan checks do (TST-399).
+  - **Resolution: done.**
+    - **Test:** the transparency check, run with each shot making Designer the active app as its set-up starts (a
+      scratch-only `window_states.rendered = window_states.switched`). It failed before the change in the three cases
+      off screen, the renders after the switch opaque, and passes after, saying the renders weren't judged. Without the
+      switch it judges every render, and passes.
+    - **Fix:** when the shot says "made opaque at once" or "left on screen, as Designer became the active app", the
+      renders aren't judged (`NOT_JUDGED`, as for TST-399); the windows opaque and clickable after the shot still are.
+  - Questioned by TST-414 (2026-11-14).
+
+- [x] **TST-411 · The hidden case counts Designer's windows through the same `windows(True)` the shot uses** · follows TST-403, generation 2 · `tests/test_all_tools/editor_panels_and_fit/window_states.py:45`, `tests/test_all_tools/editor_panels_and_fit/checks.py:940-948` · confirmed · found 2026-11-14
+  - **Defect.** `state()` counts `windows=` and `faded=` with `every = mac.windows(True)`, the function the shot fades
+    through. TST-403's scenario names `windows(every=True)` misreading NSApp's array; the check can't see that.
+  - **Scenario.** A `windows(True)` that drops windows (only the main window, or `range(count - 1)`) passes the hidden
+    case, which expects every window faded: `(1, 1)` or `(7, 7)`. The window dropped shows at full opacity when
+    Designer is shown for the shot.
+  - **Fix.** Count NSApp's windows in the snippet with its own `objectAtIndex:` loop, as `order()` does for
+    `orderedWindows`.
+  - **Resolution: done.**
+    - **Test:** the transparency check, run with the shot's `_MacWindow.windows(True)` leaving out one of Designer's
+      windows other than the main one (a scratch-only rebinding). Its hidden case passed before the change (`(8, 8)`)
+      and fails after (`(5, 6)`); it passes on the code.
+    - **Fix:** `state()` reads NSApp's windows itself (`listed('windows')`, which `order()` now shares), not through
+      `_MacWindow.windows`.
+
+- [x] **TST-412 · The covered-under fact has no reading of the window under it uncovered** · follows HLP-133, generation 2 · `tests/test_all_tools/editor_panels_and_fit/window_states.py:159-174`, `tests/test_all_tools/editor_panels_and_fit/checks.py:731-755` · confirmed · found 2026-11-14
+  - **Defect.** `_UNDER` reads the window under Designer's as covered twice, the main window opaque then transparent,
+    and the check expects `opaque=True transparent=True`. A window that never reached the screen, or was ordered out,
+    reads covered too.
+  - **Scenario.** The fact passes when `below` isn't on screen at all, so it no longer measures what the module
+    docstring and DECISIONS.md say it does.
+  - **Fix.** Bring `below` in front first and read it uncovered (`covered=False`), then the two readings.
+  - **Resolution: done.**
+    - **Test:** the fact check, run with the window under Designer's hidden as it was made (scratch only), passed
+      before the change. It now reads that window alone in front first (`alone=False`), and fails when the main window
+      is brought in front before that reading (`alone=True`, scratch only).
+    - **Fix:** `_UNDER` brings the window under in front and reads it first.
+    - **Also covered:** the control showed HLP-133's fact wrong (HLP-141).
+
+- [x] **TST-413 · Vague types in the test functions the diff adds or changes** · `tests/unit/test_view3d_helpers.py:229,233`, `tests/unit/test_shot3d.py:642` · confirmed · found 2026-11-14
+  - **Defect.** `Timer.__init__`, which gains `self.starts`, holds `parent: Any = None` and `self.run: Any = None`,
+    unmarked. `Shot`'s `set_up` returns `Callable[..., None]`.
+  - **Scenario.** mypy checks nothing through them (AGENTS.md, Typing).
+  - **Fix.** `parent: object = None` (only stored and compared), `self.run: Callable[[], object] = lambda: None`, and
+    `Callable[[object], None]` for `set_up`'s result.
+  - **Resolution: done.**
+    - **Test:** no behaviour changes: the two files' tests pass before and after, and so does mypy strict.
+    - **Fix:** `parent: object = None`, `self.run: Callable[[], object] = lambda: None`, and `Callable[[object], None]`.
+
+- [x] **HLP-141 · HLP-133's fact was wrong: a window under Designer's transparent window stays visible for macOS** · follows HLP-133, generation 2 · `mcp_server/designer_helpers/shot3d.py:15-21`, `README.md:368-372`, `DECISIONS.md`, `tests/test_all_tools/editor_panels_and_fit/checks.py:731-757` · measured · found 2026-11-14
+  - **Defect.** HLP-133's probe and fact check made the window under Designer's and never showed it on its own: it
+    read covered with Designer's window opaque, and still covered with it transparent. README said "macOS still tells
+    the apps with windows under it that those windows are covered, so some may pause drawing them during the shot",
+    and DECISIONS.md recorded the user's "Document it" on that basis.
+  - **Scenario.** Found addressing TST-412. With the window under shown alone first, it read visible alone, covered
+    under Designer's opaque window, and visible under it transparent, 3 times of 3. In the shot's own order
+    (transparent, then in front) it read visible at 0.1, 0.5, 1 and 2 s, and covered once opaque, 3 of 3. Read the
+    old way, it was covered both times, 3 of 3. The user was told apps may pause for no reason.
+  - **Fix.** Say the measured fact, and drop README's sentence: the user's choice ("Remove the sentence
+    (Recommended)", 2026-11-14).
+  - **Resolution: done.**
+    - **Test:** `check_a_window_under_designers_transparent_window_counts_as_visible`, renamed from
+      `check_a_window_under_designers_transparent_window_still_counts_as_covered`, expects
+      `alone=False opaque=True transparent=False`. It passes in its scratch run, and fails with the main window brought
+      in front before the alone reading.
+    - **Cause:** a window macOS had never shown read covered, whatever was over it.
+    - **Fix:** README's sentence removed. `shot3d.py`'s docstring says the measured fact, without the `setOpaque:`
+      sentence, measured the same flawed way. DECISIONS.md's entry says the first measurement was wrong and records the
+      user's choice, and its Reopen if names an app seen pausing under the window.
+    - **Also covered:** HLP-133's and TST-408's resolutions describe the old sentence; they stay as the history of
+      those findings.
+  - Questioned by HLP-142 (2026-11-14).
+  - Note (2026-11-14): its check failed in the branch's final check, read with a window of another app in
+    front: TST-417.
+
+- [x] **HLP-142 · Four sentences on the shot say more than its code and tests do** · follows HLP-138, HLP-140 and HLP-141, generation 3 · `mcp_server/server_tools/views.py:75`, `mcp_server/designer_helpers/shot3d.py:6-9,118-120,167` · confirmed · found 2026-11-14
+  - **Defect.**
+    - `views.py`: "(left up if Designer is the app in front as the shot ends)". `put_back` leaves the window up only
+      if Designer is the active app and wasn't as the shot began (`if mac.active() and not self._was_active`). A
+      Designer already the active app as the shot began, and still at its end, has its window put back
+      (`test_a_window_covered_while_designer_was_already_the_active_app_is_put_back`). README's sentence, which
+      starts "If you switch to Designer during the shot", is right.
+    - `_taken_up`'s docstring: "it is, and wasn't as the shot began". Since HLP-138, `between()` clears
+      `_was_active` once it sees Designer not active. So `_taken_up()` is also True for a Designer active as the shot
+      began that the user left and came back to.
+    - The class docstring: "A Designer the active app as the shot began that the user leaves counts as made the
+      active app if they come back". `between()` sees the user leave only at its looks, before each set-up step and
+      render. A user who leaves and comes back between two looks counts as never having left: the window stays
+      transparent and is put back as found, as for a user who never left (DECISIONS.md, the 3D screenshot's window).
+    - The module docstring: the self-test "re-measures ... the second [point], but for its time and the identical
+      render". That point now includes "A window made under it and never shown read covered either way", which
+      `_UNDER` doesn't read: it shows the window alone first. That reading was a scratch-only control (HLP-141).
+  - **Scenario.** An agent tells the user their window stays up because Designer is in front as the shot ends,
+    though the user never switched. A maintainer reads `_taken_up` as True only for a Designer inactive as the shot
+    began, or takes the never-shown reading for guarded.
+  - **Fix.** Make each claim smaller (generation 3):
+    - `views.py`: "(left up if the user switched to Designer during the shot and it is still the app in front as it
+      ends)";
+    - `_taken_up`: "it is, and wasn't as the shot began or at a look since (between)";
+    - the class docstring: "that the user is seen to have left, at a look before a step or render, counts as made
+      the active app once they come back";
+    - the module docstring: "but for its time, the identical render and the window never shown".
+  - **Resolution: done.**
+    - **Test:** none: the claims are made smaller (generation 3).
+    - **Fix:**
+      - `views.py`: "then puts it back as it was, and says so. It is left up if the user switched to Designer during
+        the shot and Designer is still the app in front as it ends";
+      - `_taken_up`: "it is, and wasn't as the shot began or at a look since (between)";
+      - the class docstring: "A Designer the active app as the shot began counts as made the active app once the user
+        comes back to it, if a look before a step or render saw them gone";
+      - the module docstring: "but for its time, the identical render and the window never shown".
+
+- [x] **HLP-143 · `mac_window.py`'s docstring names `on_screen` as the guard the put-back no longer uses** · follows HLP-139, generation 2 · `mcp_server/designer_helpers/mac_window.py:9-12` · confirmed · found 2026-11-14
+  - **Defect.** "...it puts it behind every window, as orderBack: does: so the shot asks first (on_screen)." Since
+    HLP-139, `put_back` no longer asks `on_screen` about the window it puts Designer's behind: `lowest()` keeps only
+    the windows CoreGraphics lists on screen. `on_screen` is now used only by `_wait_off_screen`.
+  - **Scenario.** A maintainer changing `lowest` doesn't know it keeps Designer's window from going behind every
+    window. One changing `on_screen` thinks they touch that guard.
+  - **Fix.** "(lowest)" for "(on_screen)".
+  - **Resolution: done.**
+    - **Test:** none: a name in a docstring.
+    - **Fix:** "(lowest)" for "(on_screen)".
+
+- [x] **TST-414 · The transparency check's not-judged path gives a reason that can be wrong, and cuts off what it still judges** · follows TST-410, generation 3 · `tests/test_all_tools/editor_panels_and_fit/checks.py:913-918,952-981,1079` · confirmed · found 2026-11-14
+  - **Defect.**
+    - The docstring says the window is transparent and click-through while rendered. It doesn't say the renders go
+      unjudged once the shot says Designer became the active app.
+    - The detail's prefix is `NOT_JUDGED`: "Designer became the active app during the shot, which leaves its window
+      up". With only "made opaque at once" said and the user gone again, the window is put back
+      (`test_designer_made_the_active_app_then_left_during_the_shot_is_put_back`).
+    - The prefix takes 116 characters of the 150 the detail is cut at (TST-334). So the state after the shot, the
+      one thing still judged, is cut off, and the `if not ok` block prints the shot's lines, not that state.
+  - **Scenario.** In the final check, the pool hands activation to this Designer during a shot, and the window is
+    left transparent after it. The FAIL line doesn't say why, and nothing printed below it does.
+  - **Fix.** Make the claims smaller (generation 3): the docstring's "Not judged when the shot says Designer became
+    the active app (REVIEW.md TST-410)"; a short prefix of its own, without "which leaves its window up"; the state
+    after the shot first in the detail.
+  - **Resolution: done.**
+    - **Test:** none new (generation 3). In its scratch run, with Designer made the active app as each shot's set-up
+      starts (scratch only: `window_states.rendered = window_states.switched`), the check passes, its detail starting
+      "after: opacity=1 through=False faded=0; renders not judged, as Designer became the active app". It passes on
+      the code in the category's scratch run.
+    - **Fix:** the docstring says the renders aren't judged once the shot says Designer became the active app, and
+      that the state after the shot still is. The detail starts with that state, then a reason of its own, instead of
+      `NOT_JUDGED`, which the other checks keep.
+  - Questioned by TST-416 (2026-11-14).
+
+- [x] **TST-415 · HLP-139's live case passes on the old put-back if its raise does nothing** · follows HLP-139, generation 2 · `tests/test_all_tools/editor_panels_and_fit/checks.py:1150-1157`, `tests/test_all_tools/editor_panels_and_fit/window_states.py:95-102,270` · confirmed · found 2026-11-14
+  - **Defect.** `TWO` leaves `cover,later,main,below`. Without the raise, the put-back before HLP-139 put the window
+    behind `later`, the window directly in front of it, which gives that same order. That order satisfies the case's
+    three pairs, `(cover, main)`, `(later, main)` and `(main, below)`, and the put-back says BEHIND. Nothing reads
+    that the raise happened: not the order, nor the event's line.
+  - **Scenario.** A later change makes the raise do nothing: the case passes on the old code too, so it no longer
+    guards HLP-139. Its scratch run failed before the fix only because the raise worked then.
+  - **Fix.** Add `('later', 'cover')` to the pairs: only the raise puts `later` in front of `cover`. The fix gives
+    `later,cover,main,below`, which passes. The `'covered again during the shot'` case, on `main`, has the same
+    pattern: its pairs hold if `later` never covered.
+  - **Resolution: done.**
+    - **Measured first:** a cover closed (Qt's `close()`) or minimized (`miniaturize:`) is still listed in NSApp's
+      orderedWindows, at the back, so the order after the shot can't show it. CoreGraphics lists neither on screen.
+      The probe read `order=main,below,cover` and `cg_on_screen=False` for both, and with nothing done
+      `cover,main,below` and True.
+    - **Test:** in its scratch run, with every event of the put-back check made a no-op (scratch only), the check
+      passed all five cases before the change. After it, the four cases with an event fail ("later not seen to
+      happen", and the same for close, minimize and raise), and the always-on-top case, with none, passes. On the
+      code every case passes, in the category's scratch run (74 of 74). Unit tests:
+      `test_an_event_during_a_shot_is_seen_to_have_happened_only_by_its_effect` and
+      `test_every_event_has_a_way_to_be_seen`, failing before `event_seen` existed.
+    - **Cause:** the check read only where the window was put back, never that the event it set up had happened. With
+      no event, the old put-back left the same order.
+    - **Fix:** `window_states.SEEN_BY` says how each event is seen to have happened, and the put-back check requires
+      it (`event_seen`), saying "<event> not seen to happen" when it isn't:
+      - a window brought over Designer's: the shot's "brought in front again" line (`AGAIN`, moved from checks.py);
+      - TWO's raise: `later` in front of `cover` after the shot, as the entry suggested;
+      - the cover closed or minimized: off screen for CoreGraphics, read in the state line (`cover_on_screen`).
+    - **Also covered:** the three cases on `main` with the same gap ('covered again during the shot', 'its cover
+      closed', 'its cover minimized'), with the user's go-ahead. The HLP-124 check, the other user of `during_pan`'s
+      events, already required the "brought in front again" line. `test_every_event_has_a_way_to_be_seen` fails for
+      a new event with no way to be seen.
+  - Questioned by TST-416 (2026-11-14).
+
+- [x] **HLP-144 · `_Screen`'s docstring says the Explorer's menu is made click-through, which happens on macOS only** · follows HLP-134, generation 2 · `mcp_server/designer_helpers/shot3d.py:99-100` · confirmed · found 2026-11-14
+  - **Defect.** "The Explorer's menu, which graph= opens, is made transparent and click-through as it opens
+    (view3d.py)." `_MenuPick.fade` makes it click-through only `if sys.platform == 'darwin'`. Elsewhere the menu is
+    only transparent, and still takes clicks. DECISIONS.md, view3d.py's module docstring and `fade` say "on macOS
+    click-through".
+  - **Scenario.** A maintainer working on Windows reads `_Screen` and expects a click at the menu's place during a
+    shot to reach the window under it.
+  - **Fix.** "is made transparent as it opens, and on macOS click-through too (view3d.py)".
+  - **Resolution: done.**
+    - **Test:** none: the claim is made smaller.
+    - **Fix:** "is made transparent as it opens, and on macOS click-through too (view3d.py)".
+
+- [x] **TST-416 · Two checks miss the "brought in front again" line once Designer is the active app at that look, and two sentences say its windows stay opaque from then on** · follows TST-414 and TST-415, generation 3 · `tests/test_all_tools/editor_panels_and_fit/window_states.py:277-285`, `tests/test_all_tools/editor_panels_and_fit/checks.py:918,952,1121` · confirmed · found 2026-11-14
+  - **Defect.**
+    - `AGAIN` is the line with ", transparent". Since HLP-136, `_bring` drops those words when Designer is the
+      active app at that look: `BROUGHT[way][again] if fade else BROUGHT[way][again].replace(', transparent', '')`.
+      `SEEN_BY['cover']` and `SEEN_BY['later']`, and the HLP-124 check (`window_states.AGAIN in t`), need the
+      transparent wording.
+    - The transparency check's docstring and the comment above `switched` say that Designer becoming the active app
+      "makes its windows opaque from then on". A user who switches to Designer and away again, the window covered
+      again, has it made transparent again (`_bring`'s `fade = not self._taken_up()`).
+  - **Scenario.** In the final check, another Designer of the pool quits during a shot and hands activation to this
+    one, and a Designer launching takes it back before the put-back. The look before the render says "brought in
+    front again, as another window covered it during the shot", without ", transparent". Nothing says "left on
+    screen", and Designer isn't the active app after the shot, so both checks judge the shot, and both fail: "later
+    not seen to happen" in the put-back check, and `AGAIN in t` in the HLP-124 check. The tool did what it should.
+    How often activation comes and goes within one shot wasn't measured; TST-399 saw it come.
+  - **Fix.** Make the claims smaller (generation 3): `AGAIN` becomes the start both wordings share, "Designer's
+    window: brought in front again", which no other line starts with; drop "from then on" from the two sentences.
+  - **Resolution: done.**
+    - **Test:** two cases of `test_an_event_during_a_shot_is_seen_to_have_happened_only_by_its_effect`, the line
+      without ", transparent" for the `cover` and `later` events, failed before the change and pass after. In a
+      scratch run, `_MacWindow.active` read True from the event during the pan on, and False again just before the
+      put-back (scratch only, rebound in the shot's snippet). The shot made the windows opaque at once and said "brought
+      in front again, as another window covered it during the shot". The HLP-124 check and the put-back check's
+      'covered again during the shot' case both failed before the change ("later not seen to happen"), the window put
+      back behind its cover. Both pass after, in that run and with the events as they are.
+    - **Cause:** `AGAIN` held the whole line with ", transparent", which `_bring` leaves out once Designer is the active
+      app at that look (HLP-136).
+    - **Fix:** `AGAIN` is "Designer's window: brought in front again", the start both wordings share; no other line the
+      shot says starts that way. "From then on" is dropped from the transparency check's docstring and the comment
+      above `switched`.
+    - **Also covered:** `AGAIN`'s other users: `SEEN_BY['cover']` and `SEEN_BY['later']`, and the HLP-124 check, all
+      through the one constant.

@@ -5,6 +5,7 @@ there, what the timers do while that menu runs, and the drags that turn and pan 
 
 import sys
 import types
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest import mock
@@ -12,11 +13,31 @@ from unittest import mock
 import pytest
 
 
+class MenuWindow:
+    """_MacWindow of a menu, faked: what was done to the menu's own window, in the menu's `native`."""
+
+    def __init__(self, menu: 'Menu') -> None:
+        self.menu = menu
+
+    def windows(self, every: bool) -> list[int]:
+        return [7]
+
+    def hold(self, window: int) -> None:
+        self.menu.native.append('hold')
+
+    def set_appearance(self, window: int, opacity: float, through: bool) -> None:
+        self.menu.native.append('look %g %s' % (opacity, through))
+
+    def let_go(self, window: int) -> None:
+        self.menu.native.append('let go')
+
+
 @pytest.fixture
 def helpers(faked_helpers: types.ModuleType) -> types.ModuleType:
     module = faked_helpers
     vars(module)['_process_events'] = lambda n=10: None
     vars(module)['_settle'] = lambda seconds: None
+    vars(module)['_MacWindow'] = MenuWindow
     return module
 
 
@@ -77,6 +98,10 @@ class Menu:
     def __init__(self, *texts: str, disabled: tuple[str, ...] = (), raising: bool = False) -> None:
         self.triggered: list[str] = []
         self.closed = False
+        self.opacity: float | None = None  # what setWindowOpacity set last
+        self.opacities: list[float] = []  # each opacity setWindowOpacity set, in order
+        self.native: list[str] = []  # what was done to its own window through _MacWindow (MenuWindow)
+        self.flags: list[tuple[object, bool]] = []  # what its window's setFlag set
 
         def trigger(t: str) -> None:
             if raising:
@@ -94,6 +119,19 @@ class Menu:
     def close(self) -> None:
         self.closed = True
 
+    def isVisible(self) -> bool:
+        return not self.closed
+
+    def windowOpacity(self) -> float:
+        return 1.0 if self.opacity is None else self.opacity
+
+    def setWindowOpacity(self, opacity: float) -> None:
+        self.opacity = opacity
+        self.opacities.append(opacity)
+
+    def windowHandle(self) -> SimpleNamespace:
+        return SimpleNamespace(setFlag=lambda flag, on: self.flags.append((flag, on)))
+
 
 VIEW = 'View Outputs In 3D View'
 
@@ -105,6 +143,34 @@ def test_the_pick_looks_again_until_the_menu_opens_then_triggers_the_action(help
     assert pick.pick(menu) is True
     assert menu.triggered == ['&View Outputs In 3D View'] and menu.closed
     assert pick.failure('g', held=False) is None
+
+
+def test_the_menu_is_made_transparent_once_it_opens(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-134: a popup above every window, it showed for 240 ms during a shot otherwise invisible
+    pick = helpers._MenuPick(VIEW, None)
+    menu = Menu(VIEW)
+    assert pick.fade(None) is False  # not open yet: its timer starts again
+    assert pick.fade(menu) is True and menu.opacity == 0.0
+    assert menu.triggered == [] and not menu.closed  # the pick's, still to come
+
+
+@pytest.mark.parametrize('platform', ['darwin', 'win32'])
+def test_the_menu_made_transparent_lets_clicks_through_on_macos(
+    helpers: types.ModuleType, monkeypatch: pytest.MonkeyPatch, platform: str
+) -> None:
+    # the user's choice (DECISIONS.md): a click the user makes at its place goes to the window under it, as through
+    # Designer's window; measured on macOS only
+    monkeypatch.setattr(sys, 'platform', platform)
+    menu = Menu(VIEW)
+    assert helpers._MenuPick(VIEW, None).fade(menu) is True
+    through = (qt('QtCore').Qt.WindowType.WindowTransparentForInput, True)
+    assert menu.flags == ([through] if platform == 'darwin' else [])
+
+
+def test_a_popup_open_before_the_menu_isnt_made_transparent(helpers: types.ModuleType) -> None:
+    users = Menu('Cut', VIEW)
+    pick = helpers._MenuPick(VIEW, users)
+    assert pick.fade(users) is False and users.opacity is None and users.flags == []
 
 
 def test_a_popup_open_before_the_menu_isnt_taken_for_it(helpers: types.ModuleType) -> None:
@@ -190,12 +256,13 @@ class Timer:
     """A QTimer: started, stopped, never firing by itself; `run` is what its timeout was connected to. `aborted`: its
     start raises, as an abort landing there would."""
 
-    def __init__(self, aborted: bool = False, parent: Any = None) -> None:
+    def __init__(self, aborted: bool = False, parent: object = None) -> None:
         self.active = False
         self.aborted = aborted
         self.parent = parent
-        self.run: Any = None
+        self.run: Callable[[], object] = lambda: None
         self.timeout = SimpleNamespace(connect=lambda run: setattr(self, 'run', run))
+        self.starts: list[int] = []  # each start's interval, in ms
 
     def setSingleShot(self, single: bool) -> None:
         pass
@@ -204,6 +271,7 @@ class Timer:
         if self.aborted:
             raise KeyboardInterrupt('an abort as the timer starts')
         self.active = True
+        self.starts.append(after)
 
     def stop(self) -> None:
         self.active = False
@@ -231,19 +299,19 @@ def _outputs_applied(
     helpers._apply_outputs(tree, SimpleNamespace(getIdentifier=lambda: 'g'), [])
 
 
-@pytest.mark.parametrize('menu_run', ['returns', 'raises', 'aborted as the guard starts'])
-def test_both_timers_are_stopped_whatever_the_menu_does(helpers: types.ModuleType, menu_run: str) -> None:
-    # REVIEW.md TST-316: a timer left running would later pick from, or close, a menu of the user's; HLP-112: an abort
-    # landing as the second timer starts, the first already running
+@pytest.mark.parametrize('menu_run', ['returns', 'raises', 'aborted as the guard starts', 'aborted as the fade starts'])
+def test_every_timer_is_stopped_whatever_the_menu_does(helpers: types.ModuleType, menu_run: str) -> None:
+    # REVIEW.md TST-316: a timer left running would later pick from, close or fade a menu of the user's; HLP-112: an
+    # abort landing as a timer starts, the ones before it already running
     def send_event(timers: list[Timer]) -> None:
         if menu_run == 'raises':
             raise KeyboardInterrupt('an abort as the menu runs')
 
     timers: list[Timer] = []
-    aborted = 1 if menu_run.startswith('aborted') else None
+    aborted = {'aborted as the guard starts': 1, 'aborted as the fade starts': 2}.get(menu_run)
     with pytest.raises((RuntimeError, KeyboardInterrupt)):  # returning without a menu: it didn't open
         _outputs_applied(helpers, send_event, aborted, timers)
-    assert len(timers) == 2 and not any(t.active for t in timers)
+    assert len(timers) == (3 if aborted is None else aborted + 1) and not any(t.active for t in timers)
 
 
 def test_the_timers_go_with_the_function_whatever_runs_of_its_finally(helpers: types.ModuleType) -> None:
@@ -252,7 +320,7 @@ def test_the_timers_go_with_the_function_whatever_runs_of_its_finally(helpers: t
     timers: list[Timer] = []
     with pytest.raises(RuntimeError):  # no menu: it didn't open
         _outputs_applied(helpers, lambda made: None, timers=timers)
-    assert [t.parent for t in timers] == [qt('QtCore').QObject.return_value] * 2
+    assert [t.parent for t in timers] == [qt('QtCore').QObject.return_value] * 3
 
 
 def test_a_menu_the_guard_had_to_close_is_a_failure(helpers: types.ModuleType) -> None:
@@ -265,6 +333,86 @@ def test_a_menu_the_guard_had_to_close_is_a_failure(helpers: types.ModuleType) -
     qt('QtWidgets').QApplication.activePopupWidget.side_effect = [None, Menu(VIEW)]
     with pytest.raises(RuntimeError, match="a menu was still open 5 s after 'View Outputs In 3D View'"):
         _outputs_applied(helpers, send_event)
+
+
+def test_the_menu_opened_is_made_transparent_before_its_action_is_picked(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-134: the fade's timer starts at once, the pick's after 100 ms
+    menu = Menu(VIEW)
+    seen: list[float | None] = []
+
+    def send_event(timers: list[Timer]) -> None:
+        timers[2].run()  # the fade, with the menu open
+        seen.append(menu.opacity)
+        timers[0].run()  # the pick
+
+    qt('QtWidgets').QMenu = Menu
+    qt('QtWidgets').QApplication.activePopupWidget.side_effect = [None, menu, menu]
+    _outputs_applied(helpers, send_event)
+    assert seen == [0.0] and menu.triggered == [VIEW] and menu.closed
+
+
+def test_the_pick_the_guard_and_the_fade_start_at_their_times(helpers: types.ModuleType) -> None:
+    # REVIEW.md TST-406: the fade at once, so the menu is transparent as it opens; the pick after 100 ms; the guard
+    # after MENU_GUARD
+    timers: list[Timer] = []
+    with pytest.raises(RuntimeError):  # no menu: it didn't open
+        _outputs_applied(helpers, lambda made: None, timers=timers)
+    assert [t.starts for t in timers] == [[100], [helpers.MENU_GUARD], [0]]
+
+
+def test_the_fade_looks_again_until_the_menu_opens_then_stops(helpers: types.ModuleType) -> None:
+    # REVIEW.md TST-406
+    menu = Menu(VIEW)
+    timers: list[Timer] = []
+
+    def send_event(made: list[Timer]) -> None:
+        made[2].run()  # no popup open yet
+        made[2].run()  # the menu open
+        made[0].run()  # the pick
+
+    qt('QtWidgets').QMenu = Menu
+    # before the menu, the fade twice, the pick
+    qt('QtWidgets').QApplication.activePopupWidget.side_effect = [None, None, menu, menu]
+    _outputs_applied(helpers, send_event, timers=timers)
+    assert timers[2].starts == [0, 0] and menu.opacities[0] == 0.0 and menu.triggered == [VIEW]
+
+
+@pytest.mark.parametrize('platform', ['darwin', 'win32'])
+def test_a_menu_closed_before_its_pick_is_said_so_and_its_window_gets_its_look_back(
+    helpers: types.ModuleType, monkeypatch: pytest.MonkeyPatch, platform: str
+) -> None:
+    # REVIEW.md HLP-146: made transparent and click-through at once, then closed by something else before the pick
+    # looked. "didn't open" was said, and on macOS its window stayed so: the Explorer deletes the menu as it closes, and
+    # its window was kept. Off macOS nothing was measured: only transparent, nothing held
+    monkeypatch.setattr(sys, 'platform', platform)
+    menu = Menu(VIEW)
+
+    def send_event(timers: list[Timer]) -> None:
+        timers[2].run()  # the fade, with the menu open
+        menu.close()  # closed by something else
+        timers[0].run()  # the pick: no popup open any more
+
+    qt('QtWidgets').QMenu = Menu
+    qt('QtWidgets').QApplication.activePopupWidget.side_effect = [None, menu, None]  # before, the fade, the pick
+    with pytest.raises(RuntimeError, match="the Explorer's menu for graph g closed before its action was picked"):
+        _outputs_applied(helpers, send_event)
+    assert menu.native == (['hold', 'look 1 False', 'let go'] if platform == 'darwin' else [])
+    assert not menu.triggered
+
+
+def test_a_menu_picked_has_its_window_given_its_look_back_once_closed(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-146: the shot leaves no window of Designer's transparent, the menu's included
+    menu = Menu(VIEW)
+
+    def send_event(timers: list[Timer]) -> None:
+        timers[2].run()  # the fade
+        timers[0].run()  # the pick, which closes it
+        assert menu.native == ['hold']  # still transparent while it was open
+
+    qt('QtWidgets').QMenu = Menu
+    qt('QtWidgets').QApplication.activePopupWidget.side_effect = [None, menu, menu]
+    _outputs_applied(helpers, send_event)
+    assert menu.native == ['hold', 'look 1 False', 'let go'] and menu.triggered == [VIEW] and menu.closed
 
 
 def test_a_menu_closed_by_the_pick_alone_is_no_failure(helpers: types.ModuleType) -> None:
@@ -602,6 +750,17 @@ def test_each_step_is_said_before_its_change(helpers: types.ModuleType) -> None:
             ),
         ),
     ]
+
+
+def test_the_set_up_runs_the_shots_look_at_the_active_app_before_each_step(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-136: the 3D shot's look whether the user made Designer the active app (shot3d.py), before each step
+    designer = Designer(helpers)
+    vars(helpers)['print'] = lambda line: designer.events.append(('print', (line,)))
+    run = helpers._3d_set_up('g', 'Plane', 'Top', 2, 2.0, [90.0, 30.0], [0.25, -0.4])
+    run(lambda: designer.events.append(('between', ())))
+    said = [event for event in designer.events if event[0] in ('print', 'between')]
+    steps = [i for i, (kind, line) in enumerate(said) if kind == 'print' and line[0].startswith('3D view, setting: ')]
+    assert len(steps) == 7 and all(said[i - 1] == ('between', ()) for i in steps)
 
 
 def _drags(designer: Designer) -> list[tuple[str, ...]]:

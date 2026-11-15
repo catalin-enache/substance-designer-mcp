@@ -44,12 +44,22 @@ viewpoint, the camera turned and panned, the zoom and the tiling (ROADMAP items 
   a QContextMenuEvent, and a timer picks the action while the menu runs. A graph with one output makes Designer ask
   which channel to show it in, a second menu: such a graph is refused first.
 - That menu is a new QMenu each time, with no parent, deleted once closed: nothing can be connected to it before it
-  opens. An open menu holds the job, and with it the bridge, so a guard closes whatever popup is still open after
-  MENU_GUARD ms, above any open before (the user's). An abort (a cancel, the job's timeout) raised in a Qt slot is
-  dropped and raised again at the next Python line run (the plugin's _make_tracer), so the timer that picks the action
-  closes its menu in a `finally`, and the guard is made of C callables only (_popup_closer). Both timers have a parent
-  the function holds alone, so they go with it even when an abort lands in the `finally` that stops them: without one,
-  a timer whose slot holds it outlives the function (the self-test's designer fact).
+  opens. It shows above every app's windows, also while the 3D shot keeps Designer's own transparent: picked after
+  100 ms, it was on screen for 240 ms; made transparent by a timer at 0 ms as it opens, for 0, 9 and 0 ms (three
+  shots, a watch of the window server's list from another process, 2026-11-14). So a third timer does that; the
+  self-test watches it (REVIEW.md HLP-134). On macOS it makes the menu click-through too (the user's choice:
+  DECISIONS.md): whether a click reaches a menu that is only transparent couldn't be measured without clicking on the
+  user's screen. Click-through, the menu's action is still picked (2026-11-14). A menu closed by something else
+  between the fade and the pick was deleted by the Explorer as usual, but its window stayed, hidden, transparent and
+  click-through (a scratch run closing it so; the self-test's final check met it, 2026-11-14). So on macOS the fade
+  holds the menu's window, and once the menu closed gives it its look back (REVIEW.md HLP-146). An open menu holds
+  the job, and with it the bridge, so a guard closes whatever popup is still open after MENU_GUARD ms, above any open
+  before (the user's). An abort (a cancel, the job's
+  timeout) raised in a Qt slot is dropped and raised again at the next Python line run (the plugin's _make_tracer), so
+  the timer that picks the action closes its menu in a `finally`, and the guard is made of C callables only
+  (_popup_closer). The timers have a parent the function holds alone, so they go with it even when an abort lands in
+  the `finally` that stops them: without one, a timer whose slot holds it outlives the function (the self-test's
+  designer fact).
 - Tiling is the 3D material's UVs > Tiling, shown in the Parameters panel by Materials > <material> > Edit properties.
   A material added to the mesh (Materials > Add) is listed as "(unused)", and isn't counted.
   Its spin box takes a value only through its own valueChanged() signal (neither setValue, Return, nor its slider's
@@ -58,8 +68,9 @@ viewpoint, the camera turned and panned, the zoom and the tiling (ROADMAP items 
 - What is set stays: for the next shots, and in the user's 3D view.
 """
 
-from .core import _APP, Any, APIException, Callable, SDSBSCompGraph, SDUIMgr, _current_graph, cast, find_graph
+from .core import _APP, Any, APIException, Callable, SDSBSCompGraph, SDUIMgr, _current_graph, cast, find_graph, sys
 from .editor import _process_events, _wheel
+from .mac_window import _MacWindow
 from .screenshots import _PANEL_AREAS, _3d_dock, _visible_dock
 
 MESHES = (
@@ -168,6 +179,8 @@ class _MenuPick:
         self.menus = 0  # menus pick found open
         self.disabled = False  # the action found disabled
         self.picked = False  # the action triggered in one
+        self.faded = False  # a menu made transparent by fade
+        self.held: tuple[_MacWindow, int] | None = None  # on macOS, that menu's window, held till unfade
 
     def pick(self, menu: Any) -> bool:
         """In the menu opened since, trigger the action if enabled and close the menu, even when the trigger raises
@@ -187,13 +200,49 @@ class _MenuPick:
             menu.close()
         return True
 
+    def fade(self, menu: Any) -> bool:  # Any: a Qt widget (screenshots.py: Qt widgets are Any in signatures)
+        """Makes the menu opened since transparent, so it doesn't show over the user's windows while the 3D shot keeps
+        Designer's own transparent (the module docstring), and on macOS click-through: True. No such menu yet (None,
+        or `before`): False, so its timer looks again."""
+        from PySide6 import QtCore
+
+        if menu is None or menu is self.before:
+            return False
+        if sys.platform == 'darwin':  # held first: the Explorer deletes the menu as it closes, not its window
+            mac = _MacWindow(menu)
+            window = mac.windows(False)[0]
+            mac.hold(window)
+            self.held = (mac, window)
+        menu.setWindowOpacity(0.0)
+        # measured there only: it sets the menu window's ignoresMouseEvents, and the action is still picked
+        if sys.platform == 'darwin':
+            menu.windowHandle().setFlag(QtCore.Qt.WindowType.WindowTransparentForInput, True)
+        self.faded = True
+        return True
+
+    def unfade(self) -> None:
+        """Once the menu closed: makes the window of the menu fade made transparent opaque and clickable again, and
+        ends its hold (macOS). The window of a menu closed before its action was picked stayed transparent and
+        click-through (REVIEW.md HLP-146)."""
+        if self.held is None:
+            return
+        mac, window = self.held
+        self.held = None
+        try:
+            mac.set_appearance(window, 1.0, False)
+        finally:
+            mac.let_go(window)
+
     def failure(self, graph: str, held: bool) -> str | None:
         """Why the outputs of `graph` may not be on the mesh, or None; `held`: the guard had to close a menu."""
         if not self.picked:
-            return "the Explorer's menu for graph %s %s" % (
-                graph,
-                ('had %r disabled' if self.disabled else 'had no %r') % self.action if self.menus else "didn't open",
-            )
+            if self.menus:
+                what = ('had %r disabled' if self.disabled else 'had no %r') % self.action
+            elif self.faded:  # opened, then closed by something else before the pick looked (REVIEW.md HLP-146)
+                what = 'closed before its action was picked'
+            else:
+                what = "didn't open"
+            return "the Explorer's menu for graph %s %s" % (graph, what)
         if held:
             return (
                 'a menu was still open %d s after %r (Designer asking something more?), and was closed unanswered'
@@ -233,7 +282,7 @@ def _explorer_tree(mw: Any, keep: list[Any]) -> Any:
     return trees[0]
 
 
-def _apply_outputs(tree: Any, graph: Any, keep: list[Any]) -> None:
+def _apply_outputs(tree: Any, graph: SDSBSCompGraph, keep: list[object]) -> None:  # Any: a Qt widget (screenshots.py)
     """The Explorer's "View Outputs In 3D View" for `graph`, from its context menu on the Explorer's `tree` (the module
     docstring)."""
     from PySide6 import QtCore, QtGui, QtWidgets
@@ -258,12 +307,16 @@ def _apply_outputs(tree: Any, graph: Any, keep: list[Any]) -> None:
         if not state.pick(menu):
             timers[0].start(100)
 
+    def fade() -> None:
+        if not state.fade(app.activePopupWidget()):
+            timers[2].start(0)
+
     # the timers' parent, held by this frame alone: they go with it, whatever an abort lets run of the finally below
     owner = QtCore.QObject()
-    timers: list[Any] = []
+    timers: list[QtCore.QTimer] = []
     try:  # from the first timer on: an abort landing as the second starts must stop the first
-        # the guard: an open menu holds this job, and with it the bridge
-        for run, after in ((pick, 100), (_popup_closer(app.activePopupWidget, before), MENU_GUARD)):
+        # the guard: an open menu holds this job, and with it the bridge; the fade: the menu transparent as it opens
+        for run, after in ((pick, 100), (_popup_closer(app.activePopupWidget, before), MENU_GUARD), (fade, 0)):
             timers.append(QtCore.QTimer(owner))
             timers[-1].setSingleShot(True)
             timers[-1].timeout.connect(run)
@@ -275,6 +328,7 @@ def _apply_outputs(tree: Any, graph: Any, keep: list[Any]) -> None:
     finally:
         for timer in timers:  # neither may act later, on a menu of the user's
             timer.stop()
+        state.unfade()  # the menu closed: its window opaque and clickable again
     failure = state.failure(graph.getIdentifier(), held)
     if failure:
         raise RuntimeError(failure)
@@ -496,10 +550,12 @@ def _3d_set_up(
     tiling: float | None = None,
     orbit: list[float] | None = None,
     pan: list[float] | None = None,
-) -> Callable[[], None]:
+) -> Callable[[Callable[[], None] | None], None]:
     """set_3d_view checked, changing nothing: what the arguments rule out, the graph, the panels, the menu entries and
     the tools it needs, an orbit or pan of less than a pixel's drag; refused here (shoot_3d calls it before it puts
-    Designer's window on screen: REVIEW.md HLP-127). Returns its steps, to run: set_3d_view's docstring."""
+    Designer's window on screen: REVIEW.md HLP-127). Returns its steps, to run: set_3d_view's docstring. They run
+    `between`, when given, before each step: the 3D shot's look whether the user made Designer the active app
+    (shot3d.py; REVIEW.md HLP-136)."""
     from PySide6 import QtCore, QtGui, QtWidgets
 
     g = _set_up_checked(graph, mesh, view)
@@ -538,8 +594,8 @@ def _3d_set_up(
     for path in needed:
         _menu_action(bar, keep, *path)  # there; looked up again as it is used, after the mesh may have changed
 
-    def run() -> None:
-        """The set-up's steps, checked by _3d_set_up."""
+    def run(between: Callable[[], None] | None) -> None:
+        """The set-up's steps, checked by _3d_set_up, `between` run before each."""
         done: list[str] = []
         tiling_begun = False  # an abort's handler then turns the Parameters panel back
         switched = False  # the Light tool was selected, the Camera tool selected for the drags and the wheel
@@ -547,7 +603,9 @@ def _3d_set_up(
 
         def begin(step: str) -> str:
             """Says the step before its change: no abort can land between a change and its record (REVIEW.md
-            HLP-119)."""
+            HLP-119). `between` runs first."""
+            if between is not None:
+                between()
             print('3D view, setting: ' + step)
             return step
 
@@ -632,4 +690,4 @@ def set_3d_view(
     changes (with mesh=, the new mesh's material once it shows). Prints '3D view, setting: <step>' before each change,
     so an abort leaves the steps it began said; an error after a change says what was set; then one line,
     '3D view: ...', of what it set."""
-    _3d_set_up(graph, mesh, view, zoom, tiling, orbit, pan)()
+    _3d_set_up(graph, mesh, view, zoom, tiling, orbit, pan)(None)

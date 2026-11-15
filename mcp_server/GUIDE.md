@@ -46,8 +46,9 @@ Parameters are in each tool's description; this is when to reach for which.
   section). A screenshot costs about width × height / 750 tokens: keep `max_size` small, `crop`, and zoom with
   `open_graph` rather than shooting the whole graph big. A material on a mesh, in Designer's own renderer:
   `screenshot_designer('3d', graph=...)`; `mesh='Plane'`, `view='Top'` and `tiling=2` show how it repeats. The 3D view
-  draws only while Designer's window is on screen, so on macOS the tool puts it there first and says so: tell the user
-  when it un-minimized their window. A 3D shot that doesn't show what the call set (the mesh, the view, the material)
+  draws only while Designer's window is on screen, so on macOS the tool puts it there for the shot, transparent, then
+  back as it was, and says so: tell the user when it says it left their window up or in front. A 3D shot that doesn't
+  show what the call set (the mesh, the view, the material)
   may be the view's last frame: shoot again with no set-up before judging, since pan, orbit and zoom move from where
   the camera is (ROADMAP item 83).
 - **Measure:** `node_stats` (exact numbers; prefer them to eyeballing), `check_tiling` (trim sheets only need

@@ -131,7 +131,10 @@ def test_a_set_up_that_stopped_says_the_steps_it_began(
     ]
 
 
-FRONT = "Designer's window: brought in front without taking focus, as its 3D view isn't drawn while covered"
+FRONT = (
+    "Designer's window: brought in front, transparent and without taking focus, as its 3D view isn't drawn while "
+    'covered'
+)
 BACK = "Designer's window: put back behind the window that was in front of it"
 STALE = '3D render: identical to the render before the set-up, though the set-up moved the camera or switched the mesh.'
 

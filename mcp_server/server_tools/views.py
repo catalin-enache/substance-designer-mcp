@@ -71,10 +71,11 @@ def screenshot_designer(
     zooms it to a section first. '3d' returns the 3D view's own render (material on the mesh);
     it goes through the clipboard: its text is put back, anything else on it may be lost. Inside 'window' the
     3D area doesn't show the render. The 3D view draws only while Designer's window is on screen: on macOS '3d'
-    un-minimizes it (it stays so), or brings it in front of covering windows or shows a hidden Designer and puts it
-    back as it was after (left up if the user clicked into Designer meanwhile), never taking focus, and says so. After a
-    set-up that moved the camera or switched the mesh, a render identical to the one before is said: shoot again with
-    no set-up (pan, orbit and zoom move from where the camera is).
+    puts a minimized, covered or hidden window there for the shot, transparent so the user doesn't see it, never
+    taking focus, then puts it back as it was, and says so. It is left up if the user switched to Designer during
+    the shot and Designer is still the app in front as it ends. After a set-up that moved the camera or switched the
+    mesh, a render identical to the one before is said: shoot again with no set-up (pan, orbit and zoom move from
+    where the camera is).
     '3d' can set up the view first and says what it set (stopped partway, the steps it began); it stays set, for
     later shots and in the user's view:
     graph puts that graph's outputs on the mesh, selecting it in the Explorer (outputs added to the graph open

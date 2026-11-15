@@ -253,12 +253,24 @@ may update the names and paths an entry points at; changing what was decided, or
   (GUIDE.md, Designer UI). Nothing in the graph changes, and one click on the node shows its parameters again. The
   user's decision, 2026-11-12.
   Reopen if: the user wants the selected node back, or the API gains a way to show a node in the Parameters panel.
-- **A 3D screenshot un-minimizes Designer's window and leaves it up; a covered window or a hidden Designer is put
-  back after.** The 3D view doesn't draw off screen (`designer_helpers/shot3d.py`). The user chose this over refusing
-  the shot, 2026-11-13: "Restore: un-minimize your window, take the shot ... I'm fine with that", then "Bring
-  forward, then back". If the user makes Designer the active app during the shot, it is left on screen (the user's
-  agreement, 2026-11-13).
-  Reopen if: the user wants the shot refused or the window minimized again, or showing it makes Designer the active app.
+- **A 3D screenshot puts Designer's window on screen transparent, then back as it was.** The 3D view doesn't draw
+  off screen, but it draws in a transparent window in front (`designer_helpers/shot3d.py`). So a minimized, covered
+  or hidden window is brought in front, transparent and click-through, for the shot. Then it is minimized again, put
+  back behind the window that covered it, or hidden again, and made opaque. The user chose this over refusing the
+  shot on 2026-11-13, first with the window brought up visibly ("Restore: un-minimize your window, take the shot ...
+  I'm fine with that", then "Bring forward, then back"). On 2026-11-14, once the transparent window was measured, they
+  chose "Invisible, all cases (Recommended)". If the user makes Designer the active app during the shot, it is left
+  on screen if Designer is still the active app as the shot ends; switched to and away again, it is put back as found
+  (the user's agreement, 2026-11-13; this wording, "Reword to match (Recommended)", 2026-11-14). While the window is
+  in front, transparent, the windows under it stay visible for macOS, measured with the window under it shown first.
+  A first measurement, with a window macOS had never shown, read them covered, and README said apps might pause
+  drawing them ("Document it (Recommended)", 2026-11-14); the user had that sentence removed once it was found wrong
+  ("Remove the sentence (Recommended)", 2026-11-14). The Explorer's menu that `graph=` opens is made transparent as
+  it opens, and on macOS click-through too (`designer_helpers/view3d.py`). Whether a click would reach the menu while
+  it is only transparent couldn't be measured without clicking on the user's screen; the user chose click-through
+  ("Make it click-through (Recommended)", 2026-11-14).
+  Reopen if: the user sees the window during a shot, wants it left up or the shot refused, sees an app under it pause
+  during a shot, or showing it makes Designer the active app.
 - **Why `open_graph`'s wheel steps once did nothing is unknown, and isn't being chased.** It happened in one self-test
   run of four. Not reproduced: 200 wheel steps and 40 fits in a fresh Designer gave no stuck step, idle and under
   load. `_fit_view_to` no longer reports such a view as fitted, and gives the view's size and whether Designer's

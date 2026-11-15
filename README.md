@@ -365,10 +365,11 @@ python client/sd_run.py --cancel              # abort the running script
 - Screenshots only ever capture Designer's own panels. The 3D view uses Designer's own render
   through the clipboard, then puts back its text; anything else on it (an image, formatting, copied files) may
   be lost.
-- The 3D view draws only while Designer's window is on screen. So on macOS a 3D screenshot un-minimizes your
-  Designer's window, which then stays up. If other windows cover Designer, or Designer is hidden, it is brought in
-  front for the shot and put back where it was afterwards. If you click into Designer while it is up, it stays up.
-  None of this takes the keyboard from the app you are using.
+- The 3D view draws only while Designer's window is on screen. So on macOS, when Designer's window is minimized,
+  covered by other windows or hidden, a 3D screenshot brings it in front for the shot, fully transparent, and puts it
+  back where it was afterwards. While it is transparent, your clicks go to the window under it. If you switch to
+  Designer during the shot, it becomes visible, and it stays up if Designer is still the app in front when the shot
+  ends. None of this takes the keyboard from the app you are using.
 - To turn the bridge off, disable it in Tools > Plugin Manager or delete the `sd_claude_bridge_kve`
   folder from the plugin directory.
 

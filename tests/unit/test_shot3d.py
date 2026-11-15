@@ -1,7 +1,8 @@
 """The helpers' side of screenshot_designer('3d') (designer_helpers/shot3d.py), with sd and PySide6 faked: Designer's
-window put on screen for the shot, again before each render, and put back after (REVIEW.md SRV-146, HLP-124 to
-HLP-126), and a render identical to the one before a set-up that moved the camera or switched the mesh taken again,
-then said. The live self-test checks Designer itself (editor_panels_and_fit)."""
+window put on screen for the shot, transparent and click-through, again before each render, and put back after, opaque
+(REVIEW.md SRV-146, HLP-124 to HLP-126; DECISIONS.md), and a render identical to the one before a set-up that moved
+the camera or switched the mesh taken again, then said. The live self-test checks Designer itself
+(editor_panels_and_fit)."""
 
 import contextlib
 import sys
@@ -11,10 +12,20 @@ from types import SimpleNamespace
 
 import pytest
 
+MAIN = 1  # Designer's main window
+OTHERS = (2, 3)  # its other windows: a floating panel, a dialog
+OPAQUE = (1.0, False)  # opacity, and whether the mouse goes through it to the window under it
+
+
+class Abort(BaseException):
+    """The plugin's abort (ScriptAborted), raised where a cancel lands."""
+
 
 class Mac:
     """_MacWindow, faked: how macOS sees Designer's window, the window in front of it while it is covered, the windows
-    no longer on screen, whether Designer is the active app, and what was done to the window, in order."""
+    no longer on screen, whether Designer is the active app, each window's opacity and whether clicks go through it,
+    and what was done to the windows, in order. `abort_on` names a step an abort lands on, once, before it is done.
+    `slow` is how many times the main window is still seen on screen once minimized or hidden."""
 
     def __init__(
         self,
@@ -26,9 +37,24 @@ class Mac:
     ) -> None:
         self.state = {'minimized': minimized, 'hidden': hidden, 'covered': covered}
         self.window_above = above
+        self.further: list[int] = []  # windows in front of it too while it is covered, front to back, further from it
+        self.order = [9, 7]  # the other windows on screen, front to back: one come in front of its first cover
         self.gone: set[int] = set()  # closed or minimized: not on screen
         self.is_active = active
+        self.looks: dict[int, tuple[float, bool]] = {}
+        self.abort_on: str | None = None
+        self.slow = 0
+        self.held: dict[int, int] = {}  # holds not let go of, by window: one let go of twice would be freed
         self.done: list[str] = []
+
+    def landed(self) -> bool:
+        return self.abort_on is None
+
+    def _do(self, step: str) -> None:
+        if self.abort_on is not None and step.startswith(self.abort_on):
+            self.abort_on = None
+            raise Abort
+        self.done.append(step)
 
     def minimized(self) -> bool:
         return self.state['minimized']
@@ -42,37 +68,72 @@ class Mac:
     def active(self) -> bool:
         return self.is_active
 
-    def above(self) -> int | None:  # the window directly in front of it, while one is
-        return self.window_above if self.covered() else None
+    def in_front(self) -> list[int]:  # the windows in front of it while it is covered, front to back
+        return [*self.further, self.window_above] if self.covered() and self.window_above is not None else []
 
-    def on_screen(self, number: int) -> bool:
-        return number not in self.gone
+    def lowest(self, numbers: list[int]) -> int | None:  # of `numbers`, the window on screen nearest the back
+        found = [n for n in self.order if n in numbers and self.on_screen(n)]
+        return found[-1] if found else None
+
+    def number(self) -> int:
+        return MAIN
+
+    def on_screen(self, number: int) -> bool:  # a covered window is on screen; a minimized or hidden one isn't
+        if number != MAIN:
+            return number not in self.gone
+        if self.slow and (self.state['minimized'] or self.state['hidden']):
+            self.slow -= 1
+            return True
+        return not (self.state['minimized'] or self.state['hidden'])
+
+    def windows(self, every: bool) -> list[int]:
+        return [MAIN, *OTHERS] if every else [MAIN]
+
+    def hold(self, window: int) -> None:
+        self.held[window] = self.held.get(window, 0) + 1
+
+    def let_go(self, window: int) -> None:
+        assert self.held.get(window, 0) > 0, 'let go of window %d, not held' % window
+        self.held[window] -= 1
+
+    def appearance(self, window: int) -> tuple[float, bool]:
+        return self.looks.get(window, OPAQUE)
+
+    def set_appearance(self, window: int, opacity: float, through: bool) -> None:
+        name = {(0.0, True): 'fade', OPAQUE: 'unfade'}.get((opacity, through), 'look %g %s' % (opacity, through))
+        self._do(name if window == MAIN else '%s %d' % (name, window))
+        self.looks[window] = (opacity, through)
 
     def show(self) -> None:  # in front, without taking focus: un-minimized and uncovered too
-        self.done.append('show')
+        self._do('show')
         self.state.update(minimized=False, covered=False)
 
     def unhide(self) -> None:
-        self.done.append('unhide')
+        self._do('unhide')
         self.state['hidden'] = False
 
     def hide(self) -> None:
-        self.done.append('hide')
+        self._do('hide')
         self.state['hidden'] = True
 
+    def minimize(self) -> None:
+        self._do('minimize')
+        self.state['minimized'] = True
+
     def put_below(self, number: int) -> None:
-        self.done.append('put below %d' % number)
+        self._do('put below %d' % number)
         self.state['covered'] = True
 
 
 class Window:
     """Designer's main window as Qt sees it: minimized only when Qt itself minimized it, exposed while macOS shows it
-    (never, with `shows` False)."""
+    (never, with `shows` False), once it was put in front `shows_after` times."""
 
-    def __init__(self, mac: Mac, qt_minimized: bool = False, shows: bool = True) -> None:
+    def __init__(self, mac: Mac, qt_minimized: bool = False, shows: bool = True, shows_after: int = 0) -> None:
         self.mac = mac
         self.qt_minimized = qt_minimized
         self.shows = shows
+        self.shows_after = shows_after
 
     def isMinimized(self) -> bool:
         return self.qt_minimized
@@ -85,7 +146,11 @@ class Window:
         self.qt_minimized = False
 
     def windowHandle(self) -> SimpleNamespace:
-        return SimpleNamespace(isExposed=lambda: self.shows and not any(self.mac.state.values()))
+        def exposed() -> bool:
+            shown = self.mac.done.count('show') >= self.shows_after
+            return self.shows and shown and not any(self.mac.state.values())
+
+        return SimpleNamespace(isExposed=exposed)
 
 
 @pytest.fixture
@@ -99,14 +164,27 @@ def _on(helpers: types.ModuleType, mac: Mac | None) -> None:
     vars(helpers)['_mac_window'] = lambda mw: mac
 
 
-FRONT = "Designer's window: brought in front without taking focus, as its 3D view isn't drawn while covered"
+FRONT = (
+    "Designer's window: brought in front, transparent and without taking focus, as its 3D view isn't drawn while "
+    'covered'
+)
 PUT_BACK = "Designer's window: put back behind the window that was in front of it"
-SHOWN = "Designer's window: shown without taking focus, as its 3D view isn't drawn while Designer is hidden"
+SHOWN = (
+    "Designer's window: shown, transparent and without taking focus, as its 3D view isn't drawn while Designer is "
+    'hidden'
+)
 HIDDEN = "Designer's window: hidden again"
-UNMINIMIZED = "Designer's window: un-minimized, as its 3D view isn't drawn while minimized; it stays so"
+UNMINIMIZED = (
+    "Designer's window: shown, transparent and without taking focus, as its 3D view isn't drawn while minimized"
+)
+MINIMIZED = "Designer's window: minimized again"
+QT_UNMINIMIZED = "Designer's window: un-minimized, as its 3D view isn't drawn while minimized; it stays so"
 LEFT = "Designer's window: left on screen, as Designer became the active app during the shot"
 GONE = "Designer's window: left in front, as the window that was in front of it is no longer on screen"
 NONE_IN_FRONT = "Designer's window: left in front, as no window was found in front of it"
+OPAQUE_AGAIN = "Designer's window: made opaque again, as an earlier shot left it transparent"
+EVERY_FADED = ['fade', 'fade 2', 'fade 3']  # a hidden Designer shows all its windows: each made transparent first
+EVERY_BACK = ['unfade', 'unfade 2', 'unfade 3']
 
 
 def test_a_window_on_screen_is_left_as_it_is(helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]) -> None:
@@ -117,36 +195,41 @@ def test_a_window_on_screen_is_left_as_it_is(helpers: types.ModuleType, capsys: 
     assert mac.done == ['shot'] and capsys.readouterr().out == ''
 
 
-def test_a_minimized_window_is_shown_without_focus_and_stays_so(
+def test_a_minimized_window_is_shown_transparent_without_focus_and_minimized_again(
     helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # the user's choice (DECISIONS.md): Qt doesn't see macOS minimize it, so macOS is asked
+    # the user's choice (DECISIONS.md): the user sees nothing of it; Qt doesn't see macOS minimize it, so macOS is asked
     mac = Mac(minimized=True)
     _on(helpers, mac)
     with helpers._on_screen(Window(mac)):
         mac.done.append('shot')
-    assert mac.done == ['show', 'shot']
-    assert capsys.readouterr().out.splitlines() == [UNMINIMIZED]
+    assert mac.done == ['fade', 'show', 'shot', 'minimize', 'unfade']
+    assert capsys.readouterr().out.splitlines() == [UNMINIMIZED, MINIMIZED]
+    assert mac.minimized() and mac.appearance(MAIN) == OPAQUE
 
 
-def test_a_window_qt_minimized_is_restored_by_qt_too(helpers: types.ModuleType) -> None:
-    # Designer's renderer follows the Qt state of getMainWindow(), a page: stale though macOS shows it (REVIEW.md TST-391)
+def test_a_window_qt_minimized_is_restored_by_qt_brought_in_front_and_left_so(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Designer's renderer follows the Qt state of getMainWindow(), a page: stale though macOS shows it (REVIEW.md
+    # TST-391). Restored by Qt alone, a plain shot's render was the view's last frame; brought in front too, it drew
     mac = Mac()
     _on(helpers, mac)
     with helpers._on_screen(Window(mac, qt_minimized=True)):
         mac.done.append('shot')
     assert mac.done == ['qt restore', 'show', 'shot']
+    assert capsys.readouterr().out.splitlines() == [QT_UNMINIMIZED]
 
 
-def test_a_covered_window_is_brought_in_front_without_focus_and_put_back_behind_the_window_in_front_of_it(
+def test_a_covered_window_is_brought_in_front_transparent_and_put_back_behind_the_window_in_front_of_it(
     helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # REVIEW.md HLP-126: right behind the window that was in front of it, not behind every window
+    # REVIEW.md HLP-126: right behind the window that was in front of it, not behind every window; opaque once there
     mac = Mac(covered=True, above=7)
     _on(helpers, mac)
     with helpers._on_screen(Window(mac)):
         mac.done.append('shot')
-    assert mac.done == ['show', 'shot', 'put below 7']
+    assert mac.done == ['fade', 'show', 'shot', 'put below 7', 'unfade']
     assert capsys.readouterr().out.splitlines() == [FRONT, PUT_BACK]
 
 
@@ -159,7 +242,7 @@ def test_a_covered_window_with_no_window_found_in_front_is_left_in_front(
     _on(helpers, mac)
     with helpers._on_screen(Window(mac)):
         mac.done.append('shot')
-    assert mac.done == ['show', 'shot']
+    assert mac.done == ['fade', 'show', 'shot', 'unfade']
     assert capsys.readouterr().out.splitlines() == [FRONT, NONE_IN_FRONT]
 
 
@@ -173,12 +256,36 @@ def test_a_covered_window_whose_window_in_front_went_off_screen_is_left_in_front
     with helpers._on_screen(Window(mac)):
         mac.done.append('shot')
         mac.gone.add(7)
-    assert mac.done == ['show', 'shot']
+    assert mac.done == ['fade', 'show', 'shot', 'unfade']
     assert capsys.readouterr().out.splitlines() == [FRONT, GONE]
 
 
-class Abort(BaseException):
-    """The plugin's abort (ScriptAborted), raised where a cancel lands."""
+def test_a_covered_window_goes_back_behind_its_cover_once_the_user_raised_the_window_in_front_of_it(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # REVIEW.md HLP-139: window 5 covered it, and 7 was in front of it, under 5. The user's click on 7, through
+    # Designer's transparent window, brought 7 in front: put right behind 7 alone, Designer's window would show over 5
+    mac = Mac(covered=True, above=7)
+    mac.further, mac.order = [5], [5, 7]
+    _on(helpers, mac)
+    with helpers._on_screen(Window(mac)):
+        mac.done.append('shot')
+        mac.order = [7, 5]
+    assert mac.done == ['fade', 'show', 'shot', 'put below 5', 'unfade']
+    assert capsys.readouterr().out.splitlines() == [FRONT, PUT_BACK]
+
+
+def test_a_covered_window_goes_back_behind_its_cover_once_the_window_in_front_of_it_closed(
+    helpers: types.ModuleType,
+) -> None:
+    # REVIEW.md HLP-139: the user closed 7, its close button reached through Designer's window; 5 still covers it
+    mac = Mac(covered=True, above=7)
+    mac.further, mac.order = [5], [5, 7]
+    _on(helpers, mac)
+    with helpers._on_screen(Window(mac)):
+        mac.done.append('shot')
+        mac.gone.add(7)
+    assert mac.done == ['fade', 'show', 'shot', 'put below 5', 'unfade']
 
 
 def test_an_abort_while_the_window_in_front_is_looked_for_leaves_nothing_to_put_back(
@@ -187,15 +294,104 @@ def test_an_abort_while_the_window_in_front_is_looked_for_leaves_nothing_to_put_
     # REVIEW.md HLP-130: the window wasn't moved yet, so nothing is put back and nothing said of it
     mac = Mac(covered=True)
 
-    def aborted() -> int | None:
+    def aborted() -> list[int]:
         raise Abort
 
-    vars(mac)['above'] = aborted
+    vars(mac)['in_front'] = aborted
     _on(helpers, mac)
     with pytest.raises(Abort), helpers._on_screen(Window(mac)):
         mac.done.append('shot')
     assert mac.done == []
     assert capsys.readouterr().out.splitlines() == [FRONT]
+
+
+@pytest.mark.parametrize(
+    'way, step',
+    [
+        *[('covered', step) for step in ('fade', 'show', 'put below', 'unfade')],
+        *[('minimized', step) for step in ('fade', 'show', 'minimize', 'unfade')],
+        *[('hidden', step) for step in ('fade', 'unhide', 'show', 'hide', 'unfade')],
+    ],
+)
+def test_an_abort_anywhere_in_the_shot_leaves_every_window_opaque_and_clickable(
+    helpers: types.ModuleType, way: str, step: str
+) -> None:
+    # a transparent window left behind would look to the user as if Designer were gone: whatever step the abort lands
+    # on, the handler that runs after it (untraced: the plugin's _make_tracer) gives every window its look back
+    mac = Mac(**{way: True})
+    mac.abort_on = step
+    _on(helpers, mac)
+    with pytest.raises(Abort), helpers._on_screen(Window(mac)):
+        mac.done.append('shot')
+    assert mac.landed(), 'no abort landed on ' + step
+    assert all(mac.appearance(window) == OPAQUE for window in (MAIN, *OTHERS)), mac.done
+    assert not any(mac.held.values()), 'held: %s' % mac.held  # each hold let go of, once
+
+
+def test_the_windows_are_made_transparent_each_once(helpers: types.ModuleType) -> None:
+    # a window shown again during the shot is transparent already: its look before stays the one recorded first
+    mac = Mac(hidden=True)
+    _on(helpers, mac)
+    with helpers._on_screen(Window(mac)) as screen:
+        mac.state['hidden'] = True
+        screen.again()
+    assert mac.done == [*EVERY_FADED, 'unhide', 'show', 'unhide', 'show', 'hide', *EVERY_BACK]
+
+
+@pytest.mark.parametrize(
+    'way, back',
+    [
+        ('minimized', ['shot', 'minimize', 'wait 0.05', 'wait 0.05', 'unfade']),
+        ('hidden', ['shot', 'hide', 'wait 0.05', 'wait 0.05', *EVERY_BACK]),  # REVIEW.md TST-402
+    ],
+)
+def test_a_window_put_back_off_screen_is_made_opaque_only_once_off_screen(
+    helpers: types.ModuleType, way: str, back: list[str]
+) -> None:
+    # opaque while still on screen, as macOS minimizes or hides it, the user would see it
+    mac = Mac(**{way: True})
+    mac.slow = 2
+    _on(helpers, mac)
+    vars(helpers)['_settle'] = lambda seconds: mac.done.append('wait %g' % seconds)
+    with helpers._on_screen(Window(mac)):
+        mac.done.append('shot')
+    assert mac.done[-len(back) :] == back
+
+
+@pytest.mark.parametrize(
+    'off, done, said',
+    [
+        ('', ['unfade', 'shot'], []),
+        ('minimized', ['unfade', 'fade', 'show', 'shot', 'minimize', 'unfade'], [UNMINIMIZED, MINIMIZED]),
+        ('covered', ['unfade', 'fade', 'show', 'shot', 'put below 7', 'unfade'], [FRONT, PUT_BACK]),
+        ('hidden', ['unfade', *EVERY_FADED, 'unhide', 'show', 'shot', 'hide', *EVERY_BACK], [SHOWN, HIDDEN]),
+    ],
+    ids=['on screen', 'minimized', 'covered', 'hidden'],
+)
+def test_a_window_an_earlier_shot_left_transparent_is_made_opaque_first(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str], off: str, done: list[str], said: list[str]
+) -> None:
+    # REVIEW.md TST-407: made opaque before it is brought on screen, so the look recorded for after the shot is opaque
+    mac = Mac(**({off: True} if off else {}))
+    mac.looks[MAIN] = (0.0, True)
+    _on(helpers, mac)
+    with helpers._on_screen(Window(mac)):
+        mac.done.append('shot')
+    assert mac.done == done and mac.appearance(MAIN) == OPAQUE
+    assert capsys.readouterr().out.splitlines() == [OPAQUE_AGAIN, *said]
+
+
+def test_an_abort_while_a_window_left_transparent_is_made_opaque_still_leaves_it_opaque_and_clickable(
+    helpers: types.ModuleType,
+) -> None:
+    # REVIEW.md HLP-135: opaque_first's change is recorded nowhere, so only the handler doing it again finishes it
+    mac = Mac()
+    mac.looks[MAIN] = (0.0, True)
+    mac.abort_on = 'unfade'
+    _on(helpers, mac)
+    with pytest.raises(Abort), helpers._on_screen(Window(mac)):
+        mac.done.append('shot')
+    assert mac.landed() and mac.appearance(MAIN) == OPAQUE, mac.done
 
 
 def test_a_window_covered_again_during_the_shot_goes_back_behind_the_window_that_covered_it_first(
@@ -208,7 +404,7 @@ def test_a_window_covered_again_during_the_shot_goes_back_behind_the_window_that
     with helpers._on_screen(Window(mac)) as screen:
         mac.state['covered'], mac.window_above = True, 9
         screen.again()
-    assert mac.done == ['show', 'show', 'put below 7']
+    assert mac.done == ['fade', 'show', 'show', 'put below 7', 'unfade']
     assert capsys.readouterr().out.splitlines()[-1] == PUT_BACK
 
 
@@ -221,30 +417,31 @@ def test_a_window_covered_again_after_its_first_cover_went_off_screen_goes_back_
         mac.gone.add(7)
         mac.state['covered'], mac.window_above = True, 9
         screen.again()
-    assert mac.done == ['show', 'show', 'put below 9']
+    assert mac.done == ['fade', 'show', 'show', 'put below 9', 'unfade']
 
 
-def test_a_hidden_designer_is_shown_without_focus_and_hidden_again_after(
+def test_a_hidden_designer_is_shown_transparent_without_focus_and_hidden_again_after(
     helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]
 ) -> None:
     mac = Mac(hidden=True)
     _on(helpers, mac)
     with helpers._on_screen(Window(mac)):
         mac.done.append('shot')
-    assert mac.done == ['unhide', 'show', 'shot', 'hide']
+    assert mac.done == [*EVERY_FADED, 'unhide', 'show', 'shot', 'hide', *EVERY_BACK]
     assert capsys.readouterr().out.splitlines() == [SHOWN, HIDDEN]
+    assert set(mac.held) == {MAIN, *OTHERS} and not any(mac.held.values())  # each window held while transparent
 
 
-def test_a_minimized_window_of_a_hidden_designer_is_shown_and_designer_hidden_again(
+def test_a_minimized_window_of_a_hidden_designer_is_minimized_and_designer_hidden_again(
     helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # REVIEW.md TST-393: both at once; the window stays un-minimized, inside the hidden app
+    # REVIEW.md TST-393: both at once
     mac = Mac(minimized=True, hidden=True)
     _on(helpers, mac)
     with helpers._on_screen(Window(mac)):
         mac.done.append('shot')
-    assert mac.done == ['unhide', 'show', 'shot', 'hide']
-    assert capsys.readouterr().out.splitlines() == [UNMINIMIZED, HIDDEN]
+    assert mac.done == [*EVERY_FADED, 'unhide', 'show', 'shot', 'minimize', 'hide', *EVERY_BACK]
+    assert capsys.readouterr().out.splitlines() == [UNMINIMIZED, MINIMIZED, HIDDEN]
 
 
 def test_the_view_is_given_time_to_draw_once_the_window_is_on_screen(helpers: types.ModuleType) -> None:
@@ -254,7 +451,7 @@ def test_the_view_is_given_time_to_draw_once_the_window_is_on_screen(helpers: ty
     vars(helpers)['_settle'] = lambda seconds: mac.done.append('wait %g' % seconds)
     with helpers._on_screen(Window(mac)):
         mac.done.append('shot')
-    assert mac.done == ['show', 'wait %g' % helpers.DRAW_WAIT, 'shot']
+    assert mac.done[:4] == ['fade', 'show', 'wait %g' % helpers.DRAW_WAIT, 'shot']
 
 
 def test_a_window_still_not_on_screen_is_refused_and_put_back(helpers: types.ModuleType) -> None:
@@ -263,7 +460,23 @@ def test_a_window_still_not_on_screen_is_refused_and_put_back(helpers: types.Mod
     refused = pytest.raises(RuntimeError, match=r"the 3D view isn't drawn: Designer's window isn't on screen")
     with refused, helpers._on_screen(Window(mac, shows=False)):
         mac.done.append('shot')
-    assert mac.done == ['show', 'put below 7']
+    assert mac.done == ['fade', 'show', 'show', 'put below 7', 'unfade']  # put in front again once (HLP-145)
+
+
+@pytest.mark.parametrize('way', ['minimized', 'covered', 'hidden'])
+def test_a_window_not_yet_on_screen_after_a_while_is_put_in_front_again_once(
+    helpers: types.ModuleType, way: str
+) -> None:
+    # REVIEW.md HLP-145: a hidden Designer's window, transparent, shown again, stayed covered for macOS in 3 of 14 runs
+    # in a Designer just started, until put in front again (measured 3 of 3); refused, the shot asked for the user
+    mac = Mac(**{way: True})
+    _on(helpers, mac)
+    vars(helpers)['_settle'] = lambda seconds: mac.done.append('wait %g' % seconds)
+    with helpers._on_screen(Window(mac, shows_after=2)):
+        mac.done.append('shot')
+    shown = [i for i, step in enumerate(mac.done[: mac.done.index('shot')]) if step == 'show']
+    assert len(shown) == 2
+    assert mac.done[shown[0] + 1 : shown[1]] == ['wait 0.05'] * round(helpers.SHOW_AGAIN / 0.05)
 
 
 def test_a_shot_that_fails_still_puts_the_window_back(helpers: types.ModuleType) -> None:
@@ -271,7 +484,7 @@ def test_a_shot_that_fails_still_puts_the_window_back(helpers: types.ModuleType)
     _on(helpers, mac)
     with pytest.raises(RuntimeError, match='the render failed'), helpers._on_screen(Window(mac)):
         raise RuntimeError('the render failed')
-    assert mac.done == ['unhide', 'show', 'hide']
+    assert mac.done == [*EVERY_FADED, 'unhide', 'show', 'hide', *EVERY_BACK]
 
 
 @pytest.mark.parametrize(
@@ -279,19 +492,18 @@ def test_a_shot_that_fails_still_puts_the_window_back(helpers: types.ModuleType)
     [
         (
             'covered',
-            ['shot', 'show', 'put below 9'],
-            "Designer's window: brought in front again without taking focus, as another window covered it during the "
-            'shot',
+            ['shot', 'fade', 'show', 'put below 9', 'unfade'],
+            "Designer's window: brought in front again, transparent, as another window covered it during the shot",
         ),
         (
             'minimized',
-            ['shot', 'show'],
-            "Designer's window: un-minimized again, as it was minimized during the shot; it stays so",
+            ['shot', 'fade', 'show', 'minimize', 'unfade'],
+            "Designer's window: shown again, transparent, as it was minimized during the shot",
         ),
         (
             'hidden',
-            ['shot', 'unhide', 'show', 'hide'],
-            "Designer's window: shown again without taking focus, as Designer was hidden during the shot",
+            ['shot', *EVERY_FADED, 'unhide', 'show', 'hide', *EVERY_BACK],
+            "Designer's window: shown again, transparent, as Designer was hidden during the shot",
         ),
     ],
 )
@@ -317,11 +529,18 @@ def test_a_window_on_screen_is_left_as_it_is_when_looked_at_again(helpers: types
     assert mac.done == []
 
 
-@pytest.mark.parametrize('off, done', [('hidden', ['unhide', 'show']), ('covered', ['show'])])
+@pytest.mark.parametrize(
+    'off, done',
+    [
+        ('hidden', [*EVERY_FADED, 'unhide', 'show', *EVERY_BACK]),
+        ('covered', ['fade', 'show', 'unfade']),
+        ('minimized', ['fade', 'show', 'unfade']),  # REVIEW.md TST-402: not minimized again from under the user
+    ],
+)
 def test_a_designer_the_user_made_the_active_app_during_the_shot_is_left_on_screen(
     helpers: types.ModuleType, capsys: pytest.CaptureFixture[str], off: str, done: list[str]
 ) -> None:
-    # REVIEW.md HLP-125: the user clicked into the window that came up: hiding it, or sending it back, takes it away
+    # REVIEW.md HLP-125: the user switched to Designer: hiding it, or sending it back, takes it away; opaque again
     mac = Mac(**{off: True})
     _on(helpers, mac)
     with helpers._on_screen(Window(mac)):
@@ -330,13 +549,113 @@ def test_a_designer_the_user_made_the_active_app_during_the_shot_is_left_on_scre
     assert capsys.readouterr().out.splitlines()[-1] == LEFT
 
 
+OPAQUE_AT_ONCE = "Designer's window: made opaque at once, as Designer became the active app during the shot"
+
+
+@pytest.mark.parametrize('off', ['minimized', 'covered', 'hidden'])
+@pytest.mark.parametrize('look', ['between', 'again'], ids=['before a set-up step', 'before a render'])
+def test_designer_made_the_active_app_during_the_shot_is_made_opaque_at_once_and_left_up(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str], off: str, look: str
+) -> None:
+    # REVIEW.md HLP-136: left transparent, the user who switched to Designer would see no window, and a click would go
+    # through it to the app under it, which would take Designer's place
+    mac = Mac(**{off: True})
+    _on(helpers, mac)
+    with helpers._on_screen(Window(mac)) as screen:
+        mac.is_active = True
+        getattr(screen, look)()
+        seen = dict(mac.looks)
+        mac.done.append('shot')
+    assert set(seen.values()) == {OPAQUE} and not any(mac.held.values())
+    assert mac.done[-1] == 'shot'  # left up: nothing done after the shot
+    assert capsys.readouterr().out.splitlines()[-2:] == [OPAQUE_AT_ONCE, LEFT]
+
+
+def test_a_window_put_on_screen_again_while_the_user_is_in_designer_isnt_made_transparent(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # REVIEW.md HLP-136: the user, in Designer, minimized it meanwhile: shown again as it is, which they see
+    mac = Mac(minimized=True)
+    _on(helpers, mac)
+    with helpers._on_screen(Window(mac)) as screen:
+        mac.is_active = True
+        screen.again()
+        mac.state['minimized'] = True
+        del mac.done[:]
+        screen.again()
+        assert mac.done == ['show'] and mac.appearance(MAIN) == OPAQUE
+    assert capsys.readouterr().out.splitlines() == [  # REVIEW.md TST-409: made opaque once, said once
+        UNMINIMIZED,
+        OPAQUE_AT_ONCE,
+        "Designer's window: shown again, as it was minimized during the shot",
+        LEFT,
+    ]
+
+
+def test_nothing_is_said_when_designer_becomes_the_active_app_with_no_window_made_transparent(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # REVIEW.md TST-409: "made opaque at once" would tell an agent the user's window had been invisible
+    mac = Mac()
+    _on(helpers, mac)
+    with helpers._on_screen(Window(mac)) as screen:
+        mac.is_active = True
+        screen.again()
+    assert mac.done == [] and capsys.readouterr().out == ''
+
+
+def test_a_user_in_designer_as_the_shot_began_who_left_and_came_back_sees_its_window_at_once(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # REVIEW.md HLP-138: Designer the active app as the shot began; the user went to an app whose window covers it,
+    # then came back to Designer: transparent, they would see that app through it, their clicks going to it
+    mac = Mac(covered=True, active=True)
+    _on(helpers, mac)
+    with helpers._on_screen(Window(mac)) as screen:
+        mac.is_active = False
+        screen.again()
+        mac.state['covered'] = True
+        screen.again()
+        mac.is_active = True
+        screen.between()
+        seen = mac.appearance(MAIN)
+    assert seen == OPAQUE and not any(step.startswith('put below') for step in mac.done)
+    assert capsys.readouterr().out.splitlines()[-2:] == [OPAQUE_AT_ONCE, LEFT]
+
+
+def test_designer_made_the_active_app_then_left_during_the_shot_is_put_back(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # REVIEW.md HLP-136: made opaque at once, then the user went back to another app: put back as it was found
+    mac = Mac(minimized=True)
+    _on(helpers, mac)
+    with helpers._on_screen(Window(mac)) as screen:
+        mac.is_active = True
+        screen.again()
+        mac.is_active = False
+    assert mac.done == ['fade', 'show', 'unfade', 'minimize'] and mac.minimized()
+    assert capsys.readouterr().out.splitlines() == [UNMINIMIZED, OPAQUE_AT_ONCE, MINIMIZED]
+
+
+def test_a_designer_already_the_active_app_before_the_shot_stays_transparent_during_it(
+    helpers: types.ModuleType,
+) -> None:
+    # REVIEW.md HLP-136: the user didn't switch to it during the shot
+    mac = Mac(covered=True, active=True)
+    _on(helpers, mac)
+    with helpers._on_screen(Window(mac)) as screen:
+        screen.between()
+        screen.again()
+        assert mac.appearance(MAIN) == (0.0, True)
+
+
 def test_a_window_covered_while_designer_was_already_the_active_app_is_put_back(helpers: types.ModuleType) -> None:
     # one of Designer's own windows over it, Designer in front: the user didn't take it up during the shot
     mac = Mac(covered=True, active=True)
     _on(helpers, mac)
     with helpers._on_screen(Window(mac)):
         mac.done.append('shot')
-    assert mac.done == ['show', 'shot', 'put below 7']
+    assert mac.done == ['fade', 'show', 'shot', 'put below 7', 'unfade']
 
 
 def test_off_macos_the_window_is_left_as_it_is(helpers: types.ModuleType) -> None:
@@ -399,17 +718,25 @@ class Shot:
             self.events.append('render ' + r.name)
             return r
 
+        self.screen = SimpleNamespace(again=lambda: self.events.append('again'), between=lambda: None)
+        self.given: object = None  # what the set-up was given to run before each step
+
         @contextlib.contextmanager
         def on_screen(mw: object) -> Iterator[SimpleNamespace]:
             self.events.append('on screen')
-            yield SimpleNamespace(again=lambda: self.events.append('again'))
+            yield self.screen
             self.events.append('put back')
 
-        def set_up(*args: object) -> Callable[[], None]:
+        def set_up(*args: object) -> Callable[[object], None]:
             checked(*args[:3])
             if refused:
                 raise RuntimeError(refused)
-            return lambda: self.events.append('set up %r' % (args,))
+
+            def run(between: object = None) -> None:
+                self.given = between
+                self.events.append('set up %r' % (args,))
+
+            return run
 
         vars(helpers)['_3d_render'] = render
         vars(helpers)['_on_screen'] = on_screen
@@ -427,6 +754,13 @@ STALE = (
     'The 3D view may not have been drawn. Shoot again with no set-up before judging it: pan, orbit and zoom move the '
     'camera from where it is. With no mesh in view, a pan or zoom changes nothing'
 )
+
+
+def test_the_set_up_is_given_the_screens_look_at_the_active_app_for_each_step(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-136: a set-up runs for seconds; the user switching to Designer meanwhile sees its window at once
+    shot = Shot(helpers, 'A', 'B')
+    helpers.shoot_3d('out.png', pan=[0.25, 0.0])
+    assert shot.given is shot.screen.between
 
 
 def test_a_render_identical_after_a_pan_is_taken_again_until_it_differs(

@@ -1,6 +1,6 @@
-"""Designer's main window as macOS sees it (_MacWindow), for the 3D shot (shot3d.py), read and moved through the
-Objective-C runtime and CoreGraphics with ctypes; and the keyboard given back after a start (give_back_activation).
-macOS only (_mac_window).
+"""Designer's main window as macOS sees it (_MacWindow), for the 3D shot (shot3d.py), read, moved and made transparent
+through the Objective-C runtime and CoreGraphics with ctypes; and the keyboard given back after a start
+(give_back_activation). macOS only (_mac_window).
 
 Measured on macOS in a Designer an agent started (2026-11-13; what the 3D view does off screen: shot3d.py):
 
@@ -9,7 +9,7 @@ Measured on macOS in a Designer an agent started (2026-11-13; what the 3D view d
 - The window directly in front of another, in CoreGraphics' list of the windows on screen above it (normal windows,
   layer 0), is found whether it is Designer's own or another app's. orderWindow:relativeTo: puts Designer's window
   right behind either. Given the number of a window no longer on screen, closed or minimized (2026-11-14), or of one
-  that doesn't exist, it puts it behind every window, as orderBack: does: so the shot asks first (on_screen).
+  that doesn't exist, it puts it behind every window, as orderBack: does: so the shot asks first (lowest).
 - A window covered whole by an always-on-top window (Qt's WindowStaysOnTopHint: layer 8) has no normal window in front
   of it, so none is found (2026-11-14).
 - A Designer an agent starts becomes the active app as it starts, the one the keyboard types into, taking it from the
@@ -20,9 +20,8 @@ Measured on macOS in a Designer an agent started (2026-11-13; what the 3D view d
 
 import ctypes
 import ctypes.util
-import sys
 
-from .core import _APP, Any, cast
+from .core import _APP, Any, cast, sys
 from .view3d import _settle
 
 NS_VISIBLE = 2  # NSWindowOcclusionStateVisible: part of the window is on screen
@@ -46,7 +45,7 @@ class _MacWindow:
 
     def _send(
         self,
-        result: type[ctypes.c_void_p | ctypes.c_bool | ctypes.c_ulong | ctypes.c_long],
+        result: type[ctypes.c_void_p | ctypes.c_bool | ctypes.c_ulong | ctypes.c_long | ctypes.c_double],
         receiver: int | None,
         selector: str,
     ) -> object:
@@ -86,11 +85,54 @@ class _MacWindow:
     def hide(self) -> None:
         self._object(self._app, 'hide:')
 
-    def above(self) -> int | None:
-        """The number of the window directly in front of this one: the nearest normal window above it on screen, any
-        app's. None when none is."""
-        number = cast(int, self._send(ctypes.c_long, self._window, 'windowNumber'))
-        found = [window for window, layer in self._listed(CG_ABOVE, number) if layer == 0]
+    def minimize(self) -> None:
+        """Minimized into the Dock, as its minimize button does."""
+        self._object(self._window, 'miniaturize:')
+
+    def number(self) -> int:
+        """The window's number, as CoreGraphics lists it."""
+        return cast(int, self._send(ctypes.c_long, self._window, 'windowNumber'))
+
+    def windows(self, every: bool) -> list[int]:
+        """The main window; with `every`, each of Designer's windows (NSApp's windows, shown or not)."""
+        if not every:
+            return [cast(int, self._window)]
+        listed = self._object(self._app, 'windows')
+        prototype = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong)
+        at = prototype(('objc_msgSend', self._objc))
+        count = cast(int, self._send(ctypes.c_ulong, listed, 'count'))
+        return [cast(int, at(listed, self._objc.sel_registerName(b'objectAtIndex:'), i)) for i in range(count)]
+
+    def hold(self, window: int) -> None:
+        """Keeps `window` from being freed, even once closed, until let_go: a window Designer closes while it is held
+        stays safe to message (retain)."""
+        self._object(window, 'retain')
+
+    def let_go(self, window: int) -> None:
+        """Ends a hold (release): once for each hold."""
+        self._object(window, 'release')
+
+    def appearance(self, window: int) -> tuple[float, bool]:
+        """`window`'s opacity (alphaValue, 0 to 1), and whether the mouse goes through it to the window under it
+        (ignoresMouseEvents)."""
+        return cast(float, self._send(ctypes.c_double, window, 'alphaValue')), self._flag(window, 'ignoresMouseEvents')
+
+    def set_appearance(self, window: int, opacity: float, through: bool) -> None:
+        """Sets `window`'s opacity and whether the mouse goes through it (appearance)."""
+        for selector, kind, value in (
+            (b'setAlphaValue:', ctypes.c_double, opacity),
+            (b'setIgnoresMouseEvents:', ctypes.c_bool, through),
+        ):
+            prototype = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, kind)
+            prototype(('objc_msgSend', self._objc))(window, self._objc.sel_registerName(selector), value)
+
+    def in_front(self) -> list[int]:
+        """The numbers of the normal windows in front of this one on screen, any app's, front to back."""
+        return [window for window, layer in self._listed(CG_ABOVE, self.number()) if layer == 0]
+
+    def lowest(self, numbers: list[int]) -> int | None:
+        """Of the windows `numbers`, any app's, the one on screen nearest the back; None when none is on screen."""
+        found = [window for window, _ in self._listed(CG_ON_SCREEN, 0) if window in numbers]
         return found[-1] if found else None
 
     def on_screen(self, number: int) -> bool:
