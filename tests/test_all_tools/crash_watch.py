@@ -21,7 +21,9 @@ def _common() -> types.ModuleType:
 class CrashWatch:
     """The "without a crash" checks of a category's steps, settled with one wait at its end instead of
     new_crash_dumps' 10 s after each step: Designer writes a dump a few seconds after it goes down (REVIEW.md TST-21:
-    about 3 s), so a dump appearing after the last step still counts. step() notes the dumps there before a step that
+    about 3 s), so a dump appearing after the last step still counts. The wait lasts while a dump may still come
+    (`coming`: common.dumps_may_come, looked at every POLL_S), `wait_s` at most (REVIEW.md SRV-151: 10 s, whatever
+    happened). step() notes the dumps there before a step that
     could crash a Designer (a quit, by its own ports); check() records a check of it, held until settle(), which waits
     once and gives each new dump to the latest step that started before the dump was written, among those looking at
     its folder, failing that step's checks (or a check of its own, if the step's check stopped before recording any). A
@@ -35,9 +37,11 @@ class CrashWatch:
         clock: Callable[[], float] = time.time,
         sleep: Callable[[float], None] = time.sleep,
         mtime: Callable[[str], float] = os.path.getmtime,
+        coming: Callable[[Sequence[int], set[str]], bool] | None = None,
     ) -> None:
         self.wait_s, self.clock, self.sleep, self.mtime = wait_s, clock, sleep, mtime
         self.find = find or (lambda ports: _common().crash_dumps(ports))
+        self.coming = coming or (lambda ports, before: _common().dumps_may_come(ports, before))
         self.steps: list[_WatchedStep] = []
         self.clean_ups: list[Callable[[], None]] = []
 
@@ -55,7 +59,14 @@ class CrashWatch:
     def settle(self) -> None:
         try:
             if self.steps:
-                self.sleep(self.wait_s)
+                ports = sorted({port for step in self.steps for port in step.ports})
+                # the dumps there before the first step; for a port's home first looked at later, those there then
+                shared = self.find(())
+                before = self.steps[0].before | {d for step in self.steps for d in step.before if d not in shared}
+                deadline, poll_s = self.clock() + self.wait_s, _common().POLL_S
+                # the clock first: given no wait, it looks at nothing (REVIEW.md TST-458)
+                while self.clock() < deadline and self.coming(ports, before):
+                    self.sleep(poll_s)
             found = {i: _common().new_dumps(self.find(step.ports), step.before) for i, step in enumerate(self.steps)}
             for dump in set().union(*found.values()):
                 try:

@@ -22,10 +22,13 @@ from test_all_tools import common
 from test_all_tools.common import (
     PLUGIN,
     PLUGIN_PACKAGE_DIR,
+    POLL_S,
     TOKEN_FILE,
     Ctx,
+    Reply,
     cancel_from_second_client,
     check,
+    job_running,
     lan_address,
     raw_request,
     read_greeting,
@@ -62,13 +65,14 @@ async def run(ctx: Ctx) -> None:
 
     await check_bridge_security(ctx)
     await check_a_relayed_answer_is_refused(ctx)
+    await check_a_wait_cancelled_leaves_nothing_connected(ctx)
     with open(TOKEN_FILE) as f:
         token = f.read().strip()  # used, never printed
 
     # --- cancel aborts the running job and drops queued ones (two raw clients + sd_run.py --cancel)
-    replies: dict[str, Any] = {}
+    replies: dict[str, Reply] = {}
 
-    def job(name: str, req: dict[str, Any]) -> None:
+    def job(name: str, req: dict[str, object]) -> None:
         replies[name] = raw_request(req, token)
 
     def bridge_status() -> str:
@@ -76,11 +80,14 @@ async def run(ctx: Ctx) -> None:
         return out
 
     def wait_for(text_part: str) -> bool:
-        for _ in range(100):
-            if text_part in bridge_status():
-                return True
-            time.sleep(0.05)
-        return False
+        """Whether the bridge's status says `text_part` within 5 s, a limit, looked at every POLL_S: nothing says when
+        it changes (REVIEW.md TST-449)."""
+        deadline = time.monotonic() + 5
+        while text_part not in bridge_status():
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(POLL_S)
+        return True
 
     long_job = threading.Thread(
         target=job,
@@ -217,8 +224,8 @@ async def check_no_job_starts_within_the_wait_after_the_one_before(ctx: Ctx) -> 
     one after the other, as an agent's are, each waited about 85 ms for it (a median of 100 ms a call on the poll alone, 2026-11-10). No job starts sooner than
     the plugin's WAKE_DELAY_MS after the one before ended: started at once, a job found Designer not settled after the
     one before (REVIEW.md PLG-38), and the poll and a job queued behind another started sooner than the wake (PLG-40).
-    Each job prints when it started, by Designer's clock. Started by the wake or the poll, it runs on Qt's main
-    thread."""
+    Each job prints when it started, by Designer's clock. A job queued after others runs on Qt's main thread, whichever
+    of the wake, the wait after a job and the poll starts it (REVIEW.md TST-427, TST-440)."""
     with open(TOKEN_FILE) as f:
         token = f.read().strip()  # used, never printed
     with open(os.path.join(PLUGIN_PACKAGE_DIR, '__init__.py'), encoding='utf-8') as f:
@@ -232,12 +239,14 @@ async def check_no_job_starts_within_the_wait_after_the_one_before(ctx: Ctx) -> 
     took.sort()
     gaps = sorted((b - a) * 1000 for a, b in itertools.pairwise(starts))
     # one queued behind a long one: it gets no wake (on plugin v6 it started about 1 ms after it ended: PLG-40)
-    ends: dict[str, Any] = {}
+    ends: dict[str, Reply] = {}
     long = threading.Thread(
         target=lambda: ends.update(long=raw_request({'code': 'import time; time.sleep(0.3); ' + started}, token))
     )
     long.start()
-    time.sleep(0.05)
+    deadline = time.monotonic() + 30
+    while not job_running(token) and time.monotonic() < deadline:  # nothing says it started (REVIEW.md TST-421)
+        time.sleep(POLL_S)
     behind = float(raw_request({'code': started}, token)['output'])
     long.join()
     behind_gap = (behind - float(ends['long']['output'])) * 1000
@@ -256,10 +265,53 @@ async def check_no_job_starts_within_the_wait_after_the_one_before(ctx: Ctx) -> 
             threading.current_thread() is threading.main_thread(),
             QThread.currentThread() == QApplication.instance().thread(),
         ))""")
-    time.sleep(0.5)  # idle: the wake or the poll starts it, on the main thread either way
+    # sent after the long job's reply: which of the plugin's starts runs it isn't measured (REVIEW.md TST-440)
     out = raw_request({'code': probe}, token).get('output', '')
     check(
-        'bridge queue', "a job started on an idle bridge runs on Qt's main thread", 'MAIN=True QT_MAIN=True' in out, out
+        'bridge queue',
+        "a job queued after others runs on Qt's main thread",
+        'MAIN=True QT_MAIN=True' in out,
+        out,
+    )
+
+
+# a wait of the helpers' (_until) on a signal of an object kept in sys, cancelled while it waits; then how many slots the
+# signal still has, and the object dropped
+WAIT_ON_A_SIGNAL = dedent("""
+    import sys
+    from PySide6 import QtCore
+    class _Source(QtCore.QObject):
+        fired = QtCore.Signal()
+    sys.mcp_selftest_source = _Source()
+    _until(lambda: False, 60.0, [sys.mcp_selftest_source.fired])
+""")
+CONNECTED = dedent("""
+    import sys
+    from PySide6 import QtCore
+    source = sys.mcp_selftest_source
+    del sys.mcp_selftest_source
+    print('CONNECTED=%d' % source.receivers(QtCore.SIGNAL('fired()')))
+""")
+
+
+async def check_a_wait_cancelled_leaves_nothing_connected(ctx: Ctx) -> None:
+    """A job cancelled while a helper waits on a signal (_until) leaves no slot connected to it (REVIEW.md HLP-150: the
+    abort, raised again at the finally's first line, skipped the disconnects, and the wait's look stayed connected to
+    the clipboard's dataChanged until Designer restarted)."""
+    c = ctx.c
+    task = asyncio.create_task(
+        c('execute_designer_code', {'code': ctx.helper_source + WAIT_ON_A_SIGNAL, 'timeout_s': 90})
+    )
+    try:
+        cancelled = await cancel_from_second_client()
+        waited = text(await task)
+    finally:
+        left = text(await c('execute_designer_code', {'code': CONNECTED}))
+    check(
+        'cancel_designer_job',
+        'a wait cancelled leaves no slot connected to the signal it waited on',
+        'running: True' in cancelled and 'cancelled by client' in waited and 'CONNECTED=0' in left,
+        '%s | %s' % (waited.strip().splitlines()[-1] if waited.strip() else '', left.strip()),
     )
 
 

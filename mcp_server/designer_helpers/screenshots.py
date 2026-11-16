@@ -2,6 +2,10 @@
 
 from .core import _APP, Any, cast
 from .editor import _home_screen
+from .mac_window import _mac_window
+from .waits import _until
+
+RENDER_LIMIT = 5.0  # s at most for Copy Render to Clipboard to put the render there: a safety net
 
 PANELS = ('window', 'graph', '2d', '3d', 'explorer', 'parameters', 'library', 'console')
 # Dock titles change with content ("dwarf_trimsheet", "Blend"), but their object names are stable
@@ -46,9 +50,9 @@ def _3d_render(mw: Any) -> Any:  # Any: a Qt widget, and a QImage (Qt widgets ar
     """The 3D view's render, a QImage. The 3D view is GPU-drawn, so a QWidget.grab() of its viewport is leftover black
     or grey blocks, varying between calls. Use the view's own Camera > 'Copy Render to Clipboard' (the renderer's image,
     never screen pixels; its last frame while Designer's window is off screen: shot3d.py), then put back what Qt can
-    copy of the user's clipboard: its text; the rest may be lost (DECISIONS.md, the user's choice)."""
-    import time
-
+    copy of the user's clipboard: its text; the rest may be lost (DECISIONS.md, the user's choice). On macOS the text is
+    then handed over to the pasteboard (mac_window.py, _MacWindow.hand_over_clipboard). The render is read once the clipboard
+    says it changed (its dataChanged), at most RENDER_LIMIT."""
     from PySide6 import QtCore, QtWidgets
 
     app = cast(QtWidgets.QApplication, QtWidgets.QApplication.instance())  # Designer's own: always there
@@ -74,26 +78,39 @@ def _3d_render(mw: Any) -> Any:  # Any: a Qt widget, and a QImage (Qt widgets ar
         raise RuntimeError("3D View has no 'Camera > Copy Render to Clipboard' action")
 
     clipboard = app.clipboard()
+    mac = _mac_window(mw)
     original = clipboard.mimeData()
-    backup = QtCore.QMimeData()
-    for fmt in original.formats() if original is not None else []:  # None where Qt has no clipboard
-        backup.setData(fmt, original.data(fmt))
-    try:
-        clipboard.clear()
-        copy_action.trigger()
-        image = None
-        for _ in range(100):
-            app.processEvents()
-            image = clipboard.image()
-            if not image.isNull():
-                break
-            time.sleep(0.05)
-        if image is None or image.isNull():
-            raise RuntimeError('the 3D view did not produce a render (is a material shown?)')
-        return image
-    finally:
+    saved = [(fmt, original.data(fmt)) for fmt in original.formats()] if original is not None else []  # None: none
+    put = [False]
+
+    def put_back() -> None:  # a QMimeData of its own each time: the clipboard takes it, and frees the one before
+        backup = QtCore.QMimeData()
+        for fmt, data in saved:
+            backup.setData(fmt, data)
         clipboard.setMimeData(backup)
-        app.processEvents()
+        if mac is not None:  # the pasteboard's at once, not Designer's to hand over when asked (REVIEW.md HLP-181)
+            mac.hand_over_clipboard()
+        put[0] = True
+
+    try:
+        try:
+            clipboard.clear()
+            copy_action.trigger()
+            _until(lambda: not clipboard.image().isNull(), RENDER_LIMIT, [clipboard.dataChanged])
+            image = clipboard.image()
+            if image.isNull():
+                raise RuntimeError('the 3D view did not produce a render (is a material shown?)')
+            return image
+        finally:
+            put_back()
+            app.processEvents()
+    except BaseException:
+        # the plugin raises an abort at a traced line, then stops tracing; landed on the `finally`'s first line, it
+        # skipped the put-back. Here, untraced, it is put back unless it was: at worst twice, the same text (REVIEW.md
+        # HLP-171)
+        if not put[0]:
+            put_back()
+        raise
 
 
 def _graph_view(mw: Any) -> Any:

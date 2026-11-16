@@ -3,6 +3,7 @@ scripts/read_crash_dump.py reads: the system, the modules (with their builds' UU
 registers, more memory, the exception and the messages Crashpad keeps per module; and Mach-O files holding only their
 UUID, for the modules on disk. For its tests (test_read_crash_dump.py, test_old_python.py)."""
 
+import dataclasses
 import struct
 import uuid as uuids
 from collections.abc import Sequence
@@ -79,23 +80,25 @@ DESIGNER = Module(
 PAC = 0x0012000000000000  # a return address's pointer-authentication bits, which the walk drops
 
 
-def an_abort(**kw: Any) -> Crash:
+def an_abort(**kw: Any) -> Crash:  # Any: Crash's fields, of several types, which dataclasses.replace checks
     """An abort in the kernel (pc), called from libc (lr), with two frame records above it on the stack: QtCore's
     return address (signed), then Designer's, then the end of the chain; Crashpad kept libc's "abort() called"."""
     stack = frames(
         (0x20, STACK + 0x40, (QTCORE.base + 0xFD94C) | PAC), (0x40, STACK + 0x60, DESIGNER.base + 0x1234), (0x60, 0, 0)
     )
-    defaults: dict[str, Any] = {
-        'modules': (KERNEL, LIBC, QTCORE, DESIGNER),
-        'pc': KERNEL.base + 0x95E8,
-        'lr': LIBC.base + 0x78978,
-        'fp': STACK + 0x20,
-        'sp': STACK,
-        'stack_start': STACK,
-        'stack': stack,
-        'messages': [(1, 'abort() called')],
-    }
-    return Crash(**{**defaults, **kw})
+    crash = Crash(
+        modules=(KERNEL, LIBC, QTCORE, DESIGNER),
+        pc=KERNEL.base + 0x95E8,
+        lr=LIBC.base + 0x78978,
+        fp=STACK + 0x20,
+        sp=STACK,
+        stack_start=STACK,
+        stack=stack,
+        messages=[(1, 'abort() called')],
+    )
+    return dataclasses.replace(
+        crash, **kw
+    )  # no dict of Any: replace() refuses a field Crash hasn't (REVIEW.md TST-461)
 
 
 def minidump(crash: Crash) -> bytes:

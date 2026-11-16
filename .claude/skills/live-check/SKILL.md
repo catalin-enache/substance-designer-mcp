@@ -61,8 +61,9 @@ on no other category, starts from a Designer of its own (`check_a_designer_of_it
 Three of its checks end only a Designer they started, so they also run alone, without `own_designer`:
 `check_launch_on_another_port`, `check_launch_refuses_a_port_another_program_holds` and
 `check_a_designer_sharing_the_temp_folder_hands_over` (it skips unless the run's Designer was the last one started).
-Its "without a crash" checks go through `crash_watch.watching_crashes` (a `CrashWatch`: one 10 s wait at the end of
-`lifecycle.run`, or of the check run alone, each dump given to its step by time), never `new_crash_dumps`, which waits
+Its "without a crash" checks go through `crash_watch.watching_crashes` (a `CrashWatch`: one wait at the end of
+`lifecycle.run`, or of the check run alone, while a dump may still come, 10 s at most, each dump given to its step by
+time), never `new_crash_dumps`, which waits
 after each step (`tests/unit/test_selftest_lifecycle.py` fails on it). A clean-up deleting a folder unless it holds a
 dump goes in the watch's `later()`, so a dump written late isn't deleted with it.
 

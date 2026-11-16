@@ -69,6 +69,7 @@ from test_all_tools.common import (  # noqa: E402
     editor_graph,
     end_own_designer,
     helpers_source,
+    hide_designer,
     library_packages,
     new_crash_dumps,
     remove_test_snapshots,
@@ -119,6 +120,8 @@ async def run(
                 return tools
         else:
             await check_the_start(c, t, was_running, helper_source)
+        if not was_running:  # one the self-test started: hidden, nothing of it on the user's screen (common.HIDE)
+            await hide_designer(c, helper_source)
         user_graph = await editor_graph(c)
         libs_before = await library_packages(c)
         await c('execute_designer_code', {'code': CLEAN})
@@ -127,9 +130,8 @@ async def run(
             await run_steps(ctx, steps)
         finally:
             print('\ncleanup:', text(await c('execute_designer_code', {'code': CLEAN})).strip())
-            # the library packages the run loaded, in a separate call (graph views from the test
-            # graph are torn down first); the user's own stay (REVIEW.md TST-30)
-            time.sleep(0.5)
+            # the library packages the run loaded, in a separate call: the graph views of the test graph are torn
+            # down before it starts (REVIEW.md SRV-150); the user's own stay (REVIEW.md TST-30)
             await restore_library_packages(c, libs_before)
             remove_test_snapshots()
             if user_graph and user_graph != TEST_GRAPH:

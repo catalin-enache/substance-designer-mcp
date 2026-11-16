@@ -16,7 +16,6 @@ import os
 import re
 import shutil
 import tempfile
-import time
 import xml.etree.ElementTree as ET
 from typing import cast
 
@@ -168,9 +167,6 @@ def _copy_sbs(src: str, dst: str) -> None:
         shutil.copy2(src, dst)
 
 
-RELOAD_SETTLE_S = 0.5
-
-
 def _replace_file(tree: 'ET.ElementTree[ET.Element]', path: str, snapshot: str) -> None:
     """Write the edited .sbs next to the user's file, then put it in place. A symlinked file is resolved
     first, so the file it points to is the one replaced and the link stays (REVIEW.md SRV-48). A file with one
@@ -215,12 +211,14 @@ def _replace_file(tree: 'ET.ElementTree[ET.Element]', path: str, snapshot: str) 
 
 
 def _reload_package_file(path: str, snapshot: str | None = None) -> None:
-    """Unload, load, and (by the caller) reopen as separate bridge calls with pauses between,
-    so Designer's event loop finishes tearing down the old graph views before new ones are made.
-    Done back to back, Designer once crashed: its own node_align_tools plugin (Python, PySide)
-    was called for a destroyed view while the reopened graph's view was being created."""
+    """Unload, load, and (by the caller) reopen as separate bridge calls, so Designer's event loop finishes tearing
+    down the old graph views before new ones are made. Done back to back, Designer once crashed: its own
+    node_align_tools plugin (Python, PySide) was called for a destroyed view while the reopened graph's view was being
+    created. The bridge runs Designer's event loop between two calls (the plugin's _drain), and every widget an unload
+    removes was gone by the time the next call started, none later: no pause between them (measured; link_display's
+    designer fact; REVIEW.md SRV-150). Measured in Designers an agent started: hidden, and on screen but not the active
+    app, its node_align_tools loaded, 5 of 5 alike, then 20 reloads with no crash (2026-11-16, REVIEW.md SRV-167)."""
     _checked(_bridge(_helpers_call('unload_package_file(%r)' % path), timeout=180))
-    time.sleep(RELOAD_SETTLE_S)
     try:
         _checked(_bridge(_helpers_call('load_package_file(%r)' % path), timeout=180))
     except ToolError as e:
@@ -230,7 +228,6 @@ def _reload_package_file(path: str, snapshot: str | None = None) -> None:
             'is %s%s; open it by hand (File > Open).'
             % (_sentence(str(e)), path, ', the snapshot taken before is %s' % snapshot if snapshot else '')
         ) from e
-    time.sleep(RELOAD_SETTLE_S)
 
 
 def _select_links(

@@ -27,10 +27,7 @@ def _module(name: str) -> Any:  # a module imported by name: PyCharm can't see i
         sys.path.insert(0, tests_dir)
     for loaded in [m for m in sys.modules if m == 'test_all_tools' or m.startswith('test_all_tools.')]:
         del sys.modules[loaded]
-    module = importlib.import_module('test_all_tools.' + name)
-    if name == 'category_run':
-        vars(module)['PAUSE_S'] = 0  # no Designer to wait for
-    return module
+    return importlib.import_module('test_all_tools.' + name)
 
 
 def _folders() -> list[str]:

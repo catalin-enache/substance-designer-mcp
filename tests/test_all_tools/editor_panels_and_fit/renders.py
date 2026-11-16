@@ -3,9 +3,9 @@ middle (a square from straight above), how far it moved between two renders, and
 most of three) turns from dark to light (twice per square: tiling 2 doubles it). And a shot that waits for the checker
 on the mesh (with_checker)."""
 
-import asyncio
 import base64
 import io
+import time
 
 import numpy as np
 from mcp.types import CallToolResult
@@ -17,9 +17,14 @@ from test_all_tools.common import Call, is_image, text
 # kind of shot the checks take (measured 2026-11-13: a rounded cube from the Front and the Top, a plane from the
 # Default angle and the Top, zoomed out, a sphere)
 CHECKER = 6
-# shots retaken a second apart while the checker doesn't show: in a full run, the unit suite beside the workers, the
-# 3D shots once didn't follow the camera for about 20 s, the cause unknown (REVIEW.md TST-383, TST-388)
-RETAKES = 30
+# s shots are retaken while the checker doesn't show, each as the one before returns: in a full run, the unit suite
+# beside the workers, the 3D shots once didn't follow the camera for about 20 s, the cause unknown (REVIEW.md TST-383,
+# TST-388). A limit: each shot waits for the 3D view itself (designer_helpers/frames3d.py; TST-421)
+RETAKE_S = 30
+
+
+def _now() -> float:
+    return time.monotonic()
 
 
 def grey(r: CallToolResult) -> 'np.ndarray[tuple[int, int], np.dtype[np.float64]]':
@@ -112,17 +117,17 @@ def say_failed(what: str, *shots: CallToolResult) -> None:
 
 
 async def with_checker(c: Call, args: dict[str, object]) -> CallToolResult:
-    """screenshot_designer with `args`, then retaken as the 3D view is, a second apart, until the checker shows on the
-    mesh (CHECKER), at most RETAKES times. What the checks measure needs the checker. Once, after a call that switched
-    the mesh and applied a graph, the shots didn't follow the camera for about 20 s (RETAKES); shots after a call doing
-    one of them wait too, as a defence. Says how many retakes it took, or that the checker never showed. Returns the last shot, the checker on it
-    or not, with the first shot's text: what the call set, which a retake doesn't say. A shot that failed is returned
-    at once."""
+    """screenshot_designer with `args`, then retaken as the 3D view is, each retake as the shot before returns, until
+    the checker shows on the mesh (CHECKER), RETAKE_S at most. What the checks measure needs the checker. Once, after a
+    call that switched the mesh and applied a graph, the shots didn't follow the camera for about 20 s (RETAKE_S);
+    shots after a call doing one of them wait too, as a defence. Says how many retakes it took, or that the checker
+    never showed. Returns the last shot, the checker on it or not, with the first shot's text: what the call set, which
+    a retake doesn't say. A shot that failed is returned at once."""
+    start = _now()
     first = r = await c('screenshot_designer', args)
     again: dict[str, object] = {key: args[key] for key in ('panel', 'max_size') if key in args}
     retakes = 0
-    while is_image(r) and transitions(grey(r)) < CHECKER and retakes < RETAKES:
-        await asyncio.sleep(1.0)
+    while is_image(r) and transitions(grey(r)) < CHECKER and _now() - start < RETAKE_S:
         r = await c('screenshot_designer', again)
         retakes += 1
     if retakes:

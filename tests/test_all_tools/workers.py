@@ -10,7 +10,8 @@ at once (2026-11-11), lifecycle (about 3.8 minutes) and then undo alone setting 
 (2026-11-05); the peak of four at once wasn't measured (ROADMAP item 66).
 
 - **lifecycle starts first** (the longest), and holds launch_lock's lock over its two windows: while it does, no
-  Designer of the run starts or quits.
+  other worker's Designer starts or quits. editor_panels_and_fit holds it too while its window checks read; lifecycle's
+  own launches and quits within its checks go on then (REVIEW.md TST-467).
 - **The clipboard:** facts and editor_panels_and_fit never run at once (categories.CLIPBOARD).
 - **undo** runs last, alone (categories.SOLO): beside the others its Undo failed (the reason there).
 - **The run's start checks** (get_guide, the Home screen) run once, in the first category to start after lifecycle
@@ -45,7 +46,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable, Collection, Mapping, Sequence
-from typing import Any, Protocol
+from typing import Any, Protocol, TypedDict, cast
 
 import designer_preferences
 from test_all_tools import common
@@ -59,6 +60,7 @@ from test_all_tools.common import (
     closed_by_quit,
     crash_dumps,
     designer_pids,
+    dumps_may_come,
     new_dumps,
     summarize,
     users_designer_running,
@@ -71,8 +73,8 @@ AT_ONCE = 4  # categories at once unless --workers says otherwise (ROADMAP item 
 INDEX = os.path.dirname(os.path.abspath(__file__))  # `python <this folder>` runs __main__.py
 REPO = os.path.dirname(os.path.dirname(INDEX))
 UNIT = 'unit tests'
-CRASH_WAIT_S = 10  # Designer writes a crash dump a few seconds after it goes down: once, after the last quit
-POLL_S = 0.2
+CRASH_WAIT_S = 10  # s at most for a crash dump after the last quit: a limit (wait_for_dumps)
+POLL_S = 0.1
 sleep = time.sleep
 
 
@@ -221,8 +223,20 @@ def schedule(
     return codes
 
 
+class WorkerResults(TypedDict):
+    """What a worker writes for the pool (__main__.py's results file), as JSON gives it back (REVIEW.md TST-443)."""
+
+    tools: list[str]
+    results: dict[str, list[bool]]
+    skipped: list[list[str]]  # [tool, check] pairs
+    times: dict[str, float]
+    quit: str | None  # what its quit_designer said
+    quit_at: float | None  # when it quit (time.time())
+    forced_in_shutdown: list[str]  # its normal closes forced during their shutdown
+
+
 def merge(
-    parts: Mapping[str, dict[str, Any] | None],
+    parts: Mapping[str, WorkerResults | None],
 ) -> tuple[list[str], dict[str, list[bool]], list[tuple[str, str]], dict[str, float]]:
     """The workers' results as one run's: (tools, results, skipped, times); a worker with no results is a failed
     check."""
@@ -243,19 +257,17 @@ def merge(
     return sorted(tools), results, skipped, times
 
 
-def _quit_to_keep(part: Mapping[str, object]) -> bool:
+def _quit_to_keep(part: WorkerResults) -> bool:
     """Whether a worker's Designer had its quit forced, or sampled as it ended by itself: its folder is kept then
     (REVIEW.md SRV-115)."""
-    quit = part.get('quit')
-    said = quit if isinstance(quit, str) else ''
+    said = part.get('quit') or ''
     return 'forced' in said or QUIT_SAMPLED in said or bool(part.get('forced_in_shutdown'))
 
 
-def _read(path: str) -> dict[str, Any] | None:
+def _read(path: str) -> WorkerResults | None:
     try:
         with open(path, encoding='utf-8') as f:
-            found: dict[str, Any] = json.load(f)
-        return found
+            return cast(WorkerResults, json.load(f))  # written by the worker itself (__main__.py)
     except (OSError, ValueError):
         return None
 
@@ -269,14 +281,22 @@ def _holds_a_crash_dump(folder: str) -> bool:
     )
 
 
-def check_the_quits(parts: Mapping[str, dict[str, Any] | None], port_of: Mapping[str, int], before: set[str]) -> None:
-    """After one wait from the last quit: each category's quit check, failed by a quit forced before its close took or
+def wait_for_dumps(ports: Sequence[int], before: set[str], until: float) -> None:
+    """Waits while a crash dump may still come from the Designers on `ports` (common.dumps_may_come: a crash handler
+    still running with no dump new since `before`), looked at every POLL_S, until `until` (time.time()) at most
+    (REVIEW.md SRV-151: 10 s after the last quit, whatever happened)."""
+    while time.time() < until and dumps_may_come(ports, before, run_port=False):
+        sleep(POLL_S)
+
+
+def check_the_quits(parts: Mapping[str, WorkerResults | None], port_of: Mapping[str, int], before: set[str]) -> None:
+    """After one wait from the last quit (wait_for_dumps): each category's quit check, failed by a quit forced before its close took or
     whose log couldn't be read (common.closed_by_quit), none, or a crash dump in its Designer's folder; more than two
     quits forced during their shutdown, the categories' and those of lifecycle's normal closes (its `forced_in_shutdown`),
     fail a check of their own, as does a new dump elsewhere (the shared folder)."""
-    quits = [part['quit_at'] for part in parts.values() if part and part.get('quit_at')]
+    quits = [at for part in parts.values() if part and (at := part.get('quit_at'))]
     if quits:
-        sleep(max(0.0, max(quits) + CRASH_WAIT_S - time.time()))
+        wait_for_dumps(sorted(port_of.values()), before, max(quits) + CRASH_WAIT_S)
     new = new_dumps(crash_dumps(sorted(port_of.values()), run_port=False), before)
     placed: set[str] = set()
     for name, part in parts.items():
@@ -462,7 +482,7 @@ def run_pool(slots: int, unit: bool = True, only: Sequence[str] | None = None) -
     )
     unit_code = unit_proc.wait() if unit_proc else None
     wall = time.monotonic() - started
-    parts: dict[str, dict[str, object] | None] = {}
+    parts: dict[str, WorkerResults | None] = {}
     for name in order:
         print('\n===== worker %s (exit code %d, %.0f s) =====' % (name, codes[name], took.get(name, 0.0)))
         with open(os.path.join(folder_of[name], name + '.log'), encoding='utf-8', errors='replace') as log:

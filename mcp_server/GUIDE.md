@@ -293,8 +293,10 @@ The rules and the first pitfalls are in the core, `get_guide()`.
   so `set_link_display` uses the **file-level edit pattern** (Designer's own Dot-node portals:
   `server_tools/layout.py`). Use it for other things the API can't do: snapshot the live graph and copy the saved file,
   decide on the copy (no change → no save), save, edit the .sbs XML, then unload, load and reopen as **three separate
-  bridge calls with short pauses** (back to back, Designer once crashed while tearing down the old views; returning to
-  its event loop between the steps lets that finish). If it recurs, read the newest crash dump's crashing module first
+  bridge calls** (back to back, Designer once crashed while tearing down the old views; returning to its event loop
+  between the steps lets that finish: the bridge runs it between two calls, and an unload's widgets were all gone by
+  the next call, so no pause is needed; measured in Designers an agent started, hidden and on screen, not the active
+  app). If it recurs, read the newest crash dump's crashing module first
   (in this repository: `scripts/read_crash_dump.py`).
   A package whose graphs were **never opened in a view** has nothing to tear down, so a script that builds one can save,
   edit and reload it in one call (the example script does, for its portals). Afterwards, check with `diff_graph` plus
@@ -342,7 +344,8 @@ The rules and the first pitfalls are in the core, `get_guide()`.
 - **The 3D view** has no API: `screenshot_designer('3d', ...)` drives its menus, the Explorer's context menu (opened
   on the Explorer's tree only; the warning above about the graph view stands, and an open menu holds the bridge until
   it closes), the material's Tiling field, and left- and middle-drags on its viewport under its toolbar's Camera tool.
-  What Designer does there, measured: `designer_helpers/view3d.py`.
+  What Designer does there, measured: `designer_helpers/view3d.py`. How to tell when the view has drawn a change (its
+  paints and its overlay's sample count), instead of waiting a fixed time: `designer_helpers/frames3d.py`.
 - Dock titles change with content, so find panels by object name: `areaA_` explorer, `areaB_` graph, `areaC_`
   parameters, `areaD_` 3D view, `areaE_` 2D view, `areaF_` console (hidden by default; Windows > Console), `areaG_`
   library.

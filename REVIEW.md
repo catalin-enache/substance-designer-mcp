@@ -23,7 +23,7 @@ with one of these wordings: done, not a bug, not reproducible, won't fix. Format
 `mcp_server/server.py`, `server_tools/` and `designer_preferences.py`, **HLP** `mcp_server/designer_helpers/`, **INS** installer, uninstaller,
 command-line client, example and `scripts/`, **TST** tests and docs. A new area gets a new prefix, added here.
 
-**Last used:** PLG-42, SRV-148, HLP-146, INS-36, TST-418.
+**Last used:** PLG-43, SRV-171, HLP-181, INS-39, TST-479.
 
 A new finding takes the next number for its area, and whoever writes it updates this line in the same edit. Only a
 new finding raises it, and a cleanup leaves it as it is. Nothing lowers a committed number; dropping a finding before
@@ -39,11 +39,11 @@ of the repo. If it can't, it says why: the ID never existed, a squash lost it, o
 | Severity | Open | Resolved |
 |---|---|---|
 | High | 0 | 0 |
-| Medium-high | 0 | 0 |
-| Medium | 0 | 3 |
-| Low-medium | 0 | 20 |
-| Low | 0 | 90 |
-| **Total** | **0** | **113** |
+| Medium-high | 0 | 1 |
+| Medium | 0 | 7 |
+| Low-medium | 0 | 53 |
+| Low | 0 | 175 |
+| **Total** | **0** | **236** |
 
 ## Review log
 
@@ -802,11 +802,664 @@ of the repo. If it can't, it says why: the ID never existed, a squash lost it, o
 - **The fourth final check** (after HLP-146): passed, 736 of 736 live checks in 23 categories, 1653 unit tests; the
   user's preferences as before the run.
 
+### 2026-11-15: three full runs of both suites on main, after the invisible-3d-shot merge
+
+- **How:** at the user's request, both suites in full three times in a row (`tests/test_all_tools`): 23 categories,
+  four Designers at once, the unit suite beside them. No review: the failures were read from the runs' logs and the
+  code.
+- **Results:**
+  - Runs 1 and 2 passed: 736 of 736 live checks, 1653 unit tests.
+  - Run 3 passed 732 of 734 live checks and 1653 unit tests. Both failures were in `editor_panels_and_fit`: the Light
+    tool check (HLP-147) and the click fact (TST-419). The Light tool check records one check instead of three when
+    a shot fails, hence 734.
+  - Every run: no crash dump, the user's preferences as before the run, no Designer left running. The runs took 543,
+    558 and 533 s.
+- **Not verified:** what closed the Explorer's menu (HLP-147), and which window the click fact's click-through
+  reading reached (TST-419). Each happened in one run of three, and the log doesn't say. What would check them:
+  HLP-147's measurement, and TST-419's reading naming the window in the next full run.
+- **Findings:** 2: Low-medium HLP-147, TST-419.
+- **Suggested order:** HLP-147 (the tool's code), then TST-419.
+- **Later the same day:** the user reported Designer coming in front of their windows during the runs, taking their
+  keyboard. Measured and resolved: SRV-149 (Medium), the launches. Then, at the user's request, the window checks
+  were reworked so Designer stays off the user's screen but where a check needs it in front:
+  - every Designer the run starts is hidden once it answers (all 555 checks of the other categories passed in a
+    hidden Designer);
+  - the window checks set up their ways behind every window, watched for a window of Designer's in front meanwhile;
+  - the few that need a window in front of the user's run together, after them, in every full run;
+  - the material check's dialog unhid Designer, which then stayed over the user's other windows for about 10 s: its
+    windows and the dialog are now transparent meanwhile, then Designer is hidden again (measured: none of its
+    windows on screen during the check).
+- **Then:** TST-420 (Low-medium), the window checks' fixed waits, at the user's request. Then HLP-148 (Low-medium),
+  at the user's request: the 3D shot's own fixed waits, most of a shot's time, measured step by step in a Designer an
+  agent started.
+  HLP-148 resolved the same day. The fixed waits left outside the shot became SRV-150 and TST-421, under the rule the
+  user added to AGENTS.md.
+- **Then,** at the user's request, the four open findings addressed: HLP-147, TST-419, SRV-150 and TST-421, measured
+  first in a Designer an agent started. Found along the way: HLP-149 (Low-medium, resolved), the shot's moves off
+  screen; SRV-151 (Low-medium, open), the fixed waits no callback found yet replaces; SRV-152 (Medium, open), a
+  launch's window in front of the active app's, which fails lifecycle's check.
+
+---
+
+### 2026-11-15: the full-run-failures branch against main (the diff only)
+
+- **Scope:** the branch's uncommitted diff against main: HLP-147, HLP-148, HLP-149, SRV-150, TST-419, TST-420 and
+  TST-421's fixes, the front watch, and the window checks reworked to stay off the user's screen.
+- **How:** four reviewers read the diff: the helpers, the server, the window checks, and the self-test's
+  infrastructure with the docs. No tests were run. The lead agent settled each suspicion by reading. Where reading
+  couldn't, it used three probes, one at a time, in a hidden Designer an agent started (port 9877):
+  - wheel notches past the camera's limit;
+  - the overlay's labels after a mesh switch;
+  - a front watch around the material check.
+  It also ran mypy with `--platform win32`.
+- **Resolutions assessed:** HLP-147, HLP-148, HLP-149, SRV-150, TST-419, TST-420 and TST-421, whose fixes are in this
+  diff. Their causes and fixes hold. Questioned, as follow-ups:
+  - HLP-148: HLP-150, HLP-151, HLP-152, TST-430;
+  - HLP-147: HLP-153;
+  - HLP-149: HLP-154, TST-423;
+  - SRV-150: SRV-153, SRV-154, TST-424, TST-426;
+  - TST-421: TST-425, TST-426, TST-427.
+  TST-422's check lost its guard to the rework, which has no finding of its own.
+- **Findings:** 19.
+  - Medium: TST-422.
+  - Low-medium: HLP-150, HLP-151, SRV-153, TST-423, TST-424, TST-425.
+  - Low: SRV-154, TST-426, TST-427, HLP-152, HLP-153, HLP-154, HLP-155, TST-428, HLP-156, TST-429, TST-430, TST-431.
+- **Dropped:**
+  - A zombie Designer making `_exited` wait its whole limit. Measured: kqueue reports a zombie's exit at once.
+  - lifecycle's changes never seen passing. It ran whole in a scratch run, 53 of 54, the failure SRV-152 (noted under
+    TST-421).
+  - Wheel notches past the camera's limit each waiting NO_RESTART. Measured off screen: 90 notches past 30, each
+    taken in about 0.03 s, one in 30 at the full 1 s.
+  - The overlay's labels going stale after a mesh switch. Measured: the four labels held were still valid, and the
+    same objects, after Scene's mesh changed.
+  - The material check's dialog taking the user's keyboard. Measured: a front watch around it saw Designer active in
+    0 of 154 samples.
+  - "every category's checks passed in a Designer hidden so" (`common.py`, two unit tests). The log of 2026-11-15
+    records all 555 checks of the other categories passing in a hidden Designer.
+  - bridge's `wait_for` polling every 0.05 s: it is on main, not in this diff.
+- **Not verified:** each needs Designer drawing, or a window of another app's, on the user's screen, which takes
+  their go:
+  - whether an unload in a Designer on screen also finishes its teardown before the next call;
+  - whether `to_back()` waits its whole limit when a window of the user's covers all of Designer's frame (its
+    `shown_again` waits for exposure);
+    Note (2026-11-16): measured with the user's go: it doesn't (the fourth review's log).
+  - whether `_PUT`'s 'minimized' way, made opaque as macOS's minimize animation runs, flies to the Dock opaque;
+  - whether a GPU Pathtracer view brought back on screen with nothing changed waits SETTLE_LIMIT (3 s) each time.
+- **Not included:** SRV-151's note already leaves the plugin's WAKE_DELAY_MS to the user. AGENTS.md's wait rule
+  contradicts the DECISIONS.md entry on it, and the user decides which stands.
+- **Suggested order:**
+  1. TST-422, the check guarding the put-back behind the user's window;
+  2. HLP-150, the tool's code;
+  3. SRV-153, which fails the unit suite on Windows;
+  4. TST-423, TST-425, TST-424;
+  5. HLP-151, with a callback for an accumulation that ends lower;
+  6. the Low ones, HLP-153 first.
+  SRV-152 (Medium, open) fails lifecycle's launch check, and its measurement shows Designer on the user's screen.
+- **Checked and found fine:**
+  - no `_until` runs inside another's slot, and the renders are taken between polls;
+  - the timers are owned by a QObject the frame holds, in `_until` and `_menu_once`;
+  - `frames.close()` runs in each path's `finally`;
+  - the parts' order, and no name defined twice;
+  - the placeholder replaces of `during_pan`, `hidden_mid_zoom`, `closed_early`, `_DRAG` and `read`;
+  - `EVENT_DONE` and `until`'s states run no event loop;
+  - `stayed_behind`, `in_front_of_another` and `PUT_BACK_IN_FRONT` against their unit tests;
+  - `with_checker`'s retakes;
+  - `_HITS`' window in the way;
+  - the kqueue exit watch on a child (unit tests).
+- **Chains:** every follow-up is generation 2. The longest still growing is HLP-148's, at generation 2.
+- **Then,** at the user's request, the 19 findings addressed in the suggested order, test first, with Designer on
+  the user's screen for TST-422's check and HLP-151's measurement (their go). 18 done; TST-431 not a bug (its change
+  failed three window checks), and SRV-154 not a bug for a launch's own start. Found along the way, both resolved:
+  TST-432 (Medium-high), `HIDE` never hiding a Designer, which left the probe's Designer on the user's screen for
+  about 20 s; SRV-155 (Low-medium), the same handle in `launch_designer`'s give-back. Not run live: lifecycle (its
+  launches come up in front of the user's window, SRV-152) and the launch paths.
+- **Then,** at the user's request, the two left open (SRV-152, SRV-151) and the hunt for WAKE_DELAY_MS's callback,
+  with their go for Designer launches in front of their windows, one crash and Designer shown for HLP-151's case.
+  Both resolved. WAKE_DELAY_MS: with the wait at 0, `measure`'s one-compute check passed in 5 of 5 Designers opened
+  hidden; on 2026-11-11 it failed 4 runs of 5 in Designers started from their binary, shown. So what Designer needs
+  the moment for wasn't found: reproducing the failure takes a Designer shown on the user's screen. The 30 ms stays,
+  as DECISIONS.md has it.
+
+---
+
+### 2026-11-15: the full-run-failures branch against main, second review (the diff only)
+
+- **Scope:** the branch's uncommitted diff against main, after the first review's 21 findings, SRV-151 and SRV-152
+  were addressed.
+- **How:** four reviewers read the diff: the lifecycle server, the plugin with the crash waits, the 3D helpers, and
+  the self-test's checks. No tests were run. The lead agent settled each suspicion by reading. Where reading
+  couldn't, it used probes, one at a time:
+  - in plain Python with Designer's PySide6: `_until` after `QCoreApplication.exit(0)` (HLP-157);
+  - in plain Python: a kqueue given a negative timeout (SRV-159);
+  - in one Designer opened hidden by the branch's `launch_designer` (alone's fresh server, port 9877), nothing
+    opaque on the user's screen:
+    - its environment and its crash handler, as `ps -E` and `pgrep` show them, while it ran and after its quit;
+    - `_CLEAR` after the 'transparent in front' way, 8 times;
+    - the covered way brought on screen by `_on_screen`, 3 times, and the drawing fact's covered way, 3 times;
+    - a mesh switch and a tiling while hidden, then shown, twice each.
+- **Dropped:**
+  - `_CLEAR` making a window opaque while it is still on screen. Designer's main window was off the window server's
+    list as macOS said hidden, 8 of 8.
+  - A mesh or a tiling changed off screen, then shown with a render from before. At the show the view restarted by
+    its second event, and the wait settled in 0.16 to 0.38 s, 4 of 4.
+  - A second crash dump in one home missed after a first one (crash_watch). It takes two crashes, and the run fails
+    on the first (DECISIONS.md, "Low-value findings about the tests and docs are not raised").
+  - lifecycle's `CLOSE_WINDOWS_ONLY` reply never read. It matters only with a stale plugin installed, where the check
+    still fails (the same rule).
+  - The plugin's VERSION left at 8. No rule ties it to plugin changes, the wire protocol is unchanged, and `quit.py`
+    handles a plugin without `_after_reply`.
+  - The launch's front watch ending as the call returns, so a Designer unhiding itself later goes unseen: no sign of
+    it.
+  - shot3d.py's line "as its 3D view isn't drawn while covered": it held in the Designer probed (TST-433).
+- **Not verified:**
+  - Whether activating a Designer opened hidden unhides it. If it does, `give_back_activation`'s new "still hidden"
+    branch never runs, and such a Designer is shown again. Measuring it makes Designer the active app, which takes the
+    user's keyboard, so it takes their go.
+    Note (2026-11-16): measured with the user's go: it does (SRV-161).
+  - Whether `_Frames.shown` waits SETTLE_LIMIT for a covered window Qt keeps exposed, which may draw no paint at the
+    show. The exposed-while-covered state SRV-152 recorded didn't occur in the Designer probed (TST-433), and what
+    brings it about is unknown.
+- **Resolutions assessed:** those whose fixes are in this diff: the first review's 21, SRV-151 and SRV-152.
+  Questioned, as follow-ups:
+  - SRV-152: TST-433, SRV-156, SRV-157, SRV-160, TST-441;
+  - SRV-149: TST-435;
+  - HLP-148: HLP-159;
+  - HLP-150: HLP-157;
+  - HLP-151: HLP-158, TST-439;
+  - SRV-151: PLG-43, TST-436, TST-437;
+  - SRV-153: SRV-159;
+  - SRV-154: SRV-158;
+  - TST-422: TST-438;
+  - TST-425: TST-437;
+  - TST-427: TST-440;
+  - TST-432: TST-434.
+  The others hold. DECISIONS.md: the 3D shot's entry stands, as its Reopen if is about what the user sees; so does
+  WAKE_DELAY_MS's, with no callback found.
+- **Findings:** 20.
+  - Medium: TST-433.
+  - Low-medium: HLP-157, SRV-156.
+  - Low: SRV-157, SRV-158, SRV-159, SRV-160, HLP-158, HLP-159, PLG-43, TST-434 to TST-443.
+- **Suggested order:**
+  1. TST-433: the drawing fact fails in the Designer probed. Measure first what decides a covered window's exposure;
+  2. HLP-157, the tools' code: a wait that runs on after Qt's quit;
+  3. SRV-156 with SRV-157 and SRV-160, the launch's `open` path;
+  4. the other Low ones.
+- **Checked and found fine:**
+  - `_until`, the quit aside: its limit, a wake lost between two looks caught at the next tick, an abort landing in
+    its own frame, a nested wait;
+  - HLP-153's messages and the fade's error; `_viewport`; the parts' order;
+  - the after-reply callbacks: queued once the socket is closed, each run once, none for a refused or dropped job;
+    `quit.py`'s fallback for an older plugin;
+  - the crash waits: `pgrep -fl` prints whole command lines; the mark holds for /tmp and /private/tmp; off macOS
+    the wait runs to its limit;
+  - `_found_launched`: processes running before the launch, and other ports' launches, are left out; the exit
+    watch's paths;
+  - TST-422's, TST-423's, TST-425's and TST-429's checks; the off-screen block's structure; `who()`; `_HITS`;
+    link_display's and bridge's new checks.
+- **Chains:** the longest still growing are at generation 3: HLP-148 → HLP-150 → HLP-157; HLP-148 → HLP-151 →
+  HLP-158 and TST-439; SRV-150 → SRV-153 → SRV-159; SRV-150 → SRV-154 → SRV-158; TST-421 → TST-432 → TST-434;
+  TST-421 → TST-427 → TST-440; TST-421 → TST-425 → TST-437's material test. Those about tests or docs alone have
+  fixes that make the claim smaller.
+
+---
+
+### 2026-11-16: the full-run-failures branch against main, third review (the diff only)
+
+- **Scope:** the branch's uncommitted diff against main, after the second review's 20 findings, SRV-161, TST-444 and
+  HLP-160 were addressed.
+- **How:** four reviewers read the diff: the lifecycle server with the plugin and the macOS window helper, the 3D
+  helpers, the editor_panels_and_fit checks with the window-server reader, and the self-test's infrastructure with the
+  docs. No tests were run. The lead agent settled each suspicion by reading. Where reading couldn't, it used one probe,
+  in a Designer opened hidden by the branch's `launch_designer` (alone, port 9877), nothing opaque on the user's
+  screen. Its parts:
+  - the 3D view's overlay labels before any shot;
+  - a modal QMessageBox and a top-level window shown in the hidden Designer, each at opacity 0, every window of
+    Designer's transparent and click-through first;
+  - the HLP-158 check's read after a set-up from minimized, 5 times;
+  - `covered` at each render of the transparent check's three ways, 3 times each;
+  - Edit properties alone, the window on screen as a shot puts it;
+  - 60 moves while Designer was hidden, each `taken()` timed.
+- **Dropped:**
+  - lifecycle's modal dialog, and its windows shown, unhiding a hidden Designer in front of the user's windows.
+    Measured: the QMessageBox and the top-level window left Designer hidden 3 s on, its main window off screen, and
+    Designer not the active app.
+  - The HLP-158 check reading the minimized state before macOS says it. Measured: minimized at once, 5 of 5.
+  - The tiling's wait taking a restart of Edit properties for its own. Measured: Edit properties alone drew no paint.
+  - `alone.close`'s fixed 10 s wait for a crash dump: main's code, not in this diff.
+  - `_has_port`'s `ps` and `_found_launched`'s `pgrep` with no time limit: so are the file's other process listings,
+    on main too, and none was seen to hang. `open` got one because it can (SRV-160).
+  - HLP-159's other case, a step's late restart landing after the next step's mark: it takes two steps each slower
+    than NO_RESTART to show, and no such step is known.
+- **Resolutions assessed:** those whose fixes are in this round: the second review's 20, SRV-161, TST-444 and
+  HLP-160. Questioned, as follow-ups:
+  - SRV-158: SRV-162;
+  - HLP-158: HLP-161, HLP-163;
+  - HLP-160: HLP-166, TST-445, TST-446;
+  - SRV-151: TST-447;
+  - TST-437: TST-448;
+  - TST-428: TST-450;
+  - TST-442, PLG-43, SRV-161: TST-451;
+  - TST-443: TST-452.
+  The others hold. The DECISIONS.md entries added on this branch name code that exists, and match it.
+- **Findings:** 15.
+  - Low-medium: SRV-162, HLP-161.
+  - Low: HLP-162 to HLP-166, TST-445 to TST-452.
+- **Suggested order:**
+  1. SRV-162, the launch's wait;
+  2. HLP-161, a render taken mid-accumulation;
+  3. HLP-163, HLP-164, HLP-162, HLP-166, HLP-165, the other waits;
+  4. TST-445, TST-446, TST-447, then the rest.
+- **Checked and found fine:**
+  - SRV-156's copy kept after `_OpenedUnfound`, SRV-157's whole-variable match, SRV-159's clamp, SRV-160's wait for
+    `open`, SRV-161's `started_hidden` for an app bundle only;
+  - PLG-43's tracing off, and no other code run from the plugin's slots under a job's tracer;
+  - HLP-157's quit, HLP-158's `settled` and `taken` and the turn under `_on_screen`, HLP-159's drop rule, HLP-160's
+    wait with the fade before it and an abort after it;
+  - `_until`'s timers and connections after an abort; the window waits' spies removed in a `finally`;
+  - FRAMES' and SHOWN_FROM_HIDDEN's scope (WHO, contextlib, the helpers' names), their spies removed and Display >
+    Samples put back in a `finally`; COVERS recorded only once the window is on screen, not at the put-back's hide;
+  - the off-screen and in-front split, pinned by its unit test;
+  - `dumps_may_come`'s per-port marks, `CrashWatch.settle`, `end_own_designer`, `hide_designer` only in a Designer
+    the self-test started, link_display's unload fact;
+  - `WorkerResults` against what `__main__` writes.
+- **Chains:** the longest still growing are at generation 4: SRV-150 → SRV-154 → SRV-158 → SRV-162; HLP-148 → HLP-151
+  → HLP-158 → HLP-161 and HLP-163; TST-437 → TST-448; TST-442 → TST-451. Those about tests or docs alone (TST-448,
+  TST-451) have fixes that make the claim smaller.
+
+---
+
+### 2026-11-16: the full-run-failures branch against main, fourth review (the diff only)
+
+- **Scope:** the branch's uncommitted diff against main, after the third review's 15 findings and SRV-163 were
+  addressed.
+- **How:** four reviewers read the diff: the server with the plugin and the macOS window helper, the 3D helpers, the
+  editor_panels_and_fit checks with the window readers, and the self-test's infrastructure with the docs. No tests
+  were run. The lead agent settled each suspicion by reading. Where reading couldn't, it ran four probe scripts, one
+  at a time, each in a Designer opened hidden by the branch's `launch_designer` (alone, port 9877). Designer's windows
+  stayed hidden, or on screen transparent and click-through, as a 3D shot makes them. The probes:
+  - `to_back`'s wait in `put('covered')`, timed, 3 times;
+  - the Light tool check's moves, each timed, under the Light and the Camera tool;
+  - a show from a count left low (Designer hidden mid-accumulation, then `screen.again()`), 5 times;
+  - drags right after a mesh switch; then a mesh and an orbit in one call, in two, and in the shot's set-up, each part
+    alone, and `[90, 0]` from Front against view Right.
+- **Dropped:**
+  - A drag's wait ending on an UpdateRequest that came mid-drag (`taking` counts requests from before the press).
+    Measured: no request came during any of 8 drags, and each wait ended on one 0.03 s after the release. The probe
+    found HLP-168 instead.
+  - SRV-162's poll running all of `_running_on` every POLL_S while no Designer is recorded. It is the poll AGENTS.md
+    asks for where no callback exists: a Designer that starts listening on another port has none. Its docstring's
+    "nothing says so" is half true, as a watch on the records folder would say a record. That is a generation-5
+    follow-up on a doc that changes nothing anyone does (DECISIONS.md, "Low-value findings about the tests and docs
+    are not raised").
+  - The frames fact's unit test passing with `_shown`'s "every paint reads 8" removed. It is generation 3 on tests,
+    whose fix would add a case, and no sentence says each clause is pinned (the chain rule; the same decision).
+- **Not verified:** each needs a window on the user's screen, which takes their go.
+  - Whether the window checks' set-ups (`to_back`, `_PUT`'s IN_FRONT ways) wait out their 3 s limit when another
+    app's window covers Designer's whole frame at the unhide. HLP-166 replaced that wait in `give_back_activation`.
+    In the Designer probed, no other app's window was in front of Designer's. `to_back`'s wait ended at the show in
+    0.02 s, 3 of 3: Qt exposed the window while macOS said it covered. The first review's log asks the same.
+    Note (2026-11-16): measured with the user's go, a window of theirs in front: it doesn't. macOS said Designer's
+    window covered whole, one window of another app's in front of it, and Qt exposed the window at the unhide: the
+    waits ended in 0.020 to 0.024 s, `to_back`'s 3 of 3 and the 'on screen' way's 3 of 3.
+  - Whether lifecycle's hand-over check, which starts a Designer from its binary, puts a window on the user's
+    screen, or makes the run's hidden Designer come in front as it takes the hand-over (DECISIONS.md, the Project
+    rules entry on Designer during tests; README's exception for it). What would check it: a FrontWatch around the
+    start and the hand-over, with `stayed_off_screen` read for both processes.
+    Note (2026-11-16): measured with the user's go: it doesn't. Under a front watch (about 157 samples over 11 s
+    each time), neither the Designer started from its binary nor the run's hidden Designer was the active app or had
+    a window on screen, at any layer, 3 of 3. The check passed each time.
+- **Resolutions assessed:** those whose fixes are in this round, the third review's 15 and SRV-163, and the fixes the
+  findings below follow. Questioned, as follow-ups:
+  - SRV-163: SRV-164;
+  - HLP-163: HLP-167;
+  - HLP-158: HLP-168;
+  - HLP-164: HLP-169;
+  - TST-445: TST-453;
+  - TST-421: TST-454, TST-455, TST-457;
+  - HLP-150: TST-455;
+  - TST-426: TST-456;
+  - TST-452: TST-459.
+  TST-458 is TST-261's defect back, brought by SRV-151's crash wait. The others hold: SRV-162, HLP-161, HLP-162,
+  HLP-165, HLP-166 (its Also covered: Not verified, above), TST-446 to TST-451. DECISIONS.md's 3D shot and camera turn
+  entries stand: their Reopen if isn't met.
+- **Findings:** 11.
+  - Low-medium: TST-453.
+  - Low: SRV-164, HLP-167, HLP-168, HLP-169, TST-454 to TST-459.
+- **Suggested order:**
+  1. HLP-167 and HLP-168, the tools' code: a shot rendered mid-accumulation, and a set-up that varies;
+  2. SRV-164, the launch;
+  3. TST-453, a false failure of the full run;
+  4. TST-454, TST-457, TST-458, then the rest.
+- **Checked and found fine:**
+  - `_pgrep`'s exit codes and `OSError`; `_NoListing` in core.py, bound in both modules; the callers that catch it
+    (`_any_designer`, `_agent_record`, `_appeared`, `_launched_now`, `_start_designer`'s `_force_end`s);
+  - `may_have_exited`'s watches and their close in the `finally`; quit.py's `_after_reply` lookup and its fallback;
+    the plugin's callbacks after a failed send, and `_on_after`'s docstring;
+  - `_Counts`' `seen` aligned with the paints; a shot's first `_Frames` counting a low paint as a restart; every
+    `_Frames` wait bounded and woken; renders taken between polls; the abort paths' clean-ups;
+  - FIRST_SHOT's and FRAMES_DROPPED's patches put back in a `finally`; `run()`'s order; the windows put back after
+    each put; the spies removed;
+  - `crash_handlers`' None and `dumps_may_come`; `CrashWatch.settle`'s attribution; `end_own_designer` waiting on its
+    own process; `hide_designer` only where the self-test started Designer;
+  - ROADMAP item 100's figures against the code; DECISIONS.md's names and paths.
+- **Chains:** the longest still growing is at generation 5: HLP-148 → HLP-151 → HLP-158 → HLP-163 → HLP-167. Next,
+  at generation 4: HLP-158 → HLP-168. The generation-3 follow-ups about tests or docs alone (TST-453, TST-455's cancel
+  check, TST-456, TST-459) have fixes that add no check.
+- **Then,** at the user's request, the 11 findings addressed in the suggested order, test first, all done. HLP-168
+  was measured first: moves made off screen don't always come out as on screen, the mesh step aside. The user
+  chose to run a `set_3d_view` that moves the camera on screen ("Show the window (Recommended)"), added to
+  DECISIONS.md's camera turn entry. The in-front window checks weren't run in a scratch run, as they put an opaque
+  window over the user's; the fixes change nothing they judge.
+- **Then,** at the user's request, DECISIONS.md's camera turn entry was removed: nothing cited it, and AGENTS.md's
+  wait rule already rules out what it turned down (notes under HLP-158 and HLP-168). The entry on Designer during
+  tests was cut to its rule, its reason and its reopen condition.
+
+---
+
+### 2026-11-16: the full-run-failures branch from ec984a9 to HEAD, fifth review (one diff)
+
+- **Scope:** every change from ec984a9 to HEAD (cb66092), ec984a9 included, read as one diff:
+  `git diff c9d9774..HEAD`, c9d9774 being ec984a9's parent, 83 files. The code as it stands at HEAD, the five
+  commits read together, since each built on the one before.
+- **How:** seven reviewers read the diff by area: the lifecycle server with the plugin; the preferences put-back,
+  uninstall and crash dumps; the 3D view's set-up and its waits; the 3D shot's window; the editor_panels_and_fit
+  checks; the window states and readers; the self-test's infrastructure with the docs. No tests were run. The lead
+  agent settled each suspicion by reading. Where reading couldn't, it ran four probes, one at a time, each in a
+  Designer opened hidden by the branch's `launch_designer` (port 9877). Designer's windows stayed hidden, or on
+  screen transparent and click-through, as a 3D shot makes them. The probes:
+  - the preferences lock, timed through three launches by `open` and their quits, the server run in the probe's
+    process;
+  - `set_3d_view(mesh=...)` in a Designer just started, before any 3D shot (HLP-170);
+  - set-ups of an orbit of two drags, or of one, then a zoom, 8 in all, each `settled()` timed with the counts read
+    around its mark;
+  - Qt's signals and the top-level widget's events during 4 minimizes and 4 hides (HLP-173).
+- **Dropped:**
+  - The preferences lock held through `open` and the search for its process, against DECISIONS.md's "(up to about
+    10 s)". Measured: a launch held it 0.24 to 0.25 s, 3 of 3. The limits of `open` and the search run only on
+    failure, which SRV-160 bounded. The entry's Reopen if isn't met.
+  - A move option after an orbit of two drags never seeing its restart, the mark being taken at a count of 1, so
+    that `settled()` would wait NO_RESTART. Measured: the count climbed to 3 after the mark before the zoom
+    restarted it, and each wait ended in 0.046 to 0.049 s, 4 of 4, and 4 of 4 after an orbit of one drag.
+  - The user's clipboard switching between the render and their text during a shot's renders: DECISIONS.md's
+    clipboard entry (the user doesn't mind losing their clipboard when an agent needs it, as long as the text comes
+    back).
+  - The first 3D shot's check skipping if a 3D shot ever comes before it in `run()`: a guard against a future edit,
+    and its skip says why in each run.
+  - The same facts in AGENTS.md, README.md, the live-check skill and `alone.py` (the crash dump folders, uploads
+    off, `alone.close()` naming a dump): they agree (DECISIONS.md, low-value findings: two places that agree).
+- **Not verified:**
+  - Off macOS, `view=` with Designer minimized. `_on_screen` does nothing there, so the turn's wait ends at once,
+    and Frame comes right after it, which on macOS cancels the turn. Before this range it waited VIEW_TURN. It
+    needs Windows: set the view with Designer minimized, then compare a shot with one set with the window shown.
+  - Whether an unload in a Designer on screen finishes its teardown before the next call: the first review's Not
+    verified, still open. SRV-167 narrows the docs meanwhile. It needs Designer drawing on the user's screen, which
+    takes their go.
+    Note (2026-11-16): measured with the user's go: it does. In a Designer an agent started, shown on screen, opaque
+    and not the active app, with Designer's `node_align_tools` loaded, link_display's fact read 327 widgets gone
+    within the unload, 504 by the next call and 504 by the one after, 5 of 5, as hidden. 20 `set_link_display`
+    reloads (portal, then wire) all reloaded and reopened, with no crash dump.
+  - Whether the window checks' 'minimized' way, made opaque as macOS's minimize animation runs, flies to the Dock
+    opaque: the first review's Not verified, still open. Moving its `fade(False)` after `until(reached)` would make
+    the question moot. Seeing it takes the user's go.
+    Note (2026-11-16): measured with the user's go: it does (TST-472). Sampled from outside Designer during
+    `put('minimized')`, about 0.1 to 0.65 s after the call began, the window server listed Designer's main window
+    on screen at opacity 1, shrinking from its frame to the Dock's icon, 6 of 6. It was listed behind every other
+    app's window in each sample.
+- **Resolutions assessed:** those whose fixes are in this range, the four earlier reviews' of this branch included.
+  Questioned, as follow-ups:
+  - SRV-152: SRV-165;
+  - SRV-124: SRV-166;
+  - SRV-150: SRV-167;
+  - SRV-151: TST-466;
+  - HLP-162 and HLP-152: HLP-170;
+  - HLP-150: HLP-171;
+  - HLP-163: HLP-172;
+  - HLP-145 and HLP-160: HLP-173;
+  - HLP-168: HLP-174, TST-465;
+  - HLP-167: TST-463;
+  - TST-418: TST-464;
+  - TST-453: TST-464, TST-467;
+  - TST-417: TST-467;
+  - TST-420: TST-465;
+  - TST-441: TST-468;
+  - TST-426: TST-469.
+
+  HLP-161 holds (the probe above). The others hold. DECISIONS.md's entries in scope stand: their Reopen if isn't
+  met, and the names and paths they cite exist.
+- **Findings:** 22.
+  - Low-medium: SRV-165, HLP-170, TST-460.
+  - Low: SRV-166, SRV-167, INS-37, HLP-171 to HLP-175, TST-461 to TST-471.
+- **Suggested order:**
+  1. SRV-165, a launch that can end the user's Designer;
+  2. HLP-170, a tool failing in a Designer just started;
+  3. TST-460, TST-470 and TST-471, Designer's windows in front of the user's during tests;
+  4. the tools' code: SRV-166, HLP-171, HLP-172, HLP-173, INS-37;
+  5. the tests' waits: TST-466, TST-469, TST-463;
+  6. the docs and types: SRV-167, HLP-174, TST-465, TST-467, TST-468, TST-464, TST-462, HLP-175, TST-461.
+- **Checked and found fine:**
+  - the plugin's after-reply callbacks: each run once, in order, on the main thread, none for a status or a cancelled
+    job; `_pgrep` and `_NoListing` at every caller; `open`'s limit and its stderr; `_OpenedUnfound` raised after
+    `saved()`, which keeps the copy; the locks taken in one order, the port's then the preferences';
+  - `designer_preferences.py` at HEAD: the put-back's order, the copy written 0600 then replaced, no error escaping
+    into a tool or into uninstall; `uninstall.py` on every path; the standalone scripts on Python 3.9;
+    `read_crash_dump.py`'s offsets and bounds against the minidump layout;
+  - crash uploads written only in an agent's own home; `--env CFFIXED_USER_HOME` keeping an agent's Designer out of
+    the user's log and plist;
+  - `_drag`'s guard and its release in a `finally`; `taking()`'s counts; `_wheel`'s wait per notch; `_Counts`'
+    rules (HLP-159, HLP-167); `_until`'s connections; `_Frames`' close; views.py's checks of orbit and pan;
+  - `_Screen`'s put-back orders, the refusal after BRINGS, every spy removed in a `finally`, nothing making Designer
+    the active app;
+  - every `put()` cleared in a `finally`; the snippets' filters and watches closed; the checks' readers failing when
+    they can't tell;
+  - the pool: `choose()` next to the user's Designer, the put-back through `_any_designer`, every crash wait
+    bounded, `check_the_preferences` after every worker; the unit tests kept off the real plist, log and crash
+    folders.
+- **Chains:** the longest still growing is at generation 6: HLP-148 → HLP-151 → HLP-158 → HLP-163 → HLP-167 →
+  TST-463. At generation 5: HLP-163 → HLP-172, in the tools' code; HLP-158 → HLP-168 → HLP-174 and TST-465, docs.
+  The follow-ups at generation 3 or later about tests or docs alone (HLP-174, TST-463 to TST-465, TST-467 to
+  TST-469) have fixes that add no check.
+- **Then,** with the user's go, the two questions that needed a window on their screen were measured (the notes
+  under Not verified): the unload on screen as hidden, and the 'minimized' way flying to the Dock opaque, which became
+  TST-472 (Low-medium). The findings: 23.
+- **Then,** at the user's request, all 23 addressed in the suggested order, test first, all done. Measured first: the
+  second show after SHOW_AGAIN never came since HLP-160 (60 of 60 waits), and no Qt callback says a hide or a
+  minimize (HLP-173, which then dropped its wake-ups). The first run of the category failed one check on a leftover
+  of HLP-170's new check, which then set the mesh alone. Live: HLP-170's and TST-472's checks failed in their scratch
+  runs, then against the old code put back in a copy for the run; then the whole category passed, 96 of 96, in a
+  Designer just started, its in-front checks with the user's go.
+
+### 2026-11-16: the full-run-failures branch, sixth review (eccfc1a: the fifth review's fixes)
+
+- **Scope:** the changes since the fifth review, `git diff cb66092..eccfc1a`: one commit, 34 files, the fixes of the
+  fifth review's 23 findings. Whether each of those resolutions holds.
+- **How:** three reviewers read the diff by area: the server, the crash dump script and the docs; the 3D helpers; the
+  self-test. No tests were run. The lead agent settled each suspicion by reading, and with two probes. Nothing of
+  Designer's came on the user's screen:
+  - in plain Python, on Designer's own Python 3.13.9 and on 3.12: three helpers' try/finally shapes, copied with
+    fakes, an abort raised at each traced event in turn (HLP-177);
+  - in a Designer `launch_designer` opened hidden on port 9877, after editor_panels_and_fit's preparation: the mesh
+    shown before and after NEVER_DREW (TST-475). Its quit took 1 s and left no crash dump.
+- **Dropped:**
+  - SRV-166's second test not checking which path ran, with setup it doesn't use. By reading, each case takes the path
+    its id names: SIGTERM ends the process, and `-1` makes `_force_end` fail, so the call raises. Asserting the path
+    would make a generation 4 check of a test alone stronger (Follow-up chains). The launch fakes are a guard: nothing
+    real starts.
+  - shot3d.py's sentence that no Qt callback says the window is off screen after a minimize, where HLP-173 measured
+    the top-level widget's Hide event for each minimize. That event came before the window server stopped listing the
+    window, the state the wait reads, so it can't end the wait. A docs follow-up at generation 3 that changes nothing
+    anyone does (DECISIONS.md, low-value findings). ROADMAP item 101 measures AppKit's notifications.
+  - `_CLEAR`'s NOT_HIDDEN, which no caller reads. It shows only after a hide that failed, which no run has seen, and
+    the worst it does is leave a Designer an agent started on screen, transparent and click-through (DECISIONS.md,
+    low-value findings).
+- **Not verified:** whether the window server draws Designer's windows opaque during TST-474's loop. Seeing it takes
+  Designer's windows opaque on the user's screen, which needs their go. TST-474's fix doesn't depend on it.
+- **Resolutions assessed:** the fifth review's 23, all fixed in this range. Questioned, as follow-ups:
+  - INS-37: INS-38;
+  - SRV-165: SRV-170;
+  - SRV-166: SRV-168, SRV-169;
+  - HLP-170: HLP-176, TST-475;
+  - HLP-171: HLP-177;
+  - HLP-173: HLP-178;
+  - TST-460: TST-474;
+  - TST-461: TST-476;
+  - TST-471: TST-473.
+
+  The others hold: SRV-167, HLP-172, HLP-174, HLP-175, TST-462 to TST-470, TST-472. DECISIONS.md's entries in scope
+  stand: their Reopen if isn't met.
+- **Findings:** 11.
+  - Low-medium: INS-38, HLP-177.
+  - Low: SRV-168, SRV-169, SRV-170, HLP-176, HLP-178, TST-473 to TST-476.
+- **Suggested order:**
+  1. HLP-177, the user's parameter, a temporary node or package, or the Explorer menu's look left after an abort;
+  2. INS-38, two unit tests failing on Windows;
+  3. the tools' code: SRV-169, SRV-168, HLP-176;
+  4. the self-test: TST-473, TST-474;
+  5. the docs, names and types: SRV-170, HLP-178, TST-475, TST-476.
+- **Checked and found fine:**
+  - SRV-165: the home, `/tmp/sd_mcp_<uid>_<port>/home`, holds no space, so splitting `ps -E`'s line is safe;
+    `CFFIXED_USER_HOME` is set on every `open` path; the marks are matched as whole variables; two matches would need
+    the same port and home, which `_launch_lock` and `before` rule out;
+  - SRV-166's raise in `_quit`, in order; `_sentence` leaving a failed sample's own stop alone; SRV-167's GUIDE.md
+    and docstring against the log's measurement; INS-37's checks matching `_checked_folder`'s and uninstall.py's, on
+    Python 3.9 too;
+  - HLP-171 in `_3d_render`: an abort anywhere in its put-back leaves the text put back, at most twice; HLP-170's
+    other paths (`moved()`, `shown()`, Samples off on screen); HLP-172's `between()` before the recursion; HLP-173's
+    waits, bounded, and its refusal; HLP-174's docstrings; HLP-175's marks;
+  - the re-indented `run()` (`git diff -w`: the moved `with` and the new checks only); `window(geometry, name, ...)`
+    at every caller; `_UNDER`'s `del`; every set-up's clear in a `finally`; TST-472's order and its check; `low()`;
+    PopupWatch's `layer`; `alone.close_with`'s poll; `_quit_to_keep`; each new source test failing on the old
+    snippets.
+- **Chains:** TST-463's chain, at generation 6, stopped: its resolution holds. The longest still growing is at
+  generation 4: SRV-124 → … → SRV-166 → SRV-168 and SRV-169; HLP-148 → HLP-150 → HLP-171 → HLP-177; HLP-170 →
+  HLP-176 and TST-475. SRV-169, SRV-168, HLP-176 and HLP-177 are in the tools' code. The follow-ups about docs or
+  tests alone at generation 3 or later (SRV-170, HLP-178, TST-475) have fixes that make the claim smaller.
+- **Then,** at the user's request, all 11 addressed in the suggested order, test first, all done. Measured first, in
+  Designers an agent started, hidden: a package's UID, not its handle, names it from one listing to the next, and
+  unloading a package twice crashed that Designer. In plain Python, an abort at a `try:` line escapes the `try` around
+  it in the same function, which the look's restructure followed. The fixes were saved aside while every new test ran
+  against the old code: each failed, unit and live; then they passed. Scratch runs: HLP-177's live checks, measure and
+  discovery whole (40 of 40), and editor_panels_and_fit's changed paths in a Designer just started under a front watch
+  (11 of 11). The in-front group didn't run.
+
+### 2026-11-16: the full-run-failures branch from ec984a9 to HEAD, seventh review (one diff)
+
+- **Scope:** every change from ec984a9 to HEAD (f1ad9f6), ec984a9 included, read as one diff:
+  `git diff c9d9774..HEAD`, 89 files. The code as it stands at HEAD. f1ad9f6, the sixth review's fixes, was read for
+  the first time.
+- **How:** seven reviewers read the diff by area: the lifecycle server with the plugin; the preferences put-back,
+  uninstall and crash dumps; the 3D view's set-up and its waits; the 3D shot's window and the clipboard; the helpers'
+  put-backs after an abort; the editor_panels_and_fit checks; the self-test's infrastructure with the docs. No tests
+  were run. The lead agent settled each suspicion by reading, and with two probe runs, one after the other. Each ran
+  in a Designer `launch_designer` opened hidden on port 9877 (`alone.run`, a graph of the probe's own). Designer's
+  windows stayed hidden, or on screen transparent and click-through, as a 3D shot makes them. The user's clipboard
+  text was saved first and put back after. The probes:
+  - a render taken as Designer's window came on screen during `_renders_alike`'s wait, in a view that never drew;
+  - whether `g.compute()`, `loadUserPackage` and `newInstanceNode` run Qt's events: a 0 ms timer, a posted event, and
+    a mouse-moved NSEvent queued in Designer's own application, seen by a native event filter;
+  - the clipboard after a 3D shot: read while a 12 s job held Designer's main thread, after that Designer was killed,
+    and after a normal quit (HLP-181).
+
+  Neither Designer left a crash dump.
+- **Dropped:**
+  - `_delete_new_nodes` and `_unload_new_packages` removing a node or a package the user added while the call ran,
+    where the old code removed only the one it made. Measured: `g.compute()` runs Qt's events (a 0 ms timer ran inside it
+    in 3 computes of 3, a posted event in 2 of 2). A mouse-moved event queued before it was dispatched only after it
+    (1 of 1), where one queued before a `processEvents` was dispatched there. `loadUserPackage` and `newInstanceNode` ran none. The user's input waits for the call's end, and no job
+    runs inside another (PLG-35).
+  - `_renders_alike`'s first render, taken as the window comes on screen, coming before any paint in a view that never
+    drew, and raising. Measured: the render came after the view's first paint and gave an image (1 of 1).
+  - The Explorer menu left opaque by an abort in a look that found no menu yet (two reviewers): the menu is there at
+    the first look (measured; the look's comment). An abort reaching the look's call after one was dropped elsewhere
+    is the case `_menu_once`'s docstring gives.
+  - A second Designer ended in launch_designer's wait replacing the note of the first: main's code, unchanged by the
+    range. It needs two servers launching on one port, with both Designers hung.
+  - SRV-170 missing the name and comment of `test_the_process_open_started_is_the_new_one_with_its_port`, which give
+    the port alone: a generation 4 wording follow-up that changes nothing anyone does (DECISIONS.md, low-value
+    findings). So is `_unload_new_packages`' citation of discovery's checks for a library package's file: those checks
+    pin the file only for a package the API makes.
+  - The hand-over Designer, started from its binary, uploading a crash report: it never answers, and the server's
+    docstring says a crash before a Designer answers may still be uploaded. No run has seen it crash.
+  - `Reply` copied from `server_tools/core.py` into `common.py`, filled by `raw_request`'s `Any`: `raw_request` is
+    main's, unchanged (DECISIONS.md, vague types).
+  - Outside the range, for the user to weigh: `tests/unit/test_library_subfolders.py:126` calls `os.geteuid()`, which
+    Windows lacks, in a test not skipped there. It is main's code from before ec984a9; the Windows unit suite fails it.
+- **Resolutions assessed:** the sixth review's 11, all fixed in f1ad9f6. Questioned, as follow-ups:
+  - HLP-177: HLP-179, HLP-180;
+  - INS-38: INS-39;
+  - SRV-169: SRV-171;
+  - TST-474: TST-478.
+
+  The others hold: SRV-168, SRV-170, HLP-176, HLP-178, TST-473, TST-475, TST-476. DECISIONS.md's entries in scope
+  stand, except the clipboard entry, whose Reopen if holds (HLP-181).
+- **Findings:** 8.
+  - Low-medium: HLP-179, HLP-180, HLP-181, INS-39.
+  - Low: SRV-171, TST-477, TST-478, TST-479.
+- **Suggested order:**
+  1. HLP-179, a tool's result saying the user's parameter may not be back;
+  2. HLP-180 and HLP-181, the user's screen and clipboard after a 3D shot. HLP-181's fix may want the user's word,
+     as the clipboard entry is theirs;
+  3. INS-39, two unit tests failing on Windows;
+  4. SRV-171, the tools' errors;
+  5. the self-test: TST-478, TST-477;
+  6. the types: TST-479.
+- **Checked and found fine:**
+  - SRV-168's order on every path; SRV-169's `try` in `_quit` covering each listing after the close;
+    `_quit_evidence` never raising `_NoListing`; SRV-170's comment, conftest parameter and renamed test;
+    `_force_end`'s other callers; the locks taken port first; `_remember_started` under both locks;
+  - INS-38's `getattr(os, 'getuid', None)` and its 'no user ids' case, which fails on the old code; no other
+    POSIX-only call reachable on Windows in the preferences, uninstall and crash dump code; the plist written only by
+    `_put_back`, after `running()` and `_users_ran_since`; the dump reader's bounds; Python 3.9;
+  - HLP-176's fix and test; HLP-177's `unfade` order, `_menu_once`'s two put-backs, and the look's handler covering
+    `fade`'s and `pick`'s `try:` lines; every other `finally` of the helpers (`_set_tiling`, `_drag`, `_mouse`, the
+    spies); the order of PARTS;
+  - HLP-177 in sweep, describe and editor: each put-back runs again untraced, and never unloads or deletes twice;
+    nothing is made before either `try:` line; `at_each_event` raises at every event, and each test fails on the old
+    code; the live checks fail without the fix and clean up;
+  - HLP-178's docstring; HLP-171's put-back at HEAD; HLP-173's waits; nothing making Designer the active app; holds
+    and spies balanced;
+  - TST-473's order and its pin, with no order dependence; TST-474's `_CLEAR` and its pin; TST-475; TST-476;
+  - the pool's `check_the_quits` and `check_the_preferences`, `alone.close_with`, the launch lock, `HIDE`'s order,
+    `link_display`'s unload fact, the removed pauses; every name the changed docs cite exists.
+- **Chains:** the longest still growing is at generation 5, in the tools' code: HLP-148 → HLP-150 → HLP-171 →
+  HLP-177 → HLP-179 and HLP-180; SRV-124 → … → SRV-166 → SRV-169 → SRV-171. At generation 3: INS-37 → INS-38 →
+  INS-39, the script's code with its tests; TST-460 → TST-474 → TST-478, the self-test's code, which can leave
+  Designer opaque on the user's screen. Its fix adds no check beyond its unit pin.
+- **Then,** at the user's request, all 8 addressed in the suggested order, test first, all done. Every new test failed
+  first: the unit tests in one run, the three live checks in one scratch run. HLP-181's unit test and TST-477's new
+  version, written with or as the fix, failed with the fix taken out and on a mutant without the lock. HLP-181's fix
+  was measured first: resolving Qt's promises through Carbon crashed that Designer, and reading them back worked. After
+  the fixes, the scratch run passed 16 of 16: the three new checks, HLP-177's sweep checks, and editor_panels_and_fit's
+  shot window checks off screen under a front watch. Then `/simplify` once (AGENTS.md), its fixes changing no
+  behaviour: the clipboard's read-back made a method of `_MacWindow`, the wait for a running job shared
+  (`common.until_job_running`), the sweep's fakes shared, `at_rest` the only way to the clear's snippet, the step
+  sentences joined plainly. Two slips of the fixes it found were mended: the material check stopped only after its
+  tiling shot, and a test's message lacked its `% where`. Left out: the material check hiding Designer through
+  `at_rest` in a job of its own (a change of behaviour), a helper for the two measure checks' set-up (a module of its
+  own for six lines). The touched unit tests passed before and after, and the scratch run passed 18 of 18, with the
+  bridge's cancel check.
+
 ---
 
 ## High
 
 ## Medium-high
+
+- [x] **TST-432 · The self-test's HIDE never hid a Designer: the window handle it took was already deleted** · follows TST-421, generation 2 · `tests/test_all_tools/common.py` (`HIDE`), `editor_panels_and_fit/checks.py` (`ADD_MATERIAL`) · measured · found 2026-11-15
+  - **Defect.** `HIDE` took `mw.window().windowHandle()` in one expression. A line later the handle read "Internal
+    C++ object (PySide6.QtGui.QWindow) already deleted", and `_event_signal` raised before the hide.
+  - **Scenario.** Measured while addressing the review (2026-11-15): a Designer `alone.run` started stayed on the
+    user's screen, opaque, for a whole probe run, about 20 s ("self-test: Designer wasn't hidden: ... already
+    deleted"). The same expression, in 4 of 4 fresh calls, gave a deleted handle; with `mw.window()` held first, a valid one.
+    Once a wrapper was held elsewhere, the same expression gave a valid handle too. Every Designer the self-test
+    started since TST-421's change stayed on the user's screen: in a full run, each worker's.
+  - **Fix.** Hold the top-level widget while its handle is used: `top = mw.window()`, then `top.windowHandle()`.
+  - **Resolution: done.**
+    - **Test:** `check_the_self_tests_hide_hides_designer` (editor_panels_and_fit) failed in its scratch run on the
+      deleted handle, then passed (`HIDDEN=True`). `test_no_window_handle_is_taken_through_a_wrapper_dropped_at_once`
+      fails on the expression anywhere in the code.
+    - **Also covered:** `ADD_MATERIAL` took the handle the same way; SRV-155 in the tool's code. No other
+      `windowHandle()` call takes it through a dropped wrapper.
+  - Questioned by TST-434 (2026-11-15).
 
 ## Medium
 
@@ -924,6 +1577,162 @@ of the repo. If it can't, it says why: the ID never existed, a squash lost it, o
     - **Also covered:** every way the window is brought on screen (minimized, covered, hidden, a page Qt minimized)
       goes through the same wait, so each gets the second try; only the hidden way was seen to need it.
 
+  - Note (2026-11-16): HLP-160 found a cause that fits these readings (`hidden=False covered=True`): brought in
+    front before Designer's unhide took, the window went behind the active app's window as it took. The shot now
+    waits for the unhide first; the show-again after SHOW_AGAIN stays.
+  - Questioned by HLP-173 (2026-11-16).
+- [x] **SRV-149 · A Designer launch_designer starts comes in front of the user's windows and takes their keyboard until it answers** · follows SRV-148, generation 2 · `mcp_server/server_tools/lifecycle.py:324-336` (`_designer_env`), `:413-430` (`_started`) · measured · found 2026-11-15
+  - **Defect.** `_started` runs Designer's own binary. Designer's Qt makes the app the active one as it finishes
+    launching, so its window comes in front of the user's and their typing goes into it. SRV-148 gives the keyboard
+    back only once Designer answers, about 6 to 20 s later. A full run of the self-test starts 23 Designers, so the
+    user's work is interrupted again and again: they reported "it is a deal breaker" (2026-11-15).
+  - **Scenario.** Measured. SRV-148's probe found every launch in front as the active app. Designer's Qt is 6.8.6, and
+    its Cocoa plugin reads `QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM`, which stops that activation. A probe
+    started one agent's Designer through `launch_designer` with that variable set in the server's environment, and
+    watched from another process: the active app (`lsappinfo front`) and the window server's list, every 50 ms, with
+    PyCharm in front. It ran three times, twice with `QT_MAC_SET_RAISE_PROCESS=0` set too. In each, over about 190
+    samples of the 8.6 to 8.8 s launch, Designer was never the active app, and its window was never the frontmost
+    normal window. The only Designer window above PyCharm's was one at popup level, 575 × 387 in the middle of the
+    screen, fading out (opacity 0.94 to 0.05) over 0.13 to 0.22 s as Designer answered: its splash or Home screen,
+    most likely. A screenshot of the whole window worked after it. `QT_MAC_SET_RAISE_PROCESS=0` isn't needed, and the
+    undo checks rely on a raise activating Designer (TST-234).
+  - **Fix.** `_designer_env` sets `QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM=1` on macOS. Test: a unit test of
+    the environment, and a lifecycle live check watching a launch from the self-test's process, both seen failing
+    first.
+  - **Resolution: done.**
+    - **Test:** `test_lifecycle_env.py::test_a_designer_started_on_macos_doesnt_make_itself_the_active_app` failed
+      first: the variable wasn't set. Lifecycle's new check "starts Designer behind the other apps: never the active
+      app, its window never in front of theirs" (renamed since: below), in `check_launch_on_another_port`, watches the second Designer's
+      launch from the self-test's process (`window_server.FrontWatch`). In its scratch run it failed first: "the
+      active app 4.60 s, its window the frontmost 1.93 s; 120 samples, 41 listing its windows". After the fix it
+      passed: 0.00 s and 0.00 s, of 92 samples, 27 listing its windows, and the splash's fade above the other windows
+      in 2 samples. The watch's own unit tests: `test_selftest_window_server.py`.
+    - **Then measured** (2026-11-15), with each window's bounds read too: the Designer started came up behind the active
+      app's window but over another app's window, for 1.88 s of its launch, never the frontmost. So the check, renamed
+      "starts Designer behind the app in front: never the active app, its window never in front of its", counts only
+      the active app's windows (`stayed_behind(..., active_only=True)`), and the docs say "behind the app in front".
+    - **Cause:** Designer's Qt makes the app the active one as it finishes launching, and nothing turned that off.
+    - **Fix:** `_designer_env` sets `QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM` (`STAY_BEHIND`) on macOS. The
+      module docstring has the measurement. `give_back_activation` stays, for a Designer that still becomes the
+      active app. `QT_MAC_SET_RAISE_PROCESS` is left as Qt sets it, for Undo (TST-234).
+    - **Also covered:** every Designer the server starts gets its environment from `_designer_env`, and so does the
+      self-test's hand-over check, which starts the binary itself. The window checks now set up their ways behind every
+      window, with Designer hidden at rest, and those that need a window in front of the user's run together, after
+      them. The Undo checks still raise and activate their Designer's window, as Undo needs. The tool's docstring,
+      `mac_window.py`'s docstring and README say a Designer starts behind the app in front. The CoreGraphics reading
+      the popups' watch had moved to `window_server.py`, shared by both watches.
+  - Questioned by TST-435 (2026-11-15).
+
+- [x] **SRV-152 · A Designer launch_designer starts comes up in front of the active app's window** · `mcp_server/server_tools/lifecycle.py` (`_start_designer`, `STAY_BEHIND`), `tests/test_all_tools/lifecycle/checks.py` (`check_launch_on_another_port`) · measured · found 2026-11-15
+  - **Defect.** The window of a Designer an agent starts showed in front of the active app's window, in front of the
+    user's work, though `STAY_BEHIND` was measured to start it behind that window (lifecycle.py's docstring). It
+    never became the active app, so the keyboard stayed the user's.
+  - **Scenario.** Measured with lifecycle's watch of the window server (2026-11-15), four launches of a second Designer
+    on another port, while the user worked: in front of the active app's window for 3.69, 0.65 and 5.66 s, and from
+    its first appearance, 4.5 to 4.9 s into the launch, until the launch returned. At that first sample, its window
+    was the frontmost normal window, the active app's one window right behind it. The same with the launch's old 2 s
+    poll restored for one probe run, so SRV-150's change isn't the cause. A scratch run earlier the same day passed,
+    0.00 s in front. `check_launch_on_another_port` fails.
+  - **Fix.** Measure what decides it: which app is active, how many windows it has, and whether a start flag
+    (`open -g`, or Qt's) keeps Designer's window behind. Measuring it shows Designer's window in front of the user's,
+    so it takes the user's go.
+  - Note (2026-11-15): README.md ("start behind the window you're working in") and lifecycle.py's docstring
+    still say a launch stays behind the active app's window. The fix brings them in line with what it measures.
+  - **Resolution: done.**
+    - **Measured first** (2026-11-15, with the user's go), `launch_designer` with its process started each way, under
+      the front watch, the active app's window in front:
+      - from its binary (`STAY_BEHIND` set): in front of another app's window for 2.70 s and 0.69 s, of two launches;
+      - `open -n -g`: 0.63 s, of one;
+      - `open -n -g -j` (hidden): none of its windows on screen and never the active app, in 4 of 4 launches, each
+        answering in 5.4 to 6.4 s. `ps -E` read `SD_BRIDGE_PORT` in the new process's environment each time.
+    - **Test:** `test_launch_opens_a_new_instance_hidden_with_the_port`,
+      `test_the_process_open_started_is_the_new_one_with_its_port`, `test_a_process_open_started_that_never_shows_is_said`,
+      the watch's `test_a_designer_started_hidden_shows_no_window_and_never_becomes_the_active_app`,
+      `test_the_launch_check_judges_designer_started_off_screen` and
+      `test_a_designer_started_hidden_that_became_the_active_app_stays_hidden` failed. Live: lifecycle's launch check.
+    - **Fix:** on macOS an app bundle is opened by `open -n -g -j`, with the variables Designer reads passed by
+      `--env` (`_opened`). Its process is the new one whose environment has the launch's port, looked for every
+      POLL_S (`_found_launched`). `give_back_activation` leaves a hidden Designer hidden. Lifecycle's check judges
+      `window_server.stayed_off_screen`: never the active app, no window of its on screen. Docs:
+      `launch_designer`'s docstring, lifecycle.py's and mac_window.py's, README.
+    - **Found along the way:** Designers `open` starts behave unlike those started from their binary. Covered, their
+      window stays exposed for Qt, and their 3D view draws (also with `open -g`, shown: 1 launch). The drawing fact now
+      says so; the stale-render check uses the minimized way; `_PUT` and the cover events wait on macOS's covered state,
+      not exposure. The check that a shot's window is transparent at each render no longer judges macOS's covered
+      state there: unhidden, a window of the user's may cover it until the shot brings it in front. shot3d.py's
+      docstring says the rest was measured in Designers started from their binary. DECISIONS.md's 3D-shot entry
+      stands: the shot still brings a covered window in front.
+    - **Result:** in scratch runs, lifecycle whole 54 of 54 (twice); in a Designer opened hidden,
+      `editor_open_and_zoom` and `layout` whole, the panel screenshots, the 3D view and window checks off screen, the
+      HIDE check: 92 of 92. The frames fact failed once of 4 runs there (one paint in 3 s after a pan, shown), and
+      passed the 3 runs after: not reproduced.
+    - **Not run:** the window checks in front of the user's windows other than TST-422's, and `undo`: a full run.
+  - Questioned by TST-433, SRV-156, SRV-157, SRV-160 and TST-441 (2026-11-15).
+  - Questioned by SRV-165 (2026-11-16).
+- [x] **TST-422 · The covered-during-shot check passes whatever becomes of the order after the shot** · `tests/test_all_tools/editor_panels_and_fit/checks.py` (`check_a_window_covered_during_a_3d_shot_is_put_in_front_again`), `window_states.py` (`_CLEAR`) · confirmed · found 2026-11-15
+  - **Defect.** The docstring says Designer's window "goes back behind that window after". That half no longer tests
+    anything. `_CLEAR` now leaves Designer hidden (on main it ended with `mac.unhide()`), and the check puts nothing on
+    screen before `during_pan(path, 'cover')`. So the shot starts from a hidden Designer and hides it again at its
+    end. `_MacWindow.covered()` is True for a hidden Designer, so `read(showing('covered=True'))` and
+    `state.get('covered') == 'True'` hold whatever order the windows were left in.
+  - **Scenario.** Read in the code (2026-11-15). A shot that leaves Designer's window in front of the cover, or behind
+    every window, passes as long as it hides Designer at its end. Only the "in front again" half (`AGAIN`) is still
+    judged. The put-back behind a user's window is what keeps Designer off the user's screen.
+  - **Fix.** Set the check up on screen first (`put('on screen')`; it runs in the in-front block already). Then judge
+    `hidden=False` and the cover in front of Designer's main window, read with `read(in_order([('cover', 'main')]))`.
+  - **Resolution: done.**
+    - **Test:** the check itself, rewritten. In its scratch run, with the shot's `mac.put_below(behind)` removed from
+      the helpers, it failed: `order=main,cover` after the shot. `test_the_covered_during_a_shot_check_starts_on_screen_and_reads_the_order_after`
+      pins its set-up.
+    - **Cause:** `clear()` leaves Designer hidden, so the shot began hidden and hid Designer again, and a hidden
+      Designer reads `covered=True` whatever the order.
+    - **Fix:** the check puts Designer on screen first (`put('on screen')`), then reads the state once the cover is in
+      front of Designer's main window (`read(in_order([('cover', 'main')]))`), and judges `hidden=False` and that order.
+    - **Result:** in its scratch run (Designer in front of the user's windows for a few seconds, with their go), it
+      passed: the plane moved 0.249 of the view, Designer put back behind the cover.
+  - Questioned by TST-438 (2026-11-15).
+- [x] **TST-433 · A covered window didn't draw in a Designer launch_designer opened, so the drawing fact fails there, and four checks lost their guard on its account** · follows SRV-152, generation 2 · `tests/test_all_tools/editor_panels_and_fit/checks.py` (`check_the_3d_view_isnt_drawn_while_designers_window_is_off_screen`, `check_a_3d_shot_keeps_designers_window_transparent_and_click_through_while_off_screen`, `check_a_render_that_didnt_follow_a_pan_is_said`, `check_a_plain_3d_shot_shows_a_change_made_while_designers_window_was_off_screen`, `check_a_3d_shot_puts_designers_window_on_screen_without_taking_focus`), `mcp_server/designer_helpers/shot3d.py` (the module docstring, `_wait_on_screen`) · measured · found 2026-11-15
+  - **Defect.** SRV-152's resolution recorded that in a Designer `open` starts, a covered window stays exposed for
+    Qt and its 3D view draws. The drawing fact now expects that: `still = [way for way in off_screen if way !=
+    'covered']`, so a covered render that a pan leaves unchanged fails it. On that account, four checks no longer
+    judge whether a covered window was brought on screen:
+    - the transparent-at-each-render check reads only opacity and click-through;
+    - the stale-render check minimizes the window instead;
+    - the plain-shot check's covered case can't tell a shot that brought the window on screen from one that didn't;
+    - the focus check's plane movement can't either.
+    shot3d.py's docstrings and the checks' docstrings state the fact.
+  - **Scenario.** Measured in a Designer launch_designer opened (`open -n -g -j`, alone's fresh server, 2026-11-15):
+    - the drawing fact's covered way (`window_states.panned('covered')`), 3 times: `SAME=True`, with
+      `covered=True exposed=False`, as for the minimized way;
+    - the covered way brought on screen by `_on_screen`, 3 times: `exposed=False` before it.
+    So the drawing fact fails there. SRV-152's scratch run passed with covered windows drawn, so both states occur
+    in Designers opened hidden, and what decides it is unknown. Where covered windows draw, a shot that stopped
+    bringing a covered window in front passes every check.
+  - **Fix.** Measure what decides a covered window's exposure. Until then:
+    - the drawing fact says which state it saw for the covered way and doesn't judge it;
+    - the covered cases judge what doesn't depend on drawing: Designer's main window ahead of the cover at each
+      render (`ahead(order, 'main', 'cover')`, an order that changes with the window), and `hidden=False` and
+      `minimized=False` for the other ways;
+    - the docstrings say both states were seen.
+  - **Resolution: done.**
+    - **Measured first** (2026-11-16), in a Designer launch_designer opened hidden (alone, port 9877): the covered way
+      set up, the time macOS said covered and Qt's expose events logged, then the pan, 6 tries, 3 of them waiting up to
+      3 s for Qt to stop exposing the window. In each, the render followed the pan with `exposed=True`, still so 3 s
+      after `covered=True` in the 3 that waited; no expose event came after the cover. The review's Designer saw the
+      opposite, 6 of 6. So the state held per Designer, and what decides it wasn't found.
+    - **Test:** `check_a_3d_shot_keeps_designers_window_transparent_and_click_through_while_off_screen` judges where the
+      window is at each render (`BROUGHT_ON_SCREEN`: Designer's main window ahead of its cover, `minimized=False`,
+      `hidden=False`). In its scratch run, with the shot's `show()` and `unhide()` made to do nothing, the covered case
+      failed: 2 renders, none brought on screen, while opacity and click-through held, which the old judgement passed.
+    - **Cause:** SRV-152's fix took one Designer's covered state for every Designer `open` starts, and four checks
+      dropped their guard on it.
+    - **Fix:** the drawing fact says the covered way's state ("covered: drawn, Qt keeping the window exposed", or "not
+      drawn") and doesn't judge it. The focus check's and the plain shot's docstrings say their covered case can't tell,
+      and name the check that judges it. shot3d.py's module docstring and `_wait_on_screen`'s, and window_states'
+      comments, say both states were seen; the shot's covered line says "may not be drawn".
+    - **Also covered:** the stale-render check uses the minimized way already; its docstring now says so (TST-442).
+    - **Result:** in the scratch run, the drawing fact passed (covered: drawn); the transparent-at-each-render check
+      passed its 3 ways, 2 of 2 renders on screen each; the focus check and the plain shot passed their 3 ways.
 ## Low-medium
 
 - [x] **SRV-125 · With no log of the user's, an old copy is put back over the user's own later changes** · `designer_preferences.py:79-85,199` · confirmed · found 2026-11-13
@@ -1276,6 +2085,35 @@ of the repo. If it can't, it says why: the ID never existed, a squash lost it, o
       states both waits.
     - **Also covered:** nothing else reads a sample's stacks for a wait: `sampled` and `main_thread` only report
       them.
+  - Note (2026-11-16): open again. The branch's final check after the seventh review failed here, 768 of 769 live
+    checks passing. launch_designer's sample showed the main thread at
+    `f2d_flush_rpc < FSEventStreamFlushSync < QFseventsFileSystemWatcherEngine::addPaths < QFileSystemWatcher::addPaths
+    < QFileSystemWatcher::addPath < QObject::event`, a third step before either wait. The fix had added the one more
+    step seen, not the whole teardown.
+  - **Resolution: done, the teardown as a whole.**
+    - **Test:** `test_selftest_lifecycle.py::test_a_sample_shows_designer_anywhere_in_its_teardown[a file watcher]`
+      failed first. Its fixture is that sample, which `test_the_file_watchers_sample_reads_as_the_full_run_printed_it`
+      pins. The pool, the sign-in stop, a running Designer and no sample stay as cases. `lifecycle` passed whole in a
+      scratch run on a port of its own, 55 checks.
+    - **Measured:** a probe sampled two hidden Designers an agent started, at 1 ms, from their windows' close on, with
+      the pool held. Before `destroyApplication`, main deletes the main window and exports the brush presets, about
+      30 ms in all. Every slower step runs inside `destroyApplication`:
+      - deleting the render engine, whose posted file-watcher event waits on macOS's file events (0.75 s and 0.01 s);
+      - deleting the other components, the sign-in stop among them;
+      - unloading the render back end;
+      - the application's pool wait.
+    - **Measured, the log:** `[INFO][Environment] Destroy Application` is the log's last line, written inside
+      `destroyApplication` before the pool wait.
+    - **Cause:** the checks listed the shutdown's steps one at a time, as full runs found them. When it is sampled
+      depends on the load: launch_designer samples as soon as the bridge has closed.
+    - **Fix:**
+      - `lifecycle/samples.py`'s `in_shutdown` accepts the main thread anywhere in `destroyApplication`
+        (`SHUTDOWN_CALL`, replacing `SHUTDOWN_WAITS`).
+      - The launch_designer check waits for that log line (`TEARDOWN_LOGGED`) before ending the Designer, polled with
+        a limit. Sampled then, the Designer is inside `destroyApplication` whatever the load.
+      - The quit_designer check samples after its 15 s wait, as before; the tool gives it no point to wait for.
+      - Both labels say "its teardown shown", and `server_tools/lifecycle.py`'s docstring says the same.
+    - **Also covered:** the two checks are the only readers of a sample's stacks, as before.
 
 - [x] **SRV-148 · A Designer launch_designer starts becomes the active app and keeps it: it takes the user's keyboard, and in the pool activation passes between agents' Designers as they quit** · `mcp_server/server_tools/lifecycle.py:876-891` · measured · found 2026-11-14
   - **Defect.** Once its Designer answers, `launch_designer` turns its crash uploads off and closes the Home screen, and
@@ -1314,6 +2152,7 @@ of the repo. If it can't, it says why: the ID never existed, a squash lost it, o
     - **Also covered:** only a Designer the call started gets it: one found running is left as it is. TST-399's "not
       judged" stays, for a click into Designer during a shot. The start checks' regex on the parenthesis still
       matches.
+  - Questioned by SRV-149 (2026-11-15).
 
 - [x] **HLP-133 · While the shot runs, Designer's transparent window still counts as covering the windows under it** · `mcp_server/designer_helpers/shot3d.py:184-187` · measured · found 2026-11-14
   - **Defect.** `_bring` makes the window transparent and click-through (`self._fade(...)`, then `mac.show()`), but
@@ -1443,6 +2282,8 @@ of the repo. If it can't, it says why: the ID never existed, a squash lost it, o
       user's, and another Designer's own work.
 
     The windows the pool's Designers bring as they start come in bursts longer than three tries.
+  - Questioned by TST-419 (2026-11-15).
+  - Questioned by TST-467 (2026-11-16).
 
 - [x] **TST-418 · The focus check blames the shot for activation the pool hands to Designer, before or during the shot** · follows TST-392 and TST-399, generation 3 · `tests/test_all_tools/editor_panels_and_fit/checks.py:844-900`, `tests/test_all_tools/editor_panels_and_fit/window_states.py` (`focus`) · measured · found 2026-11-14
   - **Defect.**
@@ -1478,6 +2319,7 @@ of the repo. If it can't, it says why: the ID never existed, a squash lost it, o
     that takes focus itself does so every time, and fails. Unit tests for the decision. Live, the state's `active`
     reading rebound after `put` (scratch only) for the first part; making Designer the active app for real during the
     shot would take the user's keyboard.
+  - Questioned by TST-464 (2026-11-16).
 
 - [x] **HLP-146 · An Explorer menu closed before its action is picked is said not to have opened, and is left transparent and click-through** · `mcp_server/designer_helpers/view3d.py:168-235,280-310` (`_MenuPick`, `_apply_outputs`) · measured · found 2026-11-15
   - **Defect.** `_MenuPick.fade` makes the menu transparent and click-through at the fade timer's first tick (0 ms);
@@ -1513,6 +2355,1158 @@ of the repo. If it can't, it says why: the ID never existed, a squash lost it, o
       was measured there. The module docstring has the measurement.
     - **Also covered:** a menu picked as usual gets its window's look back too. The shots of Designer's own windows
       already give each window its look back (`_Screen.unfade`).
+
+- [x] **HLP-147 · A 3D shot with `graph=` is refused when something closes the Explorer's menu before its action is picked, and the menu isn't opened again** · `mcp_server/designer_helpers/view3d.py:285-334` (`_apply_outputs`), `:236-254` (`_MenuPick.failure`) · measured · found 2026-11-15
+  - **Defect.** `_apply_outputs` opens the Explorer's context menu once. The fade sees the menu at 0 ms, and the pick
+    first looks at 100 ms. When the menu has closed by then, `failure()` says "closed before its action was picked"
+    (HLP-146), and the shot raises. Nothing opens the menu again, so one close by something outside the shot fails
+    the whole shot.
+  - **Scenario.** Measured in the third of three full runs on main (2026-11-15), twice in `editor_panels_and_fit`:
+    - The Light tool check's first shot was refused: "the Explorer's menu for graph mcp_selftest_view3d closed before
+      its action was picked; the 3D view was already set: Plane". The check failed.
+    - The transparency check's set-up shot was refused the same way. That check doesn't judge its set-up shot, and it
+      passed.
+
+    The same event failed the invisible-3d-shot branch's third final check, then said as "didn't open" (HLP-146). So
+    it happened in 2 of the last 5 full runs. What closed the menu wasn't seen. Neither check holds the pool's launch
+    lock, and HLP-146 names a likely cause: a change of the active app, which the pool's Designers cause as they start
+    and quit. In the user's Designer, the user switching apps during those 100 ms might do the same.
+  - **Fix.** Measure first what closes the menu, in a scratch run: the menu opened while another app is made active,
+    and while another Designer starts. Then open the menu again when it closed before its pick, a few times, before
+    refusing; the error stays when every try closed. Test: a live check closing the menu before its pick in the first
+    try only (as `popups.closed_early` does in every try), and a unit test for the tries.
+
+  - **Resolution: done.**
+    - **Measured first,** in a Designer an agent started (2026-11-15). The menu's "View Outputs In 3D View" was there
+      and enabled at the first look, 2 to 6 ms after the menu opened, in three menus. A menu held open for 60 s stayed
+      open while another Designer an agent starts was launched (6 s) and quit (2 s) on another port, and Designer's app
+      state didn't change. So what closed the menus in the full runs wasn't found. A click in the user's windows and
+      another app made active weren't measured: both touch the user's focus.
+    - **Test:** `editor_panels_and_fit.check_an_explorers_menu_closed_before_its_pick_is_opened_again` (new) closes the
+      menu as the fade makes it transparent, in the first try only. Its scratch run failed first, the shot refused:
+      "closed before its action was picked". `check_an_explorers_menu_closed_before_its_pick_is_said_so_and_gets_its_look_back`
+      now closes it in every try and asks for each menu's look back: it failed first with one try. The unit tests in
+      `test_view3d_helpers.py` failed first: the menu opened again when closed or never seen, but not when it had no
+      action; the tries said; each window given its look back; the look picking as it fades.
+    - **Cause:** the menu was opened once, and its action picked 100 ms after it opened. Anything closing it meanwhile
+      refused the whole shot.
+    - **Fix:** `_menu_once` opens the menu. One look makes it transparent, then picks its action, as soon as the menu
+      shows, so nothing has those 100 ms. `_apply_outputs` opens it again when no menu was looked in (closed first, or
+      never seen open), MENU_TRIES (3) times at most, and the error then says "in each of 3 tries". `_MenuPick.pick`
+      leaves a menu closed already.
+    - **Result:** in a scratch run, both checks pass: the shot taken after one close; refused after three, each menu's
+      window opaque and clickable again. The other menu checks pass too.
+    - **Also covered:** a menu without the action, or with it disabled, isn't opened again: that is Designer's answer,
+      the same each time. A menu the guard had to close isn't either.
+- [x] **TST-419 · The click fact retries only for windows in front of Designer's window, but its click-through reading reaches the window under it, and says only "another" when that isn't the cover** · follows TST-417, generation 2 · `tests/test_all_tools/editor_panels_and_fit/window_states.py:153-178` (`_HITS`), `:62-66` (`in_front_of`), `tests/test_all_tools/editor_panels_and_fit/checks.py:721-744` · measured · found 2026-11-15
+  - **Defect.** `_HITS` reads three times which window a click at the middle of Designer's window would reach. With
+    Designer's window click-through, the click should reach the window under it, the cover. The retry
+    (`without_others_in_front`) looks only at the normal windows in front of Designer's window (`in_front_of(mac)`;
+    TST-417's note). A window between Designer's window and the cover, or one at another level, changes the third
+    reading unseen. `hit()` names such a window only 'another', so the failure doesn't say whose window it was.
+  - **Scenario.** Measured in the third of three full runs on main (2026-11-15): `opaque=main transparent=main
+    through=another`. It came on the first try, with no window found in front (the detail says no tries), while the
+    check held the pool's launch lock, so no Designer of the run was starting or quitting. Runs 1 and 2 passed it.
+    The log can't tell which window it was.
+  - **Fix.** Name the window `hit()` finds when it is neither Designer's main window nor the cover: its owner and its
+    layer (CoreGraphics' window list). Count such a window in the click-through reading as one in the way, so the
+    reading is taken again, as one with a window in front is. Test: a unit test for the count, and a scratch run with
+    a window brought between Designer's window and the cover in the first try only, then in every try.
+  - Note (2026-11-15): a scratch run of the whole category, one Designer and no pool, timing each check, met it too:
+    `opaque=main transparent=main through=another`, again on the first try. In the same run the not-drawn fact found
+    another app's window in front in all three tries of its 'partly covered' and 'transparent in front' ways, and
+    failed so. No other Designer ran, and the user said they were working in their own windows during the runs.
+
+  - **Resolution: done.**
+    - **Test:** `test_selftest_window_states.py::test_a_click_reading_that_reaches_neither_designers_window_nor_the_cover_names_it_and_is_taken_again`
+      failed first. The live part: a scratch script put a window of Designer's own between its main window and the
+      cover, in the click fact's first try, then in every try (the scratch script only, at the user's go for the
+      windows in front of theirs). Before the fix, that run didn't show this failure alone. It found a window in front
+      at the middle of Designer's in all three tries, the injected one there in the first only, and said "another".
+    - **Cause:** the retry counted only the windows in front of Designer's window. A window between it and the cover,
+      or at another level, changed the click-through reading unseen, and `hit()` named it only "another".
+    - **Fix:** `hit()` counts such a window as one in the way, so the reading is taken again (`without_others_in_front`),
+      and names it by its owner and layer (`who()`, from CoreGraphics' list). `tries_said` says "a window in the way".
+    - **Result:** in the first try only, the fact passed in 2 tries. In every try, it failed in 3, naming the window:
+      `through=another(Substance 3D Designer, layer 0)`.
+- [x] **TST-420 · The window checks wait fixed times for macOS to settle, and take about 5 of a full run's 9 minutes** · `tests/test_all_tools/editor_panels_and_fit/window_states.py` (`_PUT`, `_CLEAR`, `_READ`, `to_back`, `window`, `_HITS`, `_UNDER`, `_PANNED`) · measured · found 2026-11-15
+  - **Defect.** Each snippet waits a fixed time after changing a window, whatever the change: `_PUT` 2.0 s at its end,
+    plus 1.0 s after placing the windows it makes, `to_back` 1.0 s, `window` 0.5 s for each window, `_CLEAR` 1.5 s,
+    `_READ` 0.5 s. So each way of each window check costs about 6 to 7 s of waiting alone, over about 40 ways. A full
+    run takes as long as its slowest category, and `editor_panels_and_fit` is that one, because of them.
+  - **Scenario.** Measured (2026-11-15). A full run took 4 to 4.4 min before the 3D shot's window work, 6.8 min after
+    its first part, and 8.5 to 9.6 min after the second. Timed one by one in a scratch run of the category (474 s),
+    the window checks took 324 s; the four slowest 72, 47, 40 and 35 s. The user: "where are we going if our time to
+    develop is 90% tests timing?"
+  - **Fix.** Measure how long macOS and Qt take to report each state the snippets wait for (minimized, covered,
+    hidden, on screen, shown again; Qt's exposure), then wait for that state, with a limit, instead of a fixed time.
+    Test: a unit test that the snippets wait on a state, not a fixed time; the window checks timed before and after in
+    a scratch run of those checks only.
+  - **Resolution: done.**
+    - **Measured first:** each state was reported within 0.04 to 0.07 s; a window un-minimized, or minimized, within
+      0.63 s, macOS's animation. Qt's events say each change: an expose event on Designer's windows as macOS covers,
+      hides or shows them, a window-state change as it minimizes them, and a hide or show of the 3D view's widget as
+      Qt minimizes or restores the page. The 3D view's own window is exposed once Designer shows it again; moved or
+      minimized before that, the change was undone. A page Qt minimized changes no flag and no window's exposure as its
+      view stops drawing, which some runs saw within 0.6 s and others not at all within 3 s.
+    - **Test:** `test_selftest_window_states.py::test_the_ways_wait_for_their_state_not_a_fixed_time` failed first, on
+      `_PUT`'s fixed waits (1.0, 1.0, 1.0 and 2.0 s). It also asks that no margin be timed after a state (the user:
+      under load a time measured idle can be too short), and that a page Qt minimized wait for the 3D view's hide
+      event.
+    - **Cause:** each snippet waited the longest time a change had been seen to take, whatever the change.
+    - **Fix:** `until(state)` waits for the state, woken by each of Qt's events about Designer's windows (expose, show,
+      hide, window state) and looking every 100 ms where none comes, with a 3 s limit in case none does. Each way waits
+      for its own state: minimized or hidden and not exposed, covered and not exposed, or drawn with nothing of another
+      app's in front. Shown again means the 3D view's own window exposed. A window the checks make waits until macOS
+      lists it on screen before it is placed. A page Qt minimized waits for the view's hide event. At the user's
+      choice, the drawing fact no longer measures that state: nothing says when its view stops drawing.
+      `shot3d.py`'s docstring says so instead of its earlier claim.
+    - **Result:** in a scratch run of the window checks alone, they took 234 s, 324 s before; every one passed, and the
+      watch over those off screen read 0.00 s in front of another app's windows. The rest of their time is the 3D shots
+      they take, two or three a case.
+    - **Also covered:** `_CLEAR` waits for the window un-minimized, then hidden. The click and window-under facts keep
+      their waits: they time macOS's covered state on purpose (TST-412).
+  - Questioned by TST-465 (2026-11-16).
+
+- [x] **HLP-148 · Every 3D shot waits fixed times for the 3D view to draw, most of the shot's time** · `mcp_server/designer_helpers/shot3d.py` (`DRAW_WAIT`, `_wait_on_screen`, `shoot_3d`'s retakes), `mcp_server/designer_helpers/view3d.py` (`_3d_set_up`'s steps, `VIEW_TURN`, `DRAG_PAUSE`, `WHEEL_PAUSE`) · measured · found 2026-11-15
+  - **Defect.** The shot sleeps a fixed time wherever it waits for the 3D view, whatever the view does meanwhile:
+    - 0.5 s once Designer's window is on screen (`DRAW_WAIT`), in every shot of a window brought on screen;
+    - after a mesh 0.5 s, after a graph's outputs 1.0 s, after a view 1.0 s (`VIEW_TURN`), then 0.3 s after Frame,
+      and 0.5 s at the end of every set-up;
+    - 0.2 s after each drag (`DRAG_PAUSE`) and each wheel step (`WHEEL_PAUSE`);
+    - 0.5 s before each retake of a render identical to the one before the set-up.
+  - **Scenario.** Measured in a Designer an agent started (2026-11-15), each step of the shot timed in Designer:
+    - The render itself takes 0.03 s, bringing the window on screen about 0.07 s, and putting it back 0.07 s. A plain
+      shot of a hidden Designer took 0.76 s, 0.5 s of it `DRAW_WAIT`. A pan took 1.5 s, zoom=3 2.0 s, a mesh 1.9 s,
+      view='Top' 2.6 s and graph= 3.4 s. Of those, 1.0, 1.3, 1.0, 1.8 and 1.5 s are fixed waits.
+    - The 3D view says when it has drawn. Each frame it draws is a Paint event on its viewport. Its overlay label
+      (Display > Samples, on by default) counts the frames its antialiasing accumulates: "Samples: 8" at rest. Each
+      pan, orbit, wheel step, mesh, viewpoint, Frame, graph's outputs and tiling restarted the count at 1. It came back
+      to 8 within 0.1 to 0.2 s, and the render then stopped changing. A paint's label shows the count before that
+      paint: the first paint after a change still read 8.
+    - Two things in the view are built in. The accumulation takes 8 frames, about 0.15 s. A viewpoint or Frame turns
+      the camera over about 0.8 s, Designer's own transition, and the count stays at 1 until the turn ends. No setting
+      for the transition was found: none in the preferences, the 3D view's menus or its renderer's settings. So the
+      0.3 s after Frame, plus the 0.5 s at the end, end about where its turn does: the render was still changing by
+      0.4 grey levels 0.73 s after Frame.
+    - Designer shown again with nothing changed while hidden: its first three paints read 8, within 0.06 s. With a pan
+      made while hidden: the second paint read 1, and the count was back at 8 after 0.32 s. Both cases waited 0.5 s.
+    - The view's own pace is enough between inputs. Wheel steps sent each once the view drew a frame after the one
+      before took 0.34 s for 3 and 0.48 s for 6, where 0.2 s apart takes 0.6 and 1.2 s. The renders were identical to
+      those of steps sent 0.2 s apart, 2 runs of 3 cases. Two drags sent once the view restarted after the first
+      (0.024 s) matched two sent 0.2 s apart too. Sent back to back, the first was lost, as `view3d.py`'s docstring
+      says.
+    - What the count can't say: with Display > Samples off, the label shows only "Render Time". The GPU Pathtracer
+      counts on (143 samples after 6 s). The viewpoint the camera already has restarts nothing.
+  - **Fix.** Wait for the view's signals instead of fixed times:
+    - Watch the viewport's Paint events through the shot and read the count at each, in an event loop like TST-420's:
+      woken by the events, looking every 100 ms where none comes, with a limit.
+    - After the window comes on screen, and after each set-up step: wait for the count to restart, then for it to come
+      back to what it was before, at most 8. The GPU Pathtracer then gets 8 samples.
+    - Between drags and wheel steps: wait for the view's next frame.
+    - A step with no restart, or a view showing no count, needs a rule of its own: a limit, or renders compared.
+    - Test: a unit test that the shot waits on the view, not a fixed time. A designer fact for the count's restart and
+      return. The 3D checks timed before and after in a scratch run.
+  - **Resolution: done.** The user chose the rules for the cases with no clear signal (2026-11-15): the GPU
+    Pathtracer's render taken at 8 samples, a step that restarts nothing waited for at most 1 s, and renders compared
+    every 100 ms where no count shows. The user also made the rule general, in AGENTS.md: callbacks first, hunted for;
+    a poll every 100 ms where none exists; never a time measured here.
+    - **Test:** `test_frames3d.py::test_the_3d_shot_waits_on_the_view_not_a_fixed_time` failed first, on `shot3d.py`'s
+      `_settle(DRAW_WAIT)` and `_settle(step)`. The rules' unit tests in `test_frames3d.py` failed on names not yet
+      there. The live fact `check_the_3d_views_frames_say_when_it_has_drawn` failed in a scratch run with the helpers
+      set aside (`_viewport` not defined). The tests of the shot and the set-up in `test_shot3d.py` and
+      `test_view3d_helpers.py` now pin each wait: the view waited for once on screen, each retake after a frame, each
+      step on the view.
+    - **Measured while fixing:** the fact found two things the first rules missed.
+      - A pan made right before Designer was shown still read 8 at the first two paints. Its restart came at the third,
+        after an UpdateRequest. A show with nothing changed gives paints only, no UpdateRequest.
+      - Designer hidden mid-accumulation leaves the label lower than 8: after the material check's Materials > Add, it
+        read 1, 3 and 2 in three tries. The first rule took 1 for no count and compared renders inside the wait's
+        slot. Each render runs Designer's events itself, so the waits nested, and one shot held the bridge until its
+        120 s timeout (sampled: the main thread in a tick's render, `findChildren` and `processEvents`).
+    - **Cause:** each wait slept the longest time its change had been seen to take, whatever the view did meanwhile.
+    - **Fix:** `designer_helpers/frames3d.py` watches the 3D viewport through the shot (`_Frames`): each Paint event,
+      the overlay's count read at it, and each UpdateRequest. `waits.py`'s `_until` waits for a state, woken by Qt's
+      signals and events, looking every 100 ms otherwise, with a limit.
+      - After a step: the count restarts, then reaches 8, or the view goes quiet for one poll after a frame.
+      - After a viewpoint, before Frame: the count rises after its restart, so the camera's turn is over.
+      - After each drag and each wheel step: the view's next frame, with none awaited off screen.
+      - Once the window is on screen: a restart and its return. Otherwise, the show's paints read no restart, the
+        view asked for no frame, and nothing more came for one poll.
+      - With no count shown: renders compared every 100 ms, taken between polls, never in a slot.
+      - Elsewhere: the window's exposure waits for Qt's expose events, the render waits for the clipboard's
+        `dataChanged`, and a retake follows a frame or isn't taken. `DRAW_WAIT`, `VIEW_TURN`, `DRAG_PAUSE`,
+        `WHEEL_PAUSE` and the set-up's last 0.5 s are gone.
+    - **Result:** in scratch runs, all checks passed: the 12 view checks of `editor_panels_and_fit`, the new fact, and
+      the 10 window checks that keep Designer off the user's screen. The view checks took 108 s, 162 s before. Each
+      kind of shot through the tool, before and after: plain 0.76 to 0.46 s; pan 1.56 to 0.65 s; orbit 1.54 to 0.62
+      s; zoom=3 1.99 to 0.64 s; view='Top' 2.63 to 1.34 s; graph= 3.32 to 1.15 s; mesh= 1.87 to 1.43 s; tiling= 2.15
+      to between 1.37 and 2.30 s. Not run: the window checks that put a window in front of the user's (they run in
+      the full suite).
+    - **Also covered:** the same pattern elsewhere in the shot: the exposure poll every 0.05 s, the off-screen poll,
+      and the clipboard poll. Outside the shot, the fixed waits and slow polls left are SRV-150 (the tools) and
+      TST-421 (the self-test). Its direct drags keep a 0.2 s pause, as they drag while Designer is hidden, where no
+      frame comes.
+  - Questioned by HLP-159 (2026-11-15).
+
+- [x] **SRV-150 · Outside the 3D shot, the tools still wait fixed times, and some of their polls look every 1 to 2 s** · `mcp_server/server_tools/layout.py` (`_reload_package_file`), `mcp_server/server_tools/lifecycle.py` (`_force_end`, `launch_designer`'s loop, `quit_designer`'s loop), `mcp_server/designer_helpers/mac_window.py` (`give_back_activation`) · confirmed · found 2026-11-15
+  - **Defect.** AGENTS.md now says a wait waits for the callback that says the thing happened, polls every 100 ms
+    only where none exists, and never waits a time measured here (the user, 2026-11-15). These don't:
+    - `_reload_package_file` sleeps `RELOAD_SETTLE_S` (0.5 s) after the unload and again after the load, for
+      Designer's event loop to tear down the old graph views;
+    - `give_back_activation` waits 1.0 s after hiding Designer and 1.0 s after showing it again, whatever macOS did;
+    - `_force_end` looks for the process every 1 s, `launch_designer` asks for the status every 2 s, and
+      `quit_designer` looks for the process every 1 s.
+  - **Scenario.** Read in the code (2026-11-15). Each launch or quit ends up to 1 or 2 s after the Designer answered
+    or went, and the self-test's pool launches and quits a Designer per category.
+  - **Fix.** A callback where one exists: the views' own signals, or a call that returns once Designer's event loop
+    ran, for the reload; macOS's state, looked at every 100 ms, for the activation; the process's exit, for the
+    quits (a kqueue process-exit event on macOS). Otherwise a poll every 100 ms. Not affected: the plugin's accept
+    loop, whose sleep is a back-off after an error, not a wait for something to happen.
+
+  - **Resolution: done.**
+    - **Measured first,** in a Designer an agent started (2026-11-15). An unload's widgets, each watched for its
+      destruction: 327 went within the unload's call, the other 177 before the next call started (0.06 s after), none
+      in the four calls after, in three tries. A load changed nothing after its call. At a quit, Designer's process and
+      its crash handler ended within the same 20 ms sample.
+    - **Test:** these unit tests failed first:
+      - `test_link_display.py::test_reload_is_split_in_separate_calls_with_no_pause`;
+      - `test_mac_window.py::test_the_hide_and_the_show_are_waited_for_on_qts_callbacks_not_a_fixed_time`;
+      - the new tests at the end of `test_lifecycle_env.py`: the status asked every POLL_S, the quit and the forced end
+        waiting for the process's exit, and the exit watch on a real process (it ends, it outlives the limit, it was
+        gone before);
+      - `test_waits.py`: every timed wait in the tools, the plugin, the helpers and the self-test is a 100 ms poll or
+        listed with its reason.
+      The new designer fact `link_display.check_an_unloads_widgets_are_gone_once_the_next_call_starts` passes: 327,
+      504, 504.
+    - **Cause:** each wait slept a time once seen to be enough, or looked every 1 or 2 s, whatever happened meanwhile.
+    - **Fix:**
+      - `_reload_package_file` makes its calls with no pause between them: the bridge runs Designer's event loop
+        between two calls. GUIDE.md says so.
+      - `_exited` waits for a Designer's exit on macOS's kqueue process-exit event (`_exit_watch`), and looks every
+        POLL_S (0.1 s) elsewhere. `quit_designer` and `_force_end` use it, FORCE_WAIT_S a limit after each signal.
+      - `launch_designer` asks the status every POLL_S: nothing says when the bridge starts listening.
+      - `give_back_activation` waits for Qt's applicationStateChanged after the hide, and the window's expose event
+        after the show, ACTIVATION_WAIT at most.
+    - **Result:** in scratch runs, link_display passes whole, and lifecycle on a port of its own passes 53 of 54. The one
+      failing is SRV-152: a launch's window in front of the active app's, which fails with the old 2 s poll as well.
+    - **Also covered:** the plugin's job poll every 100 ms and its accept loop's back-off stay. The fixed waits left are
+      SRV-151.
+  - Questioned by SRV-167 (2026-11-16).
+- [x] **TST-421 · The self-test still waits fixed times outside the window checks' ways** · `tests/test_all_tools/common.py` (`HIDE`, `new_crash_dumps`, `end_own_designer`, `cancel_from_second_client`), `__main__.py`, `category_run.py` (`_cleaned`), `safeguards/checks.py`, `lifecycle/checks.py`, `editor_panels_and_fit/checks.py` (`MOVES_UNDER_ANY_TOOL`, `ADD_MATERIAL`), `renders.py` (`with_checker`), `window_states.py` (`_DRAG`, `_PANNED`) · confirmed · found 2026-11-15
+  - **Defect.** The same rule as SRV-150. These sleep a fixed time where something could say when it happened:
+    - `HIDE` 1.0 s after hiding; `ADD_MATERIAL` 1.0 s after the menu and 1.0 s after hiding again, its dialog named
+      after 500 ms;
+    - 0.5 s between a clean-up or an unload and the next call (`__main__.py`, `_cleaned`, `safeguards`);
+    - `end_own_designer` 5 s after SIGTERM; `cancel_from_second_client` 2 s before cancelling; `lifecycle`'s checks
+      1 to 2 s after a quit, a job started, a freeze or a modal dialog, and a status asked every 1 s;
+    - `with_checker` 1.0 s between retakes; `MOVES_UNDER_ANY_TOOL` 0.2 s between its moves and 0.5 s after;
+      `_DRAG` and `_PANNED` 0.2 s after their drags, then 0.5 or 0.3 s. These drag while Designer is hidden, where
+      the 3D view draws no frame to wait for (HLP-148).
+    - `new_crash_dumps` looks every 0.5 s.
+  - **Scenario.** Read in the code (2026-11-15).
+  - **Fix.** As SRV-150's. Not affected: the sleeps that are a check's subject (the bridge checks' slow jobs,
+    `hold_thread_pool`, `quit_slow_shutdown`, the timer fact counting a timer's firings), and the click and
+    window-under facts, which time macOS's covered state on purpose (TST-412).
+
+  - **Resolution: done.**
+    - **Measured first:** Designer hidden, drags sent back to back were lost, and each move was followed by an
+      UpdateRequest (HLP-149).
+    - **Test:** `test_waits.py::test_nothing_waits_a_fixed_time_but_the_waits_that_stay` failed first on every site the
+      entry lists, and on four it missed: the bridge checks' waits for a long job to start and for an idle bridge,
+      `window_states`' `_READ` and `_PUT` (half a second each), and `_DURING_PAN`'s. Unit tests for `with_checker`,
+      `end_own_designer` and the window snippets failed first.
+    - **Cause:** as SRV-150's.
+    - **Fix:**
+      - `HIDE` waits for Designer off screen: hidden for macOS, and its window no longer exposed for Qt (its expose
+        event).
+      - `ADD_MATERIAL` names the dialog as it opens, looks for the material every 100 ms, and waits for Designer off
+        screen again.
+      - The clean-ups' and `safeguards`' unloads go on with no pause (SRV-150's measurement).
+      - `end_own_designer` waits on the server's `_exited`.
+      - `cancel_from_second_client`, lifecycle's long job and the bridge's queue check look at the status every POLL_S
+        until a job runs (`job_running`).
+      - Lifecycle's freeze writes a file as it begins, and the check waits for that. Its modal dialog is looked for
+        every POLL_S. The quit refusals wait for nothing: the server refuses before anything is sent, and the helper
+        before its close's timer starts.
+      - `with_checker` retakes as each shot returns, each shot waiting for the 3D view, RETAKE_S at most.
+      - `MOVES_UNDER_ANY_TOOL`, `_DRAG` and `_PANNED` wait for each move to be taken (`_Frames.taken`), with no wait
+        after.
+      - `_DURING_PAN` waits for what its event did (`EVENT_DONE`). `read()` waits for the state its check reads
+        (`showing`, `in_order`), and `_PUT` for the window exposed again.
+      - The crash dumps, the launch lock and the pool look every 0.1 s.
+    - **Result:** in scratch runs, 216 of 217 checks passed: editor_panels_and_fit's 3D checks and its window checks
+      off the user's screen, then bridge, safeguards and link_display whole. The material check failed: its first wait
+      looked at the menu inside the wait's own event loop, and the waits nested until the job's timeout, as HLP-148's
+      had. It now looks between polls, and passes.
+    - **Not run in a scratch run:** the window checks that put a window in front of the user's, but the click fact
+      (`read()`'s conditions in `check_a_window_covered_during_a_3d_shot_is_put_in_front_again` and the in-front cases
+      of the put-back check, `_PUT`'s wait for those ways). The full suite runs them.
+    - **Also covered:** the waits that stay are listed in `test_waits.py` with their reasons: a check's subject, the
+      click and window-under facts (TST-412), and SRV-151's.
+  - Note (2026-11-15): lifecycle's changes ran whole in a scratch run too, on a port of its own: 53 of 54
+    passed, the failure SRV-152's.
+  - Questioned by TST-454, TST-455 and TST-457 (2026-11-16).
+- [x] **HLP-149 · Off screen, the 3D shot's drags and wheel steps went back to back, and some were lost** · `mcp_server/designer_helpers/view3d.py` (`run`'s drags, `_wheel`), `mcp_server/designer_helpers/frames3d.py` (`_Frames.next_frame`) · measured · found 2026-11-15
+  - **Defect.** HLP-148 made each drag and wheel step wait for the 3D view's next frame (`next_frame`), which returns
+    at once off screen, where the view draws none. A window of the user's covering Designer's during a set-up of
+    several drags or wheel steps sent the rest back to back. Found while addressing TST-421.
+  - **Scenario.** Measured in a Designer an agent started (2026-11-15). Designer hidden, three pans back to back came
+    out 25 grey levels apart on average from the same pans 0.2 s apart. A zoom of 6 steps, Designer hidden at its
+    first, came out 55 grey levels from the same zoom undisturbed.
+  - **Resolution: done.**
+    - **Measured first:** hidden, each pan, wheel step or turn was followed by one UpdateRequest, 0.02 to 0.04 s later,
+      and no paint. Moves sent each after it came out as moves 0.2 s apart, within 0.01 grey levels on average.
+    - **Test:** `test_frames3d.py::test_a_move_is_taken_once_the_view_draws_on_screen_or_asks_for_a_frame_off_screen`
+      and the orbit and zoom cases of `test_view3d_helpers.py::test_each_step_waits_for_the_3d_view_to_take_it` failed
+      first. The live `editor_panels_and_fit.check_wheel_steps_sent_as_designers_window_goes_off_screen_are_all_taken`
+      (new) failed first in its scratch run: 54.86 grey levels.
+    - **Cause:** off screen, nothing was waited for between two moves.
+    - **Fix:** `_Frames.taken()` waits for the view to take a move: its next frame on screen, its next UpdateRequest
+      off screen, NO_RESTART at most. The set-up's drags and wheel steps use it. The frames fact re-measures the
+      UpdateRequests.
+    - **Result:** the live check passes, 0.00 grey levels apart.
+    - **Also covered:** the self-test's own drags while Designer is hidden (TST-421). The shot's retakes keep
+      `next_frame`: no move is waited for there.
+
+- [x] **SRV-151 · Fixed waits left that no callback found yet replaces** · `mcp_server/designer_helpers/quit.py` (`quit_designer`'s `QTimer.singleShot(300, ...)`), `tests/test_all_tools/lifecycle/checks.py` (`CLOSE_WINDOWS_ONLY`), `tests/test_all_tools/crash_watch.py`, `tests/test_all_tools/workers.py` (`CRASH_WAIT_S`) · confirmed · found 2026-11-15
+  - **Defect.** These still wait a measured time (AGENTS.md: callbacks first):
+    - `quit_designer` closes Designer's windows 300 ms after its call returns, so the bridge can still reply.
+      `CLOSE_WINDOWS_ONLY` does the same;
+    - the crash-dump checks wait 10 s after a quit for a dump that may come (`CrashWatch`, `CRASH_WAIT_S`).
+  - **Scenario.** Read in the code (2026-11-15); listed in `test_waits.py` as open.
+  - **Fix.** A callback for each:
+    - the close: the plugin telling a job its reply was sent (a plugin change, with a restart of Designer);
+    - the crash dumps: Designer's crash handler ending. At a normal quit it ended within the same 20 ms sample as
+      Designer (measured). After a crash it wasn't measured: a crash in an agent's Designer can open Adobe's crash
+      window on the user's screen, so measuring it takes the user's go.
+  - **Not included:** the plugin's 30 ms between two jobs (`WAKE_DELAY_MS`). DECISIONS.md settles it ("No job starts
+    sooner than 30 ms after the one before ended", the user's choice, 2026-11-11), and its **Reopen if** doesn't hold:
+    what Designer needs the moment for wasn't found. AGENTS.md's wait rule, added after it, contradicts it: the user
+    decides which stands.
+  - **Resolution: done.**
+    - **Measured first** (2026-11-15): an agent's Designer crashed (`ctypes.string_at(0)` in a job, with the user's
+      go). Its dump was in `pending/` within the second, as Adobe's crash window opened. The crashed process and its
+      crash handler both ran until that window closed, then ended within 0.5 s. At a normal quit the handler ends with
+      Designer (measured earlier).
+    - **Test:** `test_a_jobs_after_reply_callbacks_run_on_the_main_thread_once_its_reply_is_sent`,
+      `test_an_after_reply_callback_that_raises_doesnt_stop_the_others` (test_plugin.py),
+      `test_the_windows_are_closed_once_the_reply_is_sent_not_after_a_time` (test_quit_helper.py), the crash watch's
+      and the pool's waits (`test_crash_watch_waits_once_at_the_end_and_records_each_check`,
+      `test_a_dump_may_come_while_its_designers_crash_handler_runs_and_none_is_there`,
+      `test_the_wait_for_crash_dumps_lasts_while_one_may_come_looked_at_every_poll`, and more) failed.
+    - **Fix:**
+      - the plugin hands each job `_after_reply`; what the job gives it runs on the main thread once the reply is
+        sent (`_Waker.after`). `quit_designer` and lifecycle's `CLOSE_WINDOWS_ONLY` close Designer's windows there. An
+        older plugin, until Designer restarts, has none: the helper then closes 300 ms after, as before;
+      - the crash dumps are waited for while a crash dump may still come (`common.dumps_may_come`): a Designer's
+        crash handler still runs, its database in that Designer's home, and no new dump is there. Looked at every
+        POLL_S, 10 s at most (`CrashWatch.settle`, `workers.wait_for_dumps`).
+    - **Result:** `install.py` run, then lifecycle whole in a scratch run, 54 of 54; the plugin in a Designer just
+      opened hands jobs `_after_reply`.
+    - **Not done:** WAKE_DELAY_MS, the user's decision: the hunt for its callback (below, in the review log).
+  - Questioned by PLG-43, TST-436 and TST-437 (2026-11-15).
+  - Questioned by TST-466 (2026-11-16).
+- [x] **HLP-150 · An abort during `_until` leaves its slot connected to the signals it was given** · follows HLP-148, generation 2 · `mcp_server/designer_helpers/waits.py:74-86` · confirmed · found 2026-11-15
+  - **Defect.** `_until` connects the plain function `look` to its signals and disconnects them in its `finally`. An
+    abort raised in `look` is a slot's: Qt drops it, and the plugin raises it again at the next traced line
+    (`_make_tracer`). That line is the `finally`'s first, `tick.stop()`. The rest of the `finally` is skipped:
+    `end.stop()` and every `signal.disconnect(look)`.
+    ```python
+        finally:
+            tick.stop()
+            end.stop()
+            for signal in connected:
+                signal.disconnect(look)
+    ```
+  - **Scenario.** Read in the code and the plugin's tracer (2026-11-15). A job cancelled while `_3d_render` waits on
+    the clipboard: during `loop.exec()` the only traced Python is `look`, so the abort nearly always lands there. From
+    then until Designer restarts, `look` stays connected to `clipboard.dataChanged` (screenshots.py), and runs
+    `clipboard.image()` and `loop.quit()` on a dead loop at each clipboard change. The same holds for
+    `applicationStateChanged` (mac_window.py). Each abort adds one more. The comment "the timers go with this frame"
+    covers the timers only.
+  - **Fix.** Make the slot a method of a QObject the frame alone holds, as `owner` holds the timers, so Qt drops its
+    connections when that object goes. A unit test aborts in `look` and checks that no connection is left.
+
+  - **Resolution: done.**
+    - **Test:** `bridge`'s `check_a_wait_cancelled_leaves_nothing_connected`: a job waiting in `_until` on a signal of
+      an object kept in `sys`, cancelled from a second client. In its scratch run it failed: `CONNECTED=1`. Unit:
+      `test_a_wait_runs_no_python_in_a_slot`.
+    - **Cause:** `look`, a Python function, was the slot of the signals and the tick. An abort landing in it was
+      raised again at the `finally`'s first line, which skipped the disconnects.
+    - **Fix:** `_until` connects every signal and both timers to the event loop's own `quit`, and looks at `state()`
+      in its own frame between two runs of the loop. No Python runs in a slot, so an abort is raised in `_until`'s
+      body and its `finally` runs whole. A first fix, `look` as a method of a QObject the frame holds, still failed
+      (`CONNECTED=1`): after an abort the traceback keeps the frame, and so the QObject, alive.
+    - **Also covered:** every `_until` of the helpers and the self-test's snippets goes through this one function.
+      `window_states.py` has its own `until`, whose wake is an event filter, not a connected signal.
+    - **Result:** passed in its scratch run (`CONNECTED=0`), with the 3D view checks off screen (41 of 44 passed, the
+      3 others failing on TST-431's change, then passing once it was reverted), the Explorer menu checks, and
+      bridge, safeguards and link_display whole (176 of 176).
+  - Questioned by HLP-157 (2026-11-15).
+  - Questioned by TST-455 (2026-11-16).
+  - Questioned by HLP-171 (2026-11-16).
+- [x] **HLP-151 · `_Frames`' "quiet" rule is a margin of one poll after the last frame** · follows HLP-148, generation 2 · `mcp_server/designer_helpers/frames3d.py` (`_Counts.settled`, `_Counts.shown`, `_Frames._quiet`) · confirmed · found 2026-11-15
+  - **Defect.** `settled()` and `shown()` take "nothing drawn or asked for during TICK" as the end of an
+    accumulation. That reuses the poll's interval as a measured time after a state, which AGENTS.md's wait rule
+    forbids ("no margin after a state").
+    ```python
+    return time.monotonic() - self._last >= TICK / 1000.0
+    ```
+  - **Scenario.** Read in the code (2026-11-15). Where the view's frames come more than 100 ms apart (a large 3D view,
+    a heavy material, several Designers sharing the GPU), the view counts as quiet between two ordinary frames.
+    `settled()` then returns after the restart and one more paint, and the render is taken mid-accumulation, with
+    nothing said. Not measured: timing the paints of an accumulation needs Designer drawing, on the user's screen.
+  - **Fix.** Use the quiet rule only for a view no longer exposed, or find the callback that says an accumulation
+    ended lower than its target (HLP-148 measured it: Designer hidden mid-accumulation).
+
+  - **Resolution: done.**
+    - **Measured first** (2026-11-15), in a Designer an agent started, shown transparent with the user's go:
+      - on screen, each frame of an accumulation is an UpdateRequest then its paint, about 30 ms apart, and nothing
+        comes after the last one: nothing says it ended but its count;
+      - hidden, nothing changed, no UpdateRequest; a pan brings one, a viewpoint one after another while it turns;
+      - shown with nothing changed: three paints reading 8, no UpdateRequest (5 of 5 shows);
+      - shown after a change whose UpdateRequest came while hidden: an UpdateRequest or a restart by the second
+        paint (9 of 9). A pan right before the show, its UpdateRequest not come, read 8 at three paints.
+    - **Test:** `test_frames3d.py`'s rules and waits, failing before (the old signatures, and
+      `test_a_show_with_nothing_changed_ends_at_its_second_paint` waiting for a third paint). The frames fact's new
+      case, "shown from hidden right after a pan's UpdateRequest came", passed in its scratch run.
+    - **Fix:** after a step, a label left lower ends the wait once the view is off screen (Qt's exposure), not quiet.
+      Once shown, two paints with no restart and no UpdateRequest since say nothing changed. `_quiet` and its
+      timestamp are gone. An accumulation ending lower on screen (a renderer setting; not measured) now waits
+      SETTLE_LIMIT. frames3d.py's docstring has the measurements.
+    - **Also covered:** the frames fact waits for Designer's own restart in its changed cases, as `shown()` now ends
+      sooner.
+  - Questioned by HLP-158 and TST-439 (2026-11-15).
+- [x] **SRV-153 · The exit watch fails mypy off macOS, and two of its paths are unguarded or untested** · follows SRV-150, generation 2 · `mcp_server/server_tools/lifecycle.py` (`_ExitWatch`, `_exit_watch`, `_exited`) · confirmed · found 2026-11-15
+  - **Defect.**
+    - `_ExitWatch.__init__`'s annotation `'select.kqueue | None'` names a class `select` has only on BSD and macOS.
+      `mypy --platform win32` (and `linux`) fails: `Name "select.kqueue" is not defined`. The unit suite's
+      `test_types.py` then fails on Windows.
+    - `select.kqueue()` is called before the `try`: an OSError there (no file descriptors left) escapes `_exit_watch`
+      instead of falling back to the poll.
+    - `_exited`'s poll counts `ceil(limit / POLL_S)` sleeps, each followed by a `pgrep`. The wait runs past `limit`
+      by every `pgrep`'s time.
+    - No test covers the watch timing out while `pgrep` already says the process is gone (`watch.wait(limit) or pid
+      not in _designer_pids()`).
+  - **Scenario.** Read in the code, and mypy run with `--platform win32` (2026-11-15).
+  - **Fix.** Annotate with a name that exists on every platform (`object`, with the use behind a `sys.platform`
+    check), move `select.kqueue()` into the `try`, make the poll end at a deadline, and add the missing unit test.
+
+  - **Resolution: done.**
+    - **Test:** `test_the_poll_for_a_process_ends_at_its_limit_however_long_each_look_takes` (it ended at 4.0 s for a
+      limit of 1 s), `test_a_kqueue_that_cant_be_made_falls_back_to_the_poll` (the OSError escaped),
+      `test_the_exit_watch_type_checks_where_kqueue_doesnt_exist` (mypy `--platform linux` named `select.kqueue`)
+      failed. `test_a_watch_that_times_out_with_the_process_already_gone_says_it_ended` passed before any change:
+      that branch worked, and had no test.
+    - **Fix:** `_ExitWatch` takes a `_Queue`, a Protocol of the two methods it calls. `select.kqueue()` is called in
+      a `try` that falls back to the poll. `_exited`'s poll ends at a deadline on `time.monotonic()`.
+    - **Correction:** the entry said the annotation fails the unit suite on Windows. Main already has 18 mypy errors
+      on the server with `--platform win32` (`fcntl`, `os.getuid`, `signal.SIGKILL`...) and 3 with `linux`; this one
+      was added to them. Those are on main, outside this branch's diff, and not addressed here.
+    - **Also covered:** `no_sleep` in `test_lifecycle_env.py` now advances a clock of the test's own, so the deadline
+      ends as it would (with a no-op sleep and the real clock, the file took 155 s, now 8.5 s).
+  - Questioned by SRV-159 (2026-11-15).
+- [x] **TST-423 · The wheel-steps check compares a shot shrunk to 700 px with a full-size render** · follows HLP-149, generation 2 · `tests/test_all_tools/editor_panels_and_fit/checks.py` (`check_wheel_steps_sent_as_designers_window_goes_off_screen_are_all_taken`) · confirmed · found 2026-11-15
+  - **Defect.** `undisturbed` comes from the tool with `THREE_D`'s `max_size` 700, which the server applies with a
+    thumbnail. `shoot_3d(PATH, ...)` saves the render at full size. `difference()` returns 255 for two sizes.
+    `renders.moved_left`'s docstring already records the mismatch (TST-396).
+  - **Scenario.** Read in the code (2026-11-15). The scratch run passed (0.00) because the render there was at most
+    700 px. A wider 3D view, or a Retina-scaled render over 700 px, fails at "255.00 grey levels", with nothing wrong
+    in the shot.
+  - **Fix.** Take the undisturbed render through `shoot_3d` to a file too, or bring both to one size before comparing.
+
+  - **Resolution: done.**
+    - **Test:** the check itself, rewritten. In its scratch run, with the snippet's waits after the hide removed, it
+      failed at 54.86 grey levels; `test_the_wheel_steps_check_compares_two_renders_saved_alike` pins the two renders.
+    - **Fix:** the undisturbed zoom goes through `shoot_3d` to a file too, so both renders are saved alike, at full
+      size.
+    - **Result:** passed in its scratch run, 0.00 grey levels apart.
+- [x] **TST-424 · The unload fact leaves its slots connected, and its clean-up can load a second copy** · follows SRV-150, generation 2 · `tests/test_all_tools/link_display/checks.py` (`UNLOAD_WATCHED`, `check_an_unloads_widgets_are_gone_once_the_next_call_starts`) · confirmed · found 2026-11-15
+  - **Defect.**
+    - The `destroyed` slots stay connected to every widget of Designer, and `sys.mcp_selftest_gone` stays, for the
+      rest of the category.
+    - The first call is outside the `try`. If it raises after the unload, nothing loads the package again.
+    - If the unload is refused, the package is still loaded, and the `finally` loads a second copy.
+    - The docstring says "none in the call after" and "none later". The assertion compares the second and third counts
+      only, one call later.
+  - **Scenario.** Read in the code (2026-11-15).
+  - **Fix.** Disconnect the slots and delete the attribute in the last call. Move the first call into the `try`, and
+    load the package again only when it isn't loaded. Narrow the docstring to what the assertion compares.
+
+  - **Resolution: done.**
+    - **Test:** `test_the_unload_fact_leaves_nothing_connected_and_loads_the_package_only_if_gone` failed. In its
+      scratch run, after the fact, `sys` held neither of its attributes (`LEFT=False False`).
+    - **Fix:** `GONE_DONE` disconnects the slot from each widget still there and deletes both attributes, in the
+      `finally`; the first call is inside the `try`; `LOAD_IF_GONE` loads the package only when no copy of it is
+      loaded. The docstring says what the assertion compares.
+    - **Result:** passed in its scratch run, [327, 504, 504], and link_display whole.
+- [x] **TST-425 · The material check never judges "hidden again", and its fade has no `finally`** · follows TST-421, generation 2 · `tests/test_all_tools/editor_panels_and_fit/checks.py` (`ADD_MATERIAL`, `check_a_material_the_mesh_doesnt_use_doesnt_stop_tiling`) · confirmed · found 2026-11-15
+  - **Defect.**
+    - The snippet prints `HIDDEN AGAIN=%s`, but the check never judges it: a Designer left unhidden over the user's
+      windows passes.
+    - Designer's windows are made transparent and click-through before the trigger, and made opaque after the polling
+      loop, with no `try`/`finally`. If `_menu_action(...)` or the loop raises, the windows stay transparent and the
+      timers keep running until the next `clear()`.
+  - **Scenario.** Read in the code (2026-11-15). Also measured (2026-11-15): the dialog doesn't make Designer the
+    active app. A front watch around the check saw Designer active in 0 of 154 samples. So the reviewer's third point,
+    the check unwatched while it may take the keyboard, is dropped.
+  - **Fix.** Judge `HIDDEN AGAIN=True`. Wrap the fade, the timers and the hide in `try`/`finally`.
+  - **Resolution: done.**
+    - **Test:** the check, with "HIDDEN AGAIN" read as False in its scratch run: it failed. Unit:
+      `test_the_material_check_judges_designer_hidden_again_and_puts_its_windows_back_in_a_finally`.
+    - **Fix:** the check judges `HIDDEN AGAIN=True` on macOS. The fade, the timers and the hide are in a
+      `try`/`finally`, and the windows are made opaque in the hide's own `finally`. The snippet holds the top-level
+      widget while it uses its handle (TST-432).
+    - **Result:** passed in its scratch run.
+  - Questioned by TST-437 (2026-11-15).
+
+- [x] **SRV-155 · `launch_designer`'s keyboard give-back raises once it has hidden Designer, leaving it hidden** · follows SRV-150, generation 2 · `mcp_server/designer_helpers/mac_window.py` (`give_back_activation`) · confirmed · found 2026-11-15
+  - **Defect.** `give_back_activation` hides Designer, then takes `mw.window().windowHandle()` in one expression,
+    which is deleted by the next line (TST-432's measurement). `_event_signal` raises there, before the show.
+  - **Scenario.** A Designer that became the active app as it started: `launch_designer` hides it, the bridge call
+    fails, and the Designer stays hidden. Read in the code with TST-432's measurement (2026-11-15); not run live:
+    Designer becoming the active app takes the user's keyboard.
+  - **Fix.** Hold the top-level widget while its handle is used.
+  - **Resolution: done.** `test_no_window_handle_is_taken_through_a_wrapper_dropped_at_once` failed on this line
+    and TST-432's, then passed; `give_back_activation`'s unit test now hands it the handle through a held top-level
+    widget and checks its spy is removed.
+- [x] **HLP-157 · `_until` runs on once Qt's quit has run: past its limit, until the job is aborted** · follows HLP-150, generation 3 · `mcp_server/designer_helpers/waits.py:75-76` · measured · found 2026-11-15
+  - **Defect.** HLP-150's fix enters the event loop again at each wake: `while not state() and end.isActive():
+    loop.exec()`. Once `QCoreApplication.exit()` has run, `QEventLoop.exec()` returns at once, processing no event,
+    until the application's own loop unwinds. So no timer fires, `end` stays active, and the loop calls `state()`
+    without end. Qt also removes the posted Quit events each time an event loop is entered.
+  - **Scenario.** Measured in plain Python with Designer's PySide6 (2026-11-15): `QCoreApplication.exit(0)` from a
+    timer 0.2 s into `_until(state, 1.0)`, whose `state()` turns true after 3 s. The wait returned at 3.00 s, after
+    6.3 million calls of `state()`. A second `_until` after it, its state never true, hadn't ended after 20 s. In
+    Designer: the user quits while a 3D shot waits on the clipboard, an expose event or the view's frames. Designer
+    then spins on its main thread until the plugin aborts the job at its time limit. Not measured in Designer:
+    whether its own quit runs `exit()` while a job waits. On main, a wait returned once its loop did.
+  - **Fix.** End the wait when `loop.exec()` returns a negative value, or run
+    `loop.processEvents(QEventLoop.ProcessEventsFlag.WaitForMoreEvents)` instead of entering `exec()` again. Add a
+    unit test of `_until` itself, with a loop whose `exec` returns -1 (TST-428: `_until` is tested by its source text
+    only).
+  - **Resolution: done.**
+    - **Test:** `test_a_wait_ends_once_qts_quit_has_run` (test_frames3d.py): `_until` with an event loop whose `exec()`
+      returns -1 and a limit timer that never fires. It failed: "the wait ran on after the quit", past 100 looks.
+    - **Cause:** HLP-150's fix enters the event loop again at each wake. After Qt's quit, `exec()` returns at once and
+      no timer fires, so `end` stays active.
+    - **Fix:** `_until` ends when `exec()` returns a negative value (waits.py, with its docstring).
+    - **Also covered:** the self-test's own `until()` (window_states.py) ran the same loop, spinning to its clock limit:
+      it ends there too. No other `exec()` loop in the helpers, the plugin or the self-test.
+    - **Result:** passes. Not measured in Designer: whether its quit runs `exit()` while a job waits.
+- [x] **SRV-156 · A failure after `open` started Designer is handled as a start that failed: the preferences copy is dropped, and the Designer is left running unrecorded** · follows SRV-152, generation 2 · `mcp_server/server_tools/lifecycle.py` (`_opened`, `_started`, `_start_designer`), `designer_preferences.py` (`saved`) · confirmed · found 2026-11-15
+  - **Defect.** `_opened` can raise after `open` exited 0, with Designer already starting:
+    - `_found_launched` times out;
+    - `_designer_pids()` raises `_NoListing` in its loop;
+    - `ps` raises OSError.
+    `_start_designer` turns each into `_NotStarted`, and `saved()` drops the fresh copy of the preferences plist ("the
+    start failed: no Designer started on it"). The Designer is neither recorded nor ended.
+  - **Scenario.** Read in the code (2026-11-15). Under load `ps` fails, or the process isn't listed within
+    LAUNCH_FOUND_S. The agent's Designer runs with a home of its own and writes the shared plist: its
+    `session.instancePID` at its start, its session keys at its quit. No copy is left to put back. The `_NoListing`
+    and OSError cases also say "Designer could not be started from ...; set SD_DESIGNER_APP" while it runs. The
+    unrecorded path that already exists (`_remember_started` failing) keeps the copy and tries `_force_end`.
+  - **Fix.** Once `open` exited 0, handle a failure as the unrecorded path does: keep the copy, say Designer was
+    opened, look once more for a new process with the port, and end it. Test it with `_found_launched` raising after
+    a fake `open`.
+  - **Resolution: done.**
+    - **Test:** `test_a_designer_open_started_whose_process_isnt_found_keeps_the_copy_of_the_preferences`, found at a
+      last look and ended, or not found. It failed: the error said only "its process wasn't found within 60 s", the copy
+      was dropped, and the file wasn't put back.
+    - **Cause:** `_start_designer` took any ToolError of `_started` for a start that failed, inside `saved()`, which
+      drops a fresh copy when its block raises.
+    - **Fix:** `_opened` raises `_OpenedUnfound` once `open` exited 0, or didn't exit (SRV-160), and the process wasn't
+      found or listed, with the process one last look finds (`_launched_now`). `_start_designer` ends that one under the
+      lock (`_force_end`) and raises after `saved()`'s block, so the copy is kept. launch_designer says "Designer was
+      opened, but ...": its process ended (the copy put back), not ended (`kill -9`), or not found (it counts as the
+      user's).
+    - **Also covered:** the not-found sentence moved out of `_found_launched` into the launch's error.
+    - **Result:** passes.
+- [x] **SRV-161 · A Designer opened hidden that becomes the active app is shown again by give_back_activation** · `mcp_server/designer_helpers/mac_window.py` (`give_back_activation`), `mcp_server/server_tools/lifecycle.py` (`launch_designer`) · measured · found 2026-11-16
+  - **Defect.** Becoming the active app unhides a hidden Designer. `give_back_activation` reads `hidden` only once
+    Designer is the active app, so a Designer opened hidden reads shown then: it is hidden, then shown again, opaque, on
+    the user's screen. Its "still hidden" branch never runs that way.
+  - **Scenario.** Measured (2026-11-16, with the user's go) in the agent's Designer opened hidden (alone, port 9877),
+    its windows transparent and click-through: `activateIgnoringOtherApps:` gave `hidden=False active=True`, its window
+    on screen; hidden again after, PyCharm in front before and after. No launch was seen becoming the active app (4 of 4,
+    SRV-152's), so it takes a Designer that does. It was the review's Not verified item.
+  - **Fix.** launch_designer passes `started_hidden=True` for an app bundle (opened by `open -j`), and
+    `give_back_activation` leaves Designer hidden then.
+  - **Resolution: done.**
+    - **Test:** `test_a_designer_started_hidden_that_activation_showed_is_hidden_again` failed (no such parameter);
+      `test_a_designer_started_gives_the_keyboard_back_once_its_home_screen_is_closed[an app bundle, opened hidden]`
+      failed: `give_back_activation()` sent.
+    - **Fix:** as above; a binary in SD_DESIGNER_APP still gets `give_back_activation()`.
+    - **Result:** passes; the second Designer's launch in the scratch run passed.
+- [x] **TST-444 · The frames fact's part on screen fails now and then: right after the show, a pan draws one paint in 3 s** · `tests/test_all_tools/editor_panels_and_fit/checks.py` (`FRAMES`, `check_the_3d_views_frames_say_when_it_has_drawn`) · measured · found 2026-11-16
+  - **Defect.** Inside `_on_screen`, the first part read "a pan [8]; a viewpoint []" and "OFF=8": one paint after the
+    pan, none after the viewpoint or Display > Samples. The parts after it, shown again, passed.
+  - **Scenario.** In the scratch run of 2026-11-16, 1 of 4 runs of the check (3 of 3 passed right after), and 1 of 4 in
+    SRV-152's. In the full run the check fails then. Whether it is the shot's HLP-145 (a window shown while macOS still
+    counted it covered) isn't known: no state was printed.
+  - **Fix.** Print the window's state (exposed, covered, hidden, order) when a change draws nothing, measure what
+    happened, then wait for that state, or show the window again as `_wait_on_screen` does.
+  - **Resolution: done.**
+    - **Test:** the check, run in the scratch run with its state printed, passed 16 of 16 alone (10 in one Designer, 6
+      in Designers just started) and 6 of 6 after the material check. Run after the window checks it ran after in the
+      failing run (off screen, transparent, covered put back, focus, plain shot, stale render), it failed in 6 of 7
+      tries: the part on screen in 4, a part shown from hidden in the other 2. The state read `exposed=False covered=True hidden=False`, with PyCharm's window in front of Designer's,
+      the active app's (`in_front`, named by `window_owner.WHO`). Qt had exposed the window at the show, then stopped
+      exposing it after the first paint.
+    - **Cause:** the shot's own defect, HLP-160: brought in front before Designer's unhide took, the window went behind
+      the active app's window as it took. The check pans with no look between its steps, where the shot looks again
+      before each one (`_Screen.again`), so its view drew nothing more.
+    - **Fix:** HLP-160's, in the shot. The check now records each time Qt stops exposing the window while it is read
+      on screen (COVERS: the stretch, macOS's covered, the windows in front), and reads again, once, when that
+      happened, printing it. It prints the window's state where a wait on screen ran out (STATES), the shot's lines
+      with it. `who()` moved from `window_states._WINDOW` into `window_owner.WHO`, which both use.
+    - **Also covered:** the parts shown from hidden (SHOWN_CHANGED, SHOWN_UNCHANGED, SHOWN_TAKEN) record covers and
+      states the same way: one cover was read there too, before the fix.
+    - **Result:** after HLP-160's fix, the window checks then the check, 3 times, passed 55 of 55, never read again; the
+      check alone passed in each run since. The in-front window checks, which use `who()` through `_WINDOW` (`_HITS`),
+      weren't run: they put Designer's windows opaque in front of the user's.
+- [x] **HLP-160 · A 3D shot of a hidden Designer brings its window in front before the unhide took: the window goes behind the active app's, and the view stops drawing** · `mcp_server/designer_helpers/shot3d.py` (`_Screen._bring`) · measured · found 2026-11-16
+  - **Defect.** For a hidden Designer, `_bring` called `unhideWithoutActivation`, then `orderFrontRegardless` at
+    once. The unhide takes as Designer's events run. The window brought in front before that ended up behind the
+    active app's window, and covered whole, Qt no longer exposed it: the 3D view drew nothing more.
+  - **Scenario.** Found addressing TST-444 (2026-11-16), in the agent's Designer (alone, port 9877), with PyCharm the
+    active app. A probe, 5 tries each:
+    - hidden, then shown at once: PyCharm's window in front 5 of 5, the window no longer exposed 0.07 to 0.095 s
+      after the unhide;
+    - sent behind every window, then brought in front, with no hide: nothing in front, 5 of 5;
+    - shown once macOS no longer said Designer hidden (isHidden, looked at every 100 ms): nothing in front, 5 of 5,
+      each watched 3 s.
+    Qt's applicationStateChanged never fired for the unhide. The shot coped through `again()`, before each step and
+    render, saying "brought in front again, transparent, as another window covered it during the shot", which no
+    window of the user's had done. A step's wait ending off screen in between took longer.
+  - **Fix.** Wait for macOS to no longer say Designer is hidden, then bring the window in front.
+  - **Resolution: done.**
+    - **Test:** `test_a_hidden_designer_is_brought_in_front_once_macos_says_its_unhide_took` (a fake whose unhide
+      takes as its events run) failed: brought in front before the unhide took. Live,
+      `check_a_hidden_designers_window_is_brought_in_front_for_a_3d_shot_once_its_unhide_took` failed 3 of 3 in the
+      scratch run, 3 runs: `(True, ['PyCharm, layer 0'], 0)`. It judges only while the active app shows a window
+      (`window_server.windows_now`, `shows_a_window`, with unit tests). A "designer facts" half ran the old steps
+      again beside it: a window came in front 10 of 10 times, then 0 of 2 in a later run, PyCharm still active. A fact
+      that holds only in some runs can't be a check, so that half was dropped; the fact is in shot3d.py's docstring,
+      measured once.
+    - **Cause:** `unhideWithoutActivation` returns before the unhide is done, and the window brought in front meanwhile
+      went behind the active app's window as it took.
+    - **Fix:** `_Screen._wait_unhidden`, after the unhide: waits for `not mac.hidden()`, woken by the window's expose
+      events and looked at every TICK ms, ON_SCREEN_WAIT at most; then `mac.show()`. The measured facts are in
+      shot3d.py's module docstring.
+    - **Also covered:** the other unhides. `give_back_activation` unhides and only waits for the window to be exposed:
+      it brings nothing in front. The window checks' set-ups (`window_states`: `to_back`, `_PUT`'s ways in front) wait
+      for the unhide before they move the window.
+    - **Result:** passes: the live check 9 of 9 in that Designer and 2 of 2 in Designers just started. The touched
+      unit tests pass, with lint and types.
+  - Questioned by HLP-173 (2026-11-16).
+
+- [x] **SRV-162 · A launch watching a Designer not yet recorded never looks again if that Designer turns out to be another launch's: it waits out wait_s, then names other Designers to end** · follows SRV-158, generation 4 · `mcp_server/server_tools/lifecycle.py` (`launch_designer`'s `may_have_exited`) · confirmed · found 2026-11-16
+  - **Defect.** `may_have_exited` watches the exits of the Designers that may hold the port, unrecorded ones included,
+    and looks them up again only once one exits. An unrecorded Designer can leave that list without exiting: another
+    launch records it on its own port, or it starts listening on another port. Its exit never comes, so the loop never
+    looks again. Main ran `_running_on(port)` every round.
+  - **Scenario.** Read in the code. In the pool, launch A has started its Designer, which pgrep lists, but hasn't
+    recorded it yet. Launch B's first `_running_on(B)`, under no lock, counts it as one that may hold B's port, so B
+    starts none. If it is still unrecorded at B's first look, B watches its exit and waits wait_s (240 s). B then
+    fails ("Designer is already running, but its bridge did not answer ..."), naming the other workers' Designers.
+    The user's Designer starting as an agent launches does the same; main refused within 2 s (`_users_next_to`). How
+    often the window opens wasn't measured.
+  - **Fix.** Watch the exit only of a recorded Designer. For an unrecorded one, look again each round, as main did, or
+    when the records folder changes. The comment and the docstring to match.
+  - **Resolution: done.**
+    - **Test:** `test_a_launch_waiting_on_an_unrecorded_designer_starts_one_once_that_designer_leaves_the_port` (it
+      replaces SRV-158's test of the unrecorded case). Its fakes: a Designer no record names, which never exits and
+      leaves the port at the fourth look. It failed: the launch waited out wait_s and raised "Designer is already
+      running, but its bridge did not answer within 30s ... `kill 22`".
+    - **Cause:** SRV-158 watched an unrecorded Designer's exit and looked again only once it came. An unrecorded
+      Designer can leave the port without exiting: another launch records it on its own port, or it listens on
+      another. Nothing says either.
+    - **Fix:** `may_have_exited` watches only the Designer another launch recorded on this port, which holds the port
+      until it exits. With none recorded it returns True, so `_running_on(port)` runs each round, every POLL_S, as no
+      callback exists (AGENTS.md). Its docstring says so.
+    - **Also covered:** the other wait on processes, `_exited`, watches one process's exit, which is what it waits
+      for. SRV-158's recorded case and its test (`..._reads_its_record_once_and_closes_its_watch`) are unchanged.
+    - **Result:** passes, with the launch tests of `test_lifecycle_env.py`, lint and types.
+- [x] **HLP-161 · set_3d_view's moves wait from a mark taken before the look that can bring the window back on screen, so the show's own restart ends their wait** · follows HLP-158, generation 4 · `mcp_server/designer_helpers/view3d.py` (`_3d_set_up`'s `run`, the moving block) · confirmed · found 2026-11-16
+  - **Defect.** The moving block takes `since = watched.mark()`, then each option's `begin()`, which runs `between`:
+    in a shot, `screen.again()` (HLP-158). If the window went off screen, `again()` brings it back and waits in
+    `frames.shown()` for the view to restart and count back to 8. `settled(since)` then takes that restart and that 8
+    for the moves': it ends before the moves' own count is back.
+  - **Scenario.** Read in the code. `screenshot_designer('3d', orbit=[45, 0], pan=[0.2, 0])`: during the orbit's
+    drags the user clicks a window of their own through Designer's click-through window, which then covers it.
+    `begin('pan')` brings it in front again, the show restarts and settles, the pan restarts the count, and
+    `settled(since)` returns at once. The render is taken a few samples in, noisy with the GPU Pathtracer, and nothing
+    says so. A single option does the same when the window went off screen during the step before. The other steps
+    take their mark after `begin()`.
+  - **Fix.** Take the mark after each option's `begin()`, before its moves, and wait on the last one. Test with real
+    `_Counts` and a `between` that appends a restart and a return to 8.
+  - **Resolution: done.**
+    - **Test:** `test_the_moves_wait_from_a_mark_taken_after_the_look_before_the_last_of_them` (orbit then pan, orbit
+      then zoom, pan alone): the mark the moves' `settled()` waits from must come after the last option's look
+      (`between`) and before its first move. Put back at the old place, the mark came before every look: `3 < 0` and
+      `0 < 0`, 3 of 3 cases.
+    - **Cause:** the moving block took one mark before the options' `begin()`. Each `begin()` runs the shot's look,
+      which can bring the window back and wait for the view's restart, after that mark.
+    - **Fix:** `_3d_set_up`'s moving block marks after each option's `begin()`, before its moves. `settled()` waits
+      from the last option's mark.
+    - **Also covered:** the other steps (mesh, graph, view, Frame, tiling) already marked after their `begin()`. The
+      viewpoint's turn has a look of its own after it now (HLP-163).
+    - **Result:** passes. Live, in the scratch run below (HLP-163): orbit, pan, zoom and orbit with pan all pass.
+- [x] **TST-453 · Two checks that read the windows in front of Designer's run without the pool's launch lock** · follows TST-445, generation 3 · `tests/test_all_tools/editor_panels_and_fit/checks.py` (`check_a_hidden_designers_window_is_brought_in_front_for_a_3d_shot_once_its_unhide_took`, `check_the_3d_views_frames_say_when_it_has_drawn`) · confirmed · found 2026-11-16
+  - **Defect.**
+    - Both judge readings that a window of another Designer of the run can change: SHOWN_FROM_HIDDEN's
+      `mac.in_front()`, and the frames fact's COVERS.
+    - TST-417 found such readings failing in the full run as the pool's Designers started and quit. The four window
+      checks it fixed read inside `no_designer_starting()`.
+    - These two retry (TRIES, and the frames fact's "read again, once") but hold no lock. TST-445's Also covered took
+      the retry half of TST-417 and left the lock out.
+    - `test_the_window_checks_the_pool_disturbed_read_while_no_designer_starts` lists the four checks, not these two.
+  - **Scenario.** Read in the code. In a full run, a Designer of the pool quits and macOS passes the activation to
+    another, or lifecycle's hand-over check starts one from its binary (this review's Not verified). A window of it
+    comes in front of Designer's while the HLP-160 check reads `in_front` three times, and the check fails as
+    HLP-160's defect.
+  - **Fix.** Read inside `with no_designer_starting():`, as the other four do, and add both names to the unit test's
+    list. It adds no check and makes none stronger (the chain rule).
+  - Note (2026-11-16): the hand-over check's two Designers were never active and showed no window, 3 of 3 under a
+    front watch (the fourth review's log). What stays is the activation passed between the pool's Designers as
+    they quit.
+  - **Resolution: done.**
+    - **Test:** `test_the_window_checks_the_pool_disturbed_read_while_no_designer_starts`, given both checks and the
+      readings they take (`SHOWN_FROM_HIDDEN`, `WHO + FRAMES`): both failed, "reads windows without holding the launch
+      lock".
+    - **Cause:** the two checks came after TST-417, and took its retries but not its lock.
+    - **Fix:** both read inside `with no_designer_starting():`, the HLP-160 check from its first reading of the windows
+      to its last try. Their docstrings say so.
+    - **Also covered:** the four checks the test listed already hold the lock.
+    - **Result:** passes. Both checks pass in a scratch run.
+  - Questioned by TST-464 (2026-11-16).
+  - Questioned by TST-467 (2026-11-16).
+- [x] **SRV-165 · A launch through `open` can record the user's Designer as its own, which `quit_designer` then ends** · follows SRV-152, generation 2 · `mcp_server/server_tools/lifecycle.py` (`_has_port`, `_launched_now`, `_found_launched`; their uses in `_start_designer`) · confirmed · found 2026-11-16
+  - **Defect.**
+    - `open` gives no process ID. The launch takes its Designer to be the newest new Designer process whose
+      environment sets `SD_BRIDGE_PORT` to the launch's port:
+      ```python
+      for pid in sorted(set(_designer_pids()) - before, reverse=True):
+          if _has_port(pid, port):
+              return pid
+      ```
+    - Before SRV-152 the started process was the server's own child, so its ID was known.
+    - README tells a user with a custom port to start Designer "from a shell where it is set, or set it
+      system-wide". Their Designer's environment then sets the same variable, to the port the server uses by
+      default.
+    - `_appeared` looks for a Designer that appeared before the start only, not during `open` and the search.
+  - **Scenario.** Read in the code. The user has `SD_BRIDGE_PORT` set system-wide, and an agent calls
+    `launch_designer()`. The user opens their Designer while `open` runs, or before the agent's process is listed.
+    The whole launch under the preferences lock took 0.24 to 0.25 s in this review's probe, and the search goes on
+    up to LAUNCH_FOUND_S when the process is slow to show.
+    - The newest matching process is the user's, so it is recorded as the agent's, with the agent's home.
+    - `quit_designer` then closes it, dropping their unsaved changes, or forces it.
+    - On the `_OpenedUnfound` path, `_launched_now` can pick it, and `_force_end` ends it at once.
+
+    This breaks DECISIONS.md's "The tools never end the user's".
+  - **Fix.** Match the launch's own `CFFIXED_USER_HOME=<home>` too, or its `TMPDIR`. Both are unique to the launch's
+    port and user, and both go through `open --env`. If more than one new process matches, raise `_OpenedUnfound`
+    rather than take one. A unit test: two new processes with the port, the newer one without the home.
+  - **Resolution: done.**
+    - **Test:** `test_a_designer_the_user_starts_with_the_launchs_port_isnt_taken_for_the_launchs`, through
+      `_found_launched` and `_launched_now`: with the user's newer process carrying the port alone, both took it.
+      `test_a_launch_is_known_by_its_port_and_its_home`, and `test_the_process_open_started_is_looked_for_with_the_launchs_port`
+      expecting the home too, failed on the names missing.
+    - **Cause:** the launch's process was matched by its port alone, a variable a Designer the user starts with
+      SD_BRIDGE_PORT set has too.
+    - **Fix:** `_launch_marks(env)` gives the launch's port and its home (`CFFIXED_USER_HOME`), and `_carries(pid,
+      marks)` wants each as a whole variable of `ps -E`. `_found_launched` and `_launched_now` take the marks. The
+      module docstring and `_remember_started`'s say so.
+    - **Also covered:** `_launched_now`, the last look before `_OpenedUnfound`'s force, uses the same marks. A Designer
+      started from its binary is the server's own child, its ID known. `_appeared` reads the Designers listening on
+      the port, not environments.
+    - **Result:** passes. Each scratch run since launched its Designer through `open` and found its process by both.
+  - Questioned by SRV-170 (2026-11-16).
+- [x] **HLP-170 · `set_3d_view` without a move fails in a Designer whose 3D view never drew, after switching the mesh** · follows HLP-162 and HLP-152, generation 3 · `mcp_server/designer_helpers/frames3d.py` (`_Frames.settled`, `_Frames._renders_alike`), `mcp_server/designer_helpers/view3d.py` (`set_3d_view` and its docstring) · measured · found 2026-11-16
+  - **Defect.**
+    - Without orbit, pan or zoom, `set_3d_view` runs its steps off screen (`set_up(None, None)`).
+    - A view that never drew shows no count, so its `_Frames` has no `_Counts` (HLP-162). Each step's `settled()`
+      then compares renders, and `_renders_alike` takes one through Copy Render at once: `last = self._render()`.
+    - Off screen, a view that never drew gives no render, and `_3d_render` raises after RENDER_LIMIT.
+    - The docstring says renders go through the clipboard only "With Display > Samples off" (HLP-152).
+  - **Scenario.** Measured (2026-11-16) in a Designer that `launch_designer` had just opened hidden, with
+    editor_panels_and_fit's preparation and no 3D shot yet. `set_3d_view(graph='mcp_selftest_view3d',
+    mesh='Sphere')` printed "3D view, setting: Sphere" and switched the mesh. Then it raised "the 3D view did not
+    produce a render (is a material shown?)" after 5.3 s, its one render having raised. Before this range,
+    `set_3d_view` took no render. The graph and tiling steps wait with `settled()` the same way (read in the code).
+    A viewpoint runs on screen, where the view draws.
+  - **Fix.** Off screen with no count shown, end a step's wait on the UpdateRequest since the step, as
+    `asked_off_screen` does where a count shows, with no render; or run the set-up on screen when the view hasn't
+    drawn yet. Say in the docstring when renders go through the clipboard. A live check in a Designer just started,
+    before any 3D shot, run where the first-shot check runs.
+  - **Resolution: done.**
+    - **Test:** `test_with_no_count_shown_a_step_off_screen_takes_no_render_and_ends_once_the_view_asks_for_a_frame`
+      (Display > Samples off, and a view that never drew): the render raised, as in the probe. Live,
+      `check_set_3d_view_sets_up_a_view_that_never_drew`, first in `run()`, failed in its scratch run: "the 3D view
+      did not produce a render". Its first version put the test graph's outputs on the mesh too, and left them for
+      the check of `graph=`, which then failed in the category's run; it sets the mesh alone now, and failed the same
+      way against the old `_renders_alike`, put back in a copy of the file for that run only.
+    - **Cause:** off screen with no count shown, each step's wait took a render first. A view that never drew gives
+      none there, and off screen every render is the view's last frame anyway (HLP-163).
+    - **Fix:** `_renders_alike` takes no render off screen: it waits for its `ended()`, NO_RESTART at most (the
+      step's UpdateRequest; the turn's going off screen). set_3d_view's docstring and frames3d.py's say when renders
+      go through the clipboard.
+    - **Also covered:** `settled()` and `moved()` compare renders through `_renders_alike`; `shown()` compared only on
+      screen already.
+    - **Result:** passes, unit and live (96 of 96 checks in the category's scratch run, in a Designer just started).
+  - Questioned by HLP-176 (2026-11-16).
+  - Questioned by TST-475 (2026-11-16).
+- [x] **TST-460 · The window checks' set-ups go on when a wait for Designer's window runs out, and can leave its windows opaque in front of the user's** · `tests/test_all_tools/editor_panels_and_fit/window_states.py` (`until`, `to_back`, `window`, `_PUT`, `_CLEAR`) · confirmed · found 2026-11-16
+  - **Defect.**
+    - `until(state, limit=3.0)` returns nothing, so no caller can tell a state that came from a limit that ran out:
+      ```python
+      while not state() and _time.monotonic() - start < limit:
+      ```
+    - `to_back` sends `orderBack:` whether or not `shown_again` came. Its own comment says a window moved before
+      that "was undone". The caller's `fade(False)` then makes Designer's windows opaque.
+    - `window()` places its window and makes it opaque after its own `until`, the same way.
+    - `window()` registers its window in `sys.mcp_selftest_*` only when it returns. An abort or an error after
+      `made.show()` leaves a window that `clear()` can't close: transparent but not click-through, so it takes the
+      user's clicks.
+  - **Scenario.** Read in the code. `shown_again` needs Qt to expose Designer's window. TST-433 found Designers
+    where a covered window isn't exposed, and HLP-166 dropped the same wait from `give_back_activation` for that
+    reason. In such a Designer, with another app's window covering Designer's whole frame at the unhide, the wait
+    runs its 3 s and `orderBack:` comes before the window is shown. Designer's windows come back near the front,
+    and `fade(False)` leaves them opaque in front of the user's windows until the check's clear. The fourth review
+    measured the wait ending in 0.02 s with a window of the user's in front, 6 of 6, in one Designer.
+  - **Fix.** `until` returns `state()`. `to_back` and `window()` raise when their wait fails, before any placing or
+    opacity 1, and `window()` registers its window before `show()`. The check's clear then hides Designer, still
+    transparent and click-through. A unit test for each.
+  - **Resolution: done.**
+    - **Test:** `test_a_set_up_whose_wait_for_designers_window_runs_out_stops_before_it_places_a_window_or_makes_one_opaque`
+      failed: `until` returned nothing. `test_a_window_the_checks_make_is_registered_for_the_clear_before_it_shows`
+      failed: `window()` registered nothing.
+    - **Cause:** `until` dropped its state, so the set-ups went on once a limit ran out; `window()`'s callers registered
+      its window once it returned.
+    - **Fix:** `until` returns `state()`. `to_back`, `window()` and the 'hidden' way raise when their wait runs out,
+      before placing a window or making one opaque; the check's clear then hides Designer. `window(geometry, name,
+      ...)` registers its window as `sys.mcp_selftest_<name>` before it shows; `_UNDER` forgets its own once it closed
+      it. `_CLEAR` makes the windows opaque only once Designer is hidden, and otherwise leaves them transparent and
+      click-through, saying NOT_HIDDEN.
+    - **Also covered:** `_PUT`'s last `until(reached)` and `_READ`'s are followed by the state they print, which the
+      checks judge. The IN_FRONT ways' waits come before windows meant to be in front. `_DURING_PAN`'s and
+      `_HIDDEN_MID_ZOOM`'s print what they saw. `_CLEAR`'s wait for the un-minimize is followed by the hide, which
+      doesn't need it.
+    - **Result:** passes; the window checks pass in the category's scratch run (96 of 96 checks in the category's scratch run, in a Designer just started).
+  - Questioned by TST-474 (2026-11-16).
+- [x] **TST-472 · The window checks' 'minimized' way makes Designer's window opaque while it flies to the Dock** · `tests/test_all_tools/editor_panels_and_fit/window_states.py` (`_PUT`, the 'minimized' way) · measured · found 2026-11-16
+  - **Defect.** The way minimizes the main window, then makes Designer's windows opaque at once, while macOS's
+    minimize animation still runs; `until(reached)` waits only after that:
+    ```python
+    if way == 'minimized':
+        mac._object(mac._window, 'performMiniaturize:')
+    ...
+    else:
+        fade(False)
+    ...
+    until(reached)
+    ```
+  - **Scenario.** Measured with the user's go (2026-11-16), in a Designer an agent started: sampled from outside
+    Designer during `put('minimized')`, the window server listed Designer's main window on screen at opacity 1 from
+    about 0.1 s to 0.65 s after the call began, shrinking from its frame (1599 by 993) to the Dock's icon (36 by 25),
+    6 of 6. It was listed behind every other app's window at each sample, so the user sees it wherever their windows
+    leave its path to the Dock uncovered. The full run sets this way up about ten times. The front watch counts only
+    windows in front of another app's, so it can't see this.
+  - **Fix.** For 'minimized', make the windows opaque once macOS says the window is minimized and the window server
+    no longer lists it, as `_Screen.put_back` waits for the window off screen before its unfade. A unit test pins the
+    order, and a live check samples the window list during the way.
+  - **Resolution: done.**
+    - **Test:** `test_the_minimized_way_makes_designers_windows_opaque_only_once_the_window_is_off_screen` failed: no
+      wait in the way's branch. Live, `check_the_minimized_way_shows_none_of_designers_windows_as_its_window_flies_to_the_dock`
+      samples the window server's list from the self-test's process (`popups.PopupWatch` at every layer, given a
+      `layer`). Run against the old order, put back in a copy of the file for that run only, it failed: 961 of 1,056
+      samples with a window of Designer's on screen at an opacity above 0.
+    - **Cause:** the way made Designer's windows opaque right after `performMiniaturize:`, and waited for the
+      minimize only after that.
+    - **Fix:** the 'minimized' way waits until macOS says the window minimized and the window server no longer lists
+      it, then makes the windows opaque with the other ways behind; it raises if that never comes.
+    - **Also covered:** the 'hidden' way made them opaque only once hidden already; 'qt minimized' runs only in front.
+    - **Result:** passes, unit and live (96 of 96 checks in the category's scratch run, in a Designer just started).
+- [x] **INS-38 · `_own_folder` calls `os.getuid()`, which Windows lacks, and two unit tests reach it there** · follows INS-37, generation 2 · `scripts/read_crash_dump.py:362-370` (`_own_folder`), `tests/unit/test_read_crash_dump.py:303,349` · confirmed · found 2026-11-16
+  - **Defect.**
+    - INS-37's `_own_folder` compares the folder's owner with `os.getuid()`, which exists on Unix only:
+      ```python
+      return stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid()
+      ```
+    - Two tests that run on Windows give `dump_folders()` an agents' folder that exists, so they reach that call:
+      - `test_the_dumps_are_looked_for_in_each_designers_crashpad_folders` now makes the folder (`agents.mkdir()`);
+      - in `test_a_dump_waiting_for_its_upload_is_read_as_the_newest`, `_dump(...)` makes `tmp_path/agent` before
+        `main([])` runs.
+    - Neither is skipped on Windows. TST-349 and TST-352 made the first one pass there.
+    - The script itself is safe on Windows: `agent_designer_folders()` returns `[]` where `os` has no `getuid`.
+  - **Scenario.** Read in the code. The unit suite on Windows, its final check included, fails both tests with
+    `AttributeError: module 'os' has no attribute 'getuid'`.
+  - **Fix.** Give the two tests an `os.getuid` that returns the folder's owner
+    (`monkeypatch.setattr(os, 'getuid', ..., raising=False)`), since they stand for macOS's folders, or skip them on
+    win32 as INS-37's own test is.
+  - **Resolution: done.**
+    - **Test:** `test_the_dumps_are_looked_for_in_each_designers_crashpad_folders` and
+      `test_a_dump_waiting_for_its_upload_is_read_as_the_newest` also run with `os.getuid` removed (the `user_ids`
+      fixture, 'no user ids'). Both raised `AttributeError: module 'os' has no attribute 'getuid'`.
+    - **Cause:** `_own_folder` called `os.getuid()`, which Windows lacks. The two tests stand for macOS's folders and
+      reach that call there.
+    - **Fix:** `_own_folder` compares the folder's owner only where `os` has `getuid`. Windows has no agents' folders:
+      `agent_designer_folders` lists none there.
+    - **Also covered:** every other `os.getuid()`. The server's `_checked_folder` runs on macOS only (its callers check
+      the platform), `agent_folder_name` on POSIX, and `uninstall.py` only on what `agent_designer_folders` lists; its
+      folder tests are skipped on win32.
+    - **Result:** passes, with the rest of `test_read_crash_dump.py`.
+  - Questioned by INS-39 (2026-11-16).
+- [x] **HLP-177 · An abort landing in a `finally` skips putting back the user's parameter, a temporary node or package, and the Explorer menu's look: HLP-171's Also covered missed them** · follows HLP-171, generation 4 · `mcp_server/designer_helpers/sweep.py:66-101` (`sweep_param`), `mcp_server/designer_helpers/describe.py:255-256` (`describe_node`), `:298-300` (`_with_node_texture`), `mcp_server/designer_helpers/editor.py:360-362` (`list_atomic`), `mcp_server/designer_helpers/view3d.py:383-386` (`_menu_once`) · measured · found 2026-11-16
+  - **Defect.**
+    - The plugin's tracer raises its abort at a traced event, then stops tracing. Landed on a `finally`'s first line,
+      the abort skips the rest of that `finally` (HLP-150, HLP-171).
+    - HLP-171's Also covered says "the helpers' other put-backs of the user's state have such a handler": an outer
+      handler, run untraced, that puts the state back again. These have none:
+      - `sweep_param`: the swept parameter's value and its inheritance. `$outputsize` and `$format` are made Absolute
+        before the `try:`, and the `finally` starts with an inner `try:`:
+        ```python
+        target.setPropertyInheritanceMethod(prop, SDPropertyInheritanceMethod.Absolute)
+        try:
+            ...
+        finally:
+            # the inheritance first: changing it resets the value to the default (REVIEW.md HLP-26)
+            try:
+                if inherit is not None:
+                    target.setPropertyInheritanceMethod(prop, inherit)
+            finally:  # the value goes back even if putting the inheritance back fails
+                target.setPropertyValue(prop, original)
+        ```
+      - `_with_node_texture`: the temporary output node it adds to the user's graph
+        (`if temp_output is not None: g.deleteNode(temp_output)`). It serves preview_node, node_stats and the other
+        tools that read a node's pixels, and sweep_param.
+      - `describe_node` and `list_atomic`: the temporary package each creates (`_PM.unloadUserPackage(tmp)`).
+      - `_menu_once`: the Explorer menu's window, which `fade` held and made transparent and click-through
+        (`for timer in timers: timer.stop()`, then `state.unfade()`). That window outlives the menu (HLP-146).
+  - **Scenario.** Measured (2026-11-16) in plain Python, on Designer's own Python 3.13.9 and on 3.12. A probe copied
+    each shape with fakes and raised an abort at each traced event in turn, as the plugin's tracer does:
+    - sweep_param's shape:
+      - an abort at the outer `try:` left the inheritance Absolute;
+      - one at the inner `try:` left both the inheritance and the last swept value;
+      - one at the inner `finally`'s first line left the value.
+
+      Each `try:` line gives a line event.
+    - `_with_node_texture`'s: an abort at either line of its `finally` left the node.
+    - `_menu_once`'s: an abort at any of its `finally`'s three lines left the menu faded.
+
+    So a sweep_param call that times out or is cancelled can leave the user's node changed, with no "restored" line.
+    The tools run inside one undo step (`_with_undo`), so the user's Undo removes a value or node left this way, but
+    nothing tells them to. The odds per abort are HLP-171's: the tracer looks once every 64 events.
+  - **Fix.** The shape HLP-171 gave `_3d_render`: a flag set once the put-back has run, and an outer
+    `except BaseException:` that does it again unless the flag says it ran. In `sweep_param`, the outer handler covers
+    the lines from the inheritance change on. A unit test for each, with a trace function raising at the line, as
+    HLP-171's test does.
+  - **Resolution: done.**
+    - **Measured first** (2026-11-16):
+      - In a Designer an agent started: a package's handle differs from one listing to the next, and its UID doesn't.
+        A package made through the API is listed with a UID of its own and no file, and the list is as before once it
+        is unloaded. Unloading one package twice crashed that Designer: SIGSEGV in `UnreferencePackageCommand::execute`,
+        a crash dump in its folder.
+      - In plain Python, on 3.12 and Designer's 3.13: an abort raised at a `try:` line escapes that `try`'s handlers,
+        and those of any `try` around it in the same function. A caller's handler catches it.
+    - **Test:** `tests/unit/test_put_backs.py`. Its harness, `tests/unit/aborts.py`, raises the abort at every traced
+      event in turn: the helper's, and those of the fakes standing for sd's Python wrappers. Qt's fakes aren't counted,
+      as Qt is C++. Each test failed:
+      - sweep_param left the inheritance Absolute and the value at the default;
+      - `_with_node_texture` left the node;
+      - describe_node and list_atomic left the package;
+      - `_menu_once` left the menu open.
+
+      Live, in their scratch run, each with an abort raised at the put-back's line by a tracer of the check's:
+      - measure's `check_an_abort_putting_a_sweeps_parameter_back_still_puts_it_back` failed: Absolute after, then the
+        value 0, 0;
+      - measure's `check_an_abort_removing_a_measures_temporary_output_still_removes_it` failed: 4 nodes, then 5;
+      - discovery's `check_an_abort_unloading_describe_nodes_package_still_unloads_it` failed: `LEFT=1`.
+
+      `test_an_abort_at_a_try_line_escapes_the_try_around_it_but_not_one_in_a_caller` pins the Python fact.
+      Discovery's `check_a_package_made_has_a_uid_of_its_own_and_no_file_and_goes_once_unloaded` pins the Designer one.
+    - **Cause:** the put-backs ran in a `finally` only. An abort skips the rest of the `finally` it lands in, and
+      nothing ran them again. A node or package made as the abort landed, in sd's wrapper after its C++ call, had no
+      name in the helper.
+    - **Fix:** each put-back runs again in an outer `except BaseException:`, which runs untraced after the abort:
+      - sweep_param: `put_back()`, the inheritance then the value, with the outer `try` from the inheritance's change
+        on. Set twice, they are the same.
+      - `_with_node_texture`: `_delete_new_nodes(g, before)`, the nodes whose identifier wasn't listed before.
+      - describe_node and list_atomic: `_unload_new_packages(before)`, the packages with no file whose UID wasn't
+        listed before (`_package_uids`). Listed again each time, neither deletes or unloads anything twice.
+      - `_menu_once`: the timers stopped and `unfade()` again. `unfade` sets the look first, then forgets the hold just
+        before ending it: an abort between the two leaves a hold, never a second release.
+      - The look: its handler covers the whole look and closes the popup open then, unless it was open before. The
+        fade records its own error, so the look has no `try:` inside.
+    - **Also covered:** every `finally` of the helpers.
+      - Already put back by an untraced handler: `_3d_render`'s clipboard (HLP-171), `_on_screen`'s window, and
+        `_3d_set_up`'s mouse button, Light tool and Parameters panel.
+      - pick's `menu.close()`: an abort there now reaches the look's handler, which closes the menu.
+      - Not the user's state: the event filters, held by their frames; `_Frames.close()`; `_until`'s timers (HLP-150);
+        `mac_window.py`'s `CFRelease`.
+      - Nested `try:` lines with a change before them in the same function, where an abort escapes the handler (the
+        measurement above): the look's, removed; `_drag`'s, whose guard goes with its frame; the 3D set-up's, where
+        nothing needs putting back yet. `add_node`'s and `expose_param`'s are in handlers of errors, not of aborts.
+      - Left: an abort at the look's call, or at its `try:` line, comes before any of the look runs. The menu stays as
+        it opened until the guard closes it, MENU_GUARD at most. `_menu_once`'s docstring says so, and the unit test
+        allows it there only.
+    - **Result:** passes, unit and live. In the scratch runs: measure and discovery whole, 40 of 40, and the Explorer
+      menu checks in a Designer just started.
+  - Questioned by HLP-179 (2026-11-16).
+  - Questioned by HLP-180 (2026-11-16).
+- [x] **HLP-179 · `sweep_param` stopped by an error no longer says the parameter was put back, and the tool then warns it may not be** · follows HLP-177, generation 5 · `mcp_server/designer_helpers/sweep.py:76-114` (`sweep_param`), `mcp_server/server_tools/measure.py:230-258`, `tests/unit/test_pixels.py:120-127` · confirmed · found 2026-11-16
+  - **Defect.**
+    - HLP-177 moved the `restored` line out of the `finally`, after the inner `try`:
+      ```python
+      try:  # from the inheritance's change on: ...
+          try:
+              ...
+          finally:
+              put_back()
+          print('restored %s.%s to %r' % (node_id or 'graph', param, original_text))
+      except BaseException:
+          if not put[0]:
+              put_back()
+          raise
+      ```
+      Any exception skips the line, though the inner `finally` has put the parameter back.
+    - The server reads that line to say the value was put back:
+      ```python
+      restored = re.search(r'^restored .*$', text, re.M)
+      ...
+      if not restored:
+          lines.append('WARNING: the original value may not have been restored:\n' + text[-1500:])
+      ```
+    - No test saw it. `test_sweep_reports_a_value_that_failed` fakes the helper's old output ("'restored' from the
+      finally"), and `test_put_backs.py` doesn't read what the helper prints.
+  - **Scenario.** Read in the code. A sweep's later value fails: the node produces no texture, or `use` can't write
+    its file. The sweep stops after the first values, with the parameter back. The result says "original NOT
+    restored!" and "WARNING: the original value may not have been restored". An agent may then tell the user their
+    parameter was changed, or set it again. Before HLP-177, the line came from the `finally`.
+  - **Fix.** Print the line in `put_back()`, after its `try`/`finally` and before `put[0] = True`. A second run prints
+    it again, and the server takes the first. A unit test of the helper: a sweep whose second value raises prints the
+    line, and so does one aborted at each event (`aborts.at_each_event`). The comment in `test_pixels.py` follows.
+  - **Resolution: done.**
+    - **Test:** in `test_put_backs.py`, `test_a_sweep_stopped_by_an_error_says_its_parameter_is_back`, a sweep whose
+      second value raises, and HLP-177's abort at each event, which now wants the line once the parameter changed: it
+      failed, with the parameter back and no `restored` line.
+      Live: `check_a_sweep_stopped_by_an_error_says_its_parameter_is_back` (measure) failed in its scratch run, "no
+      restored line" with the parameter as before, then passed.
+    - **Cause:** HLP-177 moved the line after the put-back's `try`, where any exception skipped it.
+    - **Fix:** `put_back()` prints the line, after putting the parameter back and before its flag. Run again after an
+      abort, it prints it again. The comment in `test_pixels.py` says where the line comes from.
+    - **Also covered:** the server reads no other line a helper prints to say it put something back (`server_tools/`
+      searched: `measure.py`'s alone). HLP-177's abort check passes too.
+- [x] **HLP-180 · An abort in a 3D shot's put-back leaves Designer's window on screen, opaque; HLP-177's Also covered says an untraced handler puts it back** · follows HLP-177, generation 5 · `mcp_server/designer_helpers/shot3d.py:296-327` (`_Screen.put_back`), `:331-350` (`_on_screen`), `ROADMAP.md` item 91 · confirmed · found 2026-11-16
+  - **Defect.**
+    - HLP-177's Also covered lists "`_on_screen`'s window" as "already put back by an untraced handler". The handler
+      gives the windows their look back, not their place:
+      ```python
+      except BaseException:
+          screen.unfade()
+          screen.opaque_first()
+          raise
+      ```
+    - `put_back` runs traced once the shot ends. `mac.active()`, `mac.lowest()` and `_listed`'s loop over every window
+      on screen are Python. An abort landing before a step (`mac.minimize()`, `mac.put_below(behind)`, `mac.hide()`)
+      skips it. The `finally` then runs `unfade()`, untraced, which makes the window opaque where `_bring` left it.
+    - An abort in `_wait_off_screen`, after `minimize()` or `hide()`, makes the window opaque before it is off
+      screen. It then flies to the Dock opaque, as TST-472 measured for the self-test's way.
+    - `_on_screen`'s docstring says "An abort landing on that step leaves the window on screen, opaque". ROADMAP item
+      91 lists "the window sent back or hidden again after one (`shot3d.py`)" as open. It also lists sweep_param's,
+      preview_node's, the clipboard's and editor.py's put-backs, which HLP-171 and HLP-177 fixed.
+  - **Scenario.** Read in the code. `screenshot_designer('3d')` runs in the user's Designer, minimized, covered or
+    hidden. A cancel or the job's timeout lands as the shot puts the window back. The window stays on the user's
+    screen, opaque: un-minimized, in front of the window that covered it, or with Designer shown. An aborted job
+    returns no line saying so.
+  - **Fix.** HLP-177's shape:
+    - a flag set once `put_back`'s steps have run;
+    - `_on_screen`'s handler runs the steps again unless the flag is set, waits for the window off screen, then gives
+      the looks back. A step run twice is safe: `miniaturize:` on a minimized window, `hide:` on a hidden app,
+      `orderWindow:relativeTo:` again.
+
+    A unit test with `aborts.at_each_event` over `_on_screen`, the Mac fake traced, checks the window's state as
+    well as its look. ROADMAP item 91 then says what is left.
+  - **Resolution: done.**
+    - **Test:** `test_shot3d.py::test_an_abort_at_any_event_of_the_shot_leaves_the_window_where_it_was_found_and_opaque_once_there`,
+      minimized, covered and hidden, an abort at every traced event: it failed at `_on_screen`'s call of put_back, the
+      window left on screen. Live: `check_an_abort_putting_a_shots_window_back_still_hides_designer_again`
+      (editor_panels_and_fit), an abort at put_back's `mac.hide()`, the looks given back by the check only once
+      Designer is hidden: it failed in its scratch run (HIDDEN_AFTER=False), then passed.
+    - **Cause:** put_back's `finally` gave the windows their look back wherever they were, and the handler did the
+      same. Nothing ran the steps again.
+    - **Fix:** put_back runs its steps and the wait for the window off screen (`_sent_back`), then gives the looks
+      back. A step's own error gives them back at once. An abort leaves them, and `_on_screen`'s handler runs
+      put_back again, untraced, unless it ran to its end (`done`). `_on_screen`'s docstring says the window is put
+      back after an abort too.
+    - **Also covered:** an abort in the wait off screen: the handler runs the steps and the wait again before the
+      looks. ROADMAP item 91 checked: this was its last case. In the scratch run under a front watch, the shot's window
+      checks off screen passed, and Designer stayed behind and not the active app (525 samples).
+- [x] **HLP-181 · The text a 3D shot puts back on the clipboard stays with Designer's process until something reads it: lost when that Designer is ended by force, and a paste waits while it is busy** · `mcp_server/designer_helpers/screenshots.py:83-88` (`_3d_render`'s `put_back`); DECISIONS.md, "The 3D screenshot puts back only the clipboard's text; the rest may be lost" · measured · found 2026-11-16
+  - **Defect.**
+    - `put_back` gives Qt a new `QMimeData` holding the user's text: `clipboard.setMimeData(backup)`. On macOS the
+      text then stays in Designer's process. Designer hands it over only when another app asks for it.
+    - Every render of a shot puts it back so, several per step where no count shows (`_renders_alike`).
+  - **Scenario.** Measured (2026-11-16) in Designers `launch_designer` opened hidden on port 9877. The user's
+    clipboard text was saved first and put back after. A marker was copied with `pbcopy`, then:
+    - after a `screenshot_designer('3d')`, a 12 s job held Designer's main thread. `pbpaste`, started 2 s into the
+      job, was the first read since the shot. It returned the marker after 10.02 s, as the job ended (1 of 1). Read
+      before a job instead, it came back in 0.02 s;
+    - after a shot, with nothing reading the clipboard, that Designer was killed (SIGKILL). `pbpaste` returned nothing,
+      0 bytes (1 of 1);
+    - after a shot, a normal `quit_designer`: the marker came back (1 of 1).
+
+    DECISIONS.md's entry rests on the text coming back. Its Reopen if, "the text is seen not to come back", holds
+    for a Designer that crashes or is ended by force after a shot. `quit_designer` forces a Designer hung in its
+    shutdown, as in the self-test's runs. In the user's own Designer, a paste in another app waits while an agent's
+    job holds Designer's main thread.
+  - **Fix.** Write the text to the pasteboard at once on macOS. AppKit can do it, called as `mac_window.py` calls it:
+    `NSPasteboard.generalPasteboard`'s `clearContents`, then `setString:forType:` for each text type Qt kept. Qt's
+    `setMimeData` stays elsewhere. What comes back stays the text alone, as the entry says. A live check: after a
+    shot, `pbpaste` gets the marker while a job holds Designer's main thread, within a limit.
+  - **Resolution: done.**
+    - **Measured first** (2026-11-16, in Designers an agent started, hidden):
+      - Carbon's `PasteboardResolvePromises(kPasteboardResolveAllPromises)` crashed Designer: SIGSEGV in HIServices at
+        0x1f, the constant read as a pasteboard. The dump stayed in that Designer's own folder.
+      - Every type of the general pasteboard read back in Designer's process right after the put-back: the paste
+        during a 12 s job came in 0.013 s, and the text was there after a SIGKILL (1 of 1 each).
+    - **Test:** `check_the_text_a_3d_capture_puts_back_can_be_pasted_while_designer_is_busy` (editor_panels_and_fit):
+      a shot, then a job holding Designer's main thread until the check has pasted. It failed in its scratch run
+      (PASTED_MEANWHILE=False: the paste came after the job), then passed. Unit:
+      `test_shot3d.py::test_the_users_text_put_back_after_a_render_is_handed_to_the_pasteboard_at_once` failed with
+      the call taken out of the code, and passes with it.
+    - **Cause:** on macOS, Qt's `setMimeData` promises the data. Designer hands it over only when another app asks.
+    - **Fix:** `_MacWindow.hand_over_clipboard` (mac_window.py) reads back every type on the general pasteboard, each
+      read freed at once (an autorelease pool of its own). `_3d_render`'s put-back calls it after `setMimeData` on
+      macOS, so a put-back run again after an abort does it too. The unit tests fake `_mac_window`, as the real one
+      reads the machine's clipboard. The measurement is in its docstring.
+    - **Also covered:** no other helper writes the clipboard. Windows wasn't measured: there, Qt also hands its data
+      over on request, through OLE. DECISIONS.md's entry stands as written: the text alone comes back, now also after
+      a forced end.
+- [x] **INS-39 · `read_crash_dump.py` names a dump's signal from the signal table of the Python it runs on: on Windows an abort reads "signal 6", and two unit tests fail there** · follows INS-38, generation 3 · `scripts/read_crash_dump.py:200-215` (`_exception`), `tests/unit/test_read_crash_dump.py:84-87,448-450` · confirmed · found 2026-11-16
+  - **Defect.**
+    - `_exception` names the signal of a macOS dump with the host's `signal` module:
+      ```python
+      said += ', signal %s' % signal.Signals(number).name
+      ```
+    - Windows' C runtime numbers signals its own way: SIGABRT is 22 there. CPython builds `signal.Signals` from that
+      `<signal.h>`, so 6 has no name in it. `Signals(6)` raises ValueError, and the line reads "EXC_CRASH, signal 6".
+    - `test_an_abort_is_said_with_its_signal` and `test_it_runs_as_a_script` want "exception: EXC_CRASH, signal
+      SIGABRT", and run on Windows. INS-38 made the crash dump tests run there, looking at `os.getuid` only.
+  - **Scenario.** Read in the code. The unit suite on Windows, its final check included, fails both tests. The test
+    of a crash from another exception passes only because SIGSEGV is 11 on both systems.
+  - **Fix.** A table of macOS's signal names (`<sys/signal.h>`: 1 SIGHUP to 31 SIGUSR2), as `MACH_EXCEPTIONS` is
+    one of Mach's, and no `signal` import. A unit test with the module's `signal` replaced by one numbering signals
+    as Windows does.
+  - **Resolution: done.**
+    - **Test:** `test_read_crash_dump.py::test_a_dumps_signal_is_named_as_macos_numbers_it_whatever_system_reads_it`,
+      the script's `signal` replaced by Windows' numbering: it failed, "signal 6" and "signal 10".
+    - **Cause:** the signal of a macOS dump was named from the table of the Python reading it.
+    - **Fix:** `MACOS_SIGNALS`, from `<sys/signal.h>` (all 31 alike with this Mac's `signal` module), and no `signal`
+      import.
+    - **Also covered:** the script reads no other host table for a dump's data: `MACH_EXCEPTIONS` is Mach's already.
 
 ## Low
 
@@ -3514,3 +5508,1882 @@ of the repo. If it can't, it says why: the ID never existed, a squash lost it, o
       above `switched`.
     - **Also covered:** `AGAIN`'s other users: `SEEN_BY['cover']` and `SEEN_BY['later']`, and the HLP-124 check, all
       through the one constant.
+
+- [x] **SRV-154 · The launch poll runs `pgrep` and `lsof` every 0.1 s on its refused path** · follows SRV-150, generation 2 · `mcp_server/server_tools/lifecycle.py` (the launch loop: `_control('status', ...)` refused, `_with_uploads_off`) · confirmed · found 2026-11-15
+  - **Defect.** The launch loop now looks every POLL_S. On each refused connection, its error path runs the process
+    and port lookups (`pgrep`, `lsof`) again. Before, that happened every 2 s.
+  - **Scenario.** Read in the code (2026-11-15). A launch takes 4 to 5 s before the bridge listens, so about 45 rounds
+    of subprocesses instead of 2 or 3.
+  - **Fix.** Look up the process and the port only when the refusal says something new, or every few rounds.
+
+  - **Resolution: done,** and *not a bug* for a launch's own start.
+    - **Test:** `test_a_launch_waiting_for_another_launchs_designer_looks_it_up_once_its_process_exits` failed (6
+      lookups). `test_a_launch_waiting_for_its_own_start_looks_up_no_process_between_its_polls` passed before any
+      change: after its own start, the refused path looks up nothing (`running` is False).
+    - **Fix:** waiting for a Designer another launch started on the port, the loop looks it up (`_running_on`) only
+      once that Designer's exit watch says it exited, or none can be made (`_ExitWatch.ended`).
+    - **Not run live:** the launch paths; the scratch runs used the Designer already running.
+  - Questioned by SRV-158 (2026-11-15).
+- [x] **TST-426 · Waits the wait rule's test doesn't see, and two that block or keep a margin** · follows SRV-150 and TST-421, generation 2 · `tests/unit/test_waits.py`, `tests/unit/test_selftest_window_server.py`, `tests/test_all_tools/common.py` (`cancel_from_second_client`), `lifecycle/checks.py` (the modal poll) · confirmed · found 2026-11-15
+  - **Defect.**
+    - `test_waits.py`'s regex matches only a timer started at a number literal. `timers[-1].start(after)`
+      (`_menu_once`'s guard, MENU_GUARD) goes unseen, though its docstring says "every timer started at a fixed
+      time". It doesn't read `tests/unit`, where `test_selftest_window_server.py` waits `time.sleep(0.3)` and
+      `time.sleep(0.1)`.
+    - `cancel_from_second_client` calls `job_running`, a blocking socket call, on the asyncio loop.
+    - lifecycle's modal poll sleeps POLL_S after finding the dialog too: a margin after the state.
+  - **Scenario.** Read in the code (2026-11-15).
+  - **Fix.** Match a timer started at any argument, list the ones that stay, and narrow the docstring to what is
+    matched. Wait on the watch's samples in the unit test. Run `job_running` in a thread (`asyncio.to_thread`), and break
+    the modal poll before its sleep.
+
+  - **Resolution: done.**
+    - **Test:** `test_waits.py`, widened, failed on 9 waits it hadn't seen; `test_the_second_client_looks_at_the_bridge_off_the_event_loop`
+      and `test_the_modal_dialog_poll_stops_once_the_dialog_is_seen` failed.
+    - **Fix:** `WAIT` matches anything started with an argument but 0 (the next event loop turn) and a regex match's
+      start; `tick.start(TICK)` is a poll; the waits that stay are listed: WAKE_DELAY_MS (DECISIONS.md, which AGENTS.md's
+      rule contradicts, the user's to decide), `_until`'s limit, `_menu_once`'s look and guard. The window-server unit
+      test waits on its samples, polled every 100 ms, and accepts samples naming no active app.
+      `cancel_from_second_client` runs `job_running` in a thread. The modal poll breaks once the dialog is seen and
+      sleeps with `asyncio.sleep`.
+    - **Not changed:** the unit tests' own sleeps elsewhere (`test_plugin.py` and others), on main.
+    - **Not run live:** lifecycle's modal check: a scratch run of lifecycle launches Designers, which come up in
+      front of the user's window (SRV-152). The second client ran in bridge's checks.
+  - Questioned by TST-456 (2026-11-16).
+  - Questioned by TST-469 (2026-11-16).
+- [x] **TST-427 · The bridge's idle probe now runs on a bridge that isn't idle** · follows TST-421, generation 2 · `tests/test_all_tools/bridge/checks.py` (`check_no_job_starts_within_the_wait_after_the_one_before`) · confirmed · found 2026-11-15
+  - **Defect.** The 0.5 s before the probe is gone. The probe now reaches the bridge right after the long job's reply,
+    within the plugin's WAKE_DELAY_MS, so it is started by the delayed timer, not by the wake or the poll. The check
+    still says "a job started on an idle bridge".
+  - **Scenario.** Read in the code and the plugin's `_drain` (2026-11-15). The main-thread result still holds, but for
+    another path than the one named.
+  - **Fix.** Ask `status` until the bridge says it is idle before the probe, or name the path the probe takes.
+
+  - **Resolution: done.** The check and its docstring now say the probe is started by the plugin's wait after a job,
+    and passed in bridge's scratch run.
+  - Questioned by TST-440 (2026-11-15).
+- [x] **HLP-152 · `set_3d_view` goes through the clipboard where no count shows, and doesn't say so** · follows HLP-148, generation 2 · `mcp_server/designer_helpers/view3d.py:617` · confirmed · found 2026-11-15
+  - **Defect.** With Display > Samples off, `set_3d_view`'s own `_Frames` compares renders taken through Copy Render to
+    Clipboard, up to about 40 a step. Before this branch, `set_3d_view` never touched the clipboard. DECISIONS.md's
+    entry covers `screenshot_designer('3d')` only, and `set_3d_view`'s docstring doesn't say it.
+  - **Fix.** Say it in `set_3d_view`'s docstring, or wait on paints alone where `set_3d_view` runs without a shot.
+
+  - **Resolution: done.** `set_3d_view`'s docstring says that with Display > Samples off its waits take renders
+    through the clipboard, and only the user's text is put back.
+  - Questioned by HLP-170 (2026-11-16).
+- [x] **HLP-153 · The Explorer menu's failure says the last try's reason, and "didn't open" for a menu whose fade raised** · follows HLP-147, generation 2 · `mcp_server/designer_helpers/view3d.py` (`_MenuPick.failure`, `_menu_once`'s `look`) · confirmed · found 2026-11-15
+  - **Defect.**
+    - "in each of %d tries" is said with the last try's reason. A first try that closed early and two that didn't
+      open says "didn't open, in each of 3 tries".
+    - Fade and pick run in one slot now. A fade that raises (`_MacWindow(menu)`, `hold`, `setFlag`) skips the pick. The
+      menu stays open until the guard closes it, 5 s later. `failure()` then says "didn't open", hiding both the open
+      menu and the guard's close.
+    - `pick`'s `closed` branch is reached only when `fade` itself closes the menu, as the check's patch does. A menu
+      closed by something else before the look is never seen, and is reported as "didn't open".
+  - **Scenario.** Read in the code (2026-11-15).
+  - **Fix.** Say "in the last of N tries", or each try's reason. Pick in a `finally` after the fade. Say "closed by the
+    guard" when `held` and nothing was picked.
+
+  - **Resolution: done.**
+    - **Test:** `test_tries_failing_for_different_reasons_say_each_one`,
+      `test_a_fade_that_raises_closes_the_menu_at_once_and_says_why` and
+      `test_a_menu_the_guard_closed_with_nothing_picked_is_said_so` failed.
+    - **Fix:** `_MenuPick.what()` says one try's reason; `failure()` says each try's when they differ ("..., then ...
+      (3 tries)"). A fade that raises closes the menu at once, says why, and isn't tried again: picked from then, the
+      action would run with the menu not transparent. A menu the guard closed with nothing picked says so. `pick`'s
+      comment says when its closed branch is reached.
+    - **Result:** the two Explorer menu checks passed in their scratch run.
+- [x] **HLP-154 · Two docstrings name the wait the moves no longer use** · follows HLP-149, generation 2 · `mcp_server/designer_helpers/view3d.py` (`_drag`), `editor.py` (`_wheel`) · confirmed · found 2026-11-15
+  - **Defect.** `_drag`'s docstring says `taken()` is "the 3D view's next frame: _Frames.next_frame", and `_wheel`'s
+    says "the 3D view's waits for its next frame". Both are passed `_Frames.taken`, which off screen waits for an
+    UpdateRequest.
+  - **Fix.** Name `_Frames.taken`.
+
+  - **Resolution: done.** `_drag`'s and `_wheel`'s docstrings name `_Frames.taken`.
+- [x] **HLP-155 · Unmarked `Any` in the functions this branch adds** · `mcp_server/designer_helpers/waits.py` (`_event_signal`, `_until`), `view3d.py` (`_MenuPick.pick`, `_drag`), `editor.py` (`_wheel`) · confirmed · found 2026-11-15
+  - **Defect.** Each has an `Any` without a reason on its line (AGENTS.md's typing rules):
+    - `_event_signal(watched: Any, ...) -> Any`: `QtCore.QObject`, and a `Protocol` with `fired`, or marked;
+    - `_until`'s `signals: Sequence[Any]`: marked as Qt's signals;
+    - `pick(self, menu: Any)`, `_drag(viewport: Any, button: Any, ...)`, `_wheel(viewport: Any, ...)`: marked as Qt
+      widgets, as `fade` and `_menu_once` are;
+    - `_drag`'s `pressed: list[Any]`: `list[tuple[QtCore.Qt.MouseButton, float, float]]`, as its caller declares it,
+      or marked.
+  - **Fix.** Narrow or mark each.
+
+  - **Resolution: done.** Each `Any` has its reason on its line: Qt objects, Qt's signals, Qt widgets and buttons.
+    `pressed` stays `list[Any]`, marked: `QtCore` can't be named at def time in the helpers.
+- [x] **TST-428 · Unit tests that don't evaluate what they guard** · `tests/unit/test_shot3d.py`, `test_mac_window.py`, `test_frames3d.py`, `test_selftest_window_states.py`, `test_lifecycle_env.py` · confirmed · found 2026-11-15
+  - **Defect.**
+    - Nothing asserts that the Expose spies are removed: dropping the `removeEventFilter` in `_wait_on_screen`,
+      `_wait_off_screen` or `give_back_activation` passes.
+    - `_Frames.settled`, `moved` and `shown` have no test of their wiring: the restart within NO_RESTART, then
+      SETTLE_LIMIT, and no second wait when no restart came. `_until` is tested only by its source text.
+    - `showing()` and `in_order()` are tested by their source text only. An inverted comparison in `in_order`'s
+      condition passes.
+    - Server: the branch where the watch times out but `pgrep` says the process is gone is untested (SRV-153).
+  - **Fix.** Record `removeEventFilter` in the fakes and assert one per install. Add tests of `_Frames`' waits with a
+    fake `_until`. Evaluate the generated conditions against fake states, in and out of order.
+
+  - **Resolution: done.** Added, each passing on the code as it is, as guards:
+    `test_each_spy_on_the_windows_expose_events_is_removed` (minimized, covered, hidden), the spy's removal in
+    `give_back_activation`'s test, `_Frames`' waits (`test_a_step_waits_for_its_restart_then_for_the_count_back` and
+    four more), and `in_order()` and `showing()` evaluated against fake states. The exit-watch branch is SRV-153's.
+- [x] **HLP-156 · A parameter never passed, and the viewport's class name twice** · `mcp_server/designer_helpers/frames3d.py` (`_Frames._wait`, `VIEWPORT`), `view3d.py` (`_3d_set_up`) · confirmed · found 2026-11-15
+  - **Defect.** `_wait`'s `woken` is never passed False. `_3d_set_up` looks up the viewport with its own literal
+    `'Alg::Gui3D::ViewportWidget'` beside `frames3d.py`'s `_viewport` and `VIEWPORT`.
+  - **Fix.** Drop the parameter, and use `_viewport` in `_3d_set_up`.
+
+  - **Resolution: done.** `_wait`'s `woken` is gone; `_3d_set_up` takes its viewport from `_viewport`. Test:
+    `test_one_name_for_the_3d_views_viewport_and_no_parameter_never_passed` failed before.
+- [x] **TST-429 · The frames fact's waits check less than they appear to** · follows HLP-148 and HLP-149, generation 2 · `tests/test_all_tools/editor_panels_and_fit/checks.py` (`FRAMES`) · confirmed · found 2026-11-15
+  - **Defect.**
+    - The Samples-off wait's `len(paints(read)) > 0` reads the whole list, never empty by then. The condition is
+      `count() is None` alone. `read[start:]` was meant.
+    - In HIDDEN_ASKS each pan's slice ends at its first UpdateRequest. A paint after the last pan's is never seen,
+      so "draws none" isn't checked for it.
+  - **Fix.** Use `paints(read[start:])`. After the hidden pans, check that no Paint came over the whole hidden stretch,
+    up to the next call.
+
+  - **Resolution: done.** The Samples-off wait reads the paints since its pan; `HIDDEN_PAINTS` counts every paint over
+    the hidden stretch, up to the last pan's UpdateRequest, judged 0; the check's line says so. Test:
+    `test_the_frames_facts_samples_off_wait_reads_the_paints_since_its_pan` failed before. The fact passed in its
+    scratch run.
+- [x] **TST-430 · `who()`'s ctypes calls have no return types, and the front watch's docstring says more than it samples** · `tests/test_all_tools/editor_panels_and_fit/window_states.py` (`who`), `checks.py` (`check_designer_stayed_behind`) · confirmed · found 2026-11-15
+  - **Defect.** `CFStringGetCString` returns a Boolean and `CFNumberGetValue` too, but neither has a `restype`, so
+    each is read as a `c_int`. The docstring says no window of Designer's "was in front". The watch samples every 50 ms
+    or so, plus two `lsappinfo` runs, so a shorter flash is missed.
+  - **Fix.** `restype = ctypes.c_bool` for both. "Sampled every FRONT_EVERY s or so" in the docstring.
+
+  - **Resolution: done.** Both calls have `restype = ctypes.c_bool`; the docstring says the watch samples every
+    FRONT_EVERY s or so, and what it saw. Test: `test_who_reads_the_booleans_ctypes_returns_as_booleans` failed before.
+- [x] **TST-431 · `_CLEAR` overwrites the looks it has just put back** · `tests/test_all_tools/editor_panels_and_fit/window_states.py` (`_CLEAR`) · confirmed · found 2026-11-15
+  - **Defect.** `_CLEAR` puts back each look `_PUT` recorded, then `fade(False)` makes every window opaque and
+    clickable. The put-back only ends the holds. A window Designer kept transparent or click-through would be changed
+    for every later check.
+  - **Fix.** Put back the recorded looks last, or apply `fade(False)` only to windows not recorded.
+  - **Resolution: not a bug.**
+    - **Why not:** at rest every window is opaque and clickable (`_CLEAR`'s comment: "the window back at rest:
+      Designer hidden, its windows opaque and clickable"). The looks put back first only end their holds, then
+      `fade(False)` makes every window opaque.
+    - **Evidence:** with the looks put back last, three window checks failed in a scratch run (the view drawn in the
+      covered way, a hidden shot found covered, a render not said). Reverted, they passed.
+    - **Test:** `test_clear_leaves_every_window_opaque_and_clickable_after_ending_the_holds` guards the order.
+- [x] **SRV-157 · `_has_port` matches a substring, and misses the port when it is the last variable** · follows SRV-152, generation 2 · `mcp_server/server_tools/lifecycle.py` (`_has_port`) · measured · found 2026-11-15
+  - **Defect.** `('SD_BRIDGE_PORT=%s ' % port) in shown + ' '`. ps's line ends with a newline, so a port printed last
+    reads `SD_BRIDGE_PORT=9877\n `, which doesn't match. A variable whose name ends in `SD_BRIDGE_PORT`, or a value
+    holding the text, does match.
+  - **Scenario.** Measured (2026-11-15) in a Designer launch_designer opened: `SD_BRIDGE_PORT` was variable 42 of 49,
+    launchd's own variables after it (`XPC_SERVICE_NAME`, `XPC_FLAGS`), and `_has_port` returned True. The output
+    ended with a newline. So it holds today, as long as a variable follows the port. Both `_found_launched` tests fake
+    `_has_port`, so no test reads ps's real output.
+  - **Fix.** Match a whole token: `('SD_BRIDGE_PORT=%s' % port) in shown.split()`. Add a unit test on ps's format
+    with the port last.
+  - **Resolution: done.**
+    - **Test:** `test_the_port_is_read_as_a_whole_variable_of_ps`, on ps's format: it failed for the port printed last
+      and for another variable ending in `SD_BRIDGE_PORT`.
+    - **Cause:** a substring with a space after it, and ps's line ends with a newline.
+    - **Fix:** a whole token of `shown.split()`; the port is an int, as elsewhere (TST-443).
+    - **Result:** passes; the second Designer's launch in the scratch run found its process.
+- [x] **SRV-158 · The launch loop still reads another launch's record twice every POLL_S, and looks up an unrecorded Designer every round** · follows SRV-154, generation 3 · `mcp_server/server_tools/lifecycle.py` (`launch_designer`'s `may_have_exited`, `_end_if_past_startup`) · confirmed · found 2026-11-15
+  - **Defect.** Each refused round runs `_end_if_past_startup`, then `may_have_exited`. Each calls `_agent_record`,
+    which runs pgrep (`_designer_pids`) and ps (`_process_start`). With no record, `may_have_exited` returns True, and
+    `_running_on` (pgrep, lsof) runs every round: SRV-154's pattern. The docstring says "looked up only then". The
+    `_ExitWatch` objects in `watched` are never closed; garbage collection closes them.
+  - **Scenario.** Read in the code (2026-11-15). Waiting 4 to 6 s for another launch's Designer to answer takes
+    about 50 rounds, each with 2 pgrep and 2 ps. Waiting on a Designer no agent recorded that holds the port, such as
+    the user's while it starts, `_running_on` runs every 0.1 s for up to wait_s. SRV-154's test patches
+    `_agent_record` and `_still_starting` and counts only `_running_on`.
+  - **Fix.**
+    - Check `_still_starting` (a stat) before `_agent_record`.
+    - Read the record once per round.
+    - Watch an unrecorded Designer's process too, or look it up less often.
+    - Close the watches in a `finally`.
+    - Test the ended and no-watch branches.
+  - **Resolution: done.**
+    - **Test:** `test_a_launch_waiting_for_another_launchs_designer_reads_its_record_once_and_closes_its_watch` failed:
+      11 reads over 5 refused rounds, no watch closed.
+      `test_a_launch_waiting_on_an_unrecorded_designer_looks_it_up_once_its_process_exits` failed: `_running_on` 6
+      times. `test_a_launch_waiting_for_another_launchs_designer_starts_one_once_it_exited`, watched and not, covers the
+      ended and no-watch branches (TST-437).
+    - **Cause:** each round read the record again, and a Designer no agent recorded had no watch.
+    - **Fix:** `_end_if_past_startup` stats the record first (`_still_starting`). `may_have_exited` looks the Designers
+      up only once one's exit event came or one can't be watched: the recorded one, else those `_sorted_out` says may
+      hold the port. The watches are closed in a `finally`. `_still_starting` reads the file's time before the clock
+      (the restarted-Designer test's clock counts calls).
+    - **Result:** passes.
+- [x] **SRV-159 · `quit_designer` with a negative wait_s raises ValueError after the close was sent** · follows SRV-153, generation 3 · `mcp_server/server_tools/lifecycle.py` (`_ExitWatch.wait`, `_exited`) · measured · found 2026-11-15
+  - **Defect.** `_exited(own, wait_s)` passes the limit to `kqueue.control(None, 1, limit)`, which refuses a negative
+    timeout. Main's poll ran no round, and the end was forced.
+  - **Scenario.** Measured in plain Python (2026-11-15): `select.kqueue().control(None, 1, -1)` raised "ValueError:
+    timeout must be positive or None". With `quit_designer(wait_s=-1)` on an agent's Designer, the close is sent, then
+    the call fails with that error. The record stays, and the preferences put-back waits for the next call. Nothing
+    validates wait_s.
+  - **Fix.** Clamp the limit at 0 in `_exited`, or refuse a negative wait_s. Test `_exited(pid, -1)` with a watch.
+  - **Resolution: done.**
+    - **Test:** `test_a_negative_wait_for_an_exit_is_no_wait`, with a queue refusing a negative timeout as kqueue does:
+      it raised "ValueError: timeout must be positive or None".
+    - **Fix:** `_exited` takes a negative limit as 0, as main's poll ran no round.
+    - **Result:** passes.
+- [x] **SRV-160 · `_opened` waits for `open` with no limit, and drops what `open` says when it fails** · follows SRV-152, generation 2 · `mcp_server/server_tools/lifecycle.py` (`_opened`) · confirmed · found 2026-11-15
+  - **Defect.** `code = opener.wait()` has no limit (AGENTS.md: every wait gets one). `stderr=quiet` sends `open`'s
+    message to DEVNULL, so the error gives only the exit code.
+  - **Scenario.** Read in the code (2026-11-15). A LaunchServices stall holds the port's launch lock and the
+    preferences lock without end. A wrong SD_DESIGNER_APP says "`open` exited with 1" without "Unable to find
+    application".
+  - **Fix.** `opener.wait(timeout=...)` as a safety net, and `open`'s stderr in the error.
+  - **Resolution: done.**
+    - **Test:** `test_opens_failure_is_said_with_what_open_printed_and_its_wait_has_a_limit` failed: no message, no
+      limit. `test_an_open_that_doesnt_exit_is_said_as_a_designer_that_may_run` failed: TimeoutExpired raised.
+    - **Fix:** `open`'s stderr goes to a temporary file, said in the error; `opener.wait(timeout=OPEN_WAIT_S)`, then
+      `open` is ended and the launch handled as SRV-156's.
+    - **Result:** passes.
+- [x] **HLP-158 · Off screen, a set-up step waits its whole NO_RESTART though the view's UpdateRequests say it took the step, and going off screen is seen only at a tick** · follows HLP-151, generation 3 · `mcp_server/designer_helpers/frames3d.py` (`_Frames.settled`, `_Frames.moved`, `_Frames._wait`, `_Counts.settled`) · measured · found 2026-11-15
+  - **Defect.**
+    - `settled()` and `moved()` first wait for a paint reading a restart:
+      `self._wait(lambda: counts.restart(paints) is not None, NO_RESTART)`. Off screen the view draws none, so this
+      wait always runs to its limit, a limit used as the wait's time (AGENTS.md). Only the moves wait for the
+      off-screen callback (`taken`).
+    - `settled`'s off-screen end reads `self._drawing()`, which Qt's expose events change. The wait is woken only by
+      the viewport's paints and UpdateRequests, so going off screen is seen at the next TICK.
+    - Gone off screen right at the paint that reads the restart, `first + 1 < len(self.seen)` never holds, and the
+      wait runs SETTLE_LIMIT.
+  - **Scenario.** Measured in a hidden Designer (2026-11-15):
+    - a mesh switch brought an UpdateRequest 0.06 s after it, then one every 30 ms;
+    - a tiling brought one 0.71 s into `set_3d_view`, which took 1.82 s.
+    Off screen, each step waits 1 s, and `moved()` 1 s before Frame. The self-test's `set_3d_view` calls in a hidden
+    Designer pay it. A shot pays it only when the user hides Designer during its set-up, and its render still came
+    out right: shown, the view restarted by its second event (HLP-151's rule).
+  - **Fix.** Off screen, end the restart wait on an UpdateRequest since the mark, as `taken` does. Wake the waits on
+    the top-level window's expose events too. Off screen, accept the restart's paint alone, or say why a second paint
+    is needed.
+  - **Resolution: done.**
+    - **Test:** `test_off_screen_a_step_ends_once_the_view_asks_for_a_frame` failed (`[False]`);
+      `test_the_waits_are_woken_as_the_view_goes_off_screen` failed (no expose spy);
+      `test_a_view_gone_off_screen_at_the_paint_reading_its_restart_has_settled` failed.
+    - **Fix:** off screen, `settled()` ends both its waits on an UpdateRequest since the mark; the waits look again at
+      the viewport window's expose events; off screen, the restart's paint alone settles, as it reads the restart's
+      frame. `test_a_step_left_lower_ends_once_the_view_is_off_screen` now expects that.
+    - **Then, `moved()` off screen** (the user's choice, 2026-11-16: "Show the window first"; DECISIONS.md). Hunted
+      first, hidden, 2 turns: only UpdateRequests came, every 22 to 44 ms, for 0.82 and 0.84 s, then nothing, no other
+      event on the viewport or its window. So `_3d_set_up`, run without the shot's watch (set_3d_view), turns the camera
+      and frames inside `_on_screen`: the window shown transparent for it, then put back. The shot passes `screen.again`
+      before each step, so a window gone off screen is shown again before the next one. The wait runs NO_RESTART only
+      when the window goes off screen during the turn.
+    - **Test:** `test_the_cameras_turn_is_watched_with_designers_window_on_screen` (set up on its own, and in a shot)
+      and `test_the_set_up_is_given_the_screens_look_before_each_step` failed: no `_on_screen` around the turn,
+      `screen.between` given. Live: `check_a_viewpoint_set_off_screen_is_turned_with_designers_window_on_screen`, hidden
+      and minimized, failed in its scratch run ("shown: False"), then passed: shown, put back, the view 0.00 grey levels
+      from view=Front.
+    - **Result:** after the last change, in its scratch run, 28 of 28: the new check, the viewpoint, orbit, pan, zoom
+      and tiling checks, the user's mouse in a turn, the set-up's checks, the Explorer's menu, the wheel steps, and the
+      window checks off screen (focus, transparent at each render, the put-back). The material check passed in the run
+      before.
+  - Questioned by HLP-168 (2026-11-16).
+  - Note (2026-11-16): at the user's request, DECISIONS.md's camera turn entry, which recorded this choice, was
+    removed: nothing cited it, and AGENTS.md's wait rule already rules out the time limit it turned down. The choice
+    stays recorded here and in `set_3d_view`'s docstring.
+- [x] **HLP-159 · A step's wait takes a count the step before left low for its own restart** · follows HLP-148, generation 2 · `mcp_server/designer_helpers/frames3d.py` (`_Counts.restart`, `_Counts.moved`, `_Counts.settled`) · confirmed · found 2026-11-15
+  - **Defect.** `restart()` returns the first paint since the mark that reads any count below the target. A mark
+    taken mid-accumulation reads the count left over as the step's restart. That happens after `moved()` returns at
+    about 2, and after a step that ended at NO_RESTART while its change was still coming. `settled` still needs the
+    target after it, but `moved` needs only a count above the restart's.
+  - **Scenario.** Read in the code (2026-11-15). `graph=` with a material that shows more than NO_RESTART after the
+    pick, then `view=`: the graph's late restart (1, then 2) ends `moved()` while the camera turns, and Frame cancels
+    the turn. The shot isn't then at the viewpoint asked for. Not measured: it needs a material slower than 1 s to
+    show.
+  - **Fix.** Count a restart only as a drop from the count before it, or have `mark()` wait for the view at rest.
+  - **Resolution: done.**
+    - **Test:** `test_a_count_left_climbing_by_the_step_before_isnt_taken_for_the_next_steps_restart` failed: the
+      leftover 3 read as the restart.
+    - **Fix:** a restart is a count below the target and below the count read before it (`_Counts.restart`).
+    - **Also covered:** a show would then have waited SETTLE_LIMIT for an accumulation left lower and going on, which
+      has no drop: `_Counts.shown` accepts it reaching the target
+      (`test_a_show_after_an_accumulation_left_lower_ends_once_it_reaches_the_target`).
+    - **Result:** passes; the 3D view checks passed in the scratch run.
+- [x] **PLG-43 · An abort landing in an after-reply callback leaves the callbacks queued after it unrun** · follows SRV-151, generation 2 · `plugin/sd_claude_bridge_kve/sd_claude_bridge_kve/__init__.py` (`_Waker._on_after`) · confirmed · found 2026-11-15
+  - **Defect.** `_on_after` catches `Exception` around each callback. Delivered inside another job's nested event
+    loop, a callback runs under that job's tracer, which skips only the plugin's own file. That job's cancel or time
+    limit then raises ScriptAborted, a BaseException, inside the callback.
+  - **Scenario.** Read in the code (2026-11-15). It needs the reply's send to outlast WAKE_DELAY_MS, so that the next
+    job starts first: a large output to a slow client. The callbacks after it stay in `pending` until another reply
+    hands one over. The traceback the plugin prints lands in the other job's output.
+  - **Fix.** Run each callback with tracing off, as `untraced` does for the hooks.
+  - **Resolution: done.**
+    - **Test:** `test_an_abort_of_another_job_doesnt_land_in_an_after_reply_callback`, under the plugin's own tracer
+      with an abort due: `_on_after` raised ScriptAborted in the queue's `get_nowait`, before any callback ran.
+    - **Fix:** `_on_after` runs with tracing off, put back as it was after.
+    - **Result:** passes. install.py was run and the agent's Designer restarted; the second Designer's quit, whose close
+      goes through `_after_reply`, passed in the scratch run.
+- [x] **TST-434 · The HIDE check runs HIDE on a Designer that is already hidden** · follows TST-432, generation 3 · `tests/test_all_tools/editor_panels_and_fit/checks.py` (`check_the_self_tests_hide_hides_designer`, `run`) · confirmed · found 2026-11-15
+  - **Defect.** `run()` hides Designer (`window_states.clear()`) just before the check. HIDE's `mac.hide()` then has
+    nothing to do, and `HIDDEN=True` is printed whatever it does. Since SRV-152, every Designer launch_designer opens
+    is hidden from its start.
+  - **Scenario.** Read in the code (2026-11-15). A HIDE without its `mac.hide()` passes. Only TST-432's raise is
+    caught.
+  - **Fix** (generation 3: the claim made smaller). The check's name and docstring say what it judges: HIDE runs, and
+    Designer is hidden after it. Measuring the hide itself needs Designer shown first, behind every window and
+    transparent: the user's call.
+  - **Resolution: done (generation 3: the claim made smaller).**
+    - The check's name and docstring say HIDE runs and Designer is hidden after it, and that `run()` hides it just
+      before, so the hide itself isn't measured. Passed in the scratch run.
+- [x] **TST-435 · The cover-closed and cover-minimized cases no longer reach the path that leaves the window in front** · follows SRV-149, generation 3 · `tests/test_all_tools/editor_panels_and_fit/checks.py` (`PUT_BACK`, `PUT_BACK_IN_FRONT`, `check_a_covered_window_goes_back_behind_its_cover_or_stays_in_front_once_the_cover_is_gone`) · confirmed · found 2026-11-15
+  - **Defect.** Both cases set up the 'covered' way, now behind every window (`to_back()`). The shot records every
+    normal window in front of Designer's (`mac.in_front()`, any app's), the user's included. Once the cover is gone,
+    `mac.lowest(self._covers)` finds a window of the user's, and the shot says BEHIND, which `STAYS` accepts. On main
+    the way was in front of the user's windows: the cover was alone in front, and the cases reached GONE.
+  - **Scenario.** Read in the code (2026-11-15). With any window of another app on screen, the path that leaves the
+    window in front (HLP-130's) never runs, and both cases pass on BEHIND. The comment on `PUT_BACK_IN_FRONT` says
+    "Designer's window left in front once its cover is gone".
+  - **Fix** (generation 3: the claim made smaller). The comment and the docstring say both cases accept either.
+    Reaching GONE again means setting them up 'covered in front', in front of the user's windows: the user's call.
+  - **Resolution: done (generation 3: the claim made smaller).**
+    - `PUT_BACK_IN_FRONT`'s comment and the check's docstring say the cover-closed and cover-minimized cases accept
+      either put-back, and why.
+- [x] **TST-436 · No live check guards the crash wait's match of Designer's crash handler, and a mismatch ends the wait at once** · follows SRV-151, generation 2 · `tests/test_all_tools/common.py` (`crash_handlers`, `dumps_may_come`) · measured · found 2026-11-15
+  - **Defect.** `dumps_may_come` waits only while a crashpad_handler line has `--database=` and
+    `/<agent folder>/home/`. A change in how the handler is started, such as another argument form or a renamed
+    process, makes it return False at once, where the old wait always ran 10 s. Only unit fakes test it, with a line
+    written by hand (AGENTS.md: a live check for anything that depends on Designer).
+  - **Scenario.** Measured (2026-11-15) in a Designer launch_designer opened: one handler of three matched, with the
+    flags `--attachment`, `--database`, `--handshake-fd`, `--metrics-dir`, `--no-rate-limit` and `--url`.
+    `dumps_may_come([], <its dumps>)` was True while it ran. After its quit no handler matched, and it was False. So
+    it works on this Designer. After an update that changes the command line, lifecycle's "without a crash" checks and
+    the pool's quit checks would stop waiting, and a dump written 3 s after a crash would go unseen.
+  - **Fix.** A live check: while the run's Designer runs, `dumps_may_come([], <the dumps there>)` is True, and False
+    once it has quit.
+  - **Resolution: done.**
+    - **Test:** lifecycle's `check_launch_on_another_port` judges `dumps_may_come` for its second Designer while it runs
+      and once it quit (polled every POLL_S, HANDLER_GONE_S at most). In its scratch run with `crash_handlers` made to
+      list none, it failed ("while it ran False"); with the real one it passed (True, then False).
+- [x] **TST-437 · Unit tests that pass with their fix undone** · follows SRV-151 and SRV-152, generation 2; TST-425, generation 3 · `tests/unit/test_plugin.py`, `tests/unit/test_selftest_crash_dumps.py`, `tests/unit/selftest_fakes.py`, `tests/unit/test_lifecycle_env.py`, `tests/unit/test_selftest_window_states.py` · confirmed · found 2026-11-15
+  - **Defect.**
+    - `test_a_jobs_after_reply_callbacks_run_on_the_main_thread_once_its_reply_is_sent`: `_FakeSignal.emit` counts and
+      never delivers, so `ran == []` holds with the emit moved before `conn.sendall`.
+    - The crash waits:
+      - the fake `may_come` ends on any new dump, the user's folder included. The real `dumps_may_come` ends only on
+        one in that Designer's home. `test_crash_watch_counts_a_dump_appearing_late` asserts that the wait ended at a
+        dump in the user's folder, where the real code waits to its limit;
+      - `test_crash_watch_looks_with_the_dumps_known_before_every_step` passes with the union removed
+        (`before = self.steps[0].before`): its later dump is in the user's folder, which `shared` leaves out;
+      - no test passes `run_port=True`;
+      - the pool's fake `wait_for_dumps` (`selftest_fakes.py`) drops `before`.
+    - The launch: `test_the_designer_started_is_reaped_when_it_exits` sets SD_DESIGNER_APP to a folder. The launch
+      then takes `_opened`, whose `opener.wait()` sets `waited`, so the test passes with the reaping thread deleted.
+      No test reaches the binary path on macOS, `open` exiting non-zero, `_started`'s wrapping of `_NoListing` and
+      OSError, or the port `_opened` passes, which the conftest fake ignores. `may_have_exited`'s ended and no-watch
+      branches are untested.
+    - `test_the_material_check_judges_designer_hidden_again_and_puts_its_windows_back_in_a_finally`:
+      `snippet.index('try:') < fade + 200` passes with the `try` up to 200 characters after the fade.
+  - **Scenario.** Read in the code (2026-11-15): each change named above leaves its test passing.
+  - **Fix.**
+    - The after-reply test logs the send, the close and the emit, and checks their order.
+    - The fake `may_come` filters by home as the real one does. Add a test of a port's old dump seen at a later step,
+      and one with `run_port=True`. The pool's fake records `before`.
+    - The reaping test points SD_DESIGNER_APP at a file. Add tests for the launch paths listed.
+    - The material test (generation 3: the claim made smaller): drop that assertion, or word its message as what it
+      checks.
+  - **Resolution: done.**
+    - **Test:** each test was seen failing with its fix undone, in a scratch mutation of the code, put back after: the
+      after-reply order (a new test logging the send, the close and the emit, which failed with the emit moved before
+      the send); the union (with `before = self.steps[0].before`); the pool's `before` (with `set()` passed); the
+      reaping test (with the thread removed; SD_DESIGNER_APP now a file).
+    - **Fix:** the fake `may_come` ends only on a dump in a Designer's home, and the late-dump test writes it in the
+      run's; the union test's later dump is in the home of the Designer only the next step looks at; the pool's fake
+      records `before`. New: `test_a_dump_may_come_from_the_runs_own_designer` (run_port=True),
+      `test_a_binary_in_sd_designer_app_is_started_itself_on_macos`,
+      `test_processes_that_cant_be_listed_before_open_are_said_as_no_start`,
+      `test_the_process_open_started_is_looked_for_with_the_launchs_port`, `open` exiting non-zero (SRV-160's), and
+      `may_have_exited`'s branches (SRV-158's). The material test (generation 3): the 200-character assertion dropped;
+      it checks a `finally` after the fade.
+- [x] **TST-438 · TST-422's pattern elsewhere: a covered window judged by `covered=True` without `hidden=False`** · follows TST-422, generation 2 · `tests/test_all_tools/editor_panels_and_fit/checks.py` (`AFTER['covered']` in `check_a_3d_shot_puts_designers_window_on_screen_without_taking_focus`, `PUT_BACK`'s judgement) · measured · found 2026-11-15
+  - **Defect.** A hidden Designer reads `covered=True` whatever the order (TST-422). The focus check judges the
+    covered way's put-back by `covered=True` alone, and `PUT_BACK`'s judgement reads no `hidden`.
+  - **Scenario.** Measured (2026-11-15): after `_CLEAR`, a hidden Designer's state still listed its order
+    (`hidden=True ... order=main`), so NSApp's `orderedWindows` lists a hidden Designer's windows. A put-back that hid
+    Designer instead of putting it behind passes the focus check's covered way. It also passes PUT_BACK's cases judged
+    by `('main', 'below')` alone: ON_TOP, and the cover closed or minimized.
+  - **Fix.** `showing('covered=True', 'hidden=False')`, and `state.get('hidden') == 'False'` in PUT_BACK's `ok`.
+  - **Resolution: done.**
+    - **Test:** the focus check's covered way reads `covered=True` and `hidden=False`; PUT_BACK's judgement reads
+      `hidden=False`. In the scratch run, with the put-back made to hide Designer after putting it behind, a case judged
+      by `('main', 'below')` alone failed; the real cases passed.
+    - Measured along the way: a hidden Designer read `order=main,below,cover`, so the cases judged by `('cover',
+      'main')` already failed such a put-back.
+- [x] **TST-439 · The frames fact's TAKEN case judges neither that Designer was hidden nor that the pan's UpdateRequest came before the show** · follows HLP-151, generation 3 · `tests/test_all_tools/editor_panels_and_fit/checks.py` (`FRAMES`, `_changed_by_its_second_paint`) · confirmed · found 2026-11-15
+  - **Defect.** `_changed_by_its_second_paint` doesn't require `events[0] is True` (hidden before the show), as
+    `_shown` does. The result of `_until(lambda: asked_since(start), 1.0, ...)` isn't printed or judged.
+  - **Scenario.** Read in the code (2026-11-15). If an earlier show left Designer up, because the user made it the
+    active app, the pan draws on screen, the paints read a restart, and the fact passes. With no UpdateRequest before
+    the show, the show's own makes it pass, as in the CHANGED case.
+  - **Fix** (generation 3: the claim made smaller). The check's name says what it judges: once shown, an
+    UpdateRequest or a restart by the second paint.
+  - **Resolution: done (generation 3: the claim made smaller).**
+    - The check says "shown after a pan, ..."; a comment says what isn't judged.
+- [x] **TST-440 · The bridge's main-thread probe names a path it doesn't measure** · follows TST-427, generation 3 · `tests/test_all_tools/bridge/checks.py` (`check_no_job_starts_within_the_wait_after_the_one_before`) · confirmed · found 2026-11-15
+  - **Defect.** The comment says the probe is "sent as the long job's reply came: the plugin's wait after a job starts
+    it", and the check is named "a job started by the wait after the one before". The probe goes out after `behind`'s
+    reply and `long.join()`. The plugin's wait starts it only if it arrives within WAKE_DELAY_MS; otherwise the wake
+    does. The check passes either way.
+  - **Scenario.** Read in the code (2026-11-15). Under the pool's load the wake starts it, and the check's line still
+    claims the wait's path.
+  - **Fix** (generation 3: the claim made smaller). The name and the comment say that a job queued after others runs
+    on Qt's main thread.
+  - **Resolution: done (generation 3: the claim made smaller).**
+    - The check says "a job queued after others runs on Qt's main thread"; its comment and the docstring say which start
+      runs it isn't measured.
+- [x] **TST-441 · `stayed_off_screen` passes when the active app was never read** · follows SRV-152, generation 2 · `tests/test_all_tools/window_server.py` (`stayed_off_screen`) · confirmed · found 2026-11-15
+  - **Defect.** `active = sum(s.active == pid for s in samples)`. A sample whose `lsappinfo` failed has
+    `active=None`, which counts as not the active app. The "can't tell" guards cover only the samples and the
+    windows listed.
+  - **Scenario.** Read in the code (2026-11-15). With `lsappinfo` failing at every sample, lifecycle's launch check
+    passes "never the active app" unmeasured.
+  - **Fix.** Return False when no sample read the active app, and say so in the detail.
+  - **Resolution: done.**
+    - **Test:** `test_a_designer_started_hidden_shows_no_window_and_never_becomes_the_active_app[the active app never
+      read]` failed (True).
+    - **Also covered:** `stayed_behind`, the same pattern:
+      `test_a_watch_that_cant_tell_isnt_taken_for_one_that_stayed_behind[the active app never read]` failed too.
+    - **Fix:** both return False when no sample read the active app, and say how many did. The launch check passed in
+      the scratch run: 69 samples, 69 reading the active app.
+  - Questioned by TST-468 (2026-11-16).
+- [x] **TST-442 · Docs and comments that say more than, or other than, the code and the measurements** · follows SRV-149, SRV-151 and SRV-152, generation 2 and 3 · `mcp_server/server_tools/lifecycle.py`, `README.md`, `mcp_server/designer_helpers/mac_window.py`, `shot3d.py`, `view3d.py`, the plugin's docstring, `tests/test_all_tools/` (`lifecycle/checks.py`, `window_server.py`, `common.py`, `editor_panels_and_fit/checks.py`), `tests/unit/test_selftest_window_states.py`, `tests/unit/test_frames3d.py`, `tests/unit/test_lifecycle_env.py` · confirmed · found 2026-11-15
+  - **Defect.** The server and the plugin:
+    - `lifecycle.py`'s module docstring says "So launch_designer starts the binary, in `/`" and that launch_designer
+      "records the process it started (its own child)". `_start_designer`'s comments say "still the server's child"
+      and "its own child, just started". `_remember_started` says "its own child, so no other can be taken for it".
+      An app bundle is now opened by `open`: its process is launchd's child, found by its port.
+    - `launch_designer`'s docstring says "on macOS the .app, whose own binary is started", and README.md's
+      SD_DESIGNER_APP row "whose own binary it starts". "On macOS it starts Designer hidden" holds only for an app
+      bundle: a binary in SD_DESIGNER_APP starts shown.
+    - lifecycle.py's module docstring and `_opened`'s say "for up to 5 s": SRV-152 measured 5.66 s.
+    - `OPENED_ENV`'s comment says "what of `env` reaches a Designer `open` starts". `_opened`'s docstring says "with
+      `env`'s variables Designer reads (OPENED_ENV) on launchd's environment", and
+      `test_launch_opens_a_new_instance_hidden_with_the_port`'s message "launchd's environment, with Designer's own on
+      it". Measured (2026-11-15): the Designer launch_designer opened had the server's whole environment (CLAUDECODE,
+      VIRTUAL_ENV, LANG, SHELL, USER, TERM, its HOME), as `man open` says ("Opened applications inherit environment
+      variables"). So the `--env` flags pass nothing `env=env` doesn't.
+    - `give_back_activation`'s first sentence says "Designer hidden, then shown": a Designer that was hidden is left
+      hidden.
+    - The plugin's docstring says a function handed to `_after_reply` runs "once the reply is sent". It also runs
+      when the send failed, and one handed over after the job ended never runs.
+
+    The helpers:
+    - shot3d.py's module docstring says "The self-test's editor_panels_and_fit re-measures the first point (a window
+      of Designer's own covering it)". The bullet's "the rest was measured in Designers started from their binary"
+      doesn't say which facts (TST-433 for what the bullet claims).
+    - view3d.py: `_MenuPick`'s docstring says "What _apply_outputs' look does"; the look is `_menu_once`'s.
+      `failure()`'s says "`tries`: the menus opened"; it counts every try, those whose menu didn't open included.
+
+    The self-test:
+    - `check_launch_on_another_port`'s docstring says the Designer "never comes in front of the active app's windows
+      ...: it comes up behind them, over the other apps'". The check now judges `stayed_off_screen`.
+    - `window_server.py`'s module docstring says "stayed_behind reads the samples for that process", for the launch.
+      `stayed_behind`'s `active_only` and `in_front_of_another`'s `over` are now passed only by unit tests, under the
+      docstring's "a Designer starting comes up behind them, but over the other apps'".
+    - `check_a_render_that_didnt_follow_a_pan_is_said` says "macOS only (the window covered through _MacWindow)". It
+      minimizes the window.
+    - HIDE's comment (`common.py`) and a section heading of `test_selftest_window_states.py` cite "DECISIONS.md,
+      Project rules" for nothing of Designer's in front of the user's windows unless asked. No such entry is there.
+      The user's word on it is recorded nowhere: Designer in front of their windows during tests is "a deal breaker",
+      and Designer stays minimized, in front only when truly justified.
+    - `check_designer_stayed_behind`'s docstring says "no window of Designer's at an opacity above 0". Only normal
+      windows (layer 0) are judged. The Explorer's menus (layer 101) are said, not judged.
+    - lifecycle's checks say "no wait for a close: its timer is started after the unloads". The close is handed to
+      `_after_reply`, with no timer.
+    - `common.crash_handlers`' docstring says "Crashpad's, one beside each Designer". `pgrep` lists every app's
+      handler: three on this Mac, one of them Designer's.
+    - `test_frames3d.py`'s comment says "in 3 of 3 shows ... in 5 of 5". HLP-151's resolution and frames3d.py say 5
+      of 5 shows with nothing changed, and an UpdateRequest or a restart by the second paint in 9 of 9.
+    - README.md says "On macOS the self-test's Designers start hidden". lifecycle's hand-over check starts the binary
+      itself.
+  - **Scenario.** Read in the code (2026-11-15); the environment measured as above.
+  - **Fix.** Bring each in line with the code and the measurements. For the DECISIONS.md citation, point at the 3D
+    shot's entry, or ask the user to record the rule.
+  - **Resolution: done.**
+    - lifecycle.py: the module docstring starts Designer (an app bundle through `open`), 5.66 s, no "own child"; the
+      reaping comment, `_remember_started`, `OPENED_ENV`'s comment and `_opened`'s docstring say what the code does and
+      what was measured (the whole environment reaches Designer). `launch_designer`'s docstring and README's
+      SD_DESIGNER_APP row: the .app opened hidden, a binary there starts shown. The env test's message.
+    - `give_back_activation`'s docstring (now with SRV-161); the plugin's after-reply sentence: after the send, done or
+      failed, and none for one handed over after the job.
+    - shot3d.py's header (TST-433); view3d.py: `_menu_once`'s look, `tries` every try.
+    - The self-test: the launch check's docstring; window_server.py's module docstring and `stayed_behind`'s
+      `active_only`, which no check passes now; "minimized through _MacWindow"; `check_designer_stayed_behind`'s layer;
+      the quit helper's comment (no timer); `crash_handlers`; test_frames3d.py's counts; README's "start hidden".
+    - DECISIONS.md, Project rules: the user's rule recorded, at their word (2026-11-16): no window of an agent's
+      Designer in front of the user's during tests unless a check needs it there. HIDE's comment and the unit tests'
+      heading cite it.
+- [x] **TST-443 · Vague types in functions the diff adds or changes** · `plugin/sd_claude_bridge_kve/sd_claude_bridge_kve/__init__.py`, `mcp_server/server_tools/lifecycle.py`, `mcp_server/designer_helpers/frames3d.py`, `view3d.py`, `tests/test_all_tools/workers.py`, `bridge/checks.py`, `tests/unit/` · confirmed · found 2026-11-15
+  - **Defect.** By file, with the type each should have:
+    - the plugin's `_run`, whose signature changed: `scope: dict[str, Any]` (`dict[str, object]`);
+      `untraced(hook: Callable[..., Any], *args: Any)` (`Callable[..., object]`, `object`); `unraisable(info: Any)`
+      (marked with its reason: `sys.UnraisableHookArgs` exists only in typeshed). `_authorised`: the result of
+      `json.loads` (`object` until it is checked);
+    - lifecycle.py: `_found_launched(opener: object, ...)` takes an `opener` it never uses, there for the conftest
+      fake only; `port: str` there and in `_has_port`, where ports are `int` elsewhere;
+    - frames3d.py: `_Frames.__init__`'s `render: Callable[[], Any]` (a QImage only compared: `Callable[[], object]`);
+      view3d.py: `_MenuPick.__init__(self, action: str, before: Any)`, not marked;
+    - the self-test: `workers.check_the_quits(parts: Mapping[str, dict[str, Any] | None], ...)` (a TypedDict of a
+      worker's results); bridge's `ends: dict[str, Any]`, not marked;
+    - the unit tests:
+      - `test_selftest_window_states.py`: `_functions() -> dict[str, object]` (`dict[str, ast.AsyncFunctionDef]`)
+        and `_awaits(nodes: list[object])` (`Sequence[ast.AST]`), the reason for five `type: ignore`s;
+      - `test_selftest_window_server.py:37`: `-> list[object]` (`list[Sample]`);
+      - `test_selftest_crash_dumps.py`: `may_come(self, ports: Any, ...)` (`Sequence[int]`) and `watch(...) -> Any`,
+        not marked;
+      - `test_selftest_pool.py`: `may_come(ports: Any, ...)` (`Sequence[int]`);
+      - `test_plugin.py`: the fake `run(...) -> Any` (`object`);
+      - `test_shot3d.py`: `on_screen(...) -> Any`, not marked;
+      - `test_frames3d.py`: `cast(Any, frames)`, not marked;
+      - `test_view3d_helpers.py`: the changed fakes `wheel`, `drag`, `failing`, `aborted`, `Watching.__new__` and
+        `options: dict[str, Any]`, whose values are only passed on or compared (`object`).
+  - **Scenario.** Read in the code (2026-11-15): mypy checks nothing through these.
+  - **Fix.** Narrow each, or mark it `# Any: <reason>`.
+  - **Resolution: done.**
+    - Narrowed: the plugin's `scope` (`dict[str, object]`), `untraced` (`Callable[..., object]`, `object`), the request
+      (`object` until checked); `unraisable` marked. lifecycle.py: `_found_launched`'s `opener` a Popen, ports `int`.
+      `_Frames`' render `Callable[[], object]`; `_MenuPick`'s `before` marked. workers.py: `WorkerResults`, a TypedDict,
+      for `merge`, `check_the_quits` and `_read`, which found a `float | None` in the quit times. bridge's `ends`
+      marked.
+    - The unit tests: `_functions` and `_awaits` (the five `type: ignore`s gone), `samples` (Sample's fields),
+      `may_come` and `find` (`Sequence[int]`), the plugin's fake `run` (`object`), the view3d fakes (`object`); the
+      others marked.
+    - mypy strict passes.
+- [x] **HLP-162 · The first 3D shot in a Designer opened hidden compares renders: its overlay shows no count until the view has drawn** · `mcp_server/designer_helpers/frames3d.py` (`_Frames.__init__`) · measured · found 2026-11-16
+  - **Defect.** `_Frames` decides once, as it is made, whether a count shows: `self._counts = _Counts() if
+    self.count() is not None else None`. In a Designer launch_designer opened hidden, the 3D view hasn't drawn yet, so
+    its labels are empty.
+  - **Scenario.** Measured (2026-11-16) in a Designer opened hidden (alone, port 9877), after the category's
+    preparation: the four labels read `''` before any shot, and "Samples: 8" after one. So the first shot of an
+    agent's Designer waits by comparing renders (`_renders_alike`: a render every TICK ms, through the clipboard), up
+    to NO_RESTART and SETTLE_LIMIT a step, though counts show from its first frame on.
+  - **Fix.** Make `_Counts` when a count first shows (`_event`), not only as `_Frames` is made.
+  - **Resolution: done.**
+    - **Test:** `test_a_count_first_shown_once_the_view_has_drawn_is_read_from_then_on` (the labels empty until the
+      second paint) failed: the show compared renders. `test_a_show_with_no_count_at_the_paint_after_the_views_first_frame_compares_renders`
+      covers Display > Samples off. Live, `check_the_first_3d_shot_in_a_designer_opened_hidden_waits_on_the_views_count`
+      runs first among run()'s 3D shots. It wraps `_Frames._renders_alike` and calls `shoot_3d`, and skips when a
+      count shows before the shot. In a Designer just started it failed: `(None, 1, 8)` (no count before, 1
+      comparison, 8 after).
+    - **Cause:** `_Frames` decided once, as it was made, whether a count shows.
+    - **Fix:** `_Frames._event` makes `_Counts` at the first paint reading a count, the paints before it read as
+      showing none. `shown()`, with no count yet, first waits for that or for the paint after the view's first frame,
+      which a label shows the count of. The fact is in frames3d.py's module docstring, measured once.
+    - **Also covered:** `settled()` and `moved()` read `_counts` as they begin. A step begun before any count showed
+      compares renders for that step only. In a shot, `_bring`'s `shown()` comes before any step.
+    - **Result:** the unit tests pass. The live check passes in a Designer just started: `(None, 0, 8)`, 2 runs.
+  - Questioned by HLP-170 (2026-11-16).
+- [x] **HLP-163 · Three waits still run their limit when the window goes off screen during them** · follows HLP-158, generation 4 · `mcp_server/designer_helpers/frames3d.py` (`_Frames.moved`, `shown`, `_renders_alike`), `shot3d.py` (`_bring`) · confirmed · found 2026-11-16
+  - **Defect.** HLP-158 ended `settled()` and `taken()` when the view goes off screen. Three waits don't:
+    - `moved()`'s second wait, `counts.moved(paints)`, runs SETTLE_LIMIT (3 s) once the restart was read. Its
+      docstring, frames3d.py's and HLP-158's resolution say NO_RESTART.
+    - `shown()`'s state ignores `_drawing()`. Off screen meanwhile, it runs SETTLE_LIMIT, and `_bring` returns with the
+      window off screen. In the look before a render, the render is then the view's last frame, and no line says so.
+    - `_renders_alike()`, where no count shows: off screen the renders are identical, so each step's comparison runs
+      NO_RESTART.
+  - **Scenario.** Read in the code: the user covers, minimizes or hides Designer's window during a viewpoint's turn,
+    or during the look before a render.
+  - **Fix.** `shown`: end on `not self._drawing()`, then bring the window in front again or refuse, as
+    `_wait_on_screen` does. `_renders_alike`: end off screen on an UpdateRequest since the mark. `moved`: end its
+    second wait as `settled` does, or say SETTLE_LIMIT.
+  - **Resolution: done.**
+    - **Test:** `test_a_show_ends_once_the_window_goes_off_screen_again`, `test_a_turns_wait_ends_once_the_window_goes_off_screen`
+      (before and after its restart) and `test_with_no_count_shown_a_step_off_screen_ends_once_the_view_asks_for_a_frame`
+      failed: each wait read on past the window going off screen. In test_shot3d.py,
+      `test_a_window_covered_again_as_the_view_drew_is_brought_in_front_again` failed: brought once.
+      `test_a_window_covered_again_each_time_the_view_drew_is_refused_and_put_back` did not raise. In
+      test_view3d_helpers.py, `test_the_cameras_turn_is_watched_with_designers_window_on_screen` failed: no look
+      between the turn and Frame.
+    - **Cause:** HLP-158 ended `settled()` and `taken()` off screen, but not `shown()`, `moved()` or the comparison of
+      renders.
+    - **Fix:**
+      - `shown()` ends as the view goes off screen (`_Frames.off_screen`). `_Screen._bring` then puts the window on
+        screen again, BRINGS (3) times in all, then refuses ("went off screen again while its view drew").
+      - `moved()` ends off screen too. The set-up's turn runs the look after it (`between`, or `_on_screen`'s
+        `again` when set up alone), which puts the window back and waits there for the view to settle, before Frame.
+      - `_renders_alike` takes an `ended()` looked at after each poll: off screen, an UpdateRequest since the step
+        (`settled`), or the view off screen (`moved`, `shown`).
+      - The docstrings of frames3d.py, view3d.py's `_3d_set_up` and shot3d.py's `_Screen` say so.
+    - **Also covered:** `next_frame()` already returns at once off screen; `taken()` ended off screen (HLP-158).
+    - **Result:** passes. A scratch run of the new checks and 12 existing off-screen 3D checks, in a Designer just
+      started: 32 of 32. The checks that put Designer in front of the user's windows weren't run.
+  - Questioned by HLP-167 (2026-11-16).
+  - Questioned by HLP-172 (2026-11-16).
+- [x] **HLP-164 · A move's wait marks after the move's events ran, so an UpdateRequest delivered meanwhile is missed and the wait runs NO_RESTART** · `mcp_server/designer_helpers/frames3d.py` (`_Frames.taken`), `view3d.py` (`_drag`), `editor.py` (`_wheel`) · measured · found 2026-11-16
+  - **Defect.** `taken()` takes its mark when called: after `_drag`'s press, moves and release, or `_wheel`'s notch,
+    each followed by `_process_events(2)`. Off screen the view sends one UpdateRequest a move. Delivered within those
+    calls, it comes before the mark, and nothing more comes.
+  - **Scenario.** Measured (2026-11-16) in a Designer opened hidden: 60 moves, wheel notches and drags in turn. The
+    first took 0.95 s, its UpdateRequest delivered before the mark; the other 59 took 0.02 to 0.03 s each. The first
+    review's measurement fits: one notch in 30 at the full 1 s.
+  - **Fix.** Take the mark before the press or the notch, and pass it to `taken(since)`.
+  - **Resolution: done.**
+    - **Test:** `test_a_moves_update_request_delivered_before_its_wait_began_ends_the_wait`: an UpdateRequest
+      delivered as the move's events ran, off screen. It failed: no `taking`, the API to mark before the move.
+      `test_each_wheel_notch_waits_from_a_mark_taken_before_it_is_sent` failed: the mark came after the notch's
+      events. `test_a_drag_is_a_press_moves_and_a_release...` expects the mark before the press.
+    - **Cause:** `taken()` took its mark when called, after the move's events.
+    - **Fix:** `_Frames.taking()`, called before the press or the notch, returns the wait. Its UpdateRequests count
+      from then, its paints from the wait's start. `_drag` and `_wheel` take `taking` (optional) and call it before
+      the move. The first version counted the paints from before the move too. In the scratch run that lost one of
+      zoom=-3's three steps (0.82x), and the zoom with Designer hidden at its first step failed. So paints count
+      from the wait's start, with a unit test of it
+      (`test_on_screen_a_frame_drawn_while_a_moves_events_ran_doesnt_end_its_wait`). Both facts are in frames3d.py's
+      module docstring, measured once.
+    - **Also covered:** every caller passing `taken`: the set-up's drags and wheel, the self-test's
+      `MOVES_UNDER_ANY_TOOL`, window_states' drags, and `_HIDDEN_MID_ZOOM`'s wrapper of `_wheel`, moved to the new
+      protocol. Its check failed until then, as the wrapper's function ran before each notch.
+    - **Result:** passes. The zoom checks and the mid-zoom check pass (0.00 grey levels, 3 of 3 alone), in the
+      32-check scratch run.
+  - Questioned by HLP-169 (2026-11-16).
+- [x] **HLP-165 · `_Frames`' spy holds `_Frames` through its callback: after an abort that skips `close()`, the 3D viewport keeps a Python filter until the cyclic GC runs** · `mcp_server/designer_helpers/frames3d.py` (`_Frames.__init__`, `close`), `waits.py` (`_event_signal`) · confirmed · found 2026-11-16
+  - **Defect.** `_event_signal(viewport, ('Paint', 'UpdateRequest'), self._event)`: the filter's class closes over
+    the bound method, which holds `_Frames`, which holds the filter. Dropped by its frame, the cycle frees nothing
+    until the cyclic collector runs, and the viewport's filter and its window's `_exposed` stay installed meanwhile.
+    The helpers otherwise rely on a frame's objects going with it after an abort (`_drag`'s guard, `_until`'s timers).
+  - **Scenario.** Read in the code: an abort landing on `frames.close()`, in it, or in `_Frames.__init__` after the
+    first spy is installed. Each paint of the 3D view then runs Python and grows `seen` until a collection. Objects
+    that lived through a shot are likely in an older generation, collected later.
+  - **Fix.** Keep the counters in an object the closure holds and that doesn't hold the spies, or give
+    `_event_signal` a weak method.
+  - **Resolution: done.**
+    - **Test:** `test_frames_dropped_without_close_go_at_once_with_their_filters` (the cyclic collector off) failed:
+      `_Frames` still alive after its last reference went. Live,
+      `check_a_watch_of_the_3d_views_frames_dropped_without_close_goes_at_once` failed: `(False, False)` (the watch
+      and its spy both alive).
+    - **Cause:** the spy's class closed over the bound method `self._event`, which held `_Frames`, which held the spy.
+    - **Fix:** `_Frames.__init__` passes a function that holds `_event` through a `weakref.WeakMethod`.
+    - **Also covered:** every other `_event_signal` callback, in the helpers and the self-test's snippets, closes over
+      lists or the window, never over an object holding the spy.
+    - **Result:** passes; live `(True, True)`.
+- [x] **HLP-166 · give_back_activation's unhide waits for its window's exposure, which a window covered whole never gets** · follows HLP-160, generation 2 · `mcp_server/designer_helpers/mac_window.py` (`give_back_activation`) · confirmed · found 2026-11-16
+  - **Defect.** For a Designer started shown (a binary in SD_DESIGNER_APP) that became the active app, it hides it,
+    unhides it, and waits `_until(handle.isExposed, ACTIVATION_WAIT, ...)`. HLP-160 measured that an unhidden window
+    goes behind the active app's window, and that once covered whole, Qt no longer exposes it. HLP-160's Also covered
+    took this path for fine, as it brings nothing in front.
+  - **Scenario.** Read in the code, with HLP-160's measurement: the active app's window covers Designer's whole, and
+    the launch waits ACTIVATION_WAIT (3 s) before it says it gave the keyboard back.
+  - **Fix.** Wait for macOS to no longer say Designer is hidden, as `_wait_unhidden` does, not for the exposure.
+  - **Resolution: done.**
+    - **Test:** `test_the_show_is_waited_for_until_macos_says_designer_is_shown_not_until_its_window_is_exposed` (the
+      window never exposed, covered whole) failed: the show's wait read False.
+    - **Cause:** `give_back_activation` waited for the window's exposure, which a window covered whole never gets
+      (HLP-160).
+    - **Fix:** `_wait_unhidden(mac, handle, limit)` in mac_window.py: waits for `not mac.hidden()`, woken by the
+      window's expose events and looked at every TICK ms. `give_back_activation` and the shot's `_bring` both use it.
+      The `_Screen` method of the same name is gone.
+    - **Also covered:** the only other unhide waits are in the self-test's set-ups (HLP-160's Also covered).
+    - **Result:** the unit tests pass. No live check: making Designer the active app takes the user's keyboard.
+  - Note (2026-11-16): measured with the user's go, at an unhide with Designer's window covered whole by another
+    app's window: Qt exposed the window at once, 6 of 6 (the fourth review's log). So the exposure wait this
+    replaced may have ended at the show too; give_back_activation's own case wasn't measured. Waiting for macOS's
+    unhide holds either way.
+- [x] **TST-445 · HLP-160's live check reads the windows in front once, and skips for good when the window readers return nothing** · follows HLP-160, generation 2 · `tests/test_all_tools/editor_panels_and_fit/checks.py` (`SHOWN_FROM_HIDDEN`, `check_a_hidden_designers_window_is_brought_in_front_for_a_3d_shot_once_its_unhide_took`) · confirmed · found 2026-11-16
+  - **Defect.**
+    - It judges `in_front` empty at one reading. A window the user raises meanwhile, by a click through Designer's
+      click-through window, reads as HLP-160's failure. The other window-order readings take theirs again (TRIES,
+      `no_designer_starting`: TST-417).
+    - It skips when `active_app()` returns None or `windows_now()` lists nothing. A broken reader then makes the check
+      a SKIP in every run, and `test_the_windows_on_screen_now_are_read_with_their_owners` passes with `()`.
+  - **Scenario.** Read in the code: the user clicks a window of theirs during the read, in a full run.
+  - **Fix.** Read again while a window is in front, up to TRIES, and fail only if every read lists one. Skip only
+    when windows are listed and none is the active app's; with none listed, or no active app read, fail as "can't
+    tell" (TST-405, TST-441).
+  - **Resolution: done.**
+    - **Test:** `test_whether_the_active_app_shows_a_window_is_unknown_when_either_reading_is_missing` (new
+      `window_server.active_shows_a_window`: None with no active app or no window read). Before it, the check skipped
+      in both cases. `test_the_windows_on_screen_now_are_read_with_their_owners` now requires a window listed.
+    - **Cause:** the check read the windows in front once, and took a missing reading for "nothing to judge".
+    - **Fix:** the check fails as "can't tell" when either reading is missing, and skips only when windows are read
+      and none is the active app's. It runs SHOWN_FROM_HIDDEN again while a window is in front of Designer's, up to
+      TRIES times, failing only if every try finds one. Its detail says how many tries it took.
+    - **Also covered:** the other window-order readings retry already (`retries.without_others_in_front`, TST-417).
+    - **Result:** passes: the unit tests, and the check in a scratch run, 1 try.
+  - Questioned by TST-453 (2026-11-16).
+- [x] **TST-446 · The transparent-at-each-render check still doesn't judge `covered`, though HLP-160 explains the readings it was dropped for** · follows HLP-160, generation 2 · `tests/test_all_tools/editor_panels_and_fit/checks.py` (`check_a_3d_shot_keeps_designers_window_transparent_and_click_through_while_off_screen`) · measured · found 2026-11-16
+  - **Defect.** Its comment: whether macOS still counted the window covered at each render "isn't judged: a window of
+    the user's where Designer's comes back covers it until the shot brings it in front (REVIEW.md SRV-152)". Each
+    RENDER line is read after `screen.again()`, and those readings fit HLP-160's defect, now fixed. So the check
+    would pass HLP-160 back.
+  - **Scenario.** Measured (2026-11-16) after HLP-160's fix, in a Designer opened hidden, PyCharm the active app: the
+    check's three ways, 3 times each, read `covered=False` at each of their 18 renders.
+  - **Fix.** Judge `covered == 'False'` at each render, for the minimized, covered and hidden ways, and drop the
+    comment's reason.
+  - **Resolution: done.**
+    - **Test:** the check itself judges `covered == 'False'` at each render, for the minimized, covered and hidden
+      ways. Its detail now prints the values. It passes in the scratch run. To see it fail, a scratch run put HLP-160's
+      defect back (`_wait_unhidden` a no-op). The hidden way still passed, 6 of 6 tries: HLP-160 didn't show today, as
+      in its later runs (0 of 2). So the judgement was seen passing, not failing on the defect. By reading, it fails on
+      any render read covered.
+    - **Fix:** the judgement added. The comment's reason (SRV-152) replaced by what the shot does since HLP-160.
+    - **Result:** passes, 3 ways.
+- [x] **TST-447 · A failing `pgrep` reads as no crash handler, so the crash waits end at once** · follows SRV-151, generation 2 · `tests/test_all_tools/common.py` (`crash_handlers`, `dumps_may_come`) · confirmed · found 2026-11-16
+  - **Defect.** `crash_handlers()` returns `pgrep`'s stdout and never reads its return code. On an error (2 or 3) the
+    empty list makes `dumps_may_come` False, and `CrashWatch.settle` and `workers.wait_for_dumps` stop waiting.
+    `designer_pids` raises `NoListing` on the same codes (`test_a_failing_pgrep_is_an_error_not_no_designer`).
+  - **Scenario.** Read in the code: `pgrep` failing as a Designer crashes, its dump, written a few seconds later, is
+    missed, and the "no crash dump" check passes.
+  - **Fix.** Treat a return code other than 0 or 1, or an OSError, as "a dump may come", with a unit test.
+  - **Resolution: done.**
+    - **Test:** `test_a_failing_pgrep_reads_as_handlers_unknown_not_as_none_running` (exit codes 2 and 3 failed: `[]`),
+      `test_a_pgrep_that_cant_run_reads_as_handlers_unknown` (OSError raised through) and
+      `test_a_dump_may_come_while_the_crash_handlers_cant_be_listed` (TypeError, then True) failed.
+    - **Cause:** `crash_handlers()` read pgrep's output and never its exit code.
+    - **Fix:** `crash_handlers()` returns None when pgrep exits other than 0 or 1, or can't run. `dumps_may_come`
+      then returns True, so the waits run to their limit.
+    - **Also covered:** the other pgrep and ps calls. `_designer_pids` (server and self-test) and uninstall.py read
+      the exit code. `_has_port`'s ps failing makes `_found_launched` say the process wasn't found. core.py's
+      `_designer_running`, main's code, reads a failing pgrep as no Designer: SRV-163.
+    - **Result:** passes.
+- [x] **TST-448 · The crash-wait fake says it behaves as `dumps_may_come`, and two tests of the real function read the user's own crash-dump folder** · follows TST-437, generation 4 · `tests/unit/test_selftest_crash_dumps.py` (`_Dumps.may_come`, `test_a_dump_may_come_while_its_designers_crash_handler_runs_and_none_is_there`, `test_a_dump_may_come_from_the_runs_own_designer`) · confirmed · found 2026-11-16
+  - **Defect.** The fake's docstring: "as common.dumps_may_come, which never ends on one in the user's folder". It
+    has one handler flag for every home, where the real function waits per port. The two tests of the real function
+    redirect SHORT_TEMP but not HOME, so `crash_dumps` lists the user's own `~/Library/.../Sentry-Crashpad`. The
+    filter that ignores that folder is then guarded only on a machine that holds dumps there. The tests only read it.
+  - **Scenario.** Read in the code. No result depends on the fake's difference today.
+  - **Fix.** Generation 4, tests only, so the claims get smaller: the fake's docstring says what it does, and a
+    comment in the two tests says the user's-folder filter isn't tested there.
+  - **Resolution: done (generation 4: the claims made smaller).**
+    - The fake's docstring says it has one handler for every home, where `dumps_may_come` looks for each port's.
+    - The two tests' comments say HOME isn't redirected, and the filter ignoring the user's folder isn't tested
+      there.
+- [x] **TST-449 · `test_waits.py` passes bridge's 50 ms status poll as "a job holding the bridge"** · `tests/unit/test_waits.py` (the entry for `bridge/checks.py`'s `time.sleep(0.05)`) · confirmed · found 2026-11-16
+  - **Defect.** Of the three `time.sleep(0.05)` it lets through, two are inside jobs (`bridge/checks.py:54` and
+    `:96`). The third (`:85`) is `wait_for`'s poll of the bridge's status. The new test vouches for it with a reason
+    that isn't true, and lets a poll at 50 ms stand against AGENTS.md's 100 ms. `wait_for`'s result is never read.
+  - **Scenario.** Read in the code.
+  - **Fix.** Give `wait_for` POLL_S against a deadline, and the entry a count of 2; at least, give `:85` its own
+    reason.
+  - **Resolution: done.**
+    - **Test:** `test_waits.py`'s entry for `bridge/checks.py`'s `time.sleep(0.05)` set to 2: it failed, 3 found.
+    - **Fix:** `wait_for` polls the bridge's status every POLL_S against a 5 s deadline, the limit it had (100 times
+      0.05 s). The entry keeps its reason for the two sleeps inside jobs.
+    - **Result:** passes; the bridge category in a scratch run, 38 of 38.
+- [x] **TST-450 · The frames fact's judgements, and the window checks' BROUGHT_ON_SCREEN, have no unit test** · follows TST-428, generation 2 · `tests/test_all_tools/editor_panels_and_fit/checks.py` (`_shown`, `_changed_by_its_second_paint`, `restarted`, `held`, `BROUGHT_ON_SCREEN`) · confirmed · found 2026-11-16
+  - **Defect.** They decide in plain Python whether the frames fact and the window checks pass. TST-428 had
+    `showing()` and `in_order()` evaluated in unit tests; these were left out, so a comparison any reading satisfies
+    would go unseen.
+  - **Scenario.** Read: no test names them.
+  - **Fix.** Parametrized unit tests on recorded readings: the measured passes, and readings that must fail, TST-439's
+    among them.
+  - **Resolution: done.**
+    - **Test:** `tests/unit/test_selftest_frames_fact.py`, 34 cases: `_restarted`, `_held`, `_shown`,
+      `_changed_by_its_second_paint` and each way of `BROUGHT_ON_SCREEN`. Each runs on the readings measured, which
+      pass, and on readings that must fail: TST-439's not hidden before, a restart before the request, a request
+      after the second paint. With each judgement made to return True, 23 of 34 failed.
+    - **Fix:** the frames fact's `restarted` and `held`, nested in the check, moved to module level as `_restarted`
+      and `_held`, unchanged.
+    - **Result:** passes; the frames fact in the scratch run passes.
+- [x] **TST-451 · Comments and docstrings that say other than the code** · follows TST-442, generation 4; PLG-43, generation 3; SRV-161, generation 2 · listed below · confirmed · found 2026-11-16
+  - **Defect.**
+    - The plugin's `_Waker._on_after`: a callback that raises "is said in Designer's log". Inside another job's nested
+      event loop, `_run`'s `redirect_stdout` is active, and the traceback goes into that job's output (PLG-43's own
+      scenario).
+    - `mac_window.py`, `give_back_activation`: `hidden = mac.hidden()  # started hidden (REVIEW.md SRV-152): left
+      so, not shown again`. SRV-161 measured that a Designer opened hidden reads shown once active, as the docstring
+      above says, and `started_hidden` handles it. `test_mac_window.py`'s
+      `test_a_designer_started_hidden_that_became_the_active_app_stays_hidden` builds that unseen state.
+    - `mac_window.py`'s module docstring: "launch_designer now starts it hidden"; a binary in SD_DESIGNER_APP starts
+      shown.
+    - `lifecycle.py`'s `_designer_env`: "(not seen: `open -a` never passed them on)"; `_opened` now passes the whole
+      environment through `open`.
+    - `lifecycle/checks.py`'s hand-over check: "Started here from the binary as launch_designer starts one";
+      launch_designer opens the app bundle.
+    - `lifecycle/checks.py:54`: the comment for CLOSE_WINDOWS_ONLY sits above HANDLER_GONE_S.
+    - `editor_panels_and_fit/checks.py`, the material check: `# REVIEW.md TST-425: printed, never judged`, on the line
+      that judges `HIDDEN AGAIN=True`.
+  - **Scenario.** Read in the code.
+  - **Fix.** Make each claim smaller, or move it: "printed to Designer's log, or into the output of a job running
+    then"; "hidden while active: not seen (SRV-161), a defence", with the test named so; "opens an app bundle
+    hidden"; drop the parenthetical; "from its binary, with the environment launch_designer gives one"; move the
+    comment; "was printed, never judged".
+  - **Resolution: done (the claims made smaller or moved).**
+    - The plugin's `_Waker._on_after`: "printed to Designer's log, or into the output of a job running then".
+      install.py run, and the scratch runs' Designer restarted: "installed plugin matches the repo" passes.
+    - `give_back_activation`'s `hidden` comment: hidden while active wasn't seen (SRV-161), a defence, with the test
+      that builds the state named.
+    - mac_window.py's module docstring: an app bundle opens hidden; a binary in SD_DESIGNER_APP starts shown.
+    - `_designer_env`'s parenthetical dropped.
+    - The hand-over check: "from its binary, with the environment launch_designer gives one".
+    - lifecycle/checks.py: the comment moved onto CLOSE_WINDOWS_ONLY.
+    - The material check: "was printed, never judged".
+- [x] **TST-452 · Vague types in functions the diff adds or changes** · follows TST-443, generation 2 · listed below · confirmed · found 2026-11-16
+  - **Defect.**
+    - `tests/test_all_tools/bridge/checks.py`, `run`: `replies: dict[str, Any]` and `job(name: str, req: dict[str,
+      Any])`, unmarked: `req` fits `dict[str, object]`, `replies` a TypedDict of the plugin's reply. `ends: dict[str,
+      Any]  # Any: raw_request's replies, parsed JSON`: AGENTS.md gives parsed JSON `object`.
+    - `tests/unit/test_selftest_pool.py`: `write(...) -> dict[str, Any]`, three times; the fake types it
+      `Mapping[str, object] | None`.
+    - `tests/unit/test_selftest_alone.py`: `async def a_check(ctx: Any)`: `Ctx`, or `object`.
+    - `tests/unit/test_selftest_crash_dumps.py`: `_Dumps.watch(self, common: Any)`, unused: `object`.
+    - `tests/unit/test_lifecycle_env.py`: the fakes' `request: dict[str, Any]` (three) and `**kw: Any` (four),
+      unmarked: `dict[str, object]` and `object`. The one reading `kw['stderr']` narrows it with `isinstance`, or is
+      marked.
+    - `tests/unit/test_selftest_window_server.py`: `out: object` with `# type: ignore[index]`, where
+      `ctypes.Array[ctypes.c_double]` fits, and `# type: ignore[arg-type]` on `Bounded(...)`, which hides that `Server`
+      types its windows as 3-tuples.
+  - **Scenario.** Read in the code.
+  - **Fix.** As listed.
+  - **Resolution: done.**
+    - bridge/checks.py: `replies` and `ends` are `dict[str, Reply]`, a new TypedDict in common.py (the plugin's reply:
+      ok, output, error); `job`'s `req` is `dict[str, object]`.
+    - test_selftest_pool.py: every `write` returns `Mapping[str, object]` (or `| None`), as the fake takes it.
+    - test_selftest_alone.py: `a_check(ctx: object)`.
+    - test_selftest_crash_dumps.py: `_Dumps.watch(self, common: object)`.
+    - test_lifecycle_env.py: the two fakes' `request: dict[str, object]`, and the two `begin`s' `**kw: object`. The
+      one writing to `stderr` narrows it with `isinstance(..., io.BufferedIOBase)`.
+    - test_selftest_window_server.py: `out: ctypes.Array[ctypes.c_double]`, its ignore gone. test_selftest_popups.py's
+      `Server` types its windows as `FakeWindow` (3-tuples, or 4 with bounds), so `Bounded(...)` needs no ignore.
+    - mypy strict passes.
+  - Questioned by TST-459 (2026-11-16).
+- [x] **SRV-163 · A failing `pgrep` reads as no Designer running in `_designer_running`** · `mcp_server/server_tools/core.py` (`_designer_running`), its callers in `lifecycle.py` (`_running_on`, `_quit`) · confirmed · found 2026-11-16
+  - **Defect.** `_designer_running()` returns `pgrep`'s exit code == 0. On pgrep's own errors (2 or 3), or one that
+    can't run (OSError, raised), it reads no Designer. `_designer_pids` (SRV-97) and the self-test's
+    `crash_handlers` (TST-447) tell those apart.
+  - **Scenario.** Read in the code, found addressing TST-447 (main's code, outside the branch's diff). pgrep failing:
+    `quit_designer` says "Designer is not running." while one may run; `launch_designer` reads none running and goes
+    on to start one, where `_sorted_out`'s `_designer_pids` raises. The preferences' put-back is safe:
+    `_any_designer` reads "can't tell" as a Designer running.
+  - **Fix.** Tell "can't tell" apart in `_designer_running` (exit codes other than 0 or 1, OSError), and let each
+    caller decide: a Designer may run (as `_any_designer`), or an error saying the processes couldn't be listed.
+  - **Resolution: done.**
+    - **Test:** `test_lifecycle_env.py`, with the real `_designer_running` and `_designer_pids` and pgrep faked:
+      - `test_a_failed_process_listing_isnt_read_as_no_designer_running` (exit code 2, exit code 3, pgrep missing):
+        the exit codes didn't raise, and `_running_on` read none running. A missing pgrep raised its raw
+        `FileNotFoundError`, which doesn't say the processes couldn't be listed;
+      - `test_a_quit_with_the_processes_unlisted_doesnt_say_none_runs`: it didn't raise, as it said "Designer is not
+        running.";
+      - `test_the_log_with_the_processes_unlisted_isnt_chosen_as_none_running`: `read_designer_log` didn't raise;
+      - `test_a_launch_with_the_processes_unlisted_starts_none` passed before the fix: `_users_next_to`'s own listing
+        refused the launch before anything started. It stays as a guard;
+      - `test_pgrep_finding_designer_or_nothing_reads_as_running_or_not` (exit codes 0 and 1) passed before and after.
+    - **Cause:** `_designer_running` ran its own pgrep and read every exit code but 0 as none running, where
+      `_designer_pids` (SRV-97) told pgrep's errors apart.
+    - **Fix:** `core.py` has one `_pgrep()`, which raises `_NoListing` on exit codes other than 0 or 1 and on an
+      `OSError`. `_designer_running` and `lifecycle.py`'s `_designer_pids` both use it, and `_NoListing` moved from
+      `lifecycle.py` to `core.py`. Every caller lets the error through: `quit_designer`, `launch_designer` and
+      `read_designer_log` (through `_running_on`) say the processes couldn't be listed. `_running_on` already raised
+      that error whenever its second listing failed.
+    - **Also covered:** every other pgrep. `uninstall.py`'s `folders_in_use`, the self-test's `_pgrep`
+      (`designer_alive`, `designer_pids`) and `crash_handlers` (TST-447) already tell the errors apart. Not changed:
+      `tasklist` on Windows, in the server and in the self-test's `designer_alive`. An `OSError` there is raised, not
+      read as none running, and tasklist's exit codes can't be measured here (no Windows).
+    - **Result:** the new tests pass; `test_lifecycle_env.py` and `test_bridge.py` with lint and types, 292 passed;
+      the other tests of the touched code (`test_selftest_lifecycle.py`, `test_designer_preferences.py`,
+      `test_server.py`, `test_selftest_summary.py`, `test_selftest_alone.py`, `test_uninstall.py`), 242 passed.
+  - Questioned by SRV-164 (2026-11-16).
+- [x] **SRV-164 · One failed process listing ends launch_designer's wait, and its error, like every `_NoListing` the call lets out, leaves out what the call already did** · follows SRV-163, generation 2 · `mcp_server/server_tools/lifecycle.py` (`launch_designer`) · confirmed · found 2026-11-16
+  - **Defect.**
+    - Since SRV-163, `_running_on` raises `_NoListing` when pgrep fails. In the wait's loop (`if running and
+      may_have_exited() and not _running_on(port)`), nothing catches it, so one failure ends the call. Before, it read
+      as no Designer: `start()` listed again under the lock and, finding the Designer, the wait went on.
+    - The error is the bare "Designer's processes couldn't be listed (...)", without `told()`. A Designer this call
+      ended, with its sample's file, and what was done with Designer's preferences go unsaid, and `none_left()`'s
+      put-back doesn't run.
+    - The other `_NoListing`s the call lets out leave `told()` out too, on main as well: `start()`'s `_running_on`
+      and `_users_next_to`, `_end_if_past_startup`'s `_force_end`, and `_how_to_end` in the timeout's message.
+  - **Scenario.** Read in the code. launch_designer waits on a Designer no agent recorded (the user's still
+    starting, or another launch's not yet recorded), so `may_have_exited()` is True each round, and one pgrep fails
+    (exit code 3, or a fork failing).
+  - **Fix.** In the loop, read `_NoListing` as "may still hold the port" and go on waiting, as `_any_designer` reads
+    "can't tell". Where it ends the call, raise it with `none_left()` (or `told()`) in front, as the timeout and the
+    refusal do.
+  - **Resolution: done.**
+    - **Test:** in `test_lifecycle_env.py`:
+      - `test_a_launch_waiting_on_a_designer_goes_on_when_its_processes_cant_be_listed_once`, one listing failing in
+        the wait, raised the listing's error;
+      - `test_a_launch_that_ended_a_designer_and_starts_none_puts_back_first[processes unlisted]`, an agent's Designer
+        ended, then `_users_next_to`'s listing failing, neither said the Designer ended nor put Designer's preferences
+        back.
+    - **Cause:** SRV-163 made `_running_on` raise where it had read no Designer. Nothing in launch_designer caught a
+      `_NoListing`, so one ended the wait and left `told()` out.
+    - **Fix:** the wait's look goes through `_may_hold`, which reads "can't tell" as a Designer that may hold the port,
+      so the wait goes on. Any other `_NoListing` launch_designer lets out is raised again with `none_left()` in front:
+      what the call did, and Designer's preferences put back if it ended or started one.
+    - **Also covered:** `start()`'s `_running_on`, under the lock, still ends the call with that error, now with
+      `none_left()`: it can't tell whether to start one. `_end_if_past_startup` and `_how_to_end` inside the call are
+      covered by the same clause. `_log_for` (read_designer_log) and `_quit` raise it, as SRV-163 chose.
+    - **Result:** passes, with the rest of `test_lifecycle_env.py` (270).
+- [x] **HLP-167 · A 3D shot's show from a sample count left low off screen can end at its second paint, and render the first sample** · follows HLP-163, generation 5 · `mcp_server/designer_helpers/frames3d.py` (`_Counts.shown`, `_Frames.shown`), `shot3d.py` (`_Screen._bring`) · measured · found 2026-11-16
+  - **Defect.** `_Counts.shown` also ends on `self.unchanged(since) and not asked`: two paints reading no restart, and
+    no UpdateRequest since the show. A count left below the target reads no restart at the show: the view went off
+    screen mid-accumulation, where HLP-163's waits end. So two expose paints reading it end the wait before
+    `_went_on` can wait for the target.
+  - **Scenario.** Measured in a probe in a Designer an agent opened hidden (port 9877), inside `_on_screen`
+    (transparent and click-through), 5 tries. Each try panned, hid Designer once the count read 3 or less (it read 1
+    each time), then called `screen.again()`, with `_Counts.shown` wrapped to say which branch ended the wait:
+    - 4 of 5: `_went_on`, at a paint reading 8, 0.09 to 0.10 s after the show began;
+    - 1 of 5: `unchanged and not asked`, at the second paint, both reading 1 (`again` took 0.006 s). The count read 1
+      then, and 8 after 1.5 s. A render taken then is the first sample's.
+    In a shot, the user's click raising a window of theirs over Designer's click-through window during the
+    accumulation puts the view off screen the same way.
+  - **Fix.** Apply `unchanged and not asked` only when the count read before `since` is None or at the target. A count
+    left lower then waits for `_went_on` or a restart, SETTLE_LIMIT the safety net. A unit test: counts 8, 1, a mark,
+    then paints reading 1, 1 with `asked=False`: not shown.
+  - **Resolution: done.**
+    - **Test:** `test_frames3d.py::test_a_show_from_a_count_left_lower_isnt_ended_by_two_paints_reading_it` (counts 8,
+      1, then paints reading 1, 1 and no UpdateRequest) was shown. Live,
+      `check_a_3d_shots_window_shown_again_mid_accumulation_waits_for_the_count_at_rest` failed in a scratch run: of
+      the 5 tries hidden at a count of 3 or less, 2 ended at 1. Its 6 tries each pan, hide Designer once the count
+      reads 3 or less, then call `screen.again()`.
+    - **Cause:** `unchanged and not asked` tells nothing changed from a change made off screen, a rule measured from a
+      count at rest. From a count left lower, the expose paints read that count before the view asks for a frame.
+    - **Fix:** `_Counts.shown` applies the rule only when the count read before the show is at the target, or none was
+      read (`_before`, also used by `restart` and `_went_on`). frames3d.py's docstring has the measured fact, and its
+      waits' bullet the rule.
+    - **Also covered:** `settled` and `moved` don't use the rule. A shot's first show starts from no count read, where
+      a lower first paint counts as a restart.
+    - **Result:** passes: the unit tests of frames3d, shot3d and view3d (234). Live, 6 of 6 tries, each hidden at 1
+      and ended at 8. The window checks that bring the window back during a shot pass too.
+  - Questioned by TST-463 (2026-11-16).
+- [x] **HLP-168 · `set_3d_view` off screen goes on after a mesh switch at the view's first request, while the view still takes the switch: a mesh and an orbit in one call come out differently each time** · follows HLP-158, generation 4 · `mcp_server/designer_helpers/view3d.py` (`_3d_set_up`, the mesh step), `frames3d.py` (`_Frames.settled` off screen) · measured · found 2026-11-16
+  - **Defect.** Off screen, `settled` ends at the first UpdateRequest since the step (HLP-158). After a mesh switch,
+    that request comes at about 0.07 s, but the view asks for more frames until about 0.32 s. The moves that follow
+    in the same call run meanwhile.
+  - **Scenario.** Measured in probes in Designers an agent opened hidden (port 9877). Each way started from
+    `set_3d_view(mesh='Rounded cube', view='Front')`, its result shot with no set-up, the shots compared in grey levels
+    (mean absolute difference):
+    - after `set_3d_view(mesh='Sphere')`, the UpdateRequests came at 0.068 s, when the call returned, then at 0.13 to
+      0.17 s and at 0.32 s, 3 of 3;
+    - `set_3d_view(mesh='Sphere', orbit=[90, 30])` in one call: 1.12 apart between two runs in one Designer, 4.16 in
+      another;
+    - the mesh, then the orbit in a second call 1.5 s later: 0.00 between runs, and 8 to 35 from the one call;
+    - the shot's own set-up (on screen, `mesh='Sphere', orbit=[90, 30]`): 0.00 between runs, and 16 to 20 from the one
+      call.
+    Each part alone matched on screen and off, 0.00 in 2 of 2: the mesh switch, the orbit's up part `[0, 30]`, and
+    `[90, 0]` from Front against view Right, in one call and in two. Not explained: the two calls 1.5 s apart differ
+    from the shot's set-up by 11.64, and on screen, the mesh in one shot then the orbit in another differed by 1.49
+    between runs.
+  - **Fix.** Measure first what says the view has taken a mesh switch off screen (its last UpdateRequest, or a state
+    of the scene), and wait for it after the mesh step. Then compare the one call, the two calls and the shot's set-up
+    again.
+  - **Resolution: done (the user's choice, 2026-11-16: "Show the window (Recommended)").**
+    - **Measured first,** in a Designer an agent opened hidden, each set-up from a start the view had drawn, on screen
+      (the shot's set-up) against off screen (`set_3d_view`), twice. Orbit [0, 30], orbit [90, 30], orbit [90, 0]
+      with pan [0.2, 0], and a mesh switch with orbit [90, 0] came out alike, 0.00. Pan [0.2, 0.1] came out 68.53 grey
+      levels away off screen in 1 run of 2. On screen, every set-up repeated exactly. So the mesh step's wait isn't the
+      whole cause: moves made off screen don't always come out the same, and nothing found says when they will.
+    - **Test:** `test_view3d_helpers.py::test_a_set_up_that_moves_the_camera_runs_with_designers_window_on_screen`
+      (orbit, pan, zoom, a mesh with an orbit; a set-up with no move stays off screen but for the turn) failed: the
+      moves ran with no window put on screen. Live, `check_set_3d_view_moves_the_camera_as_a_3d_shots_set_up_does` (a
+      pan of two drags from Top, set_3d_view's against the shot's, 2 tries) failed in a scratch run: the window wasn't
+      put on screen for the pan. The renders matched that time.
+    - **Fix:** `set_3d_view` with orbit, pan or zoom runs the whole set-up inside `_on_screen`, on a watch of its own,
+      each step after the shot's look (`screen.again`), as a 3D screenshot sets up. Its docstring, frames3d.py's facts
+      and DECISIONS.md's camera turn entry say so.
+    - **Also covered:** the 3D shot's own set-up already ran on screen. A set-up with no move (mesh, graph, view,
+      tiling) stays off screen but for the turn: a mesh switch alone came out alike on and off screen (0.00, 2 of 2).
+    - **Result:** passes: the unit tests (117 with view3d's and the parts'), and live, 2 of 2 tries (the window put on
+      screen, the renders 0.00 apart). The user's-mouse check, which calls set_3d_view with an orbit and a pan,
+      passes.
+  - Note (2026-11-16): at the user's request, DECISIONS.md's camera turn entry, which recorded this choice, was
+    removed: nothing cited it, and AGENTS.md's wait rule already rules out the time limit it turned down. The choice
+    stays recorded here and in `set_3d_view`'s docstring.
+  - Questioned by HLP-174 (2026-11-16).
+  - Questioned by TST-465 (2026-11-16).
+- [x] **HLP-169 · `_drag`'s and `_wheel`'s docstrings say a frame since the press or the notch ends the wait, where only a frame once the move's events ran does** · follows HLP-164, generation 2 · `mcp_server/designer_helpers/view3d.py` (`_drag`), `editor.py` (`_wheel`) · confirmed · found 2026-11-16
+  - **Defect.** `_drag`: "(_Frames.taking: a frame of the 3D view since the press; off screen, an UpdateRequest
+    since)". `_wheel`: "the 3D view's _Frames.taking, a frame since, or off screen an UpdateRequest since". `taking`
+    counts paints from the wait's start, once the move's events ran. Counted from before, zoom=-3 lost one of its
+    steps (frames3d.py's docstring). HLP-164's Also covered missed the two.
+  - **Scenario.** Read in the code.
+  - **Fix.** Say "a frame drawn once the move's events ran; off screen, an UpdateRequest since the press" (the notch,
+    for `_wheel`).
+  - **Resolution: done.** Both docstrings say a frame drawn once the move's events ran, or off screen an UpdateRequest
+    since the press (the notch, for `_wheel`). Docstrings only, so no test.
+- [x] **TST-454 · The Light tool check waits out NO_RESTART for each move the tool ignores** · follows TST-421, generation 2 · `tests/test_all_tools/editor_panels_and_fit/checks.py` (`MOVES_UNDER_ANY_TOOL`) · measured · found 2026-11-16
+  - **Defect.** Under the Light tool, the wheel and a middle drag don't move the camera. The hidden view then asks for
+    no frame, and each move's `taken()` runs its 1 s limit. The limit becomes the wait's time, against AGENTS.md's
+    wait rule. The snippet's comment says "each move waits for its request for one".
+  - **Scenario.** Measured in a probe in a Designer an agent opened hidden (port 9877), the snippet's moves timed one
+    by one, twice under the Light tool and once under the Camera tool:
+    - Light tool: each of 3 notches and the middle drag took 1.0 to 1.05 s, with no UpdateRequest. The left drag took
+      0.01 s, with one;
+    - Camera tool: each move took 0.00 to 0.03 s, with one UpdateRequest.
+    So the check spends about 4 s on limits in each run.
+  - **Fix.** Send the moves the tool ignores without `taking`, and say why in the comment. Another possible place, not
+    measured: `put_and_drag('qt minimized', 40)` (window_states.py), whose 3D view gets a hide event.
+  - **Resolution: done.**
+    - **Test:** the snippet records how each of its waits ended (`WAITS`), and a new judgement requires each to end on
+      the view asking for a frame. It failed in a scratch run: `[False, False, False, False, True]`, the 3 notches and
+      the middle drag at their limit.
+    - **Cause:** the snippet gave every move a wait. The moves the Light tool ignores change nothing, so the hidden
+      view asks for no frame.
+    - **Fix:** the wheel and the middle drag go without a wait, and the comment says why. The turn, which moves the
+      light, waits.
+    - **Also covered:** `put_and_drag('qt minimized', 40)` wasn't measured, and stays as it was.
+    - **Result:** passes in a scratch run: `[True]`, with the check's other judgements.
+- [x] **TST-455 · Two bridge checks reach the state they test only by timing, and ROADMAP item 100 doesn't list them** · follows TST-421, generation 2, and HLP-150, generation 3 · `tests/test_all_tools/bridge/checks.py` (`check_no_job_starts_within_the_wait_after_the_one_before`, `check_a_wait_cancelled_leaves_nothing_connected`), `ROADMAP.md` (item 100) · confirmed · found 2026-11-16
+  - **Defect.**
+    - The queue check sends `behind` once the 0.3 s job is seen running. Nothing makes sure `behind` arrives before
+      that job ends. Arriving after, it starts on an idle bridge, where the 30 ms rule holds too, so the check passes
+      without testing a queued job's start.
+    - The cancel check cancels once the status says a job runs. The status says so from the job's start, before the
+      helpers' text has run and `_until` has connected. The cancel lands after that only because the second MCP
+      client takes about a second to start. Landing earlier, CONNECTED=0 passes without testing the abort's
+      disconnects, or `sys.mcp_selftest_source` is missing and the check fails.
+    - Item 100 lists the live checks whose verdict load can change, and neither is there.
+  - **Scenario.** Read in the code: a loaded machine, where `behind`'s round trip takes over 0.3 s.
+  - **Fix.** Add both to item 100, with designs that don't depend on load: the long job loops until a marker file
+    exists, made once `wait_for('1 queued')` returns True; the cancelled job writes a marker right before `_until`,
+    and the cancel waits for it. No check is made stronger now (generation 3 for the cancel check).
+  - **Resolution: done.** ROADMAP item 100 lists both checks, with designs that don't depend on load. No check changed
+    (generation 3, for the cancel check).
+- [x] **TST-456 · `test_waits.py` claims every fixed wait, but reads one line at a time and no `Event.wait`, so the front watch's 50 ms sampling isn't listed** · follows TST-426, generation 3 · `tests/unit/test_waits.py`, `tests/test_all_tools/window_server.py` (`FRONT_EVERY`) · confirmed · found 2026-11-16
+  - **Defect.**
+    - The docstring says every sleep, `_settle`, `.start(...)` given a time and single-shot timer after a number is
+      a poll or listed. The test matches one line at a time, so a call that formatting splits over lines goes
+      unseen. `lifecycle/designer_scripts/modal_dialog.py` already has a `QTimer.singleShot(` with its `0` on the
+      next line.
+    - It doesn't match `Event.wait(<seconds>)`. `FrontWatch` samples every `FRONT_EVERY` (0.05 s) through
+      `self._stop.wait(FRONT_EVERY)`: a poll at 50 ms that is neither in POLLS nor listed. The other `.wait(...)`
+      calls given a time wait for an event, with a limit.
+    - `test_the_polls_look_every_100_ms` checks POLL_S, not `waits.TICK`, which POLLS accepts too.
+  - **Scenario.** Read in the code.
+  - **Fix.** Generation 3, tests only, so the claim gets smaller. The docstring says it reads calls written on one
+    line, and not `Event.wait`. `FRONT_EVERY` gets the reason for its 50 ms in its comment, or becomes POLL_S. No
+    check is added.
+  - **Resolution: done (generation 3: the claim made smaller).** `test_waits.py`'s docstring says it reads calls
+    written on one line, and neither a call split over lines nor `Event.wait(...)`, naming the front watch's sampling.
+    `test_the_polls_look_every_100_ms`'s comment says TICK isn't read. `FRONT_EVERY` has its reason in a comment. No
+    check was added. The test passes.
+- [x] **TST-457 · Unit tests patch names the code no longer reads, and `end_own_designer`'s SIGKILL has no test** · follows TST-421, generation 2 · `tests/unit/test_selftest_lifecycle.py` (`test_ending_the_runs_designer_forces_only_its_own`), `tests/unit/test_selftest_alone.py:40`, `tests/unit/test_selftest_preparations.py:32`, `tests/unit/test_selftest_summary.py:99` · confirmed · found 2026-11-16
+  - **Defect.**
+    - TST-421 made `end_own_designer` wait with the server's `_exited`, which reads the server's `_designer_pids`
+      (the conftest's `list`: none). The TST-170 test still patches `common.designer_pids` ("another run's is up"),
+      `designer_alive` and `time.sleep`, which nothing reads now. `_exited(11, ...)` returns True at once, so the
+      case the test was written for isn't set up.
+    - No test makes `_exited` return False, so the SIGKILL line is untested. The newer test patches `_exited` to
+      True.
+    - TST-421 removed `category_run.PAUSE_S`. Three tests still set it, one with the comment "(slept in _cleaned)":
+      `_cleaned` no longer sleeps.
+  - **Scenario.** Read in the code. A change that sends SIGKILL whenever the server lists any Designer passes the
+    TST-170 test.
+  - **Fix.** Patch the server's `_designer_pids` to `[12]` (`patch_server`) and drop the dead patches. Add a case
+    where `_exited` returns False, expecting `[(11, SIGTERM), (11, SIGKILL)]`. Remove the three PAUSE_S lines.
+  - **Resolution: done.**
+    - **Test:** `test_ending_the_runs_designer_forces_only_its_own`, now parametrized. The processes are given to the
+      server's `_designer_pids`, which `_exited` reads, and the exit watch runs its limit. A case where 11 still runs
+      expects SIGTERM, then SIGKILL. With TST-170's defect put back for a moment (SIGKILL whenever the server lists a
+      Designer), the case with another run's Designer up failed. The old version's patches reached nothing.
+    - **Fix:** the dead patches (`common.designer_pids`, `designer_alive`, `time.sleep`) removed, and the three
+      PAUSE_S lines (`test_selftest_alone.py`, `test_selftest_preparations.py`, `test_selftest_summary.py`).
+    - **Result:** passes. The three files' tests pass (94).
+- [x] **TST-458 · Lifecycle's unit tests reach the real crash handlers and crash-dump folders again, and read the windows on screen** · TST-261's defect back · `tests/test_all_tools/crash_watch.py` (`CrashWatch.settle`), `tests/unit/test_selftest_lifecycle.py` (`_no_wait`, `_prepared`), `tests/test_all_tools/lifecycle/checks.py` (`check_launch_on_another_port`'s FrontWatch) · confirmed · found 2026-11-16
+  - **Defect.**
+    - SRV-151's crash wait added `coming` (`common.dumps_may_come`), and `settle` looks at it before its deadline:
+      `while self.coming(ports, before) and self.clock() < deadline`. `_no_wait` and `_prepared` build the watch with
+      `wait_s=0` but no `coming`.
+    - So each settle with a step runs the real `dumps_may_come` once: a real `pgrep -fl crashpad_handler`. When a
+      Designer an agent started runs on PORT, it also lists the real crash-dump folders, the user's included.
+      `_no_wait`'s docstring says "no real crash-dump folder (REVIEW.md TST-261)".
+    - On macOS, the tests that reach `check_launch_on_another_port`'s launch start a real `window_server.FrontWatch`:
+      a thread reading the active app (`lsappinfo`) and the windows on screen.
+    - All of it only reads, and no result depends on it.
+  - **Scenario.** Read in the code: the unit suite run while `alone`'s Designer runs on 9877.
+  - **Fix.** `settle` looks at the clock first, as `workers.wait_for_dumps` does. The fakes pass a `coming` that
+    returns False. The tests patch `FrontWatch`.
+  - **Resolution: done.**
+    - **Test:** `test_selftest_crash_dumps.py::test_a_watch_with_no_time_to_wait_never_looks_whether_a_dump_may_come`
+      failed: a watch with `wait_s=0` called `coming`. In `test_selftest_lifecycle.py`, `_windows_read` records each
+      front watch entered, and the 3 cases that reach `check_launch_on_another_port`'s launch entered one watching.
+    - **Cause:** `settle` looked at `coming` before its deadline, and the lifecycle tests left `coming` and `FrontWatch`
+      real.
+    - **Fix:** `settle` looks at its clock first. `_no_wait` and `_prepared` pass `_no_dump_coming`. The two tests make
+      the check's front watch one that samples nothing (`_no_front_watch`).
+    - **Also covered:** `workers.wait_for_dumps` already looks at the time first. The other unit tests that run
+      `lifecycle.run` replace its checks with fakes, so they reach no front watch.
+    - **Result:** passes, with the rest of both files.
+- [x] **TST-459 · Vague types left in functions the diff adds or changes** · follows TST-452, generation 3 · listed below · confirmed · found 2026-11-16
+  - **Defect.**
+    - `tests/unit/test_lifecycle_env.py`, unmarked, in functions the diff changes: `**kw: Any` in the `begin`s at lines
+      534, 1684 and 1742, and `request: dict[str, Any]` in `send` at line 1691. They fit `object` and
+      `dict[str, object]`. TST-452's resolution narrowed two of each.
+    - `mcp_server/designer_helpers/view3d.py`, `_drag`'s `pressed: list[Any]`: `list[tuple[Any, float, float]]`, as
+      its marker describes it.
+    - `tests/unit/test_frames3d.py`: `_frames_counting(...) -> tuple[Any, list[float]]`, `_comparing(frames: Any)` and
+      five `cast(Any, frames)`, two of them unmarked, type `_Frames` as `Any`, "a helper loaded from its file". The
+      same file gives `_Counts` a Protocol (`Counts`), so a `Frames` Protocol fits. `cast(Any,
+      sys.modules['PySide6'])` fits `cast(mock.MagicMock, ...)`, as its reason says.
+    - `tests/unit/test_shot3d.py`, `on_screen(...) -> Any  # Any: a helper's context`:
+      `contextlib.AbstractContextManager[Screen]`, with a Protocol for what the tests call (`again`, `between`).
+    - `tests/unit/test_selftest_frames_fact.py`, `checks() -> Any  # Any: a module imported by name`, and its five
+      tests' `checks: Any`: `ModuleType`, as `test_selftest_window_server.py` types its module.
+    - `tests/unit/test_selftest_window_server.py`: `windows: tuple[object, ...]` (line 274), the window tuples the
+      file's other tests type; `rect: tuple[float, ...]` (line 24), `tuple[float, float, float, float]`.
+  - **Scenario.** Read in the code.
+  - **Fix.** As listed.
+  - **Resolution: done.** As listed:
+    - `test_lifecycle_env.py`'s four, `object` and `dict[str, object]`;
+    - `_drag`'s `pressed: list[tuple[Any, float, float]]`;
+    - `test_frames3d.py`'s `Frames` Protocol, with `_counted` for the reads that need a count shown, and
+      `cast(mock.MagicMock, ...)`;
+    - `test_shot3d.py`'s `on_screen(...) -> contextlib.AbstractContextManager[Screen]`, with a `Screen` Protocol;
+    - `test_selftest_frames_fact.py`'s `ModuleType`;
+    - `test_selftest_window_server.py`'s window tuples and `rect`.
+    mypy strict passes.
+- [x] **SRV-166 · `quit_designer`'s "could not be ended" error leaves out that the crash reports may still be uploaded** · follows SRV-124, generation 3 · `mcp_server/server_tools/lifecycle.py` (`_quit`, `_end_if_past_startup`) · confirmed · found 2026-11-16
+  - **Defect.**
+    - `_quit` puts the uploads line in `prefix`. Every return carries `prefix`, but the raise doesn't:
+      ```python
+      prefix = ''.join(line + '\n' for line in (notes, uploads) if line)
+      ...
+      raise ToolError(_could_not_end(own) + sampled)
+      ```
+    - `_end_if_past_startup` adds the uploads sentence right after the sample's path, which ends with no stop:
+      `sampled + uploads` reads "... threads_N.sample.txt Its crash reports may still be uploaded to Adobe: ...".
+  - **Scenario.** Read in the code. A Designer an agent started crashes as it quits, and Adobe's crash window keeps
+    its process (ROADMAP item 95), so the quit can't end it. If its Crashpad settings couldn't be written, the error
+    doesn't say its crash report may go to Adobe. SRV-124 said "with a line when it can't", and DECISIONS.md's crash
+    uploads entry relies on it. The close's notes are dropped the same way.
+  - **Fix.** `raise ToolError(prefix + _could_not_end(own) + sampled)`, and `_sentence(sampled)` before the uploads
+    sentence. A unit test for each path.
+  - **Resolution: done.**
+    - **Test:** `test_a_quit_that_cant_end_its_designer_says_its_crash_reports_may_be_uploaded` failed: no uploads
+      line. `test_an_agents_designer_ended_past_its_start_up_says_its_sample_then_its_uploads_each_a_sentence`, ended
+      and not, failed: "threads_11.sample.txt Its crash reports".
+    - **Cause:** `_quit`'s raise left out `prefix`, which every return carries; `_end_if_past_startup` joined the
+      sample's sentence, which ends with its path, to the next.
+    - **Fix:** the raise carries `prefix` (the close's notes, the uploads line); the sample's sentence gets its stop
+      (`_sentence`) when the uploads sentence follows.
+    - **Also covered:** `_quit`'s returns put `sampled` last, after `prefix`.
+    - **Result:** passes.
+  - Questioned by SRV-168 (2026-11-16).
+  - Questioned by SRV-169 (2026-11-16).
+- [x] **SRV-167 · GUIDE.md and `_reload_package_file` say no pause is needed between unload, load and reopen, measured in hidden Designers only** · follows SRV-150, generation 2 · `mcp_server/GUIDE.md` (the file-level edit pattern), `mcp_server/server_tools/layout.py` (`_reload_package_file`'s docstring) · confirmed · found 2026-11-16
+  - **Defect.** GUIDE.md says "an unload's widgets were all gone by the next call, so no pause is needed". The
+    docstring says the same, citing link_display's designer fact. That fact, like every self-test run, runs in a
+    Designer opened hidden. The crash the three separate calls guard against was in a Designer on screen. Whether an
+    unload there finishes its teardown before the next call is the first review's Not verified, and this one's.
+  - **Scenario.** Read in the docs. An agent writing a script with the file-level edit pattern for the user's
+    Designer, which is on screen, reads that no pause is needed.
+  - **Fix.** Say where it was measured: in Designers opened hidden, not in one on screen.
+  - **Resolution: done.**
+    - **Measured** with the user's go (this review's log, Not verified): on screen, not the active app, link_display's
+      fact read as hidden, 5 of 5, and 20 reloads raised nothing and left no crash dump.
+    - **Fix:** GUIDE.md and `_reload_package_file`'s docstring say where it was measured: hidden, and on screen but not
+      the active app.
+    - **Result:** the docs tests pass.
+- [x] **INS-37 · `read_crash_dump.py` reads dumps from folders in /tmp without checking they are the user's own** · `scripts/read_crash_dump.py` (`dump_folders`) · confirmed · found 2026-11-16
+  - **Defect.** `agent_designer_folders()` lists the names in the shared /tmp that match `sd_mcp_<uid>_<port>`.
+    `dump_folders()` looks for dumps in each, with no check that the folder is this user's and not a link:
+    ```python
+    homes = [os.path.expanduser('~')] + [os.path.join(folder, 'home') for folder in agent_designer_folders()]
+    ```
+    The server reads these folders only through `_checked_folder` (lstat, a folder, the user's uid; REVIEW.md
+    SRV-96), and `uninstall.plan()` checks them the same way.
+  - **Scenario.** Read in the code. Another account on the Mac makes `/tmp/sd_mcp_<the user's uid>_<port>` first,
+    with a dump newer than any real one and a log beside it. Run with no argument, as AGENTS.md tells agents to after
+    a crash, the script prints that dump's messages and that log. An agent diagnosing a crash then reads text another
+    account wrote. Nothing of the user's changes.
+  - **Fix.** In `dump_folders()`, keep only the folders that are this user's own and not links, as
+    `uninstall.plan()` does. A unit test with a link, and one with a folder of another uid.
+  - **Resolution: done.**
+    - **Test:** `test_a_folder_in_tmp_that_isnt_the_users_own_isnt_read`, with a link and a folder of another uid:
+      both were read.
+    - **Cause:** the folders were matched by name alone.
+    - **Fix:** `dump_folders()` keeps the agents' folders that are this user's own and not links (`_own_folder`, as
+      the server's `_checked_folder` and uninstall.py check).
+    - **Also covered:** `common.crash_dumps` reads only this run's ports' folders, which `launch_designer` made and
+      checked.
+    - **Result:** passes.
+  - Questioned by INS-38 (2026-11-16).
+- [x] **HLP-171 · An abort landing on `_3d_render`'s `finally` skips putting the user's clipboard text back** · follows HLP-150, generation 3 · `mcp_server/designer_helpers/screenshots.py` (`_3d_render`) · confirmed · found 2026-11-16
+  - **Defect.** The plugin's tracer raises its abort at a traced line: every 64th event, or the first one after an
+    abort dropped in a slot. Raised at a `finally`'s first line, it skips the rest of that `finally` (HLP-150):
+    ```python
+    finally:
+        clipboard.setMimeData(backup)
+        app.processEvents()
+    ```
+    The window code guards the same case with a handler that runs untraced: `_on_screen`'s and `_3d_set_up`'s
+    `except BaseException`.
+  - **Scenario.** Read in the code and the plugin's `_make_tracer`. A job is cancelled, or times out, as a render
+    returns. The abort lands on `clipboard.setMimeData(backup)`, and the render stays on the user's clipboard
+    instead of their text. DECISIONS.md's clipboard entry rests on the text coming back. A shot can take several
+    renders now: the retakes, and the steps compared by renders where no count shows.
+  - **Fix.** An outer `except BaseException:` that puts the backup back unless a flag says the `finally` did, as
+    `_on_screen` does for the window. A unit test with the abort at that line.
+  - **Resolution: done.**
+    - **Test:** `test_an_abort_landing_on_the_renders_put_back_of_the_clipboard_still_puts_the_users_text_back`, a
+      trace function raising at the `finally`'s first line as the plugin's does: nothing was put back.
+    - **Cause:** the plugin raises an abort at a traced line, then stops tracing; landed on the `finally`'s first line,
+      the rest of it didn't run.
+    - **Fix:** an outer `except BaseException:`, which runs untraced, puts the text back unless the `finally` did. Each
+      put-back is a QMimeData of its own, so twice is harmless.
+    - **Also covered:** the helpers' other put-backs of the user's state have such a handler: the window
+      (`_on_screen`), the tool and the mouse button (`_3d_set_up`), the Parameters panel (HLP-118).
+    - **Result:** passes.
+  - Questioned by HLP-177 (2026-11-16).
+- [x] **HLP-172 · A window put on screen again within one look stays transparent though the user is in Designer, and its line drops ", transparent"** · follows HLP-163, generation 5 · `mcp_server/designer_helpers/shot3d.py` (`_Screen._bring`) · confirmed · found 2026-11-16
+  - **Defect.** `_bring` calls itself when the window went off screen again during its wait, without `between()`:
+    ```python
+    fade = not self._taken_up()
+    print(WINDOW + (BROUGHT[way][again] if fade else BROUGHT[way][again].replace(', transparent', '')))
+    ...
+    self._bring(again=True, brings=brings - 1)
+    ```
+    Once the user has made Designer the active app, `fade` is False: nothing more is faded, and the line says the
+    window is shown without ", transparent". The windows the first bring faded stay in `_faded`, still transparent:
+    only `between()` gives their look back.
+  - **Scenario.** Read in the code. During the first bring's wait, the user switches to Designer and minimizes it
+    (Cmd-M). The window comes back transparent, and its line says it isn't. The user sees nothing of Designer until
+    the next step's look or the put-back, against HLP-136's "made opaque at once".
+  - **Fix.** `self.between()` before the recursive `_bring`. A unit test: `Covering`, with the app made active
+    during `shown`.
+  - **Resolution: done.**
+    - **Test:** `test_a_window_put_on_screen_again_within_one_look_once_the_user_is_in_designer_is_made_opaque_first`
+      failed: "left transparent, the user in Designer".
+    - **Cause:** the bring called itself without the look that gives the windows their look back.
+    - **Fix:** `between()` before the recursive bring.
+    - **Result:** passes.
+- [x] **HLP-173 · The shot's window waits: a measured time decides the second show, and the minimize and hide waits aren't woken by the events Qt sends for them** · follows HLP-145 and HLP-160, generation 2 · `mcp_server/designer_helpers/shot3d.py` (`SHOW_AGAIN`, `_wait_on_screen`, `_Screen._wait_off_screen`), `mcp_server/designer_helpers/mac_window.py` (`_wait_unhidden`) · measured · found 2026-11-16
+  - **Defect.**
+    - `SHOW_AGAIN = 0.5` puts the window in front again once it isn't exposed 0.5 s after the show; the exposure
+      took about 0.3 s where measured. A time measured here decides it, against AGENTS.md's wait rule. HLP-160's fix
+      has since removed the cause that fits HLP-145's readings, and nothing says whether the second show still
+      happens.
+    - `_wait_off_screen` and `_wait_unhidden` look at macOS's state every TICK and as the page's expose events come.
+      Their docstrings record a hunt for a callback in Qt's signals only.
+  - **Scenario.** Measured (2026-11-16) in a Designer opened hidden, its window on screen transparent and
+    click-through, over 2 minimizes and 2 hides, each brought back with the shot's `again()`, polled every 10 ms:
+    - The page's and the top-level window's `windowStateChanged` and `visibleChanged`, and `applicationStateChanged`,
+      never fired.
+    - The top-level widget (`mw.window()`, a QStackedWidget) got a Hide event 0.60 to 0.61 s after each minimize.
+      macOS said it minimized, and the window server no longer listed it, at the next look (0.62 to 0.63 s).
+    - It got a Hide event 0.002 s after each hide. macOS said Designer hidden at 0.005 s, and the window server
+      stopped listing the window at 0.023 to 0.025 s.
+    - It got a Show event 0.044 to 0.058 s into each `again()`, which ended at 0.058 to 0.103 s.
+
+    On a slower or busier machine, an exposure later than 0.5 s gets a second show it didn't need.
+  - **Fix.** Wake both waits on the top-level widget's Hide and Show events too (`_event_signal(mw.window(), ('Hide',
+    'Show'))`), keeping the poll for the window server's list, which lags the hide's event by 0.02 s. AppKit's
+    notifications (`NSApplicationDidHideNotification`, `NSApplicationDidUnhideNotification`,
+    `NSWindowDidChangeOcclusionStateNotification`) are the next candidates. For SHOW_AGAIN: measure whether the
+    second show still happens since HLP-160. Remove it if it never does, or wake it on what says the window is
+    still covered.
+  - **Resolution: done.**
+    - **Measured first** (2026-11-16, in Designers an agent started, windows transparent and click-through):
+      - the second show: over 30 shots of a hidden Designer in 10 Designers just started, the window was exposed at
+        its first show in 60 of 60 waits, each 0.002 to 0.026 s;
+      - callbacks: no Qt signal fired for a hide or a minimize (both windows' `windowStateChanged` and
+        `visibleChanged`, `applicationStateChanged`). The top-level widget's Hide and Show events came for a
+        minimize and its look after, and in a Designer just started not for a hide right after the shot showed it,
+        nor its look after.
+    - **Test:** `test_a_window_not_yet_on_screen_after_a_while_is_put_in_front_again_once` failed: a wait of 0.5 s
+      before the second show.
+    - **Cause:** HLP-145's fix put the window in front again after a time measured then; HLP-160's wait for the unhide
+      removed the cause that fits its readings.
+    - **Fix:** SHOW_AGAIN is gone: the window is put in front again only once the wait's limit, ON_SCREEN_WAIT, has
+      passed, then refused after it again. The waits keep the poll, as no Qt callback says the states; shot3d.py's
+      docstring records both measurements. AppKit's notifications: ROADMAP item 101.
+    - **Result:** passes; the focus check's hidden way and the other window checks pass in the category's scratch run
+      (96 of 96 checks in the category's scratch run, in a Designer just started).
+  - Questioned by HLP-178 (2026-11-16).
+- [x] **HLP-174 · Two docstrings of the 3D set-up's waits say what the code doesn't do** · follows HLP-168, generation 5 · `mcp_server/designer_helpers/view3d.py` (`_3d_set_up`'s and its `run`'s docstrings), `mcp_server/designer_helpers/frames3d.py` (the module docstring, the bullet on the show) · confirmed · found 2026-11-16
+  - **Defect.**
+    - `_3d_set_up` says "Run without the shot's watch, the viewpoint's turn and Frame run with the window on screen,
+      transparent (_on_screen)", and `run` says "on `frames`, the shot's watch of its frames, or one of its own".
+      Since HLP-168, `set_3d_view` with a move passes a watch of its own. Its turn then gets no `_on_screen` of its
+      own, as `set_3d_view` already runs inside one. What the code relies on is a caller that passes `frames` already
+      keeping the window on screen and passing its look as `between`.
+    - frames3d.py, on the show: "With no count to read, renders are compared ...: a change seen, then two renders
+      alike". `shown()` passes `changed=False`, so it ends at the first two renders alike, no change seen.
+  - **Scenario.** Read in the code.
+  - **Fix.** Narrow both (the chain rule): "a watch from a caller that keeps the window on screen and passes its
+    look as `between`: the shot, or set_3d_view with a move"; "two renders alike (after a step, a change seen
+    first)".
+  - **Resolution: done.**
+    - **Fix:** `_3d_set_up`'s and `run`'s docstrings name the contract: a caller giving its watch keeps the window on
+      screen and passes its look as `between`, the shot or set_3d_view with a move. frames3d.py's show bullet says two
+      renders alike, no change needed first.
+    - **Result:** lint and types pass.
+- [x] **HLP-175 · `Any` without its reason in five functions view3d.py adds** · `mcp_server/designer_helpers/view3d.py` (`_navigation_tools`, `_tool_back`, `_mouse`, `_mouse_guard`, `_release`) · confirmed · found 2026-11-16
+  - **Defect.** AGENTS.md keeps an `Any` only when it is marked with its reason on its line; screenshots.py's module
+    comment isn't that mark (HLP-129). These have none:
+    - `def _navigation_tools(dock: Any, keep: list[Any]) -> tuple[Any, Any]:`, whose `keep` is the caller's
+      `list[object]`;
+    - `def _tool_back(light: Any, switched: bool)`;
+    - `def _mouse(viewport: Any, kind: Any, x: float, y: float, button: Any, buttons: Any)`;
+    - `def _mouse_guard() -> Any:`;
+    - `def _release(viewport: Any, button: Any, x: float, y: float)`.
+
+    `_drag`, beside them, has its mark.
+  - **Scenario.** Read in the code (DECISIONS.md, vague types: reported in the functions a branch's diff adds).
+  - **Fix.** `keep: list[object]`, and on the others' lines the mark `_drag` has (`# Any: a Qt widget ...
+    (screenshots.py)`).
+  - **Resolution: done.**
+    - **Fix:** `keep: list[object]`; the five functions marked `# Any:` with their Qt types, as `_drag` is.
+    - **Result:** lint and types pass.
+- [x] **TST-461 · `Any` without its reason, and containers vaguer than known, in the test code the range adds** · `tests/unit/minidumps.py`, `tests/unit/test_read_crash_dump.py`, `tests/unit/test_selftest_alone.py`, `tests/unit/test_selftest_lifecycle.py`, `tests/unit/test_selftest_crash_dumps.py`, `tests/unit/test_selftest_pool.py`, `tests/unit/test_view3d.py`, `tests/unit/test_view3d_helpers.py`, `tests/test_all_tools/workers.py`, `tests/test_all_tools/editor_panels_and_fit/designer_scripts/tool_3d.py` · confirmed · found 2026-11-16 · found by four reviewers
+  - **Defect.** Unmarked, where a narrower type fits (AGENTS.md's typing rules):
+    - minidumps.py: `an_abort(**kw: Any)` and `defaults: dict[str, Any]`, which are `Crash`'s fields: a
+      `total=False` TypedDict with `Unpack`, or the mark;
+    - test_read_crash_dump.py: `_said(path: Path, **kw: Any)`, whose callers pass only `name_frames`,
+      `Callable[[str, int, list[int]], list[str]]`;
+    - test_selftest_alone.py: `CrashesAsItQuits.__init__(folder: Any)` (`Path`), its `dumps(ports: Any = ())`
+      (`Collection[int]`), `_watching(alone: Any)` (`ModuleType`), and `tmp_path: Any` in the three close tests
+      (`Path`);
+    - test_selftest_lifecycle.py: `lifecycle: Any` in `_windows_read`, `_no_front_watch` and `_prepared`
+      (`ModuleType`), `_no_dump_coming(ports: Any)` (`Sequence[int]`), `_no_wait -> list[Any]`, and
+      `dict[str, Any]` in the two `test_the_check_on_another_port_*` tests (`dict[str, object]`);
+    - test_selftest_crash_dumps.py: `_users_folders(common: Any)` (`ModuleType`);
+    - test_selftest_pool.py: `dumps(ports: Any = ())` (`Collection[int]`);
+    - test_view3d.py: `value: Any`, widened from `float`: marked, since it goes to parameters of several types;
+    - test_view3d_helpers.py: `_tool(...) -> Any` (`SimpleNamespace`), `options: dict[str, Any]` twice
+      (`dict[str, object]`), and `object` or the drag record's tuple in `tool_back`, `released`, `Mouse.pressed`,
+      `Mouse.held`, `Mouse.mouse`, the two `pressed: list[Any]` and `send`;
+    - workers.py: `_quit_to_keep(part: Mapping[str, object])`, only ever given a `WorkerResults`;
+    - tool_3d.py: `ARGS: dict[str, Any]` (`dict[str, str | bool]`), and `mw: Any` with no mark.
+  - **Scenario.** Read in the code (DECISIONS.md, vague types).
+  - **Fix.** Narrow each as listed, or mark it `# Any: <reason>`.
+  - **Resolution: done.**
+    - **Fix:** narrowed: `_said`'s `name_frames` callable; `Path`, `Collection[int]`, `Sequence[int]`, `ModuleType`,
+      `dict[str, object]`, `list[object]` and `SimpleNamespace` in the tests listed; `_quit_to_keep(part:
+      WorkerResults)`; tool_3d.py's ARGS a `TypedDict`. Marked where nothing narrower is checked: `an_abort`'s
+      `**kw` (Crash's fields, which `dataclasses.replace` checks by name), `test_options_out_of_range_are_refused`'s
+      `value`, tool_3d.py's main window, `_no_wait`'s fresh CrashWatch.
+    - **Result:** lint and types pass.
+  - Questioned by TST-476 (2026-11-16).
+- [x] **TST-462 · ROADMAP item 100's list of verdicts that depend on time leaves out three** · `ROADMAP.md` (item 100), `tests/test_all_tools/editor_panels_and_fit/checks.py` (`POPUP_MS`, `check_a_3d_shots_window_shown_again_mid_accumulation_waits_for_the_count_at_rest`, FRAMES) · confirmed · found 2026-11-16
+  - **Defect.**
+    - The menu check wants Designer's popup on screen at most `POPUP_MS = 20` ms during a shot; 9 ms is the most
+      measured.
+    - The mid-accumulation check counts a try only if Designer was hidden at a count of 3 or less, and needs 3 such
+      tries of 6. How many qualify depends on timing.
+    - The frames fact wants each hidden pan's UpdateRequest within a 1 s `_until`.
+  - **Scenario.** Read in the code. Under the full run's load, the menu's flash lasts past 20 ms, or fewer than 3
+    tries are hidden low, and a check fails while the tool works. Item 100 lists such checks so each is made to
+    judge what happened.
+  - **Fix.** Add the three to item 100's list.
+  - **Resolution: done.**
+    - **Fix:** item 100 lists the three.
+- [x] **TST-463 · The mid-accumulation check waits out SETTLE_LIMIT in a try that misses the low count, and reads the count before the hide** · follows HLP-167, generation 6 · `tests/test_all_tools/editor_panels_and_fit/checks.py` (`SHOWN_FROM_LOWER`, `check_a_3d_shots_window_shown_again_mid_accumulation_waits_for_the_count_at_rest`) · confirmed · found 2026-11-16
+  - **Defect.**
+    - `_until(low, SETTLE_LIMIT, [frames._spy.fired])` waits for a count of 3 or less. When the count passes 3
+      before `low` looks (1 try in 6, says the check's docstring), `low` never comes true, and the wait runs its 3 s
+      limit: a limit used as the wait's time (AGENTS.md).
+    - `hidden_at = frames.count()` is read before `mac.hide()`, and the off-screen wait's result isn't checked. The
+      docstring says "Designer hidden as the count read 3 or less".
+  - **Scenario.** Read in the code.
+  - **Fix.** End `low` also once the count is back at the target after the restart, so that a missed try ends at
+    once. The docstring says the count is read just before the hide. No check is added or made stronger (the chain
+    rule).
+  - **Resolution: done.**
+    - **Fix:** `low()` also ends once the count is back at the target after the restart, so a try that missed the low
+      count ends at once and is hidden there, not judged. The docstring and the snippet's comment say the count is
+      read just before the hide.
+    - **Result:** passes in the category's scratch run (96 of 96 checks in the category's scratch run, in a Designer just started).
+- [x] **TST-464 · Two window checks take a try again and keep only the last try's evidence** · follows TST-418 and TST-453, generation 4 · `tests/test_all_tools/editor_panels_and_fit/checks.py` (`check_a_3d_shot_puts_designers_window_on_screen_without_taking_focus`, `check_a_hidden_designers_window_is_brought_in_front_for_a_3d_shot_once_its_unhide_took`) · confirmed · found 2026-11-16
+  - **Defect.**
+    - The focus check takes a way again, up to TRIES times, while Designer became the active app (TST-418). The
+      unhide check takes a try again while a window is in front of Designer's. A pass prints only the number of
+      tries, not what the earlier tries saw.
+    - TST-418's reason, "the pool's other Designers can hand it activation", has weakened: they start hidden now,
+      and both checks read under `no_designer_starting()`.
+    - HLP-160's defect came and went: 19 tries of 19 one day, then none of 2 (shot3d.py's docstring).
+  - **Scenario.** Read in the code. A regression that takes focus, or leaves the window behind, in one try of two
+    passes, and only "2 tries" says something happened.
+  - **Fix.** Print each retaken try's reason (the activation lines, or `who` of the windows in front), and say in
+    both docstrings that a defect seen in fewer than TRIES tries passes. No check is added or made stronger (the
+    chain rule).
+  - **Resolution: done.**
+    - **Fix:** both checks print each retaken try's reading after their result (the activation and what the shot said
+      of it; the windows in front), and their docstrings say a defect seen in fewer than TRIES tries passes.
+    - **Result:** passes in the category's scratch run (96 of 96 checks in the category's scratch run, in a Designer just started).
+- [x] **TST-465 · Docstrings of the self-test and its unit tests that say more than their checks do** · follows HLP-168 and TST-420, generation 5 · `tests/test_all_tools/editor_panels_and_fit/checks.py` (`check_the_camera_moves_under_the_light_tool_too`, `check_set_3d_view_moves_the_camera_as_a_3d_shots_set_up_does`), `tests/test_all_tools/editor_panels_and_fit/designer_scripts/tool_3d.py`, `tests/test_all_tools/editor_panels_and_fit/window_states.py` (the module docstring, `put_and_drag`), `tests/unit/test_view3d_helpers.py` (`Mouse`, `test_a_drag_is_a_press_moves_and_a_release_from_the_middle_then_a_pause_all_guarded`) · confirmed · found 2026-11-16
+  - **Defect.**
+    - The Light tool check says "so zoom, orbit and pan move it under the Camera tool". It takes a zoom and a pan,
+      no orbit.
+    - HLP-168's check says set_3d_view "puts Designer's window on screen, transparent". It judges
+      `"Designer's window: " in said`, any window line.
+    - tool_3d.py says "'' selects none". With '', it selects nothing new and reads the tool selected. The Light tool
+      check relies on that, reading 'TOOL=Light' after the zoom.
+    - window_states.py says the 'qt minimized' way "stops the drawing too", and `put_and_drag` says "the view not
+      drawn". TST-420 measured a page Qt minimized drawing in some runs and not others, and TST-433 found covered
+      windows drawn in some Designers; shot3d.py says so.
+    - test_view3d_helpers.py: `Mouse`'s "'pause' (x the seconds)", the test's name and its comment on the pause. A
+      drag now ends on the wait for the view, which the test asserts; no pause is recorded.
+  - **Scenario.** Read in the code.
+  - **Fix.** Narrow each to what is checked (the chain rule): "zoom and pan"; "puts Designer's window on screen";
+    "'' leaves the tool as it is"; "which may stop the drawing"; the test renamed for the wait, its words too.
+  - **Resolution: done.**
+    - **Fix:** each narrowed to what is checked: "zoom and pan"; "puts Designer's window on screen"; "'' leaves the
+      tool as it is"; the Qt-minimized page and `put_and_drag` "may" draw; the drag test renamed for the wait for the
+      view, `Mouse`'s docstring and the comment with it.
+    - **Result:** the tests pass.
+- [x] **TST-466 · `alone.close()` waits its whole 10 s for a crash dump after every quit that leaves none** · follows SRV-151, generation 2 · `tests/test_all_tools/alone.py` (`close_with`, `CLOSE_DUMP_WAIT_S`) · confirmed · found 2026-11-16
+  - **Defect.** `common.new_crash_dumps(before, CLOSE_DUMP_WAIT_S)` returns early only when a dump appears. After a
+    normal quit, the limit is the wait's time (AGENTS.md's wait rule). SRV-151 moved the run's other crash waits
+    onto the crash handler's end (`common.dumps_may_come`). This one, added in ec984a9, stayed timed. The third
+    review dropped it as main's code, but it is in this range.
+  - **Scenario.** Read in the code. Every `alone.close()` takes 10 s more than its quit, also when
+    `designer_status` erred and nothing ran.
+  - **Fix.** Wait while `common.dumps_may_come([], before)`, every POLL_S, CLOSE_DUMP_WAIT_S at most, then take
+    the new dumps. A unit test with `dumps_may_come` faked, as the pool's has.
+  - **Resolution: done.**
+    - **Test:** `test_close_after_a_quit_that_leaves_no_dump_waits_only_while_one_may_come` failed: the wait never
+      asked whether a dump may come.
+    - **Cause:** `alone.close()` kept `new_crash_dumps`' timed wait when SRV-151 moved the others.
+    - **Fix:** it waits while `common.dumps_may_come([], before)`, every POLL_S, CLOSE_DUMP_WAIT_S at most (a safety
+      net), then takes the new dumps. The crash tests' fake says a dump may come until it is written.
+    - **Also covered:** `__main__`'s wait after a run in the user's Designer stays timed: their Designer keeps running,
+      so its crash handler says nothing (main's code).
+    - **Result:** passes; each `alone.close()` since took its quit's time.
+- [x] **TST-467 · The pool's launch lock is said to stop every Designer of the run starting or quitting; lifecycle's own launches and quits go on** · follows TST-417 and TST-453, generation 4 · `tests/test_all_tools/editor_panels_and_fit/retries.py` (the module docstring, `no_designer_starting`), `tests/test_all_tools/launch_lock.py` (the module docstring, `held`), `tests/test_all_tools/workers.py` (its rules) · confirmed · found 2026-11-16 · found by two reviewers
+  - **Defect.**
+    - `no_designer_starting` says "no Designer of the run starts or quits meanwhile, so none brings windows in front
+      or hands activation over". TST-417's resolution and TST-453's note say the same.
+    - The lock holds off only the pool's starts (`Gate.try_begin`) and the workers' last quits
+      (`launch_lock.changing`). lifecycle's own `launch_designer` and `quit_designer` calls outside its two
+      `held(own='lifecycle')` windows take no mark: about ten in `check_quitting_and_starting_again`, and the second
+      Designer of `check_launch_on_another_port`. lifecycle runs beside editor_panels_and_fit in the pool.
+    - `launch_lock.py`'s docstring, `held()`'s "lifecycle's side" and `workers.py`'s rules still name lifecycle as
+      the only holder.
+    - retries.py's module docstring says the pool's Designers come in front as they start, which they no longer do
+      since they start hidden (SRV-152).
+  - **Scenario.** Read in the code. A window check reads `in_front` or the activation while lifecycle quits or
+    launches its Designer.
+  - **Fix.** Narrow the docstrings (the chain rule): the lock holds off the pool's starts and its workers' quits,
+    while lifecycle's own launches and quits, and other scratch runs, go on. Name editor_panels_and_fit as a holder
+    in `launch_lock.py` and `workers.py`.
+  - **Resolution: done.**
+    - **Fix:** retries.py, launch_lock.py (its holders listed: lifecycle, editor_panels_and_fit), workers.py and the
+      checks' docstrings say what the lock holds off: the pool's starts and its workers' quits, lifecycle's own
+      launches and quits going on. retries.py says the pool's Designers came in front as they started before SRV-152.
+    - **Result:** lint passes.
+- [x] **TST-468 · `stayed_behind`'s detail doesn't say how many samples read the active app** · follows TST-441, generation 3 · `tests/test_all_tools/window_server.py` (`stayed_behind`) · confirmed · found 2026-11-16
+  - **Defect.** TST-441's resolution: "both return False when no sample read the active app, and say how many
+    did". `stayed_off_screen` says it. `stayed_behind` counts `read`, then leaves it out of its detail.
+  - **Scenario.** Read in the code. `lsappinfo` fails at every sample, and `check_designer_stayed_behind` fails with
+    a detail of zeros, "the active app 0.00 s, its window in front of another app's 0.00 s", which reads as a pass.
+  - **Fix.** Add the count to the detail. No check is added or made stronger (the chain rule).
+  - **Resolution: done.**
+    - **Test:** `test_stayed_behinds_detail_says_how_many_samples_read_the_active_app` failed: no count.
+    - **Fix:** the detail says how many samples read the active app.
+    - **Result:** passes.
+- [x] **TST-469 · A unit test of the popup watch sleeps 0.1 s, then wants more than 10 samples** · follows TST-426, generation 3 · `tests/unit/test_selftest_popups.py` (`test_the_watch_samples_the_window_list_and_sees_no_popup_of_a_process_with_none`) · confirmed · found 2026-11-16
+  - **Defect.** `time.sleep(0.1)`, then `assert watch.samples > 10 ...`: a fixed sleep (AGENTS.md's wait rule), and
+    a count that depends on how fast the window server answers. TST-426 fixed the same pattern in the window
+    server's test.
+  - **Scenario.** Read in the code. In a full run, the unit suite runs beside four Designers. The window server
+    takes longer than 9 ms a sample, and the test fails while the watch works.
+  - **Fix.** Drop the count (the chain rule), or look at `watch.samples` every 0.1 s until it passes 10, with a
+    limit, as `test_the_front_watch_samples_the_active_app_and_the_windows_on_screen` does.
+  - **Resolution: done.**
+    - **Fix:** the test looks at `watch.samples` every 0.1 s until it passes 10, 10 s at most; it runs at every layer
+      too, as the watch now takes one (TST-472).
+    - **Result:** passes.
+- [x] **TST-470 · No test pins that `to_back` makes Designer's windows transparent before it shows them** · `tests/test_all_tools/editor_panels_and_fit/window_states.py` (`to_back`), `tests/unit/test_selftest_window_states.py` (`test_the_ways_off_the_users_screen_are_set_up_behind_every_window`) · confirmed · found 2026-11-16
+  - **Defect.** `to_back` fades the windows, then unhides, un-minimizes and restores the page, then orders them
+    back. The unit test pins only that `to_back()` comes first, and `window()`'s order:
+    ```python
+    assert behind.lstrip().startswith('to_back()')
+    ```
+    Moved after the unhide, `fade(True)` would show Designer's windows opaque near the front until the
+    `orderBack:` (DECISIONS.md, Designer during tests). The front watch samples every FRONT_EVERY plus two
+    `lsappinfo` runs, so it catches such a flash only some of the time.
+  - **Scenario.** Read in the code. An edit moves `fade(True)` below the unhide. Every unit test still passes, and
+    full runs fail only some of the time.
+  - **Fix.** Pin `to_back`'s order in the unit test, as `_CLEAR`'s test does: `fade(True)` before the unhide, the
+    de-miniaturize and Qt's restore.
+  - **Resolution: done.**
+    - **Test:** `test_to_back_makes_designers_windows_transparent_before_it_shows_them_and_leaves_them_so` pins the
+      order: `fade(True)` before the unhide, the de-miniaturize and Qt's restore; `orderBack:` after the wait; no
+      `fade(False)` inside. It passed on the code, which was right; with `fade(True)` moved after the unhide, a mutant
+      made for the run and then removed, it failed (`61 < 44`).
+    - **Cause:** the pin covered `window()`'s order and `_CLEAR`'s, not `to_back`'s.
+    - **Fix:** the test above.
+    - **Result:** passes.
+- [x] **TST-471 · The front watch covers the window checks only; the 3D checks before them put Designer's window on screen unwatched** · `tests/test_all_tools/editor_panels_and_fit/checks.py` (`run`), `tests/unit/test_selftest_window_states.py` (the watch's pin) · confirmed · found 2026-11-16
+  - **Defect.** `run()` starts `window_server.FrontWatch` after about 25 checks that put a hidden Designer's window
+    on screen: every 3D shot (`with_checker`), the frames fact's and SHOWN_FROM_HIDDEN's `_on_screen`, and the
+    material dialog's unhide. The unit test pins the watch around the checks that use `window_states` only.
+    DECISIONS.md: no window of an agent's Designer comes in front of the user's unless a check needs it there.
+  - **Scenario.** Read in the code. A regression that leaves one of those windows opaque in front passes every full
+    run. The material check once left Designer over the user's windows for about 10 s (the log of the three full runs
+    of 2026-11-15).
+  - **Fix.** Start the watch at the first 3D check. A check that needs a window in front there moves after it, as
+    the in-front group does.
+  - **Resolution: done.**
+    - **Test:** `test_the_window_checks_off_screen_are_watched_and_those_in_front_run_after_together` wants no check
+      awaited before the watch: it failed, listing the 3D checks.
+    - **Cause:** the watch began at the window checks; the 3D checks before them put the window on screen too.
+    - **Fix:** `run()` starts the front watch before its first check, and judges it right after the window checks off
+      screen, as before; its docstring says so.
+    - **Result:** passes; in the category's scratch run `check_designer_stayed_behind` passed over every check up to
+      it (96 of 96 checks in the category's scratch run, in a Designer just started).
+  - Questioned by TST-473 (2026-11-16).
+- [x] **SRV-168 · An agent's Designer ended past its start-up: the stop SRV-166 puts after the sample's path reads as part of the path** · follows SRV-166, generation 4 · `mcp_server/server_tools/lifecycle.py:895-912` (`_end_if_past_startup`), `tests/test_all_tools/lifecycle/samples.py:32` (`sampled`) · confirmed · found 2026-11-16
+  - **Defect.**
+    - When the uploads sentence follows, SRV-166 ends the sample's sentence with a stop. That sentence ends with the
+      sample's path:
+      ```python
+      if sampled and uploads:  # the sample's sentence ends with its path: a stop before the next (REVIEW.md SRV-166)
+          sampled = ' ' + _sentence(sampled.strip())
+      ```
+      The result then reads "... threads_11.sample.txt. Its crash reports may still be uploaded to Adobe: ...".
+    - The self-test takes the path to be everything up to the next space, so the stop becomes part of it:
+      ```python
+      found = re.search(re.escape(QUIT_SAMPLED) + r' (\S+)', result)
+      ```
+      An agent copying the path gets the stop too.
+    - `_quit` has no such stop: its uploads line comes first, in `prefix`, and the sample's sentence last.
+    - The docstring says the function returns "_sampled_before_force's sentence ('' when no sample was tried)". It
+      returns the uploads sentence after it too, and the uploads sentence alone when no sample was tried.
+  - **Scenario.** Read in the code. `launch_designer` ends an agent's Designer that isn't answering past its start-up,
+    and that Designer's Crashpad settings can't be written (missing, or another version). `sampled()` takes
+    `threads_11.sample.txt.`, which isn't a file, so lifecycle's check of the sample (`checks.py:747`) finds none.
+  - **Fix.** Put the uploads sentence first, as `_quit` does: `uploads + sampled`, and
+    `_could_not_end(own) + uploads + sampled` in the raise, without the `_sentence` step. The docstring says it returns
+    the uploads sentence, then the sample's. SRV-166's second test follows the new order.
+  - **Resolution: done.**
+    - **Test:** `test_an_agents_designer_ended_past_its_start_up_says_its_uploads_then_its_sample_its_path_last`,
+      ended and not, reads the path as `lifecycle/samples.py` does. It failed on the old order: the sample's sentence
+      came first.
+    - **Cause:** SRV-166 kept the sample's sentence first and ended it with a stop, which the path then took.
+    - **Fix:** `_end_if_past_startup` says the uploads sentence first, then the sample's, as `_quit` does, with no
+      `_sentence` step. Its docstring says what it returns.
+    - **Also covered:** `_quit` already says the sample last. launch_designer's note puts its own line end after it.
+    - **Result:** passes.
+- [x] **SRV-169 · A process listing failing after the close drops what the call already did: the close's notes, the uploads line and the sample** · follows SRV-166, generation 4 · `mcp_server/server_tools/lifecycle.py:1342-1363` (`_quit`), `:895-912` (`_end_if_past_startup`), `:1147-1150` (`launch_designer`'s wait) · confirmed · found 2026-11-16
+  - **Defect.**
+    - SRV-166 made `_quit`'s "could not be ended" error carry `prefix`: the close's notes and the uploads line. Its Also
+      covered looked at the returns only. When pgrep fails, `_designer_pids` raises `_NoListing` (SRV-163), which
+      leaves `_quit` without them, from three places after the close:
+      ```python
+      if _exited(own, wait_s):  # its pgrep
+      ...
+      if own not in _designer_pids():  # after the sample
+      ...
+      if _force_end(own, port, seen):  # _exited's pgrep
+      ```
+      The last two drop the sample's path too.
+    - In `_end_if_past_startup`, `_force_end` raising `_NoListing` drops `sampled + uploads`. `launch_designer`'s
+      `except _NoListing` adds `none_left()` (SRV-164), which doesn't hold them.
+    - In `launch_designer`'s wait, the "could not be ended" error of `_end_if_past_startup` leaves out `told()`: a
+      Designer the call ended before, and what was done with Designer's preferences.
+  - **Scenario.** Read in the code. `quit_designer` sends the close, then pgrep fails once (exit code 3, or a fork
+    failing). The error says only that Designer's processes couldn't be listed. It doesn't say the close was asked.
+    Nor does it say the crash reports may still be uploaded to Adobe, the line SRV-124 added for when they can't be
+    turned off.
+  - **Fix.** In `_quit`, catch `_NoListing` from the first wait on and raise it again with `prefix` in front and the
+    sample after. In `_end_if_past_startup`, do the same with the uploads and the sample, in SRV-168's order. In
+    `launch_designer`'s wait, raise `_end_if_past_startup`'s error with `told()` in front, as the call's other errors
+    do. A unit test for each, pgrep failing after the close with the settings missing.
+  - **Resolution: done.**
+    - **Test:** in `test_lifecycle_env.py`:
+      - `test_a_quit_whose_processes_cant_be_listed_after_the_close_still_says_the_close_the_uploads_and_the_sample`,
+        the listing failing in the wait, after the sample, or in the forced end. All three raised the bare listing
+        error.
+      - `test_an_agents_designer_whose_processes_cant_be_listed_as_it_is_ended_still_says_its_sample_and_its_uploads`
+        raised it bare too.
+      - `test_a_launch_whose_wait_cant_end_an_agents_designer_says_first_the_one_it_ended_before` said only "Designer
+        12 could not be ended".
+    - **Cause:** SRV-166 made the "could not be ended" error carry what the call had done; the `_NoListing` raised by a
+      listing after the close went out without it. In launch_designer's wait, `_end_if_past_startup`'s own error left
+      `told()` out.
+    - **Fix:** `_quit` raises a listing error from its wait on with `prefix` in front and the sample after.
+      `_end_if_past_startup` raises one from the forced end with the uploads and the sample after. launch_designer's
+      wait puts `told()` before `_end_if_past_startup`'s error. A listing error still gets `none_left()` in front there.
+    - **Also covered:** `_quit`'s listing before the close says nothing was asked yet. launch_designer's
+      `_end_if_past_startup` before its wait has done nothing before it.
+    - **Result:** passes, with the rest of `test_lifecycle_env.py`.
+  - Questioned by SRV-171 (2026-11-16).
+- [x] **SRV-170 · A comment and test names still say the launch's process is known by its port alone** · follows SRV-165, generation 3 · `mcp_server/server_tools/lifecycle.py:399`, `tests/unit/conftest.py:147`, `tests/unit/test_lifecycle_env.py:3847-3850` · confirmed · found 2026-11-16
+  - **Defect.** SRV-165 made the launch find its process by its port and its home (`_launch_marks`). Three places
+    still give the port alone, the first as the reason SRV-165 disproved:
+    - lifecycle.py: `with contextlib.suppress(_NoListing):  # new, with the launch's port: certainly this launch's`;
+    - conftest.py: `lambda opener, before, port: opener.pid`, a parameter now given the marks;
+    - test_lifecycle_env.py: `test_the_process_open_started_is_looked_for_with_the_launchs_port`, and its comment
+      "the conftest fake ignores the port; an int, as ports are elsewhere (TST-443)". The value is now a tuple of the
+      port's and the home's variables.
+  - **Scenario.** Read in the code. A reader of the comment takes the port to be enough, which is what let a launch
+    take the user's Designer for its own (SRV-165).
+  - **Fix.** Say "its port and its home" in the comment, name the fake's parameter `marks`, and rename the test and
+    its comment for the marks. Wording only, at generation 3 (Follow-up chains).
+  - **Resolution: done.** Wording and names only, at generation 3: the comment says "its port and home"; the conftest
+    fake's parameter is `marks`; the test is `test_the_process_open_started_is_looked_for_with_the_launchs_port_and_home`,
+    its comment about the marks. The test passed before and after the rename.
+- [x] **HLP-176 · A step off screen with no count shown waits its whole limit once Designer's window comes on screen, and its test can't tell** · follows HLP-170, generation 4 · `mcp_server/designer_helpers/frames3d.py:324-326` (`_renders_alike`), `tests/unit/test_frames3d.py:544-578` · confirmed · found 2026-11-16
+  - **Defect.**
+    - HLP-170's branch waits for `ended()` alone when the view is off screen at the start:
+      ```python
+      if not self._drawing():
+          self._wait(ended, NO_RESTART)
+          return
+      ```
+      For `settled()`, `ended` is `asked_off_screen`: `self._asked > asked and not self._drawing()`. Once the window
+      is on screen, that can't become true. The wait then runs to NO_RESTART, its limit, and returns without
+      comparing a render. Before HLP-170, the loop compared renders once the window was on screen.
+    - The test HLP-170 added records each wait's limit, not what its state returned. It would pass on a wait that ends
+      at its limit (`lambda: False`) or at once (`self.off_screen`). So the "ends once the view asks for a frame" of
+      its name goes unchecked.
+  - **Scenario.** Read in the code. `set_3d_view(mesh='Sphere')`, with no move, in a hidden Designer whose view shows
+    no count (Display > Samples off, or a view that never drew). The user shows Designer before the step's
+    UpdateRequest comes. The Expose event wakes the wait, but its state stays False, so it waits the whole second:
+    the limit becomes the wait's time, against AGENTS.md's wait rule. The step's draw isn't seen. set_3d_view takes no
+    shot, so nothing it says is wrong.
+  - **Fix.** Wait on `lambda: ended() or self._drawing()`. If the view is drawing then, compare renders for the time
+    left, as on screen. In the test, record `state()` before and after each fake wait: `(False, True)` for
+    `settled()`, ended by the UpdateRequest; `(True, True)` for `moved()`, which ends at once off screen. Add a case
+    where the window comes on screen during the wait.
+  - **Resolution: done.**
+    - **Test:** `test_with_no_count_shown_a_step_whose_window_comes_on_screen_during_its_wait_compares_renders_there`
+      failed: the wait ended False, and no render was taken. HLP-170's test now records each wait's state, before and
+      after the UpdateRequest: `(False, True)` for `settled()`, `(True, True)` for `moved()`.
+    - **Cause:** HLP-170's branch waited for `ended()` alone, which can't hold once the window is on screen.
+    - **Fix:** `_renders_alike` waits off screen for `ended()` or the window on screen. On screen then, it compares
+      renders in the time left of the same limits. Its docstring says so.
+    - **Also covered:** `moved()` ends at once off screen, as before. `shown()` compares renders only on screen.
+    - **Result:** passes. Live, `check_set_3d_view_sets_up_a_view_that_never_drew` passes in a Designer just started.
+      The window coming on screen during a step's wait is in the unit test only: it takes the user's showing Designer.
+- [x] **HLP-178 · `_Screen`'s docstring says a window not on screen is refused after ON_SCREEN_WAIT** · follows HLP-173, generation 3 · `mcp_server/designer_helpers/shot3d.py:163-164` · confirmed · found 2026-11-16
+  - **Defect.** Since HLP-173, `_wait_on_screen` waits ON_SCREEN_WAIT, puts the window in front again, then refuses
+    after ON_SCREEN_WAIT more. Its own docstring and the refusal say so. The class docstring still says:
+    ```
+    Refused when the window still isn't on screen
+    after ON_SCREEN_WAIT, or goes off screen again as its view draws each of BRINGS times it is put there.
+    ```
+  - **Scenario.** Read in the code. A reader expects one show and a refusal after ON_SCREEN_WAIT; the window is shown
+    twice and refused after twice that.
+  - **Fix.** Make the claim smaller: "Refused when the window still isn't on screen once `_wait_on_screen` gives up,
+    or ...". Wording only, at generation 3 (Follow-up chains).
+  - **Resolution: done.** Wording only, at generation 3: the refusal is "once `_wait_on_screen` gives up".
+- [x] **TST-473 · The Scene menu check's two 3D shots still run unwatched, and the front watch's check still names the window checks alone** · follows TST-471, generation 2 · `tests/test_all_tools/editor_panels_and_fit/checks.py:2602`, `:2291-2299` (`check_designer_stayed_behind`), `tests/test_all_tools/window_server.py:5-9`, `tests/unit/test_selftest_window_states.py:325` · confirmed · found 2026-11-16
+  - **Defect.**
+    - TST-471 starts the front watch before the first check, so the 3D checks that put a hidden Designer's window on
+      screen are watched. `check_the_3d_views_scene_menu_checks_the_mesh_shown` still comes after the in-front group,
+      outside the watch:
+      ```python
+      await check_a_plain_3d_shot_shows_a_change_made_while_designers_window_was_off_screen(ctx, in_front=True)
+      await check_the_3d_views_scene_menu_checks_the_mesh_shown(ctx)
+      ```
+      It takes two 3D shots with `mesh=`, and nothing it measures needs a window in front of the user's.
+    - The unit test pins only the checks right after `check_designer_stayed_behind`
+      (`after[1 : 1 + len(IN_FRONT_ONLY) + len(SPLIT)]`), so a check awaited after them goes unwatched and unseen.
+    - `check_designer_stayed_behind`'s docstring ("Over the window checks off screen") and its check's name ("the
+      window checks off screen never bring a window of Designer's in front ...") still name the window checks alone.
+      So does window_server.py's docstring ("the window checks set up off screen", "stayed_behind (the window
+      checks')"). A window of Designer's in front during a 3D check or a panel's screenshot would be reported as the
+      window checks'.
+  - **Scenario.** Read in the code. A change that leaves Designer's window opaque in front after a mesh switch shows
+    on the user's screen in every full run, and no check judges it.
+  - **Fix.** Move the call into the `with FrontWatch` block, before `check_designer_stayed_behind`, and pin that
+    nothing is awaited after the in-front group. Say "every check up to the window checks off screen" in the
+    docstrings and the check's name.
+  - **Resolution: done.**
+    - **Test:** `test_the_window_checks_off_screen_are_watched_and_those_in_front_run_after_together` now wants nothing
+      after the in-front group. It failed, listing the Scene menu check.
+    - **Cause:** TST-471 moved the watch's start, not this check, which stayed after the in-front group.
+    - **Fix:** the Scene menu check runs last in the watched block. The in-front 3D checks set their own mesh, and the
+      other two take no 3D shot. `check_designer_stayed_behind`'s docstring and check name, and window_server.py's
+      docstring, say every check up to the window checks off screen.
+    - **Result:** passes. In a scratch run, the Scene menu check passed under a front watch, judged after it:
+      `check_designer_stayed_behind` passed.
+- [x] **TST-474 · A clear whose hide fails makes Designer's windows opaque, then transparent again; its docs still say opaque** · follows TST-460, generation 2 · `tests/test_all_tools/editor_panels_and_fit/window_states.py:274-300` (`_CLEAR`), `:517-519` (`clear`), `tests/unit/test_selftest_window_states.py:455` · confirmed · found 2026-11-16
+  - **Defect.**
+    - TST-460's resolution says `_CLEAR` "makes the windows opaque only once Designer is hidden". It puts back the
+      looks `_PUT` recorded before it acts on the hide's result:
+      ```python
+      hidden = until(mac.hidden)
+      for w, look in getattr(sys, 'mcp_selftest_looks', {}).items():  # as _PUT found them
+          mac.set_appearance(w, *look)
+          mac.let_go(w)
+      ...
+      fade(not hidden)
+      ```
+      `_PUT` records the windows at rest, opaque and clickable. When the hide fails, each window goes from transparent
+      to opaque, then back to transparent with `fade(True)`.
+    - The comment above `_CLEAR` and `clear()`'s docstring still say the clear leaves Designer "hidden, its windows
+      opaque and clickable", without the case where it couldn't hide. So does the name of
+      `test_clear_leaves_every_window_opaque_and_clickable_after_ending_the_holds`.
+  - **Scenario.** Read in the code. After a way in front, a hide that doesn't take leaves Designer's windows on the
+    user's screen, opaque for the length of the loop. Whether the window server draws them opaque in that time wasn't
+    measured: that takes Designer's windows opaque on the user's screen. The fix doesn't depend on it.
+  - **Fix.** Put each look back only `if hidden`, and end every hold (`let_go`) either way, then `fade(not hidden)` as
+    now. Add the not-hidden case to the comment, the docstring and the test's name.
+  - **Resolution: done.**
+    - **Test:** `test_clear_ends_every_hold_and_makes_the_windows_opaque_only_once_designer_is_hidden`, renamed from the
+      TST-431 test, wants each look put back under `if hidden` and every hold ended either way. It failed: the looks
+      were put back whatever the hide did.
+    - **Cause:** TST-460 guarded the final fade, not the looks put back before it.
+    - **Fix:** `_CLEAR` puts a look back only once Designer is hidden, and ends every hold either way. The comment above
+      `_CLEAR` and `clear()`'s docstring give the not-hidden case.
+    - **Result:** passes. In a scratch run, the transparency check's three ways off screen pass, each ended by `clear()`.
+  - Questioned by TST-478 (2026-11-16).
+- [x] **TST-475 · NEVER_DREW is said to switch the mesh and back, but leaves Plane where a Designer just started shows Rounded cube** · follows HLP-170, generation 4 · `tests/test_all_tools/editor_panels_and_fit/checks.py:1996-2010` (`NEVER_DREW`, `check_set_3d_view_sets_up_a_view_that_never_drew`) · measured · found 2026-11-16
+  - **Defect.** The comment says "then a mesh set up and back", and the check's docstring "the mesh is switched, then
+    back". The snippet sets Sphere, then Plane, whatever was shown before:
+    ```python
+    set_3d_view(mesh='Sphere')
+    set_3d_view(mesh='Plane')
+    ```
+  - **Scenario.** Measured (2026-11-16) in a Designer `launch_designer` had just opened hidden, after
+    editor_panels_and_fit's preparation. `_mesh_shown` read "Rounded cube" before NEVER_DREW, with no count shown, and
+    "Plane" after it. The checks after it start from Plane, not from the mesh shown before.
+  - **Fix.** Make the claim smaller: "Sphere, then Plane", in the comment and the docstring. Wording only, at
+    generation 4 (Follow-up chains).
+  - **Resolution: done.** Wording only, at generation 4: "Sphere, then Plane" in the comment and the docstring.
+- [x] **TST-476 · tool_3d.py's types: `tool` optional though always passed, and an `Any` mark whose reason doesn't hold** · follows TST-461, generation 2 · `tests/test_all_tools/editor_panels_and_fit/designer_scripts/tool_3d.py:11-20` · confirmed · found 2026-11-16
+  - **Defect.**
+    ```python
+    class Args(TypedDict, total=False):
+        tool: str
+        selection: bool
+
+
+    ...
+    mw: Any = app.getQtForPythonUIMgr().getMainWindow()  # Any: a Qt widget, which sd's stubs leave untyped
+    ```
+    - Every caller passes `tool` (checks.py:324-397), and the script reads `ARGS['tool']`, so `tool` is required.
+      Only `selection` is optional.
+    - sd types the main window: `getMainWindow(self) -> Optional[QtWidgets.QMainWindow]` (Designer's
+      `sd/api/qtforpythonuimgrwrapper.py:28`). The `Any` comes from `getSDApplication`, which sd leaves unannotated.
+  - **Scenario.** Read in the code. AGENTS.md's typing rules mark an `Any` only where nothing narrower fits.
+  - **Fix.** `tool` required and `selection` optional: a TypedDict with `tool`, and `Args` deriving from it with
+    `total=False` and `selection` (`NotRequired` needs Python 3.11, and mypy checks for 3.10). Then
+    `mw: QtWidgets.QMainWindow = ...`.
+  - **Resolution: done.** `Args` derives from a TypedDict holding the required `tool`, adding `selection` as optional.
+    `NotRequired` needs Python 3.11, and mypy checks for 3.10. The main window is typed `QtWidgets.QMainWindow`, as
+    sd's wrapper types it. Lint and types pass.
+- [x] **SRV-171 · A process listing failing mid-call still drops what the error is about: a quit's error doesn't say the close was asked, and launch_designer's timeout message is lost** · follows SRV-169, generation 5 · `mcp_server/server_tools/lifecycle.py:1369` (`_quit`), `:895-914` (`_end_if_past_startup`), `:933-946` (`_how_to_end`), `:1190-1217` (`launch_designer`), `tests/unit/test_lifecycle_env.py:1035` · confirmed · found 2026-11-16
+  - **Defect.**
+    - SRV-169's scenario was an error that "doesn't say the close was asked". Its fix puts `prefix` in front, the
+      close's notes and the uploads line:
+      ```python
+      except _NoListing as e:
+          raise _NoListing(prefix + _sentence(str(e)) + sampled) from e
+      ```
+      The quit helper replies "closing Designer" alone, unless it discarded unsaved packages, and `_quit` takes that
+      phrase out. So `prefix` is usually empty, and once uploads are off the error is the bare listing sentence. The
+      test passes on a reply the helper never gives: `_closes(monkeypatch, said='closing Designer (a note of the
+      close)')`.
+    - `_end_if_past_startup`'s raise puts the uploads and the sample after the listing's sentence. It doesn't say it
+      was ending an agent's Designer. Its docstring says the sample's sentence "ends with the sample's path"; a failed
+      sample's ends with its reason.
+    - launch_designer's timeout message calls `_how_to_end(port)`, which lists processes (`_sorted_out`,
+      `_designer_pids`). A `_NoListing` raised there replaces the whole message ("did not answer within Ns ... ask
+      the user to save and close it") with `none_left()` and the listing's sentence. SRV-164's Also covered counted
+      it covered by that clause, which adds `none_left()` only.
+  - **Scenario.** Read in the code.
+    - `quit_designer` on an agent's Designer with nothing unsaved and uploads off; pgrep fails once in the wait. The
+      error says only that Designer's processes couldn't be listed. It says neither that the close was asked nor
+      whether the Designer was being forced.
+    - launch_designer waits its whole wait_s on the user's Designer showing a dialog, and pgrep fails as the message
+      is built. The agent isn't told that the bridge didn't answer, nor to ask the user.
+  - **Fix.**
+    - Name the step in each error: "Designer N was asked to close" in `_quit`, with "and didn't quit within Ns" from
+      the force on; "Ending Designer N, an agent's that wasn't answering past its start-up" in
+      `_end_if_past_startup`.
+    - `_how_to_end` catches `_NoListing` and gives the advice without process IDs.
+    - Tests with the helper's real reply, and with the listing failing in `_how_to_end`.
+    - The docstring: "with the sample's path, when one was written".
+  - **Resolution: done.**
+    - **Test:** in `test_lifecycle_env.py`, each of which failed:
+      - `test_a_quit_whose_processes_cant_be_listed_after_the_close_still_says_the_close_the_uploads_and_the_sample`,
+        now with the helper's own reply, in all three places;
+      - `test_an_agents_designer_whose_processes_cant_be_listed_as_it_is_ended_still_says_its_sample_and_its_uploads`:
+        the listing's sentence came first;
+      - `test_a_launch_timing_out_whose_processes_cant_be_listed_still_says_what_to_do`: the bare listing error.
+    - **Cause:** SRV-169 put in front only what `prefix` held, empty for the helper's usual reply. `_how_to_end`'s
+      listing let its error out of the message it was part of.
+    - **Fix:**
+      - `_quit` says "Designer N was asked to close." during the wait, and "Designer N did not quit within Ns and was
+        being ended." from the sample on, before the listing's sentence. When the close wasn't asked, its notes say
+        so.
+      - `_end_if_past_startup` says it was ending an agent's Designer not answering past its start-up. Its docstring
+        says the sample's sentence ends with the path when one was written.
+      - `_how_to_end` gives the advice without process IDs when they can't be listed.
+    - **Also covered:** the other listing errors launch_designer lets out come before it asked Designer anything,
+      with what it did in front (SRV-164). read_designer_log raises it, as SRV-163 chose. `_quit`'s look before the
+      close has done nothing yet.
+- [x] **TST-477 · A unit test of the preferences lock waits a fixed 0.3 s, and under load passes without the lock** · `tests/unit/test_designer_preferences.py:696-709` (`test_a_put_back_waits_for_a_start_in_progress`) · confirmed · found 2026-11-16
+  - **Defect.** The test judges the put-back blocked by joining its thread for 0.3 s, a fixed wait (AGENTS.md, Wait
+    for callbacks):
+    ```python
+    waiting.start()
+    waiting.join(0.3)
+    assert waiting.is_alive() and not done, 'waits for the start'
+    running.append(True)  # the one started
+    ```
+    `test_waits.py` doesn't read `tests/unit`.
+  - **Scenario.** Read in the code. Take the lock away, and the thread may not reach `put_back` within 0.3 s, as when
+    the unit suite runs beside four Designers in a full run. It is still alive then, so the assert passes.
+    `running.append(True)` comes first, the put-back finds a Designer running and returns `''`, which the test
+    wants: it passes.
+  - **Fix.** Wait for the thread to meet the held lock. Wrap the module's `_lock` (or `fcntl.flock`) to try `LOCK_NB`
+    first and set an Event on `BlockingIOError` before blocking. Wait for the Event with a limit, then go on as now.
+  - **Resolution: done.**
+    - **Test:** the test itself. With the lock taken out of `_lock` (a mutant made for the run, then removed), the new
+      version failed, "waits for the start" at its 10 s limit. It passes on the code.
+    - **Cause:** a fixed 0.3 s join judged the thread blocked.
+    - **Fix:** the put-back's thread says when it meets the held lock: `fcntl.flock` wrapped to try `LOCK_NB` first,
+      an Event set on `BlockingIOError`, then the blocking call. The test waits for the Event, 10 s at most.
+    - **Also covered:** the other fixed waits the branch added to the unit tests: `watch.wait(0.05)` in
+      `test_lifecycle_env.py` is a limit on a process already gone, met at once; `test_plugin.py`'s added
+      `time.sleep(0.01)` are polls in loops.
+- [x] **TST-478 · After a hide that fails, Designer's windows still end up opaque on the user's screen: the material check's put-back, and the next 3D shot after a clear** · follows TST-474, generation 3 · `tests/test_all_tools/editor_panels_and_fit/checks.py:602-656` (`ADD_MATERIAL`), `window_states.py:275-302,519-522` (`_CLEAR`, `clear`), `mcp_server/designer_helpers/shot3d.py:177-186` (`opaque_first`) · confirmed · found 2026-11-16
+  - **Defect.**
+    - TST-474 made `_CLEAR` give the looks back only once Designer is hidden. `ADD_MATERIAL`'s `finally` makes every
+      window opaque whatever the hide did:
+      ```python
+      try:
+          mac.hide()
+          _until(lambda: mac.hidden() and not handle.isExposed(), 3.0, [spy.fired])  # off screen again
+      finally:
+          handle.removeEventFilter(spy)
+          for w in mac.windows(True):
+              mac.set_appearance(w, 1.0, False)
+      ```
+      The snippet's own comment says the dialog's unhide once left Designer over the user's windows.
+    - A clear whose hide fails leaves Designer shown, transparent and click-through. It prints NOT_HIDDEN, which no
+      caller reads. The next 3D shot's `opaque_first` takes the transparent window for one an earlier shot left so,
+      and makes it opaque where it is. `_bring` finds it neither covered, hidden nor minimized, so `put_back` does
+      nothing.
+    - The sixth review dropped the unread NOT_HIDDEN on DECISIONS.md's low-value rule. It took the worst to be a
+      Designer left "transparent and click-through"; the next shot makes it opaque.
+  - **Scenario.** Read in the code; no run has seen a hide fail.
+    - In the in-front group, a way in front leaves Designer's main window in front of the user's windows, and
+      `without_others_in_front`'s clear can't hide it. The next check's `with_checker` shot makes it opaque there,
+      unwatched. It stays until a clear hides it.
+    - The material check's hide failing leaves the windows opaque until the next clear, several checks later.
+  - **Fix.** `ADD_MATERIAL` gives the looks back only once hidden, as `_CLEAR` does. `clear()` raises when its output
+    says NOT_HIDDEN, which ends the category's run before another shot. Its test: the material check's unit pin gets
+    TST-474's "only once hidden". At generation 3, no new check beyond that pin.
+  - **Resolution: done.**
+    - **Test:** in `test_selftest_window_states.py`, each of which failed:
+      - the material check's pin, which now wants the looks back under `if mac.hidden()`, NOT_HIDDEN printed
+        otherwise, and the output read by `stopped_if_shown`;
+      - `test_a_clear_that_couldnt_hide_designer_stops_the_category`: no such function;
+      - `test_every_clear_of_the_window_checks_goes_through_at_rest`: 17 clears ran directly.
+    - **Cause:** TST-474 fixed `_CLEAR`'s looks alone, and NOT_HIDDEN went unread.
+    - **Fix:**
+      - `ADD_MATERIAL` gives the looks back only once Designer is hidden again, and says NOT_HIDDEN otherwise.
+      - `window_states.at_rest` runs every clear: the 17 in checks.py and retries.py's. The snippet is window_states'
+        own (`_clear`).
+      - `stopped_if_shown` raises on NOT_HIDDEN, as the material check does on its output before its tiling shot. The
+        category's run then ends before another shot.
+    - **Also covered:** window_states' other `fade(False)` come after a hide or a minimize that took, or after a
+      raise (TST-460). In the scratch run, the material check and the window checks off screen passed, each clear
+      through `at_rest`.
+- [x] **TST-479 · Vague types in functions the branch adds or changes: a new fake's unmarked `Any`, and safeguards' `dict[str, Any]`** · `tests/unit/test_selftest_alone.py:657` (`CrashesAsItQuits.__call__`), `tests/test_all_tools/safeguards/checks.py:67,486,571` (`run`) · confirmed · found 2026-11-16
+  - **Defect.**
+    - The new `CrashesAsItQuits.__call__(self, name: str, args: dict[str, Any] | None = None) -> Any` carries no
+      `# Any:` reason. It copies the signature of its parent's, a function the branch leaves alone.
+    - safeguards' `run()`, which the branch changed (two sleeps removed), types three sets of tool arguments
+      `dict[str, Any]`:
+      - `cases: tuple[tuple[str, Callable[[str], list[dict[str, Any]]], str], ...]`;
+      - `edits: list[tuple[str, dict[str, Any]]]`;
+      - `calls: list[tuple[str, dict[str, Any]]]`.
+  - **Scenario.** Read in the code: AGENTS.md's typing rules, for the functions a branch's diff adds or changes,
+    their unchanged lines included (DECISIONS.md, vague types).
+  - **Fix.** `dict[str, object]` for the tool arguments, which `Call` accepts. For the override: `args` typed
+    `dict[str, object] | None`, and the return `SimpleNamespace`, what `_result` builds, or its `Any` marked with its
+    reason.
+  - **Resolution: done.** Types only:
+    - `dict[str, object]` for safeguards' tool arguments. The loop's `args` is now `arguments`, as `args` is typed
+      elsewhere in `run()`.
+    - `CrashesAsItQuits.__call__` takes `dict[str, object] | None`, and its `Any` is marked with its reason.
+
+    Lint and types pass, and so does `test_selftest_alone.py`.

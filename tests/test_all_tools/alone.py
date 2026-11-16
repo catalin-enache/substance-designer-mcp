@@ -8,7 +8,8 @@ Running the tests). From a scratch script, with `tests` on sys.path:
 
 A check is a function of its category's checks.py (<category>/checks.py), `async def check_<what>(ctx: Ctx)`, that the
 category's `run(ctx)` calls: this calls the same function, never a copy. It runs in a Designer an agent started, never
-the user's: it starts one if none runs, keeps it open for the next runs, and `alone.close()` ends it, naming any crash dump its quit left (exit code 1). Each category's
+the user's: it starts one if none runs, hides it on macOS as the suite does (common.HIDE), keeps it open for the next
+runs, and `alone.close()` ends it, naming any crash dump its quit left (exit code 1). Each category's
 checks run as in the suite (category_run.py): on a Ctx of their own, after the category's own preparation
 (<category>/preparations.py), then cleaned up; checks of several categories run category by category, in the order
 given. `setup(ctx)` adds anything else, after the preparation, its graphs named starting `mcp_selftest`: the clean-up
@@ -35,6 +36,7 @@ import contextlib
 import os
 import shutil
 import tempfile
+import time
 import traceback
 from collections.abc import Awaitable, Callable, Iterator, Sequence
 from typing import cast
@@ -53,6 +55,7 @@ from test_all_tools.common import (
     Step,
     designer_here,
     helpers_source,
+    hide_designer,
     remove_test_snapshots,
     text,
     users_designer_running,
@@ -61,7 +64,9 @@ from test_all_tools.common import (
 # every run's folder is made in here, in a folder per port (scratch_root); never deleted while that port's Designer runs
 # (deleting the suite's crashed Designer twice: __main__.py), so close() removes it once that Designer has ended
 SCRATCH_ROOT = os.path.join(tempfile.gettempdir(), 'sd_mcp_selftest_alone')
-CLOSE_DUMP_WAIT_S = 10  # Designer writes a crash dump a few seconds after it goes down (common.new_crash_dumps)
+CLOSE_DUMP_WAIT_S = (
+    10  # s at most for a crash dump of its quit, while one may come (common.dumps_may_come): a safety net
+)
 
 
 def scratch_root(port: int | None = None) -> str:
@@ -190,6 +195,7 @@ async def run_with(
     if refusal:
         print('alone: nothing run: %s' % refusal)
         return 2
+    await hide_designer(c, ctx.helper_source)  # as in the suite (common.HIDE)
     print('alone: before: %s' % text(await c('execute_designer_code', {'code': CLEAN})).strip())
     code = 0
     for category, its_checks in _by_category(checks):
@@ -228,7 +234,12 @@ async def close_with(c: Call) -> int:
     if status.is_error or 'Started by an agent' in text(status):
         before = common.crash_dumps()  # the user's folder and this port's Designer's (its own home)
         print('alone: %s' % text(await c('quit_designer')).strip())
-        dumps = common.new_crash_dumps(before, CLOSE_DUMP_WAIT_S)
+        # while a dump may still come: its crash handler runs and none is there yet, CLOSE_DUMP_WAIT_S at most (REVIEW.md
+        # TST-466, SRV-151)
+        deadline = time.monotonic() + CLOSE_DUMP_WAIT_S
+        while time.monotonic() < deadline and common.dumps_may_come([], before):
+            time.sleep(common.POLL_S)
+        dumps = common.new_dumps(common.crash_dumps(), before)
         if dumps:
             print(
                 'alone: a crash dump appeared as it quit: %s (python3 scripts/read_crash_dump.py <dump> reads it)'

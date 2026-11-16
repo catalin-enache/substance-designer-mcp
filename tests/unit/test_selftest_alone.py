@@ -11,8 +11,9 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Iterator
-from types import SimpleNamespace
+from collections.abc import Collection, Iterator, Sequence
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -37,7 +38,6 @@ def _alone() -> Any:  # a module imported by name: PyCharm can't see its names
     for name in [m for m in sys.modules if m == 'test_all_tools' or m.startswith('test_all_tools.')]:
         del sys.modules[name]
     alone = importlib.import_module('test_all_tools.alone')
-    vars(sys.modules['test_all_tools.category_run'])['PAUSE_S'] = 0  # no Designer to wait for (slept in _cleaned)
     # not the real pgrep: as if one of the user's ran, so close_with never removes the real SCRATCH_ROOT (REVIEW.md
     # TST-147) and a run with no bridge is refused; a test about none running says so itself
     vars(alone)['designer_here'] = lambda: True
@@ -650,16 +650,18 @@ class CrashesAsItQuits(FakeDesigner):
     """An agent's Designer leaving a crash dump in `folder` as it quits, written `late` looks after the quit returned
     (Designer writes one a few seconds after it goes down)."""
 
-    def __init__(self, folder: Any, late: int = 0) -> None:
+    def __init__(self, folder: Path, late: int = 0) -> None:
         super().__init__(AGENTS)
         self.folder, self.late, self.quit = folder, late, False
 
-    async def __call__(self, name: str, args: dict[str, Any] | None = None) -> Any:
+    async def __call__(
+        self, name: str, args: dict[str, object] | None = None
+    ) -> Any:  # Any: a SimpleNamespace for a CallToolResult, as its parent
         if name == 'quit_designer':
             self.quit = True
         return await super().__call__(name, args)
 
-    def dumps(self, ports: Any = (), run_port: bool = True) -> set[str]:
+    def dumps(self, ports: Collection[int] = (), run_port: bool = True) -> set[str]:
         if self.quit:
             if self.late:
                 self.late -= 1
@@ -668,13 +670,17 @@ class CrashesAsItQuits(FakeDesigner):
         return {str(p) for p in self.folder.iterdir()}
 
 
-def _watching(alone: Any, monkeypatch: pytest.MonkeyPatch, c: CrashesAsItQuits) -> None:
+def _watching(alone: ModuleType, monkeypatch: pytest.MonkeyPatch, c: CrashesAsItQuits) -> None:
     monkeypatch.setitem(vars(alone.common), 'crash_dumps', c.dumps)
+    # as common.dumps_may_come says it: its crash handler runs until the dump is written (REVIEW.md SRV-151)
+    monkeypatch.setitem(
+        vars(alone.common), 'dumps_may_come', lambda ports, before, run_port=True: not c.dumps() - before
+    )
     monkeypatch.setattr(time, 'sleep', lambda s: None)
 
 
 def test_close_names_a_crash_dump_its_designer_leaves_as_it_quits(
-    tmp_path: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # it went unseen once: a probe's Designer aborted at its quit and the scratch run said nothing
     alone = _alone()
@@ -688,7 +694,7 @@ def test_close_names_a_crash_dump_its_designer_leaves_as_it_quits(
 
 
 def test_close_waits_for_a_dump_written_after_the_quit_returned(
-    tmp_path: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     alone = _alone()
     monkeypatch.setitem(vars(alone), 'CLOSE_DUMP_WAIT_S', 10)
@@ -697,10 +703,30 @@ def test_close_waits_for_a_dump_written_after_the_quit_returned(
     assert asyncio.run(alone.close_with(c)) == 1 and 'new.dmp' in capsys.readouterr().out
 
 
-def test_close_with_no_crash_dump_is_exit_code_0(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_close_with_no_crash_dump_is_exit_code_0(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     alone = _alone()
     c = FakeDesigner(AGENTS)
     assert asyncio.run(alone.close_with(c)) == 0 and 'quit_designer' in c.names()
+
+
+def test_close_after_a_quit_that_leaves_no_dump_waits_only_while_one_may_come(monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md TST-466: it waited CLOSE_DUMP_WAIT_S after every quit, a limit as the wait's time; SRV-151 had moved
+    # the run's other crash waits onto the crash handler's end (common.dumps_may_come)
+    alone = _alone()
+    monkeypatch.setitem(vars(alone), 'CLOSE_DUMP_WAIT_S', 10)
+    looks = iter([True, True, False])
+    asked: list[tuple[list[int], bool]] = []
+
+    def may_come(ports: Sequence[int], before: set[str], run_port: bool = True) -> bool:
+        asked.append((list(ports), run_port))
+        return next(looks)
+
+    slept: list[float] = []
+    monkeypatch.setitem(vars(alone.common), 'dumps_may_come', may_come)
+    monkeypatch.setitem(vars(alone.common), 'crash_dumps', lambda ports=(), run_port=True: set())
+    monkeypatch.setattr(time, 'sleep', slept.append)
+    assert asyncio.run(alone.close_with(FakeDesigner(AGENTS))) == 0
+    assert slept == [alone.common.POLL_S] * 2 and asked[0] == ([], True), (slept[:5], asked[:5])
 
 
 def test_close_waits_for_no_dump_when_it_quits_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -710,3 +736,22 @@ def test_close_waits_for_no_dump_when_it_quits_nothing(monkeypatch: pytest.Monke
     monkeypatch.setattr(time, 'sleep', waited.append)
     assert asyncio.run(alone.close_with(FakeDesigner(USERS))) == 0
     assert not waited, "the user's Designer isn't quit, so it leaves no dump to wait for"
+
+
+@pytest.mark.parametrize('status', [None, AGENTS], ids=['started here', "an agent's already running"])
+def test_the_designer_is_hidden_before_any_check_as_in_the_suite(
+    monkeypatch: pytest.MonkeyPatch, status: str | None
+) -> None:
+    # nothing of it on the user's screen: every category's checks passed with Designer hidden (common.HIDE)
+    alone = _alone()
+    monkeypatch.setitem(vars(alone), 'users_designer_running', lambda: False)
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    c = FakeDesigner(status)
+    seen: list[int] = []
+
+    async def a_check(ctx: object) -> None:
+        seen.append(len(c.calls))
+
+    assert _run(alone, c, a_check) == 0
+    codes = [args.get('code', '') for name, args in c.calls[: seen[0]] if name == 'execute_designer_code']
+    assert any('mac.hide()' in code for code in codes)

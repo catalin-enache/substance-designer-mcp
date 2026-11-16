@@ -217,43 +217,51 @@ def _short_description(prop: SDProperty) -> str:
 def describe_node(definition: str) -> None:
     """definition: atomic name ('levels' or 'sbs::compositing::levels') or library
     '<package file>[/<graph id>]' (e.g. 'tile_generator', 'hbao.sbs/hbao', 'materials/pbr/bricks_001')."""
-    tmp = _PM.newUserPackage()
+    before = _package_uids()
     try:
-        g = SDSBSCompGraph.sNew(tmp)
-        atomic_id = definition if definition.startswith('sbs::') else 'sbs::compositing::' + definition
-        node = g.newNode(atomic_id) if atomic_id in atomic_definition_ids(g) else None
-        if node is None:
-            res = _library_graph(definition)
-            node = cast(SDNode, g.newInstanceNode(res))  # the resource was found just above
-            path, graph_id = _library_path(definition)
-            print('library node %s (%s)' % (graph_id, os.path.basename(path)))
-        else:
-            print('atomic node %s' % atomic_id)
-        print('output connector ids:', [p.getId() for p in node.getProperties(SDPropertyCategory.Output)])
-        print('inputs:')
-        for prop in node.getProperties(SDPropertyCategory.Input):
-            ptype = cast(SDType, prop.getType())  # a parameter always has a type
-            kind = 'CONNECTOR' if prop.isConnectable() else ptype.getId()
-            line = '  %-28s %-26s' % (prop.getId(), kind)
-            label = prop.getLabel()
-            if label and label != prop.getId():
-                line += ' "%s"' % label
-            if not prop.isConnectable():
-                line += ' default=%r' % (fmt(node.getPropertyValue(prop)),)
-                slider = _slider_range(node, prop.getId())
-                if slider:
-                    line += ' ' + slider
-            print(line)
-            desc = _short_description(prop)
-            if desc:
-                print('      ' + desc)
-            if isinstance(ptype, SDTypeEnum):
-                print(
-                    '      enum: '
-                    + ', '.join('%s=%s' % (e.getId(), fmt(e.getDefaultValue())) for e in ptype.getEnumerators())
-                )
-    finally:
-        _PM.unloadUserPackage(tmp)
+        try:
+            tmp = _PM.newUserPackage()
+            g = SDSBSCompGraph.sNew(tmp)
+            atomic_id = definition if definition.startswith('sbs::') else 'sbs::compositing::' + definition
+            node = g.newNode(atomic_id) if atomic_id in atomic_definition_ids(g) else None
+            if node is None:
+                res = _library_graph(definition)
+                node = cast(SDNode, g.newInstanceNode(res))  # the resource was found just above
+                path, graph_id = _library_path(definition)
+                print('library node %s (%s)' % (graph_id, os.path.basename(path)))
+            else:
+                print('atomic node %s' % atomic_id)
+            print('output connector ids:', [p.getId() for p in node.getProperties(SDPropertyCategory.Output)])
+            print('inputs:')
+            for prop in node.getProperties(SDPropertyCategory.Input):
+                ptype = cast(SDType, prop.getType())  # a parameter always has a type
+                kind = 'CONNECTOR' if prop.isConnectable() else ptype.getId()
+                line = '  %-28s %-26s' % (prop.getId(), kind)
+                label = prop.getLabel()
+                if label and label != prop.getId():
+                    line += ' "%s"' % label
+                if not prop.isConnectable():
+                    line += ' default=%r' % (fmt(node.getPropertyValue(prop)),)
+                    slider = _slider_range(node, prop.getId())
+                    if slider:
+                        line += ' ' + slider
+                print(line)
+                desc = _short_description(prop)
+                if desc:
+                    print('      ' + desc)
+                if isinstance(ptype, SDTypeEnum):
+                    print(
+                        '      enum: '
+                        + ', '.join('%s=%s' % (e.getId(), fmt(e.getDefaultValue())) for e in ptype.getEnumerators())
+                    )
+        finally:
+            _unload_new_packages(before)
+    except BaseException:
+        # the plugin raises an abort at a traced line, then stops tracing: landed on the unload, it skipped it, and one
+        # landing as the package was made left no name for it. Here, untraced, they are unloaded unless they were
+        # (REVIEW.md HLP-177)
+        _unload_new_packages(before)
+        raise
 
 
 def _with_node_texture(
@@ -281,9 +289,12 @@ def _with_node_texture(
     g.compute()
     value = cast(SDValueTexture | None, node.getPropertyValue(outs[0]))
     texture = value.get() if value is not None else None
-    temp_output = None
+    if texture is not None:
+        use(texture, outs[0])
+        return
+    before = {n.getIdentifier() for n in g.getNodes()}
     try:
-        if texture is None:
+        try:
             temp_output = g.newNode('sbs::compositing::output')
             node.newPropertyConnectionFromId(outs[0].getId(), temp_output, 'inputNodeOutput')
             for _ in range(2):  # the second only when the first gave none (the docstring)
@@ -292,12 +303,41 @@ def _with_node_texture(
                 texture = value.get() if value is not None else None
                 if texture is not None:
                     break
-        if texture is None:
-            raise RuntimeError('node %s produced no texture (are its inputs connected?)' % node.getIdentifier())
-        return use(texture, outs[0])
-    finally:
-        if temp_output is not None:
-            g.deleteNode(temp_output)
+            if texture is None:
+                raise RuntimeError('node %s produced no texture (are its inputs connected?)' % node.getIdentifier())
+            use(texture, outs[0])
+        finally:
+            _delete_new_nodes(g, before)
+    except BaseException:
+        # the plugin raises an abort at a traced line, then stops tracing: landed on the deletion, it skipped it, and
+        # one landing as the node was added left no name for it. Here, untraced, it is deleted unless it was (REVIEW.md
+        # HLP-177)
+        _delete_new_nodes(g, before)
+        raise
+
+
+def _delete_new_nodes(g: SDSBSCompGraph, before: set[str]) -> None:
+    """Deletes the nodes of `g` whose identifier isn't in `before`: the ones a call added. Listed again each time, so a
+    second run deletes none twice."""
+    for n in list(g.getNodes()):
+        if n.getIdentifier() not in before:
+            g.deleteNode(n)
+
+
+def _package_uids() -> set[str]:
+    """The UIDs of the user packages loaded now, for _unload_new_packages."""
+    return {p.getUID() for p in _PM.getUserPackages()}
+
+
+def _unload_new_packages(before: set[str]) -> None:
+    """Unloads the user packages with no file whose UID isn't in `before` (_package_uids): the ones a call made. A
+    package made through the API has a UID of its own and no file, and a library package loaded meanwhile has its file
+    (designer facts: discovery's checks). Listed again each time, so a second run unloads none twice: unloading a
+    package twice crashed Designer (measured 2026-11-16, SIGSEGV in its UnreferencePackageCommand; not checked again,
+    as the check would crash its Designer)."""
+    for package in list(_PM.getUserPackages()):
+        if package.getUID() not in before and not package.getFilePath():
+            _PM.unloadUserPackage(package)
 
 
 def save_node_output(

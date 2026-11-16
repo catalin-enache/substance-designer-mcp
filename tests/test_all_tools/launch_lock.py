@@ -1,8 +1,11 @@
-"""The pool's lock on Designers starting and quitting (workers.py). In a pool (workers.py), lifecycle
-has two windows during which no other Designer of the run may start (or quit, which also writes Designer's settings):
-from its own launch to the end of its hand-over check, which needs its Designer to be the last one started
-(`session.instancePID`), and while its record is aside, when its Designer counts as the user's and launch_designer
-refuses to start any next to it.
+"""The pool's lock on Designers starting and quitting (workers.py): the pool's starts of its workers' Designers and the
+workers' last quits wait for it; lifecycle's own launches and quits within its checks don't (REVIEW.md TST-467). Two
+categories hold it in a pool:
+- lifecycle, over two windows during which no other worker's Designer may start (or quit, which also writes
+  Designer's settings): from its own launch to the end of its hand-over check, which needs its Designer to be the last
+  one started (`session.instancePID`), and while its record is aside, when its Designer counts as the user's and
+  launch_designer refuses to start any next to it;
+- editor_panels_and_fit, while its window checks read (retries.no_designer_starting).
 
 Files in the run's folder, named by the environment of every worker (Gate.env): the lock, and a folder of marks, one
 per Designer starting or quitting. Each side announces before it looks: the pool marks a start, then sees whether the
@@ -16,7 +19,7 @@ from collections.abc import Callable, Iterator
 
 LOCK_ENV = 'SD_SELFTEST_LAUNCH_LOCK'
 CHANGING_ENV = 'SD_SELFTEST_LAUNCHING'
-POLL_S = 0.2
+POLL_S = 0.1
 
 
 class Gate:
@@ -66,7 +69,8 @@ def held(
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> Iterator[None]:
-    """lifecycle's side: no Designer of the run starts or quits meanwhile. Taken once no other holder has it (one at a
+    """A holder's side (lifecycle's, editor_panels_and_fit's): no worker of the pool starts or quits its Designer
+    meanwhile. Taken once no other holder has it (one at a
     time), then held from when the
     Designers starting or quitting have done so (timeout_s at most: one that never answers doesn't hold it forever),
     but for the start of `own`, the worker holding it: the pool clears that mark once its Designer answers, which it

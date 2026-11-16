@@ -3,6 +3,7 @@ what is left to finish, refusing a Designer no agent started, launch_designer ag
 run() starts from a Designer of its own and leaves none running, so it also runs alone, with
 `alone.run(lifecycle.run, own_designer=True)`."""
 
+import asyncio
 import contextlib
 import glob
 import json
@@ -26,8 +27,9 @@ from project_constants import (
     TOKEN_FILE,
     agent_designer_file,
 )
-from test_all_tools import common, launch_lock
+from test_all_tools import common, launch_lock, window_server
 from test_all_tools.common import (
+    POLL_S,
     Ctx,
     agent_folder,
     agents_designers,
@@ -35,8 +37,10 @@ from test_all_tools.common import (
     crash_dumps,
     designer_pids,
     designer_script,
+    dumps_may_come,
     free_port,
     helpers_source,
+    job_running,
     new_dumps,
     normal_close,
     raw_request,
@@ -45,16 +49,24 @@ from test_all_tools.common import (
 )
 from test_all_tools.crash_watch import watching_crashes
 from test_all_tools.lifecycle.crash_reports import uploads, uploads_off, uploads_on
-from test_all_tools.lifecycle.samples import in_shutdown, sampled
+from test_all_tools.lifecycle.samples import TEARDOWN_LOGGED, in_shutdown, sampled
 
+HANDLER_GONE_S = (
+    10  # s at most for a Designer's crash handler to end after its quit: a limit; it ended with it, measured
+)
+
+# Designer's windows closed once the bridge has sent this call's reply (the plugin's _after_reply: REVIEW.md SRV-151)
 CLOSE_WINDOWS_ONLY = dedent("""\
-    from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
     def close_windows():
         for w in QApplication.instance().topLevelWidgets():
             if w.isVisible():
                 w.close()
-    QTimer.singleShot(300, close_windows)""")
+    _after_reply(close_windows)""")
+
+MODAL_SHOWN = dedent("""\
+    from PySide6.QtWidgets import QApplication
+    print('MODAL=' + type(QApplication.instance().activeModalWidget()).__name__)""")
 
 # whether Designer is the active app, the one the keyboard types into (macOS: the helpers' _MacWindow)
 IS_ACTIVE = "print('ACTIVE=%s' % _MacWindow(_APP.getQtForPythonUIMgr().getMainWindow()).active())\n"
@@ -69,9 +81,10 @@ FREEZE_MAIN_THREAD = dedent("""\
     import time
     from PySide6.QtCore import QTimer
     def freeze():
+        open(FROZEN, 'w').close()  # the main thread frozen from here on: what the check waits for
         while True:
             time.sleep(0.1)
-    QTimer.singleShot(300, freeze)""")
+    QTimer.singleShot(0, freeze)  # once this job has returned""")
 
 
 def users_log() -> tuple[str, int] | None:
@@ -121,8 +134,11 @@ def has_ended(pid: int | None) -> bool:
 
 async def check_launch_on_another_port(ctx: Ctx) -> None:
     """A second Designer an agent started, next to the run's on a port of its own (ROADMAP item 49): each answers on its
-    own port from its own process, and quitting it leaves the first. It quits only the one it started, so it runs in a
-    scratch run too (the live-check skill)."""
+    own port from its own process, and quitting it leaves the first. Watched from the self-test's process as it
+    starts, it never becomes the active app, and none of its windows is on screen at an opacity above 0: launch_designer
+    opens it hidden (window_server.stayed_off_screen; REVIEW.md SRV-149, SRV-152). The crash wait sees its crash handler
+    while it runs, and not once it quit (common.dumps_may_come; REVIEW.md TST-436). It quits only the one it started,
+    so it runs in a scratch run too (the live-check skill)."""
     c = ctx.c
     # a free port another run's Designer, still starting, doesn't hold: that one isn't this check's to quit
     # (REVIEW.md TST-154)
@@ -163,7 +179,9 @@ async def check_launch_on_another_port(ctx: Ctx) -> None:
         second: int | None = None
         its_quit = ''  # the other port's quit: its folder kept if forced, to read its log (REVIEW.md TST-293)
         try:
-            t = text(await c('launch_designer', {'port': other, 'wait_s': 240}))
+            # watched from here as it starts: Designer's Qt made it the active app, in front (REVIEW.md SRV-149)
+            with window_server.FrontWatch(watching=sys.platform == 'darwin') as front:
+                t = text(await c('launch_designer', {'port': other, 'wait_s': 240}))
             check(
                 'launch_designer',
                 'starts a second Designer on another port, recorded for it',
@@ -185,6 +203,16 @@ async def check_launch_on_another_port(ctx: Ctx) -> None:
             second = json.loads(Path(record).read_text())['pid']
             if 'Designer started in' not in t:
                 return  # the check above failed, with why; the finally ends it
+            if sys.platform == 'darwin':
+                # opened hidden: none of its windows on screen (REVIEW.md SRV-152: from its binary, in front of the
+                # active app's window for up to 5 s)
+                off, said = window_server.stayed_off_screen(front.samples, second)
+                check(
+                    'launch_designer',
+                    'starts Designer hidden: never the active app, none of its windows on screen',
+                    off,
+                    said,
+                )
             theirs = os.path.join(agent_folder(other), 'home') + '/'
             # Designer turns them on as it starts; its reports carry the user's Adobe account (DECISIONS.md)
             check(
@@ -256,7 +284,22 @@ async def check_launch_on_another_port(ctx: Ctx) -> None:
             finally:  # put back if it didn't, before the quit: a crash then would be uploaded (REVIEW.md SRV-120)
                 if uploads(theirs) == 'on':
                     uploads_off(theirs)
+            # the crash wait's look while it runs: its crash handler seen (REVIEW.md TST-436: only unit fakes tested it)
+            known = crash_dumps([other], run_port=False)
+            while_running = dumps_may_come([other], known, run_port=False)
             t = its_quit = text(await c('quit_designer', {'port': other, 'wait_s': 30}))
+            if sys.platform == 'darwin':  # elsewhere nothing is known, and a dump may always come
+                # and once it quit: nothing says when its crash handler ends, so a poll, with a limit
+                deadline = time.monotonic() + HANDLER_GONE_S
+                while dumps_may_come([other], known, run_port=False) and time.monotonic() < deadline:
+                    time.sleep(POLL_S)
+                after_quit = dumps_may_come([other], known, run_port=False)
+                check(
+                    'designer facts',
+                    'the crash wait sees the crash handler of a Designer an agent started, and not once it quit',
+                    while_running and not after_quit,
+                    'a dump may come: while it ran %s, after its quit %s' % (while_running, after_quit),
+                )
             status_after = await c('designer_status')
             check(
                 'quit_designer',
@@ -348,7 +391,7 @@ async def check_a_designer_sharing_the_temp_folder_hands_over(ctx: Ctx) -> None:
     """Why launch_designer gives each Designer a temp folder of its own: a Designer starting reads the process ID of
     the last one started (`session.instancePID` in Designer's settings) and looks for that one's socket
     (algipc-...-<ID>) in its own temp folder; found, it hands it its arguments and exits, its own log naming that one's
-    process. Started here from the binary as launch_designer starts one (_designer_env: a home of its own, so its log is
+    process. Started here from its binary, with the environment launch_designer gives one (_designer_env: a home of its own, so its log is
     its own and the user's is left alone; no plugins), on a port of its own, with the temp folder of the run's
     Designer; ended if it stays. It ends only the Designer it
     started, so it runs in a scratch run too (the live-check skill), but skips unless the run's Designer was
@@ -532,8 +575,7 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
             os.replace(record, kept)
             try:
                 status = text(await c('designer_status'))
-                r_ = await c('quit_designer')
-                time.sleep(2)
+                r_ = await c('quit_designer')  # refused by the server, before anything is sent to Designer
                 refused = r_.is_error and 'ask the user to save, close and reopen' in text(r_)
                 alive = not (await c('designer_status')).is_error
             finally:
@@ -552,7 +594,8 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
         # the close names its process: asked of another, it refuses before touching anything (REVIEW.md SRV-73)
         call = '\n\nquit_designer(1, %r)\n' % QUIT_CLOSED
         r_ = await c('execute_designer_code', {'code': helpers_source() + call})
-        time.sleep(1)
+        # no wait for a close: it refused before the unloads, which come before the close it would hand _after_reply,
+        # and the unsaved package still there says none ran
         status = text(await c('designer_status'))
         check(
             'quit_designer',
@@ -619,13 +662,13 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
             'HELD=True' in held and QUIT_FORCED_IN_SHUTDOWN in t and has_ended(quitting),
             held + t,
         )
-        # its threads sampled before the force, for the cause of a hang (ROADMAP item 70): this one waits for the pool, or
-        # still stops Adobe's sign-in before it (samples.SHUTDOWN_WAITS);
-        # the detail says where its main thread was, as the pool deletes lifecycle's folder (REVIEW.md TST-310)
+        # its threads sampled before the force, for the cause of a hang (ROADMAP item 70): in its teardown, 15 s after its
+        # close (samples.SHUTDOWN_CALL); the detail says where its main thread was, as the pool deletes lifecycle's folder
+        # (REVIEW.md TST-310)
         stacks, where = sampled(t)
         check(
             'quit_designer',
-            "samples one stuck in its shutdown before forcing it, its shutdown's wait shown",
+            'samples one stuck in its shutdown before forcing it, its teardown shown',
             in_shutdown(stacks),
             where,
         )
@@ -643,7 +686,9 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
 
         long_job = threading.Thread(target=hold_the_bridge, daemon=True)
         long_job.start()
-        time.sleep(2)
+        deadline = time.monotonic() + 30
+        while not job_running(token) and time.monotonic() < deadline:  # nothing says it started (REVIEW.md TST-421)
+            time.sleep(POLL_S)
         step, quit_started = watch.step(), time.time()  # a dump of this quit is its own (REVIEW.md TST-236)
         quitting = own_pid()  # the process this quit is about
         t = text(await c('quit_designer', {'wait_s': 2}))
@@ -661,8 +706,11 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
         )
 
         # its main thread frozen outside a job, it reads as idle, and the close has a limit of its own (REVIEW.md SRV-78)
-        await c('execute_designer_code', {'code': FREEZE_MAIN_THREAD})
-        time.sleep(2)
+        frozen = os.path.join(scratch, 'frozen')
+        await c('execute_designer_code', {'code': FREEZE_MAIN_THREAD.replace('FROZEN', repr(frozen))})
+        deadline = time.monotonic() + 30
+        while not os.path.exists(frozen) and time.monotonic() < deadline:  # the freeze says it began
+            time.sleep(POLL_S)
         state = raw_request({'cmd': 'status'}, token)['output']
         check('designer facts', 'a main thread frozen outside a job reads as idle', 'idle, 0 queued' in state, state)
         step, quit_started = watch.step(), time.time()  # a dump of this quit is its own (REVIEW.md TST-236)
@@ -685,7 +733,14 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
         await c('execute_designer_code', {'code': CLOSE_WINDOWS_ONLY})
         deadline = time.time() + 30
         while time.time() < deadline and not (await c('designer_status')).is_error:
-            time.sleep(1)
+            time.sleep(POLL_S)
+        # its teardown logs TEARDOWN_LOGGED from inside, never to leave it while the pool is held: sampled once that line
+        # is there, it is in its teardown, however slow the steps before it (REVIEW.md TST-400)
+        deadline = time.time() + 60
+        while time.time() < deadline and TEARDOWN_LOGGED not in text(
+            await c('read_designer_log', {'contains': TEARDOWN_LOGGED, 'lines': 1})
+        ):
+            time.sleep(POLL_S)
         long_ago = time.time() - STARTUP_LIMIT - 1
         os.utime(record, (long_ago, long_ago))
         t = text(await c('launch_designer', {'wait_s': 240}))
@@ -699,7 +754,7 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
         stacks, where = sampled(t)  # it can be one hung in its shutdown, as this one is (REVIEW.md SRV-113)
         check(
             'launch_designer',
-            "samples the agent's Designer it ends before forcing it, its shutdown's wait shown",
+            "samples the agent's Designer it ends before forcing it, its teardown shown",
             in_shutdown(stacks),
             where,
         )
@@ -839,17 +894,12 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
 
         # the realistic blocker: a modal dialog (its own event loop) must not stop quitting
         await designer_script(c, 'lifecycle/modal_dialog')
-        time.sleep(1)
-        modal = text(
-            await c(
-                'execute_designer_code',
-                {
-                    'code': dedent("""\
-                        from PySide6.QtWidgets import QApplication
-                        print('MODAL=' + type(QApplication.instance().activeModalWidget()).__name__)""")
-                },
-            )
-        )
+        deadline, modal = time.monotonic() + 30, ''
+        while time.monotonic() < deadline:  # the dialog, once it opened
+            modal = text(await c('execute_designer_code', {'code': MODAL_SHOWN}))
+            if 'MODAL=QMessageBox' in modal:
+                break
+            await asyncio.sleep(POLL_S)  # REVIEW.md TST-426: no wait once it is seen
         step = watch.step()
         t = text(await c('quit_designer', {'wait_s': 30}))
         gone = (await c('designer_status')).is_error

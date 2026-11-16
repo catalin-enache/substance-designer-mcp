@@ -3,12 +3,73 @@
 import os
 import re
 import xml.etree.ElementTree as ET
+from textwrap import dedent
 from typing import cast
 
 from test_all_tools.common import TEST_GRAPH, Ctx, added_id, check, graph_in_editor, text
 
+# every widget of Designer's watched for its destruction, then the package at PATH unloaded (the helpers'
+# unload_package_file, as set_link_display's reload does): how many went within the call (IN_CALL)
+UNLOAD_WATCHED = dedent("""
+    from PySide6 import QtWidgets
+    gone = []
+    def seen(*args):
+        gone.append(1)
+    sys.mcp_selftest_gone = gone
+    sys.mcp_selftest_watched = (seen, QtWidgets.QApplication.allWidgets())
+    for w in sys.mcp_selftest_watched[1]:
+        w.destroyed.connect(seen)
+    unload_package_file(PATH)
+    print('IN_CALL=%d' % len(gone))""")
+GONE_SO_FAR = "import sys; print('GONE=%d' % len(sys.mcp_selftest_gone))"
+# the slots disconnected from the widgets still there, and what the check kept in sys dropped (REVIEW.md TST-424)
+GONE_DONE = dedent("""
+    import sys, shiboken6
+    seen, widgets = getattr(sys, 'mcp_selftest_watched', (None, []))
+    for w in widgets:
+        if shiboken6.isValid(w):
+            w.destroyed.disconnect(seen)
+    if hasattr(sys, 'mcp_selftest_watched'):
+        del sys.mcp_selftest_watched
+    if hasattr(sys, 'mcp_selftest_gone'):
+        del sys.mcp_selftest_gone""")
+# the package at PATH loaded again only if no copy of it is loaded: a refused unload left it there
+LOAD_IF_GONE = dedent("""
+    norm = os.path.normpath(PATH)
+    if not any(os.path.normpath(p.getFilePath() or '') == norm for p in _PM.getUserPackages()):
+        load_package_file(PATH)""")
+
+
+async def check_an_unloads_widgets_are_gone_once_the_next_call_starts(ctx: Ctx) -> None:
+    """An unload's widgets (the package's graph views) are destroyed within its call, or before the next call starts
+    (deleted later by Qt, as the plugin runs Designer's event loop between two jobs), and as many by the call after:
+    what lets set_link_display's reload, and the self-test's clean-ups, load in the next call with no pause (REVIEW.md
+    SRV-150; measured 327 within the call, 177 before the next, none by the one after). The package is loaded again
+    after, unless it is still loaded, and opened, as the reload does."""
+    c = ctx.c
+    sbs = os.path.join(ctx.scratch, TEST_GRAPH + '.sbs')
+    seen: list[int] = []
+    try:
+        said = text(
+            await c('execute_designer_code', {'code': ctx.helper_source + UNLOAD_WATCHED.replace('PATH', repr(sbs))})
+        )
+        by_next = text(await c('execute_designer_code', {'code': GONE_SO_FAR}))
+        after = text(await c('execute_designer_code', {'code': GONE_SO_FAR}))
+        seen = [int(m) for m in re.findall(r'(?:IN_CALL|GONE)=(\d+)', said + by_next + after)]
+    finally:
+        await c('execute_designer_code', {'code': GONE_DONE})
+        await c('execute_designer_code', {'code': ctx.helper_source + LOAD_IF_GONE.replace('PATH', repr(sbs))})
+        await c('open_graph', ctx.G)
+    check(
+        'designer facts',
+        "an unload's widgets are destroyed within its call or before the next one starts, as many by the one after",
+        len(seen) == 3 and 0 < seen[0] < seen[1] == seen[2],
+        'destroyed within the unload, by the next call, by the one after: %s' % seen,
+    )
+
 
 async def run(ctx: Ctx) -> None:
+    await check_an_unloads_widgets_are_gone_once_the_next_call_starts(ctx)
     c, G, clouds, lv, stats_before = ctx.c, ctx.G, ctx.clouds, ctx.lv, ctx.stats_before
     r_ = await c('set_link_display', {'mode': 'dotted', 'from_nodes': [clouds], **G})
     check('set_link_display', 'error on bad mode', r_.is_error and 'mode must be' in text(r_), text(r_))

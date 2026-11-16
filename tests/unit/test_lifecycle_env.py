@@ -3,6 +3,7 @@ environment-variable overrides (README, Configuration), log filtering and the mi
 
 import contextlib
 import errno
+import io
 import json
 import os
 import plistlib
@@ -19,6 +20,7 @@ import types
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from textwrap import dedent
+from types import SimpleNamespace
 from typing import IO, Any, NoReturn
 
 import pytest
@@ -30,6 +32,9 @@ import server_tools
 from conftest import (
     REAL_BIND_ERROR,
     REAL_DESIGNER_PIDS,
+    REAL_DESIGNER_RUNNING,
+    REAL_EXIT_WATCH,
+    REAL_FOUND_LAUNCHED,
     REAL_OWN_HOME,
     REAL_OWN_TEMP,
     REAL_PLUGIN_PATHS,
@@ -54,7 +59,7 @@ class _FakeProcess:
     def __init__(self, pid: int) -> None:
         self.pid = pid
 
-    def wait(self) -> int:
+    def wait(self, timeout: float | None = None) -> int:
         return 0
 
 
@@ -83,7 +88,10 @@ def _no_starts_left() -> Iterator[None]:
 
 @pytest.fixture
 def no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(time, 'sleep', lambda s: None)
+    # a sleep passes at once on a clock of the test's own, so a wait to a deadline ends as it would
+    clock = [time.monotonic()]
+    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(time, 'sleep', lambda s: clock.__setitem__(0, clock[0] + s))
 
 
 def test_launch_reports_missing_app(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -504,22 +512,33 @@ def test_launch_state_not_running(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     assert server._agent_designer(server.PORT) == 77, 'it remembers the one it started'
 
 
+@pytest.mark.parametrize(
+    'bundle, give_back',
+    [(True, 'give_back_activation(started_hidden=True)'), (False, 'give_back_activation()')],
+    ids=['an app bundle, opened hidden', 'a binary'],
+)
 def test_a_designer_started_gives_the_keyboard_back_once_its_home_screen_is_closed(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, bundle: bool, give_back: str
 ) -> None:
-    # REVIEW.md SRV-148: it became the active app as it started, the user's keyboard in it
+    # REVIEW.md SRV-148: it became the active app as it started, the user's keyboard in it. SRV-161: one opened hidden
+    # is left hidden, as activating it unhides it
+    monkeypatch.setattr(sys, 'platform', 'darwin')
     started = _launch_fakes(monkeypatch, tmp_path)
+    if not bundle:
+        binary = tmp_path / 'Designer'
+        binary.write_text('')
+        monkeypatch.setenv('SD_DESIGNER_APP', str(binary))
     calls: list[str] = []
     processes = _Processes(monkeypatch)
 
-    def begin(cmd: list[str], **kw: Any) -> _FakeProcess:
+    def begin(cmd: list[str], **kw: object) -> _FakeProcess:
         started.append(cmd)
         processes.pids.append(77)
         return _FakeProcess(77)
 
     said = {
         'leave_home_screen()': 'closed the Home screen',
-        'give_back_activation()': 'gave the keyboard back to the app in front before it',
+        give_back: 'gave the keyboard back to the app in front before it',
     }
 
     def bridge(
@@ -537,7 +556,7 @@ def test_a_designer_started_gives_the_keyboard_back_once_its_home_screen_is_clos
     patch_server(monkeypatch, '_send', _answers_once_started(started))
     patch_server(monkeypatch, '_bridge', bridge)
     result = server.launch_designer(wait_s=30)
-    assert calls == ['leave_home_screen()', 'give_back_activation()']
+    assert calls == ['leave_home_screen()', give_back]
     assert '(closed the Home screen; gave the keyboard back to the app in front before it)' in result
 
 
@@ -557,6 +576,31 @@ def test_a_user_opening_one_at_the_same_moment_doesnt_confuse_the_record(
     patch_server(monkeypatch, '_send', _answers_once_started(started))
     server.launch_designer(wait_s=30)
     assert server._agent_designer(server.PORT) == 77
+
+
+def test_a_launch_timing_out_whose_processes_cant_be_listed_still_says_what_to_do(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
+) -> None:
+    # REVIEW.md SRV-171: the timeout's advice lists Designer's processes for their IDs; that listing failing replaced the
+    # whole message, the bridge not answering and what to ask the user, with the listing's error
+    started = _launch_fakes(monkeypatch, tmp_path)
+    _Processes(monkeypatch, 11)
+    patch_server(monkeypatch, '_send', _no_bridge)
+    clock = iter(range(0, 1000, 10))
+    monkeypatch.setattr(time, 'time', lambda: next(clock))
+    listed: Callable[[int], tuple[list[int], list[int]]] = server._sorted_out
+
+    def sorted_out(port: int) -> tuple[list[int], list[int]]:
+        if sys._getframe(1).f_code.co_name == '_how_to_end':
+            raise server._NoListing("Designer's processes couldn't be listed (pgrep exit code 3: fork failed)")
+        return listed(port)
+
+    patch_server(monkeypatch, '_sorted_out', sorted_out)
+    with pytest.raises(server.ToolError) as raised:
+        server.launch_designer(wait_s=30)
+    message = str(raised.value)
+    assert 'did not answer within 30s' in message and 'ask the user to end it in Activity Monitor' in message, message
+    assert 'If they are open, ask the user to save and close it' in message and not started, message
 
 
 def test_launch_state_answering(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -966,6 +1010,153 @@ def test_quit_says_when_crash_uploads_couldnt_be_turned_off(monkeypatch: pytest.
     monkeypatch.setattr(time, 'sleep', lambda seconds: processes.pids.clear())
     said = server.quit_designer()
     assert 'Its crash reports may still be uploaded to Adobe' in said and 'Designer quit after' in said, said
+
+
+SAMPLED = ' Its threads, sampled first: /tmp/sd_mcp_501_9877/threads_11.sample.txt'
+
+
+@_HOMES_OF_THEIR_OWN
+def test_a_quit_that_cant_end_its_designer_says_its_crash_reports_may_be_uploaded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
+) -> None:
+    # REVIEW.md SRV-166: every result of the quit said it, but its "could not be ended" error left the line out
+    _Processes(monkeypatch, 11, ends_on=-1)
+    _an_agent_started(11, home=str(tmp_path / 'home'))  # its settings missing
+    _closes(monkeypatch)
+    patch_server(monkeypatch, '_sampled_before_force', lambda pid, port: SAMPLED)
+    with pytest.raises(server.ToolError, match='could not be ended') as raised:
+        server.quit_designer(wait_s=2)
+    assert 'Its crash reports may still be uploaded to Adobe' in str(raised.value), str(raised.value)
+
+
+class _UnlistedFrom:
+    """Designer's processes, which can't be listed from a moment on (pgrep failing: SRV-163's _NoListing)."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, processes: _Processes) -> None:
+        self.failing = False
+        listed = server._designer_pids
+
+        def pids() -> list[int]:
+            if self.failing:
+                raise server._NoListing("Designer's processes couldn't be listed (pgrep exit code 3: fork failed)")
+            return list(listed())
+
+        patch_server(monkeypatch, '_designer_pids', pids)
+
+    def fail(self) -> None:
+        self.failing = True
+
+
+@_HOMES_OF_THEIR_OWN
+@pytest.mark.parametrize('when', ['its wait', 'after its sample', 'its forced end'])
+def test_a_quit_whose_processes_cant_be_listed_after_the_close_still_says_the_close_the_uploads_and_the_sample(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, when: str
+) -> None:
+    # REVIEW.md SRV-169: SRV-166 made the "could not be ended" error carry them; the listing's error, raised from any
+    # of the looks after the close, carried none. SRV-171: the close's notes are empty unless unsaved packages were
+    # dropped, so with the helper's own reply, the error didn't say the close was asked, nor that it was being forced
+    processes = _Processes(monkeypatch, 11, ends_on=-1)
+    unlisted = _UnlistedFrom(monkeypatch, processes)
+    _an_agent_started(11, home=str(tmp_path / 'home'))  # its settings missing
+    _closes(monkeypatch)
+
+    def sample(pid: int, port: int) -> str:
+        if when == 'after its sample':
+            unlisted.fail()
+        return SAMPLED
+
+    patch_server(monkeypatch, '_sampled_before_force', sample)
+    kill = processes.kill
+
+    def signal_then_fail(pid: int, sig: int) -> None:
+        kill(pid, sig)
+        unlisted.fail()
+
+    monkeypatch.setattr(os, 'kill', signal_then_fail if when == 'its forced end' else kill)
+    if when == 'its wait':
+        unlisted.fail()
+    with pytest.raises(server._NoListing) as raised:
+        server.quit_designer(wait_s=2)
+    said = str(raised.value)
+    assert said.startswith('Its crash reports may still be uploaded to Adobe'), said
+    step = (
+        'Designer 11 was asked to close.'
+        if when == 'its wait'
+        else 'Designer 11 did not quit within 2s and was being ended.'
+    )
+    assert step + " Designer's processes couldn't be listed" in said, said
+    assert (SAMPLED.strip() in said) == (when != 'its wait'), said
+
+
+@_HOMES_OF_THEIR_OWN
+def test_an_agents_designer_whose_processes_cant_be_listed_as_it_is_ended_still_says_its_sample_and_its_uploads(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
+) -> None:
+    # REVIEW.md SRV-169: _force_end's listing failing dropped what the end had found
+    processes = _Processes(monkeypatch, 11, ends_on=-1)
+    unlisted = _UnlistedFrom(monkeypatch, processes)
+    _an_agent_started(11, age=server.STARTUP_LIMIT + 1, home=str(tmp_path / 'home'))  # its settings missing
+    patch_server(monkeypatch, '_sampled_before_force', lambda pid, port: SAMPLED)
+    kill = processes.kill
+
+    def signal_then_fail(pid: int, sig: int) -> None:
+        kill(pid, sig)
+        unlisted.fail()
+
+    monkeypatch.setattr(os, 'kill', signal_then_fail)
+    with pytest.raises(server._NoListing) as raised:
+        server._end_if_past_startup(server.PORT)
+    said = str(raised.value)
+    assert 'Its crash reports may still be uploaded to Adobe' in said and SAMPLED.strip() in said, said
+    # REVIEW.md SRV-171: what was being done, said first
+    ending = 'Designer 11, which an agent started, was not answering past its start-up and was being ended.'
+    assert said.startswith(ending + " Designer's processes couldn't be listed"), said
+
+
+def test_a_launch_whose_wait_cant_end_an_agents_designer_says_first_the_one_it_ended_before(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
+) -> None:
+    # REVIEW.md SRV-169: the wait's "could not be ended" error left out told(), unlike the call's other errors
+    _launch_fakes(monkeypatch, tmp_path)
+    _Processes(monkeypatch, 12)
+    ends: list[int] = []
+
+    def end_if_past_startup(port: int) -> str:
+        ends.append(port)
+        if len(ends) == 1:  # as the call begins: one ended
+            return ''
+        raise server.ToolError(server._could_not_end(12))
+
+    patch_server(monkeypatch, '_end_if_past_startup', end_if_past_startup)
+    patch_server(monkeypatch, '_running_on', lambda port: True)  # another, not answering: waited for
+    patch_server(monkeypatch, '_send', _no_bridge)
+    with pytest.raises(server.ToolError) as raised:
+        server.launch_designer(wait_s=30)
+    said = str(raised.value)
+    assert said.startswith('Ended a Designer an agent started, which was not answering.\n') and len(ends) == 2, said
+    assert 'Designer 12 could not be ended' in said, said
+
+
+@_HOMES_OF_THEIR_OWN
+@pytest.mark.parametrize('ends', [True, False], ids=['ended', 'not ended'])
+def test_an_agents_designer_ended_past_its_start_up_says_its_uploads_then_its_sample_its_path_last(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, ends: bool
+) -> None:
+    # REVIEW.md SRV-166: the uploads sentence ran on right after the sample's path, which ends with no stop; SRV-168:
+    # the stop SRV-166 put after the path was read as part of it, by the self-test (lifecycle/samples.py) and by an
+    # agent copying it. Uploads first, as quit_designer says them, so nothing follows the path
+    _Processes(monkeypatch, 11, ends_on=signal.SIGTERM if ends else -1)
+    _an_agent_started(11, age=server.STARTUP_LIMIT + 1, home=str(tmp_path / 'home'))  # its settings missing
+    patch_server(monkeypatch, '_sampled_before_force', lambda pid, port: SAMPLED)
+    said = ''
+    try:
+        said = server._end_if_past_startup(server.PORT) or ''
+    except server.ToolError as e:
+        said = str(e)
+    uploads, sample = said.find('Its crash reports may still be uploaded to Adobe'), said.find(SAMPLED.strip())
+    assert 0 <= uploads < sample and said.endswith(SAMPLED), said
+    found = re.search(re.escape(server.QUIT_SAMPLED) + r' (\S+)', said)  # as lifecycle/samples.py reads it
+    assert found is not None and found.group(1) == SAMPLED.split()[-1], said
 
 
 @_HOMES_OF_THEIR_OWN
@@ -1648,10 +1839,12 @@ def _ports_answering(*ports: int, asked: list[int | None] | None = None) -> Call
 
 
 @pytest.mark.parametrize('port', [None, OTHER], ids=['the servers', 'another'])
-def test_launch_starts_the_binary_with_the_port(
+def test_launch_opens_a_new_instance_hidden_with_the_port(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, port: int | None
 ) -> None:
-    # `open -a` brings back a Designer already running and passes it no environment: the plugin reads its port there
+    # `open -a` alone brings back a Designer already running and passes it no environment: the plugin reads its port
+    # there. REVIEW.md SRV-152: started from its binary, its window came up in front of the active app's; opened
+    # hidden (-j), as a new instance (-n), not brought to the front (-g), none of its windows showed in 4 of 4 launches
     assert server.PORT != OTHER
     monkeypatch.setattr(sys, 'platform', 'darwin')
     started = _launch_fakes(monkeypatch, tmp_path)
@@ -1660,23 +1853,27 @@ def test_launch_starts_the_binary_with_the_port(
     asked: list[int | None] = []
     answering: list[int] = []
 
-    def begin(cmd: list[str], **kw: Any) -> _FakeProcess:
+    def begin(cmd: list[str], **kw: object) -> _FakeProcess:
         started.append(cmd)
         _started_with.append(kw)
         processes.pids.append(77)
         answering.append(want)
         return _FakeProcess(77)
 
-    def send(request: dict[str, Any], wait: float, port: int | None = None) -> Reply:
+    def send(request: dict[str, object], wait: float, port: int | None = None) -> Reply:
         return _ports_answering(*answering, asked=asked)(request, wait, port)
 
     monkeypatch.setattr(subprocess, 'Popen', begin)
     patch_server(monkeypatch, '_send', send)
     monkeypatch.setenv('PYTHONPATH', '/the/servers/own')
     text = server.launch_designer(wait_s=30, port=port)
-    assert started == [[os.path.join(str(tmp_path), 'Contents', 'MacOS', 'Adobe Substance 3D Designer')]]
+    cmd = started[0]
+    assert cmd[:4] == ['open', '-n', '-g', '-j'] and cmd[-2:] == ['-a', str(tmp_path)]
+    passed = dict(cmd[i + 1].split('=', 1) for i, arg in enumerate(cmd) if arg == '--env')
+    assert passed['SD_BRIDGE_PORT'] == str(want) and passed[server.STAY_BEHIND] == '1'
+    assert 'PYTHONPATH' not in passed and 'HOME' not in passed, 'the variables Designer reads, as `--env`'
     kw = _started_with[0]
-    assert kw['env']['SD_BRIDGE_PORT'] == str(want) and kw['start_new_session'] is True
+    assert kw['env']['SD_BRIDGE_PORT'] == str(want)
     assert kw['cwd'] == '/', "as `open -a` started it: not the server's folder, the repository"
     assert kw['env']['HOME'] == os.environ['HOME'], 'the rest of the environment passes on'
     assert 'PYTHONPATH' not in kw['env'], "Designer's own Python doesn't take the server's settings"
@@ -1684,6 +1881,19 @@ def test_launch_starts_the_binary_with_the_port(
     assert 'Designer started in' in text and 'on port %d' % want in text
     assert server._agent_designer(want) == 77
     assert not os.path.exists(server.agent_designer_file(OTHER if port is None else server.PORT))
+
+
+@pytest.mark.parametrize('platform', ['darwin', 'win32'])
+def test_a_designer_started_on_macos_doesnt_make_itself_the_active_app(
+    monkeypatch: pytest.MonkeyPatch, platform: str
+) -> None:
+    # REVIEW.md SRV-149: Designer's Qt made it the active app as it finished launching, its window in front of the
+    # user's and their keyboard in it until it answered; with this variable it stayed behind (measured)
+    variable = 'QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM'  # read by Designer's Qt 6.8.6, its Cocoa plugin
+    monkeypatch.setattr(sys, 'platform', platform)
+    monkeypatch.delenv(variable, raising=False)
+    env = server._designer_env(OTHER, None, None, '')
+    assert env.get(variable) == ('1' if platform == 'darwin' else None)
 
 
 def test_the_designer_started_is_reaped_when_it_exits(
@@ -1695,17 +1905,21 @@ def test_the_designer_started_is_reaped_when_it_exits(
     waited = threading.Event()
 
     class Process(_FakeProcess):
-        def wait(self) -> int:
+        def wait(self, timeout: float | None = None) -> int:
             waited.set()
             return 0
 
     started = _launch_fakes(monkeypatch, tmp_path)
 
-    def begin(cmd: list[str], **kw: Any) -> Process:
+    def begin(cmd: list[str], **kw: object) -> Process:
         started.append(cmd)
         return Process(77)
 
     monkeypatch.setattr(subprocess, 'Popen', begin)
+    # a binary, not an app bundle: `open`'s wait would set `waited` with no thread (REVIEW.md TST-437)
+    binary = tmp_path / 'Designer'
+    binary.write_text('')
+    monkeypatch.setenv('SD_DESIGNER_APP', str(binary))
     patch_server(monkeypatch, '_designer_running', lambda: False)
     patch_server(monkeypatch, '_send', _answers_once_started(started))
     server.launch_designer(wait_s=30)
@@ -2591,6 +2805,83 @@ def test_a_failed_process_listing_keeps_a_live_record(monkeypatch: pytest.Monkey
     assert os.path.exists(server.agent_designer_file(9901))
 
 
+_NOT_LISTED = "Designer's processes couldn't be listed"
+
+
+def _pgrep_failing(monkeypatch: pytest.MonkeyPatch, failing: str = 'exit code 3') -> list[list[str]]:
+    """The real process checks, with pgrep failing: its own errors (exit code 2 or 3; 1 is nothing found) or missing.
+    Returns the commands run; any other than pgrep fails the test."""
+    patch_server(monkeypatch, '_designer_pids', REAL_DESIGNER_PIDS)
+    patch_server(monkeypatch, '_designer_running', REAL_DESIGNER_RUNNING)
+    ran: list[list[str]] = []
+
+    def run(cmd: list[str], **kw: object) -> 'subprocess.CompletedProcess[str]':
+        ran.append(cmd)
+        assert cmd[0] == 'pgrep', cmd
+        if failing == 'missing':
+            raise FileNotFoundError(errno.ENOENT, 'No such file or directory', 'pgrep')
+        return subprocess.CompletedProcess(cmd, int(failing.split()[-1]), '', 'pgrep: fork failed')
+
+    monkeypatch.setattr(subprocess, 'run', run)
+    return ran
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='tasklist, not pgrep, lists them on Windows')
+@pytest.mark.parametrize('failing', ['exit code 2', 'exit code 3', 'missing'])
+def test_a_failed_process_listing_isnt_read_as_no_designer_running(
+    monkeypatch: pytest.MonkeyPatch, failing: str
+) -> None:
+    # REVIEW.md SRV-163: _designer_running read only pgrep's exit code 0, so its own errors read as none running
+    _pgrep_failing(monkeypatch, failing)
+    with pytest.raises(server.ToolError, match=_NOT_LISTED):
+        server._designer_running()
+    with pytest.raises(server.ToolError, match=_NOT_LISTED):
+        server._running_on(OTHER)
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='tasklist, not pgrep, lists them on Windows')
+@pytest.mark.parametrize(('code', 'running'), [(0, True), (1, False)], ids=['found', 'nothing found'])
+def test_pgrep_finding_designer_or_nothing_reads_as_running_or_not(
+    monkeypatch: pytest.MonkeyPatch, code: int, running: bool
+) -> None:
+    patch_server(monkeypatch, '_designer_running', REAL_DESIGNER_RUNNING)
+    monkeypatch.setattr(
+        subprocess, 'run', lambda cmd, **kw: subprocess.CompletedProcess(cmd, code, '4242\n' if code == 0 else '', '')
+    )
+    assert server._designer_running() is running
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='tasklist, not pgrep, lists them on Windows')
+def test_a_quit_with_the_processes_unlisted_doesnt_say_none_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md SRV-163: with no record, quit_designer said "Designer is not running." while one may run
+    _pgrep_failing(monkeypatch)
+    with pytest.raises(server.ToolError, match=_NOT_LISTED):
+        server.quit_designer()
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='tasklist, not pgrep, lists them on Windows')
+def test_a_launch_with_the_processes_unlisted_starts_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
+) -> None:
+    # REVIEW.md SRV-163: none read running, so the launch went on to start one; _users_next_to's listing refused it
+    started = _launch_fakes(monkeypatch, tmp_path)
+    patch_server(monkeypatch, '_send', _no_bridge)
+    _pgrep_failing(monkeypatch)
+    with pytest.raises(server.ToolError, match=_NOT_LISTED):
+        server.launch_designer(wait_s=30)
+    assert started == []
+
+
+def test_the_log_with_the_processes_unlisted_isnt_chosen_as_none_running(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # REVIEW.md SRV-163: none read running, so the log of an agent's Designer that ended was taken for the port's
+    _logs(monkeypatch, tmp_path)
+    _pgrep_failing(monkeypatch)
+    with pytest.raises(server.ToolError, match=_NOT_LISTED):
+        server.read_designer_log(port=OTHER)
+
+
 @pytest.mark.skipif(sys.platform == 'win32', reason='nothing is recorded on Windows, so nothing is locked there')
 def test_two_launches_on_one_port_at_once_start_one_designer(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
@@ -3136,7 +3427,9 @@ def test_a_launch_without_the_preferences_lock_takes_no_designer_for_the_users(
 
 
 @_MACOS_PLIST
-@pytest.mark.parametrize('refusal', ['port taken', 'not found', "the user's next to it", 'no record', 'no home'])
+@pytest.mark.parametrize(
+    'refusal', ['port taken', 'not found', "the user's next to it", 'no record', 'no home', 'processes unlisted']
+)
 def test_a_launch_that_ended_a_designer_and_starts_none_puts_back_first(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, defaults: FakeDefaults, refusal: str
 ) -> None:
@@ -3155,6 +3448,12 @@ def test_a_launch_that_ended_a_designer_and_starts_none_puts_back_first(
         patch_server(monkeypatch, '_users_next_to', lambda port, note: server.ToolError("the user's Designer runs"))
     elif refusal == 'no record':
         patch_server(monkeypatch, '_record_error', lambda port: PermissionError(13, 'Permission denied'))
+    elif refusal == 'processes unlisted':  # REVIEW.md SRV-164: the listing's error said nothing of the Designer ended
+
+        def unlisted(port: int, note: str) -> NoReturn:
+            raise server._NoListing("Designer's processes couldn't be listed (pgrep exit code 3: fork failed)")
+
+        patch_server(monkeypatch, '_users_next_to', unlisted)
     else:  # before saved(): _own_home or _own_temp refusing the port's folder
         patch_server(monkeypatch, '_own_home', _no_home)
     with pytest.raises(server.ToolError) as raised:
@@ -3168,6 +3467,7 @@ def test_a_launch_that_ended_a_designer_and_starts_none_puts_back_first(
         "the user's next to it": "the user's Designer runs",
         'no record': 'its record could not be written',
         'no home': 'its folder is not one launch_designer made',
+        'processes unlisted': "Designer's processes couldn't be listed",
     }
     assert why[refusal] in said, said
 
@@ -3296,3 +3596,588 @@ def test_quit_puts_nothing_back_while_designers_cant_be_listed(
     patch_server(monkeypatch, '_designer_running', lambda: False)
     said = server.quit_designer()
     assert defaults.domain == changed and os.path.exists(designer_preferences.saved_file()), said
+
+
+# --- a Designer's process waited for by its exit, its status every POLL_S: never a fixed time (REVIEW.md SRV-150)
+
+
+def test_launch_asks_the_status_every_poll_interval(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # every 2 s, so a launch ended up to 2 s after its Designer answered; nothing says when its bridge starts listening,
+    # and a refused connection costs nothing
+    started = _launch_fakes(monkeypatch, tmp_path)
+    answers = iter([False, False, True])
+
+    def bridge(request: dict[str, object], wait: float, port: int | None = None) -> Reply:
+        if not next(answers, True):
+            raise server.ToolError('Designer is not reachable.')
+        return {'ok': True, 'output': 'idle'}
+
+    patch_server(monkeypatch, '_send', bridge)
+    slept: list[float] = []
+    monkeypatch.setattr(time, 'sleep', slept.append)
+    assert 'Designer started in' in server.launch_designer(wait_s=30) and started
+    assert server.POLL_S == 0.1 and len(slept) >= 2 and set(slept) == {server.POLL_S}
+
+
+def test_quit_waits_for_the_processs_exit(monkeypatch: pytest.MonkeyPatch, no_sleep: None) -> None:
+    # it looked for the process every second, so a quit ended up to a second after its Designer went
+    processes = _Processes(monkeypatch, 11)
+    _an_agent_started(11)
+    _closes(monkeypatch)
+    waited: list[tuple[int, float]] = []
+
+    def exited(pid: int, limit: float) -> bool:
+        waited.append((pid, limit))
+        processes.pids.clear()
+        return True
+
+    patch_server(monkeypatch, '_exited', exited)
+    assert 'Designer quit after' in server.quit_designer(wait_s=7)
+    assert waited == [(11, 7)]
+
+
+def test_a_forced_end_waits_for_the_processs_exit_after_each_signal(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list[int] = []
+    waited: list[tuple[int, float]] = []
+    monkeypatch.setattr(os, 'kill', lambda pid, sig: sent.append(sig))
+
+    def stays(pid: int, limit: float) -> bool:
+        waited.append((pid, limit))
+        return False
+
+    patch_server(monkeypatch, '_exited', stays)
+    assert server._force_end(11, server.PORT, b'') is False
+    assert sent == [signal.SIGTERM, signal.SIGKILL] and waited == [(11, server.FORCE_WAIT_S)] * 2
+
+
+def test_without_an_exit_watch_the_process_is_looked_for_every_poll_interval(monkeypatch: pytest.MonkeyPatch) -> None:
+    # off macOS, or a process it can't watch (another user's)
+    processes = _Processes(monkeypatch, 11)
+    slept: list[float] = []
+    clock = [0.0]
+
+    def asleep(seconds: float) -> None:
+        slept.append(seconds)
+        clock[0] += seconds
+
+    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(time, 'sleep', asleep)
+    assert server._exited(11, 0.3) is False and slept == [server.POLL_S] * 3
+    slept.clear()
+
+    def gone(seconds: float) -> None:
+        slept.append(seconds)
+        processes.pids.clear()
+
+    monkeypatch.setattr(time, 'sleep', gone)
+    assert server._exited(11, 5) is True and slept == [server.POLL_S]
+
+
+def _child() -> 'subprocess.Popen[bytes]':
+    """A process of this test's, which ends once its input is closed."""
+    return subprocess.Popen([sys.executable, '-c', 'import sys; sys.stdin.read()'], stdin=subprocess.PIPE)
+
+
+@pytest.mark.skipif(sys.platform != 'darwin', reason="macOS's kqueue")
+def test_a_process_ending_is_seen_by_its_exit_event_not_looked_for(monkeypatch: pytest.MonkeyPatch) -> None:
+    # a kqueue process-exit event: the wait ends as the process does
+    child = _child()
+    try:
+        patch_server(monkeypatch, '_designer_pids', lambda: [child.pid])
+
+        def watched_then_ended(pid: int) -> object:
+            watch = REAL_EXIT_WATCH(pid)
+            assert child.stdin is not None
+            child.stdin.close()  # it ends from here on, the watch already there
+            return watch
+
+        patch_server(monkeypatch, '_exit_watch', watched_then_ended)
+        monkeypatch.setattr(time, 'sleep', lambda seconds: pytest.fail('looked for every %g s' % seconds))
+        assert server._exited(child.pid, 60) is True
+    finally:
+        child.kill()
+        child.wait()
+
+
+@pytest.mark.skipif(sys.platform != 'darwin', reason="macOS's kqueue")
+def test_a_process_outliving_the_limit_isnt_said_to_have_ended(monkeypatch: pytest.MonkeyPatch) -> None:
+    child = _child()
+    try:
+        patch_server(monkeypatch, '_designer_pids', lambda: [child.pid])
+        patch_server(monkeypatch, '_exit_watch', REAL_EXIT_WATCH)
+        monkeypatch.setattr(time, 'sleep', lambda seconds: pytest.fail('looked for every %g s' % seconds))
+        assert server._exited(child.pid, 0.05) is False
+    finally:
+        child.kill()
+        child.wait()
+
+
+@pytest.mark.skipif(sys.platform != 'darwin', reason="macOS's kqueue")
+def test_a_process_gone_before_its_watch_has_ended() -> None:
+    child = _child()
+    child.kill()
+    child.wait()  # reaped: no process has its id now, or another one, not watched as this
+    watch = REAL_EXIT_WATCH(child.pid)
+    assert watch is not None and watch.wait(0.05) is True
+
+
+def test_the_poll_for_a_process_ends_at_its_limit_however_long_each_look_takes(monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md SRV-153: ceil(limit / POLL_S) sleeps, each followed by a pgrep: a slow pgrep ran the wait past its limit
+    clock = [0.0]
+    looks: list[float] = []
+
+    def slow_pids() -> list[int]:
+        looks.append(clock[0])
+        clock[0] += 0.4  # a pgrep under load
+        return [11]
+
+    patch_server(monkeypatch, '_designer_pids', slow_pids)
+    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    assert server._exited(11, 1.0) is False
+    assert clock[0] < 1.0 + 0.5 + server.POLL_S, 'ended at %.1f s for a limit of 1 s' % clock[0]
+
+
+def test_a_watch_that_times_out_with_the_process_already_gone_says_it_ended(monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md SRV-153: the branch where pgrep, not the watch, says the process is gone
+    pids = [[11], []]
+    patch_server(monkeypatch, '_designer_pids', lambda: pids.pop(0) if len(pids) > 1 else pids[0])
+    patch_server(monkeypatch, '_exit_watch', lambda pid: SimpleNamespace(wait=lambda limit: False))
+    assert server._exited(11, 0.1) is True
+
+
+@pytest.mark.skipif(sys.platform != 'darwin', reason="macOS's kqueue")
+def test_a_kqueue_that_cant_be_made_falls_back_to_the_poll(monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md SRV-153: select.kqueue() was called before the try, so an OSError there (no file descriptor left)
+    # escaped _exit_watch
+    import select
+
+    def no_more(*args: object) -> object:
+        raise OSError(24, 'Too many open files')
+
+    monkeypatch.setattr(select, 'kqueue', no_more)
+    assert REAL_EXIT_WATCH(os.getpid()) is None
+
+
+def test_the_exit_watch_type_checks_where_kqueue_doesnt_exist() -> None:
+    # REVIEW.md SRV-153: `'select.kqueue | None'` names a class select has only on BSD and macOS
+    result = subprocess.run(
+        [
+            sys.executable,
+            '-m',
+            'mypy',
+            '--config-file',
+            'mypy.ini',
+            '--platform',
+            'linux',
+            'mcp_server/server_tools/lifecycle.py',
+        ],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    )
+    assert 'kqueue' not in result.stdout, result.stdout
+
+
+def _refused_then_idle(refusals: int) -> Callable[..., Reply]:
+    left = [refusals]
+
+    def bridge(request: dict[str, object], wait: float, port: int | None = None) -> Reply:
+        if left[0]:
+            left[0] -= 1
+            raise server.ToolError('Designer is not reachable.')
+        return {'ok': True, 'output': 'idle'}
+
+    return bridge
+
+
+def test_a_launch_waiting_for_its_own_start_looks_up_no_process_between_its_polls(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # REVIEW.md SRV-154: the refused path runs its lookups only for a Designer another launch started
+    started = _launch_fakes(monkeypatch, tmp_path)
+    looked: list[int] = []
+    real = server._running_on
+
+    def running_on(port: int) -> bool:
+        looked.append(port)
+        return bool(real(port))
+
+    patch_server(monkeypatch, '_running_on', running_on)
+    patch_server(monkeypatch, '_send', _refused_then_idle(5))
+    monkeypatch.setattr(time, 'sleep', lambda seconds: None)
+    assert 'Designer started in' in server.launch_designer(wait_s=30) and started
+    assert len(looked) == 2  # before the start, and in it, under the launch lock
+
+
+def test_a_launch_waiting_for_another_launchs_designer_looks_it_up_once_its_process_exits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # REVIEW.md SRV-154: pgrep and lsof ran every POLL_S while that Designer started; its exit is a callback
+    _launch_fakes(monkeypatch, tmp_path)
+    looked: list[int] = []
+
+    def running_on(port: int) -> bool:
+        looked.append(port)
+        return True
+
+    patch_server(monkeypatch, '_running_on', running_on)
+    patch_server(monkeypatch, '_agent_record', lambda port: (11, b'{}'))
+    patch_server(monkeypatch, '_still_starting', lambda port: True)
+    patch_server(monkeypatch, '_exit_watch', lambda pid: SimpleNamespace(ended=lambda: False, close=lambda: None))
+    patch_server(monkeypatch, '_send', _refused_then_idle(5))
+    monkeypatch.setattr(time, 'sleep', lambda seconds: None)
+    server.launch_designer(wait_s=30)
+    assert len(looked) == 1, 'looked up %d times' % len(looked)
+
+
+_MARKS = ('SD_BRIDGE_PORT=9879', 'CFFIXED_USER_HOME=/tmp/sd_mcp_501_9879/home')
+
+
+def test_the_process_open_started_is_the_new_one_with_its_port(monkeypatch: pytest.MonkeyPatch, no_sleep: None) -> None:
+    # REVIEW.md SRV-152: `open` gives no process ID; a new Designer's is taken only once its environment has the
+    # launch's port, so a launch on another port starting at once isn't taken for it
+    seen = [[11], [11, 80], [11, 80, 81]]
+    patch_server(monkeypatch, '_designer_pids', lambda: seen.pop(0) if len(seen) > 1 else seen[0])
+    patch_server(monkeypatch, '_carries', lambda pid, marks: pid == 81 and marks == _MARKS)
+    assert REAL_FOUND_LAUNCHED(SimpleNamespace(pid=5), {11}, _MARKS) == 81
+
+
+def test_a_process_open_started_that_never_shows_is_said(monkeypatch: pytest.MonkeyPatch, no_sleep: None) -> None:
+    patch_server(monkeypatch, '_designer_pids', lambda: [11])
+    patch_server(monkeypatch, '_carries', lambda pid, marks: False)
+    with pytest.raises(server.ToolError, match="its process wasn't found"):
+        REAL_FOUND_LAUNCHED(SimpleNamespace(pid=5), {11}, _MARKS)
+
+
+def test_a_launch_is_known_by_its_port_and_its_home() -> None:
+    # REVIEW.md SRV-165: the port alone is in the environment of a Designer the user starts with SD_BRIDGE_PORT set
+    env = {'SD_BRIDGE_PORT': '9879', 'CFFIXED_USER_HOME': '/tmp/sd_mcp_501_9879/home', 'TMPDIR': '/tmp/t/', 'X': 'y'}
+    assert server._launch_marks(env) == _MARKS
+
+
+@pytest.mark.parametrize('look', ['_found_launched', '_launched_now'])
+def test_a_designer_the_user_starts_with_the_launchs_port_isnt_taken_for_the_launchs(
+    monkeypatch: pytest.MonkeyPatch, no_sleep: None, look: str
+) -> None:
+    # REVIEW.md SRV-165: the user's, started during the launch, is the newer, its environment setting the same port
+    shown = {
+        81: '/A/Designer SD_BRIDGE_PORT=9879 CFFIXED_USER_HOME=/tmp/sd_mcp_501_9879/home TMPDIR=/tmp/t/\n',
+        82: '/A/Designer SD_BRIDGE_PORT=9879 HOME=/Users/u\n',
+    }
+    patch_server(monkeypatch, '_designer_pids', lambda: [11, 81, 82])
+    monkeypatch.setattr(subprocess, 'run', lambda cmd, **kw: SimpleNamespace(stdout=shown[int(cmd[3])], returncode=0))
+    if look == '_found_launched':
+        assert REAL_FOUND_LAUNCHED(SimpleNamespace(pid=5), {11}, _MARKS) == 81
+    else:
+        assert server._launched_now({11}, _MARKS) == 81
+
+
+@pytest.mark.parametrize(
+    'shown, has',
+    [
+        ('/A/Designer TMPDIR=/tmp/t/ SD_BRIDGE_PORT=9879 XPC_FLAGS=0x0\n', True),
+        ('/A/Designer TMPDIR=/tmp/t/ SD_BRIDGE_PORT=9879\n', True),
+        ('/A/Designer SD_BRIDGE_PORT=98790 XPC_FLAGS=0x0\n', False),
+        ('/A/Designer MY_SD_BRIDGE_PORT=9879 XPC_FLAGS=0x0\n', False),
+    ],
+    ids=['followed by another variable', 'printed last', 'another port', 'another variable'],
+)
+def test_the_port_is_read_as_a_whole_variable_of_ps(monkeypatch: pytest.MonkeyPatch, shown: str, has: bool) -> None:
+    # REVIEW.md SRV-157: a substring; ps ends its line with a newline, so the port printed last didn't match
+    monkeypatch.setattr(subprocess, 'run', lambda cmd, **kw: SimpleNamespace(stdout=shown, returncode=0))
+    assert server._carries(81, ('SD_BRIDGE_PORT=9879',)) is has
+
+
+@_MACOS_PLIST
+@pytest.mark.parametrize('found', [True, False], ids=['found at a last look, and ended', 'not found'])
+def test_a_designer_open_started_whose_process_isnt_found_keeps_the_copy_of_the_preferences(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, defaults: FakeDefaults, found: bool
+) -> None:
+    # REVIEW.md SRV-156: once `open` exited 0, Designer may run; handled as a start that failed, the copy was dropped
+    # and the Designer left running unrecorded, said "could not be started"
+    defaults.domain = dict(_USERS)
+    _launch_fakes(monkeypatch, tmp_path)  # an app bundle: opened by `open`
+    processes = _Processes(monkeypatch)
+    patch_server(monkeypatch, '_send', _no_bridge)
+    patch_server(monkeypatch, '_own_home', lambda port: str(tmp_path / 'home'))
+    patch_server(monkeypatch, '_carries', lambda pid, marks: found and pid == 88)
+
+    def not_found(opener: object, before: set[int], marks: tuple[str, ...]) -> int:
+        processes.pids.append(88)  # it runs: its start writes the file
+        defaults.domain['session.instancePID'] = 88
+        raise server.ToolError("its process wasn't found within 60 s")
+
+    patch_server(monkeypatch, '_found_launched', not_found)
+    with pytest.raises(server.ToolError) as raised:
+        server.launch_designer(wait_s=30)
+    said = str(raised.value)
+    assert 'Designer was opened' in said and 'could not be started' not in said, said
+    if found:
+        assert processes.signals == [(88, signal.SIGTERM)], 'ended, as one an agent started'
+        assert defaults.domain == _USERS, 'put back: none of its runs now'
+    else:
+        assert processes.signals == [] and "counts as the user's" in said, said
+        assert os.path.exists(designer_preferences.saved_file()), 'the copy kept for its put-back'
+        assert defaults.domain['session.instancePID'] == 88, 'not put back while it may run'
+
+
+def test_opens_failure_is_said_with_what_open_printed_and_its_wait_has_a_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
+) -> None:
+    # REVIEW.md SRV-160: `open` waited for with no limit, and its message dropped (stderr to DEVNULL)
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    started = _launch_fakes(monkeypatch, tmp_path)
+    limits: list[float | None] = []
+
+    class Opener(_FakeProcess):
+        def wait(self, timeout: float | None = None) -> int:
+            limits.append(timeout)
+            return 1
+
+    def begin(cmd: list[str], **kw: object) -> Opener:
+        started.append(cmd)
+        said = kw.get('stderr')
+        if isinstance(said, io.BufferedIOBase):  # the temporary file `open`'s errors go to
+            said.write(b"Unable to find application named 'Nope'\n")
+        return Opener(77)
+
+    monkeypatch.setattr(subprocess, 'Popen', begin)
+    patch_server(monkeypatch, '_designer_running', lambda: False)
+    patch_server(monkeypatch, '_send', _no_bridge)
+    with pytest.raises(server.ToolError) as raised:
+        server.launch_designer(wait_s=30)
+    said = str(raised.value)
+    assert "`open` exited with 1 (Unable to find application named 'Nope')" in said, said
+    assert limits and limits[0] is not None, 'a limit, a safety net'
+
+
+def test_an_open_that_doesnt_exit_is_said_as_a_designer_that_may_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
+) -> None:
+    # REVIEW.md SRV-160: past its limit `open` is ended, and Designer may have been opened
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    started = _launch_fakes(monkeypatch, tmp_path)
+    killed: list[int] = []
+
+    class Opener(_FakeProcess):
+        def wait(self, timeout: float | None = None) -> int:
+            raise subprocess.TimeoutExpired('open', timeout or 0)
+
+        def kill(self) -> None:
+            killed.append(self.pid)
+
+    def begin(cmd: list[str], **kw: object) -> Opener:
+        started.append(cmd)
+        return Opener(77)
+
+    monkeypatch.setattr(subprocess, 'Popen', begin)
+    patch_server(monkeypatch, '_designer_running', lambda: False)
+    patch_server(monkeypatch, '_send', _no_bridge)
+    with pytest.raises(server.ToolError) as raised:
+        server.launch_designer(wait_s=30)
+    said = str(raised.value)
+    assert killed == [77] and "Designer was opened, but `open` didn't exit within" in said, said
+
+
+def test_the_process_open_started_is_looked_for_with_the_launchs_port_and_home(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
+) -> None:
+    # REVIEW.md TST-437: the conftest fake ignores the marks; SRV-165: the port's variable and the home's, each whole
+    # (TST-443: the port the call was given)
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    started = _launch_fakes(monkeypatch, tmp_path)
+    asked: list[object] = []
+
+    def found(opener: Any, before: set[int], marks: tuple[str, ...]) -> int:  # Any: the fake process
+        asked.append(marks)
+        return int(opener.pid)
+
+    patch_server(monkeypatch, '_found_launched', found)
+    patch_server(monkeypatch, '_designer_running', lambda: False)
+    patch_server(monkeypatch, '_send', _answers_once_started(started))
+    home = tmp_path / 'home'
+    patch_server(monkeypatch, '_own_home', lambda port: str(home))
+    server.launch_designer(wait_s=30, port=OTHER)
+    # its home too: the port alone is in a Designer the user starts with SD_BRIDGE_PORT set (REVIEW.md SRV-165)
+    assert asked == [('SD_BRIDGE_PORT=%d' % OTHER, 'CFFIXED_USER_HOME=%s' % home)], asked
+
+
+def test_a_binary_in_sd_designer_app_is_started_itself_on_macos(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
+) -> None:
+    # REVIEW.md TST-437: only an app bundle is opened by `open`
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    started = _launch_fakes(monkeypatch, tmp_path)
+    binary = tmp_path / 'Designer'
+    binary.write_text('')
+    monkeypatch.setenv('SD_DESIGNER_APP', str(binary))
+    patch_server(monkeypatch, '_designer_running', lambda: False)
+    patch_server(monkeypatch, '_send', _answers_once_started(started))
+    server.launch_designer(wait_s=30)
+    assert started == [[str(binary)]], started
+    assert _started_with[0]['start_new_session'] and _started_with[0]['cwd'] == '/'
+
+
+def test_processes_that_cant_be_listed_before_open_are_said_as_no_start(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
+) -> None:
+    # REVIEW.md TST-437: _started's wrapping of _NoListing, before `open` runs
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    started = _launch_fakes(monkeypatch, tmp_path)
+    patch_server(monkeypatch, '_running_on', lambda port: False)
+    patch_server(monkeypatch, '_users_next_to', lambda port, note: None)
+
+    def no_listing() -> list[int]:
+        raise server._NoListing('pgrep failed')
+
+    patch_server(monkeypatch, '_designer_pids', no_listing)
+    patch_server(monkeypatch, '_send', _no_bridge)
+    with pytest.raises(server.ToolError, match=r'Designer could not be started from .*pgrep failed'):
+        server.launch_designer(wait_s=30)
+    assert started == [], '`open` never ran'
+
+
+def test_a_negative_wait_for_an_exit_is_no_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md SRV-159: kqueue refuses a negative timeout ("timeout must be positive or None"), after the close sent
+
+    class Queue:
+        def control(self, changes: None, events: int, timeout: float | None = None, /) -> list[object]:
+            if timeout is not None and timeout < 0:
+                raise ValueError('timeout must be positive or None')
+            return []
+
+        def close(self) -> None:
+            pass
+
+    patch_server(monkeypatch, '_designer_pids', lambda: [11])
+    patch_server(monkeypatch, '_exit_watch', lambda pid: server._ExitWatch(Queue()))
+    assert server._exited(11, -1) is False
+
+
+class _Watch:
+    """An exit watch, as launch_designer's wait uses it: ended() from `ends` (False once it runs out), close() counted."""
+
+    def __init__(self, ends: list[bool], closed: list[int]) -> None:
+        self.ends, self.closed = ends, closed
+
+    def ended(self) -> bool:
+        return self.ends.pop(0) if self.ends else False
+
+    def close(self) -> None:
+        self.closed.append(1)
+
+
+def test_a_launch_waiting_for_another_launchs_designer_reads_its_record_once_and_closes_its_watch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # REVIEW.md SRV-158: each refused round read the record twice (pgrep and ps each time), and the watches were never
+    # closed
+    _launch_fakes(monkeypatch, tmp_path)
+    read: list[int] = []
+    closed: list[int] = []
+    patch_server(monkeypatch, '_running_on', lambda port: True)
+
+    def record(port: int) -> tuple[int, bytes]:
+        read.append(port)
+        return 11, b'{}'
+
+    patch_server(monkeypatch, '_agent_record', record)
+    patch_server(monkeypatch, '_still_starting', lambda port: True)
+    patch_server(monkeypatch, '_exit_watch', lambda pid: _Watch([], closed))
+    patch_server(monkeypatch, '_send', _refused_then_idle(5))
+    monkeypatch.setattr(time, 'sleep', lambda seconds: None)
+    server.launch_designer(wait_s=30)
+    # once over the five refused rounds, and once as it answers (_already_running: its home, for its crash uploads)
+    assert len(read) == 2 and closed == [1], (read, closed)
+
+
+def test_a_launch_waiting_on_an_unrecorded_designer_starts_one_once_that_designer_leaves_the_port(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # REVIEW.md SRV-162: an unrecorded Designer can stop holding the port without exiting: another launch records it on
+    # its own port, or it starts listening on another. Watched only for its exit, it was never looked up again, and the
+    # launch waited out wait_s, then named it to end. So it is looked up each round, as no callback says either
+    started = _launch_fakes(monkeypatch, tmp_path)
+    looks = [0]
+
+    def sorted_out(port: int) -> tuple[list[int], list[int]]:
+        looks[0] += 1
+        return [22] if looks[0] <= 3 else [], []  # recorded by another launch on its own port at the fourth look
+
+    patch_server(monkeypatch, '_running_on', lambda port: bool(sorted_out(port)[0]))
+    patch_server(monkeypatch, '_agent_record', lambda port: None)
+    patch_server(monkeypatch, '_sorted_out', sorted_out)
+    patch_server(monkeypatch, '_exit_watch', lambda pid: _Watch([], []))  # it never exits
+    patch_server(monkeypatch, '_send', _answers_once_started(started))
+    now = [time.time()]
+    monkeypatch.setattr(time, 'sleep', lambda seconds: now.__setitem__(0, now[0] + seconds))
+    monkeypatch.setattr(time, 'time', lambda: now[0])
+    assert 'Designer started in' in server.launch_designer(wait_s=30) and started
+
+
+def test_a_launch_waiting_on_a_designer_goes_on_when_its_processes_cant_be_listed_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # REVIEW.md SRV-164: one pgrep failing in the wait's look ended the call; can't tell is read as may still hold the
+    # port, and the wait goes on to the Designer's answer
+    started = _launch_fakes(monkeypatch, tmp_path)
+    looks = [0]
+
+    def running_on(port: int) -> bool:
+        looks[0] += 1
+        if looks[0] == 2:
+            raise server._NoListing("Designer's processes couldn't be listed (pgrep exit code 3: fork failed)")
+        return True
+
+    asked = [0]
+
+    def send(request: dict[str, object], wait: float, port: int | None = None) -> Reply:
+        asked[0] += 1
+        if asked[0] <= 4:  # its bridge not up yet
+            raise server.ToolError('Designer is not reachable.')
+        return {'ok': True, 'output': 'idle, 0 queued'}
+
+    patch_server(monkeypatch, '_running_on', running_on)
+    patch_server(monkeypatch, '_agent_record', lambda port: None)  # unrecorded: looked up each round
+    patch_server(monkeypatch, '_send', send)
+    now = [time.time()]
+    monkeypatch.setattr(time, 'sleep', lambda seconds: now.__setitem__(0, now[0] + seconds))
+    monkeypatch.setattr(time, 'time', lambda: now[0])
+    said = server.launch_designer(wait_s=30)
+    assert said.startswith('Designer already running') and looks[0] > 2 and not started, said
+
+
+@pytest.mark.parametrize('watchable', [True, False], ids=['its exit event come', 'no watch to be had'])
+def test_a_launch_waiting_for_another_launchs_designer_starts_one_once_it_exited(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, watchable: bool
+) -> None:
+    # REVIEW.md TST-437: may_have_exited's ended and no-watch branches; without a watch it is looked up every round
+    started = _launch_fakes(monkeypatch, tmp_path)
+    running = [True]
+    looked: list[int] = []
+    rounds = [0]
+
+    def running_on(port: int) -> bool:
+        looked.append(port)
+        return running[0]
+
+    def ended() -> bool:
+        rounds[0] += 1
+        if rounds[0] == 3:  # it exits
+            running[0] = False
+        return not running[0]
+
+    patch_server(monkeypatch, '_running_on', running_on)
+    patch_server(monkeypatch, '_agent_record', lambda port: (11, b'{}') if running[0] else None)
+    patch_server(monkeypatch, '_still_starting', lambda port: True)
+    if watchable:
+        patch_server(monkeypatch, '_exit_watch', lambda pid: SimpleNamespace(ended=ended, close=lambda: None))
+    else:
+        patch_server(monkeypatch, '_exit_watch', lambda pid: None)
+        patch_server(monkeypatch, '_agent_record', lambda port: (11, b'{}') if ended() is False else None)
+    patch_server(monkeypatch, '_send', _answers_once_started(started))
+    monkeypatch.setattr(time, 'sleep', lambda seconds: None)
+    assert 'Designer started in' in server.launch_designer(wait_s=30) and started
+    # before the start, then: once it exited (watched), or each round (not), then in start() under its lock
+    assert len(looked) == (3 if watchable else 5), looked

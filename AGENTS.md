@@ -53,6 +53,27 @@ a blind test and run it again before any fix, and say an issue that isn't real i
 changes no behaviour (a rename, a move) needs no new failing test: run the existing tests of the code it touches before
 and after; they must pass both times.
 
+**Wait for callbacks, never for measured times.** Code that waits for Designer, Qt or the OS waits for the callback
+that says the thing happened. That covers the tools, the helpers and the tests, for things like a window shown, the 3D
+view drawn, a menu open or a process gone. A callback can be a Qt signal, an event seen by an event filter, or a
+notification of the API.
+- **Hunt for one** when you don't know of any, before writing a wait. Look at the object's signals, at the events an
+  event filter logs as the thing happens, at what its widgets show (a label, a count), and at the API.
+- **Poll the state every 100 ms** only where no callback exists.
+- **Give either wait a limit,** so it ends if the callback never comes. The limit is a safety net, never the time the
+  wait is expected to take.
+- **Never wait a time measured here:** no fixed sleep, and no margin after a state. Another machine, or the same one
+  under another load, takes longer or shorter.
+
+Measuring what Designer does in each case still comes first (above): what happens, not how long it takes.
+
+**Simplify the change before reviewing it.** Once a change of code passes its tests, the agent that made it runs
+`/simplify` on it, once. `/simplify` is Claude Code's built-in skill. It reviews the diff for reuse, simplification,
+efficiency and altitude, then applies the fixes in this session. Skip a fix that goes against these rules or
+DECISIONS.md, or one that would only restyle a comment, docstring or doc. The fixes change no behaviour, so the rule for
+a rename or a move applies. Run the existing tests of the code they touch, with lint and types, before and after the
+fixes. They must pass both times. A change of docs alone skips this step, and so does a review.
+
 **Review your own work before calling it done**, as a reviewer, not its author: does it cover the neighbouring cases (a
 node as well as the graph, the other parameter, the other code path); would each test fail without the change it guards
 (not pass on state an earlier check left, a value already there, or a comparison any rule satisfies); does every test
@@ -171,7 +192,7 @@ deliberate: the sentence saying what REVIEW.md and DECISIONS.md each remember.
 | Architecture: what the plugin, server, helpers and CLI tools each do | **README.md**, "How it works" |
 | How to deploy changes, diagnostics an **agent** needs | **AGENTS.md**, Deploying and diagnosing |
 | New or changed tool | Its entry and the tool count in README.md's Tools table, and checks in `tests/test_all_tools/` |
-| What is settled for the whole project: the user's won't fix, rule or choice; a not-a-bug or not-reproducible answer the user acknowledged at a cleanup | **DECISIONS.md** (read by the review skills; agents may update its names and paths, anything else takes the user) |
+| What is settled for the whole project that a reviewer could plausibly raise again: the user's won't fix, rule or choice; a not-a-bug or not-reproducible answer the user acknowledged at a cleanup | **DECISIONS.md** (read by the review skills; agents may update its names and paths, anything else takes the user) |
 | Work still to do, ideas, follow-ups | **ROADMAP.md** (check an item when done; checked items can be deleted later, git keeps the record) |
 
 Open work lives in [ROADMAP.md](ROADMAP.md): check it before proposing improvements, and add new ideas there.

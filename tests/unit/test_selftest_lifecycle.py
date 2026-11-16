@@ -7,8 +7,9 @@ import json
 import os
 import re
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -30,6 +31,28 @@ def _lifecycle() -> Any:  # a module imported by name: PyCharm can't see its nam
     return importlib.import_module('test_all_tools.lifecycle.checks')
 
 
+def _windows_read(monkeypatch: pytest.MonkeyPatch, lifecycle: ModuleType) -> list[bool]:
+    """Whether each front watch entered watches (REVIEW.md TST-458: a real one, started by the check's launch, read the
+    user's active app and the windows on their screen)."""
+    watching: list[bool] = []
+    real = lifecycle.window_server.FrontWatch
+    enter = real.__enter__
+
+    def entered(self: Any) -> Any:  # Any: a FrontWatch of the module loaded afresh, as it returns itself
+        watching.append(self.watching)
+        return enter(self)
+
+    monkeypatch.setattr(real, '__enter__', entered)
+    return watching
+
+
+def _no_front_watch(monkeypatch: pytest.MonkeyPatch, lifecycle: ModuleType) -> None:
+    """The check's front watch made one that samples nothing: a real one reads the user's active app and the windows on
+    their screen (REVIEW.md TST-458)."""
+    real = lifecycle.window_server.FrontWatch
+    monkeypatch.setitem(vars(lifecycle.window_server), 'FrontWatch', lambda watching=True: real(watching=False))
+
+
 def _answer(out: str) -> SimpleNamespace:
     return SimpleNamespace(is_error=False, content=[SimpleNamespace(type='text', text=out)])
 
@@ -38,14 +61,20 @@ def _no_dumps(ports: Any = ()) -> set[str]:
     return set()
 
 
-def _no_wait(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+def _no_dump_coming(ports: Sequence[int], before: set[str]) -> bool:
+    """No crash handler running: the real look lists the crash handlers and the crash-dump folders (REVIEW.md
+    TST-458)."""
+    return False
+
+
+def _no_wait(monkeypatch: pytest.MonkeyPatch) -> list[object]:
     """The crash watch of a check run here: no 10 s wait, no real crash-dump folder (REVIEW.md TST-261). The list gets
     each one made: empty, the patch no longer reaches what the check builds."""
     module = sys.modules['test_all_tools.crash_watch']
     real, made = module.CrashWatch, []
 
-    def build() -> Any:
-        made.append(real(wait_s=0, find=_no_dumps, sleep=lambda seconds: None))
+    def build() -> Any:  # Any: a CrashWatch of the module loaded afresh
+        made.append(real(wait_s=0, find=_no_dumps, sleep=lambda seconds: None, coming=_no_dump_coming))
         return made[-1]
 
     monkeypatch.setitem(vars(module), 'CrashWatch', build)
@@ -61,6 +90,8 @@ def test_the_check_on_another_port_never_quits_a_designer_it_didnt_start(
     # recorded there just before this launch, which then finds it running
     lifecycle = _lifecycle()
     common = lifecycle.common
+    read = _windows_read(monkeypatch, lifecycle)
+    _no_front_watch(monkeypatch, lifecycle)
     other = 1  # a port no real agent folder is named for
     theirs = 4242
     record = json.dumps({'pid': theirs, 'start': 'x', 'home': None})
@@ -76,9 +107,9 @@ def test_the_check_on_another_port_never_quits_a_designer_it_didnt_start(
     watches = _no_wait(monkeypatch)
     monkeypatch.setitem(vars(lifecycle), 'users_log', lambda: None)
     monkeypatch.setitem(vars(lifecycle), 'users_settings_file', lambda: None)
-    calls: list[tuple[str, dict[str, Any]]] = []
+    calls: list[tuple[str, dict[str, object]]] = []
 
-    async def c(name: str, args: dict[str, Any] | None = None) -> SimpleNamespace:
+    async def c(name: str, args: dict[str, object] | None = None) -> SimpleNamespace:
         calls.append((name, args or {}))
         if name == 'launch_designer':  # the other run's, made as this launch looks: it finds that one running
             folder.mkdir(exist_ok=True)
@@ -97,6 +128,7 @@ def test_the_check_on_another_port_never_quits_a_designer_it_didnt_start(
         else ('starts a second Designer on another port')
     )
     assert re.search(r'^FAIL  launch_designer +%s' % re.escape(said), capsys.readouterr().out, re.M)
+    assert True not in read, 'a real front watch read the windows on screen'
 
 
 NOT_ANSWERING = (
@@ -118,6 +150,8 @@ def test_the_check_on_another_port_ends_the_designer_its_own_launch_left(
     # running there (another run's) still isn't the check's
     lifecycle = _lifecycle()
     common = lifecycle.common
+    read = _windows_read(monkeypatch, lifecycle)
+    _no_front_watch(monkeypatch, lifecycle)
     other, started = 1, 4242
     monkeypatch.setitem(vars(common), 'SHORT_TEMP', str(tmp_path))
     folder = tmp_path / agent_folder_name(other)
@@ -127,9 +161,9 @@ def test_the_check_on_another_port_ends_the_designer_its_own_launch_left(
     watches = _no_wait(monkeypatch)
     monkeypatch.setitem(vars(lifecycle), 'users_log', lambda: None)
     monkeypatch.setitem(vars(lifecycle), 'users_settings_file', lambda: None)
-    calls: list[tuple[str, dict[str, Any]]] = []
+    calls: list[tuple[str, dict[str, object]]] = []
 
-    async def c(name: str, args: dict[str, Any] | None = None) -> SimpleNamespace:
+    async def c(name: str, args: dict[str, object] | None = None) -> SimpleNamespace:
         calls.append((name, args or {}))
         if name == 'launch_designer':  # recorded on the port as it starts, then no answer
             folder.mkdir(exist_ok=True)
@@ -143,6 +177,7 @@ def test_the_check_on_another_port_ends_the_designer_its_own_launch_left(
     assert quits == ([{'port': other, 'wait_s': 10}] if ours else []), calls
     assert folder.is_dir()  # its process still listed: kept, as for a crash dump
     assert False in common.results['launch_designer']
+    assert True not in read, 'a real front watch read the windows on screen'
 
 
 def test_the_users_log_is_the_one_read_designer_log_finds(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -217,8 +252,35 @@ def test_its_own_designer_is_gone_whatever_else_starts(monkeypatch: pytest.Monke
     assert not lifecycle.has_ended(None), 'none recorded before the quit: nothing seen going'
 
 
-def test_ending_the_runs_designer_forces_only_its_own(monkeypatch: pytest.MonkeyPatch) -> None:
-    # REVIEW.md TST-170: after its SIGTERM, end_own_designer sent SIGKILL if any Designer still ran, another run's too
+@pytest.mark.parametrize(
+    'listed, sent',
+    [([12], ['SIGTERM']), ([11, 12], ['SIGTERM', 'SIGKILL'])],
+    ids=["its own ended, another run's up", 'its own still running at the end of the wait'],
+)
+def test_ending_the_runs_designer_forces_only_its_own(
+    monkeypatch: pytest.MonkeyPatch, listed: list[int], sent: list[str]
+) -> None:
+    # REVIEW.md TST-170: after its SIGTERM, end_own_designer sent SIGKILL if any Designer still ran, another run's too.
+    # Its wait is the server's _exited, which lists Designers as the server does: the processes are given there
+    # (REVIEW.md TST-457: given to common, they reached nothing, and the SIGKILL had no test)
+    import signal
+
+    from conftest import patch_server
+
+    lifecycle = _lifecycle()
+    common = lifecycle.common
+    Path(agent_designer_file(common.PORT)).write_text(json.dumps({'pid': 11, 'start': 'at 11', 'home': None}))
+    patch_server(monkeypatch, '_process_start', lambda pid: 'at 11')
+    patch_server(monkeypatch, '_designer_pids', lambda: listed)  # after its SIGTERM
+    patch_server(monkeypatch, '_exit_watch', lambda pid: SimpleNamespace(wait=lambda limit: False))  # its limit
+    signals: list[tuple[int, int]] = []
+    monkeypatch.setattr(os, 'kill', lambda pid, sig: signals.append((pid, sig)))
+    common.end_own_designer()
+    assert signals == [(11, getattr(signal, name)) for name in sent]
+
+
+def test_ending_the_runs_designer_waits_for_its_exit_not_a_fixed_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md TST-421: 5 s after its SIGTERM, whatever the process did
     import signal
     import time
 
@@ -228,13 +290,18 @@ def test_ending_the_runs_designer_forces_only_its_own(monkeypatch: pytest.Monkey
     common = lifecycle.common
     Path(agent_designer_file(common.PORT)).write_text(json.dumps({'pid': 11, 'start': 'at 11', 'home': None}))
     patch_server(monkeypatch, '_process_start', lambda pid: 'at 11')
-    monkeypatch.setitem(vars(common), 'designer_pids', lambda: [12])  # 11 ended on SIGTERM; another run's is up
-    monkeypatch.setitem(vars(common), 'designer_alive', lambda: True)
     sent: list[tuple[int, int]] = []
+    waited: list[tuple[int, float]] = []
     monkeypatch.setattr(os, 'kill', lambda pid, sig: sent.append((pid, sig)))
-    monkeypatch.setattr(time, 'sleep', lambda seconds: None)
+
+    def exited(pid: int, limit: float) -> bool:
+        waited.append((pid, limit))
+        return True
+
+    patch_server(monkeypatch, '_exited', exited)
+    monkeypatch.setattr(time, 'sleep', lambda seconds: pytest.fail('a fixed wait of %g s' % seconds))
     common.end_own_designer()
-    assert sent == [(11, signal.SIGTERM)]
+    assert sent == [(11, signal.SIGTERM)] and waited == [(11, common.END_WAIT_S)]
 
 
 @pytest.mark.parametrize('outcome', [2, 3, FileNotFoundError(2, 'No such file', 'pgrep')], ids=['2', '3', 'no pgrep'])
@@ -320,8 +387,10 @@ class _Designer:
         return [n for n, _ in self.calls]
 
 
-def _prepared(lifecycle: Any, c: _Designer) -> bool:
-    watch = sys.modules['test_all_tools.crash_watch'].CrashWatch(wait_s=0, find=_no_dumps, sleep=lambda seconds: None)
+def _prepared(lifecycle: ModuleType, c: _Designer) -> bool:
+    watch = sys.modules['test_all_tools.crash_watch'].CrashWatch(
+        wait_s=0, find=_no_dumps, sleep=lambda seconds: None, coming=_no_dump_coming
+    )
     ready = bool(asyncio.run(lifecycle.check_a_designer_of_its_own(SimpleNamespace(c=c, crash_watch=watch))))
     watch.settle()
     return ready
@@ -473,14 +542,24 @@ SAMPLE = """Call graph:
     820 Thread_1140019   DispatchQueue_1: com.apple.main-thread  (serial)
     + 820 start  (in dyld) + 6992  [0x18c8384e4]
     +   820 main  (in Adobe Substance 3D Designer) + 12432  [0x1044142e0]
-    +     820 QCoreApplication::~QCoreApplication()  (in QtCore) + 128  [0x11996049c]
-    +       820 QThreadPool::waitForDone(QDeadlineTimer)  (in QtCore) + 44  [0x119af21cc]
-    +         500 QWaitCondition::wait(QMutex*, QDeadlineTimer)  (in QtCore) + 108  [0x119af6ad4]
-    +         ! 500 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x18cbc350c]
-    +         320 QThreadPoolPrivate::reset()  (in QtCore) + 10  [0x119af1000]
+    +     820 (anonymous namespace)::destroyApplication(Pfx::Applications::Designer::Application*&, std::unique_ptr<Alg::CrashReporter>*)  (in Adobe Substance 3D Designer) + 1312  [0x104411a20]
+    +       820 QCoreApplication::~QCoreApplication()  (in QtCore) + 128  [0x11996049c]
+    +         820 QThreadPool::waitForDone(QDeadlineTimer)  (in QtCore) + 44  [0x119af21cc]
+    +           500 QWaitCondition::wait(QMutex*, QDeadlineTimer)  (in QtCore) + 108  [0x119af6ad4]
+    +           ! 500 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x18cbc350c]
+    +           320 QThreadPoolPrivate::reset()  (in QtCore) + 10  [0x119af1000]
     820 Thread_1140040
     + 820 start_wqthread  (in libsystem_pthread.dylib) + 8  [0x18cbfec10]
 """
+
+
+def _main_thread_sample(*calls: str) -> str:
+    """A sample in macOS's format whose main thread holds `calls`, each called by the one before it."""
+    lines = ['Call graph:', '    820 Thread_1   DispatchQueue_1: com.apple.main-thread  (serial)']
+    lines += [
+        '    +%s820 %s  (in Designer) + 8  [0x1000]' % (' ' * (1 + 2 * depth), call) for depth, call in enumerate(calls)
+    ]
+    return '\n'.join(lines) + '\n'
 
 
 def test_the_main_threads_heaviest_calls_are_read_from_a_sample() -> None:
@@ -492,27 +571,54 @@ def test_the_main_threads_heaviest_calls_are_read_from_a_sample() -> None:
     assert samples.main_thread('Call graph:\n    820 Thread_1\n') == 'no main thread in the sample'
 
 
-# the same Designer sampled while its shutdown was still stopping Adobe's sign-in, before the pool's wait (REVIEW.md
-# TST-400: seen in a full run)
-SIGNING_OUT = SAMPLE.replace(
-    '    +       820 QThreadPool::waitForDone(QDeadlineTimer)  (in QtCore) + 44  [0x119af21cc]\n',
-    '    +       820 adobe::ngl::internal::NglSSOHandler::Stop()  (in libngl.dylib) + 96  [0x11a2c3d40]\n',
+# Designer's main thread at its shutdown's steps before the pool's wait, all inside destroyApplication (measured
+# 2026-11-16, lifecycle/hold_thread_pool held, sampled from the windows' close on), its frames between shortened
+TEARDOWN = '(anonymous namespace)::destroyApplication(Pfx::Applications::Designer::Application*&)'
+# stopping Adobe's sign-in (REVIEW.md TST-400: seen in a full run)
+SIGNING_OUT = _main_thread_sample(
+    'start',
+    'main',
+    TEARDOWN,
+    'Pfx::Editor::Components::Ngl::Component::~Component()',
+    'adobe::ngl::internal::NglSSOHandler::Stop()',
+)
+# a file watcher's wait for macOS's file events, as the render engine is deleted (REVIEW.md TST-400): the six deepest
+# calls as the 2026-11-16 full run's check printed them, their callers as the probe measured them
+WATCHING_FILES = _main_thread_sample(
+    'start',
+    'main',
+    TEARDOWN,
+    'Alg::Core::ComponentsTable::clear(QRecursiveMutex&)',
+    'Pfx::DataRendering::EngineComponent::~EngineComponent()',
+    'QCoreApplication::processEvents(QFlags<QEventLoop::ProcessEventsFlag>, int)',
+    'QObject::event(QEvent*)',
+    'QFileSystemWatcher::addPath(QString const&)',
+    'QFileSystemWatcher::addPaths(QList<QString> const&)',
+    'QFseventsFileSystemWatcherEngine::addPaths(QList<QString> const&, QList<QString>*, QList<QString>*)',
+    'FSEventStreamFlushSync',
+    'f2d_flush_rpc',
+)
+RUNNING = _main_thread_sample(
+    'start', 'main', 'QApplication::exec()', 'QEventLoop::exec(QFlags<QEventLoop::ProcessEventsFlag>)', '_CFRunLoopRun'
 )
 
 
 @pytest.mark.parametrize(
-    'stacks, waiting',
-    [
-        (SAMPLE, True),
-        (SIGNING_OUT, True),
-        (SAMPLE.replace('QThreadPool::waitForDone', 'QEventLoop::exec'), False),
-        ('', False),
-    ],
-    ids=['the pool', 'the sign-in stop', 'running', 'no sample'],
+    'stacks, shutting_down',
+    [(SAMPLE, True), (SIGNING_OUT, True), (WATCHING_FILES, True), (RUNNING, False), ('', False)],
+    ids=['the pool', 'the sign-in stop', 'a file watcher', 'running', 'no sample'],
 )
-def test_a_sample_shows_designer_at_one_of_its_shutdowns_waits(stacks: str, waiting: bool) -> None:
-    # REVIEW.md TST-400: the shutdown stops Adobe's sign-in, then waits for the pool held by hold_thread_pool
-    assert _samples().in_shutdown(stacks) is waiting
+def test_a_sample_shows_designer_anywhere_in_its_teardown(stacks: str, shutting_down: bool) -> None:
+    # REVIEW.md TST-400: any of the teardown's steps, not only the waits seen so far, can hold the main thread when sampled
+    assert _samples().in_shutdown(stacks) is shutting_down
+
+
+def test_the_file_watchers_sample_reads_as_the_full_run_printed_it() -> None:
+    # REVIEW.md TST-400: the fixture is the sample that failed, not one made up to pass
+    assert _samples().main_thread(WATCHING_FILES) == (
+        'f2d_flush_rpc < FSEventStreamFlushSync < QFseventsFileSystemWatcherEngine::addPaths'
+        ' < QFileSystemWatcher::addPaths < QFileSystemWatcher::addPath < QObject::event'
+    )
 
 
 def test_a_result_naming_a_sample_gives_its_text_and_where_the_main_thread_was(tmp_path: Path) -> None:
@@ -551,3 +657,29 @@ def test_the_main_threads_calls_keep_their_names_and_the_c_librarys() -> None:
         'exit < Foo<decltype(x)>::f < std::__1::__function::__func<Foo::bar()::$_0, void ()>::operator() < '
         '-[NSApplication(NSAppleEventHandling) _handleAEQuit] < start'
     )
+
+
+def test_the_second_client_looks_at_the_bridge_off_the_event_loop() -> None:
+    # REVIEW.md TST-426: job_running, a blocking socket call, ran on the asyncio loop sending the job's own call
+    import inspect
+
+    common = importlib.import_module('test_all_tools.common')
+    assert 'await until_job_running(limit)' in inspect.getsource(common.cancel_from_second_client)
+    assert 'await asyncio.to_thread(job_running, token)' in inspect.getsource(common.until_job_running)
+
+
+def test_the_modal_dialog_poll_stops_once_the_dialog_is_seen() -> None:
+    # REVIEW.md TST-426: it slept POLL_S after finding the dialog too, a margin after the state
+    with open(os.path.join(SELFTEST_DIR, 'lifecycle', 'checks.py'), encoding='utf-8') as f:
+        text = f.read()
+    poll = text[text.index("deadline, modal = time.monotonic() + 30, ''") :][:600]
+    assert re.search(r"if 'MODAL=QMessageBox' in modal:\s+break", poll), poll
+    assert 'await asyncio.sleep(POLL_S)' in poll and 'time.sleep(POLL_S)' not in poll
+
+
+def test_the_launch_check_judges_designer_started_off_screen() -> None:
+    # REVIEW.md SRV-152: a launch starts Designer hidden, so no window of its is on screen to be behind anything
+    with open(os.path.join(SELFTEST_DIR, 'lifecycle', 'checks.py'), encoding='utf-8') as f:
+        text = f.read()
+    assert 'window_server.stayed_off_screen(front.samples, second)' in text
+    assert 'stayed_behind(front.samples, second' not in text

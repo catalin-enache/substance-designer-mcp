@@ -1,5 +1,5 @@
 """set_link_display (server_tools/layout.py): the file-level edit, the copy of the saved file, the
-reload in separate calls."""
+reload in separate calls, with no pause between them."""
 
 import os
 import time
@@ -11,9 +11,11 @@ import pytest
 from conftest import patch_server, server
 
 
-def test_reload_is_split_with_pauses(monkeypatch: pytest.MonkeyPatch) -> None:
-    # unload, pause, load, pause: separate calls so Designer's event loop finishes tearing down
-    # the old graph views before new ones are created (a back-to-back reload once crashed it)
+def test_reload_is_split_in_separate_calls_with_no_pause(monkeypatch: pytest.MonkeyPatch) -> None:
+    # separate calls, so Designer's event loop tears down the old graph views before new ones are created (a
+    # back-to-back reload once crashed it). The bridge runs Designer's event loop between two calls (the plugin's
+    # _drain), and an unload's widgets were all gone as the next call started (measured; link_display's designer
+    # fact): the 0.5 s pauses after the unload and the load waited for nothing (REVIEW.md SRV-150)
     events: list[str] = []
 
     def bridge(code: str, path: str | None = None, timeout: float | None = None) -> str:
@@ -23,7 +25,7 @@ def test_reload_is_split_with_pauses(monkeypatch: pytest.MonkeyPatch) -> None:
     patch_server(monkeypatch, '_bridge', bridge)
     monkeypatch.setattr(time, 'sleep', lambda s: events.append('sleep %.1f' % s))
     server._reload_package_file('/x/pkg.sbs')
-    assert events == ['unload_package_file', 'sleep 0.5', 'load_package_file', 'sleep 0.5']
+    assert events == ['unload_package_file', 'load_package_file']
 
 
 def _sbs(tmp_path: Path, graph_body: str) -> Path:
@@ -340,3 +342,20 @@ def test_a_hard_linked_sbs_whose_temporary_file_cant_be_removed_still_counts_as_
     assert '1 of 1 selected link(s) changed to portal' in result and reloaded == [str(sbs)]
     assert '<displayType v="1"' in sbs.read_text() and other.read_text() == sbs.read_text()
     assert len([p for p in project.iterdir() if p.name.endswith('.tmp')]) == 1  # it just stays
+
+
+def test_the_unload_fact_leaves_nothing_connected_and_loads_the_package_only_if_gone() -> None:
+    # REVIEW.md TST-424: its destroyed slots and sys.mcp_selftest_gone stayed for the rest of the category; its first
+    # call was outside the try; a refused unload was loaded again, a second copy
+    import inspect
+
+    from selftest_fakes import fresh
+
+    checks = fresh('link_display.checks')
+    body = inspect.getsource(checks.check_an_unloads_widgets_are_gone_once_the_next_call_starts)
+    assert body.index('try:') < body.index('UNLOAD_WATCHED'), 'the first call inside the try'
+    assert 'none later' not in body and 'none in the call after' not in body
+    assert 'GONE_DONE' in body and 'GONE_DONE' in vars(checks)
+    done = checks.GONE_DONE
+    assert 'disconnect' in done and 'del sys.mcp_selftest_gone' in done
+    assert 'LOAD_IF_GONE' in body and 'getUserPackages' in checks.LOAD_IF_GONE

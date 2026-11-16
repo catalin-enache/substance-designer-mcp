@@ -83,6 +83,9 @@ may update the names and paths an entry points at; changing what was decided, or
   dropping what is unsaved (`server_tools/lifecycle.py`). The user's decision, 2026-11-05.
   Reopen if: the user changes the rule.
 
+- **During tests, no window of an agent's Designer comes in front of the user's windows unless a check needs it
+  there.** It stops their work: "a deal breaker" (the user, 2026-11-15). Reopen if: the user asks for it.
+
 ## Security
 
 - **Only the client is authenticated, not the plugin.** A program running as the same user could read

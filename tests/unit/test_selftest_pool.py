@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import time
+from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -350,6 +351,23 @@ def test_the_index_runs_a_pool_one_run_off_macos_and_nothing_next_to_the_users_d
     assert ended.value.code == 2 and ran == [] and 'close it' in capsys.readouterr().out
 
 
+def test_a_run_hides_the_designer_it_started_before_any_category() -> None:
+    import ast
+    from pathlib import Path
+
+    # nothing of it on the user's screen: every category's checks passed with Designer hidden (common.HIDE)
+    path = Path(__file__).parents[1] / 'test_all_tools' / '__main__.py'
+    tree = ast.parse(path.read_text(encoding='utf-8'))
+    run = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'run')
+    source = ast.unparse(run)
+    launch, hide, steps = (
+        source.index(part) for part in ("'launch_designer'", 'hide_designer(', 'run_steps(ctx, steps)')
+    )
+    assert launch < hide < steps
+    guard = next(n for n in ast.walk(run) if isinstance(n, ast.If) and 'hide_designer(' in ast.unparse(n))
+    assert ast.unparse(guard.test) == 'not was_running', "never the user's"
+
+
 # --- a worker: one category in a Designer of its own
 
 
@@ -441,7 +459,7 @@ def test_the_pool_runs_every_category_once_and_prints_one_summary(
 def test_one_wait_for_crash_dumps_at_the_end_and_each_dump_fails_its_category_only(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
-    def write(name: str, folder: str, port: int) -> dict[str, Any]:
+    def write(name: str, folder: str, port: int) -> Mapping[str, object]:
         if name == 'render':  # its Designer crashed on its way out
             dumps = tmp_path / ('agent_%d' % port) / 'home' / 'Sentry-Crashpad' / 'completed'
             os.makedirs(dumps)
@@ -450,7 +468,7 @@ def test_one_wait_for_crash_dumps_at_the_end_and_each_dump_fails_its_category_on
 
     workers = pool(monkeypatch, tmp_path, write)
     assert workers.run_pool(4) == 1
-    assert len([s for s in workers.waits if s >= 1]) == 1, 'one wait, after the last quit'
+    assert len(workers.looked) == 1, 'one wait, after the last quit'
     out = capsys.readouterr().out
     assert "FAIL  quit_designer          closes render's Designer, which left no crash dump" in out
     assert "PASS  quit_designer          closes facts's Designer, which left no crash dump" in out
@@ -466,7 +484,7 @@ def test_a_dump_in_a_workers_folder_is_never_one_outside_the_run(
     # REVIEW.md TST-236: lifecycle's dumps and those of a worker without results were left out of `placed`, so they also
     # failed "no new crash dump outside the run"; lifecycle's own watch reports its dumps, and a worker without results
     # gets a check naming them
-    def write(worker: str, folder: str, port: int) -> dict[str, Any] | None:
+    def write(worker: str, folder: str, port: int) -> Mapping[str, object] | None:
         if worker == name:
             dumps = tmp_path / ('agent_%d' % port) / 'home' / 'Sentry-Crashpad' / 'completed'
             os.makedirs(dumps)
@@ -532,7 +550,7 @@ def test_a_forced_quits_designer_folder_is_kept_to_read_its_log(
     # REVIEW.md SRV-106: the log naming where its shutdown stopped is in that folder
     ports: dict[str, int] = {}
 
-    def write(name: str, folder: str, port: int) -> dict[str, Any]:
+    def write(name: str, folder: str, port: int) -> Mapping[str, object]:
         ports[name] = port
         return part(
             name, _forced(project_constants.QUIT_FORCED_IN_SHUTDOWN) if name == 'render' else 'Designer quit after 2s.'
@@ -554,7 +572,7 @@ def test_a_quit_ending_while_sampled_passes_and_keeps_its_folder(
     # sample a hang's evidence (ROADMAP item 70)
     ports: dict[str, int] = {}
 
-    def write(name: str, folder: str, port: int) -> dict[str, Any]:
+    def write(name: str, folder: str, port: int) -> Mapping[str, object]:
         ports[name] = port
         sampled = 'Designer quit after 32s. %s /tmp/sd_mcp_1_%d/threads_42.sample.txt' % (
             project_constants.QUIT_SAMPLED,
@@ -586,7 +604,7 @@ def test_lifecycles_quits_forced_during_their_shutdown_count_and_keep_its_folder
     # REVIEW.md TST-293: lifecycle's own normal closes pass on such a quit too, and item 69 was first seen in one
     ports: dict[str, int] = {}
 
-    def write(name: str, folder: str, port: int) -> dict[str, Any]:
+    def write(name: str, folder: str, port: int) -> Mapping[str, object]:
         ports[name] = port
         if name == 'lifecycle':
             return {**part(name), 'forced_in_shutdown': ['closes the Designer it started, with a modal dialog open']}
@@ -832,7 +850,7 @@ def test_a_report_uploaded_during_the_run_is_no_new_dump(
     workers = pool(monkeypatch, tmp_path, lambda name, folder, port: part(name))
     calls: list[int] = []
 
-    def dumps(ports: Any = (), run_port: bool = True) -> set[str]:
+    def dumps(ports: Collection[int] = (), run_port: bool = True) -> set[str]:
         calls.append(1)
         return {str(tmp_path / 'user' / 'Sentry-Crashpad' / ('pending' if len(calls) == 1 else 'completed') / 'x.dmp')}
 
@@ -937,7 +955,7 @@ def test_a_pool_of_chosen_categories_judges_the_coverage_of_their_tools_only(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
     # every worker lists all the server's tools; the others' categories didn't run, so their tools aren't missing
-    def write(name: str, folder: str, port: int) -> dict[str, Any]:
+    def write(name: str, folder: str, port: int) -> Mapping[str, object]:
         return {**part(name), 'tools': ['t', 'u']}
 
     workers = pool(monkeypatch, tmp_path, write)
@@ -964,12 +982,31 @@ def test_the_wait_for_crash_dumps_counts_from_the_last_quit(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
     # REVIEW.md TST-268: a dump comes seconds after its Designer quits, so the wait is from the last one to quit
-    def write(name: str, folder: str, port: int) -> dict[str, Any]:
+    def write(name: str, folder: str, port: int) -> Mapping[str, object]:
         return {**part(name), 'quit_at': time.time() - (100 if name == 'facts' else 0)}
 
     workers = pool(monkeypatch, tmp_path, write)
+    started = time.time()
     assert workers.run_pool(4, unit=False, only=['layout', 'facts']) == 0
-    assert [round(s) for s in workers.waits if s >= 1] == [round(workers.CRASH_WAIT_S)]
+    [(_, until, _)] = workers.looked
+    assert started + workers.CRASH_WAIT_S - 1 < until < time.time() + workers.CRASH_WAIT_S + 1
+
+
+def test_the_wait_for_crash_dumps_compares_with_the_dumps_there_before_the_run(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    # REVIEW.md TST-437: the fake wait dropped `before`, so nothing checked what it compares with
+    old = tmp_path / 'agent_5001' / 'home' / 'Sentry-Crashpad' / 'completed' / 'old.dmp'
+    os.makedirs(old.parent)
+    old.write_text('')
+
+    def write(name: str, folder: str, port: int) -> Mapping[str, object]:
+        return {**part(name), 'quit_at': time.time()}
+
+    workers = pool(monkeypatch, tmp_path, write)
+    workers.run_pool(4, unit=False, only=['layout', 'facts'])
+    [(_, _, before)] = workers.looked
+    assert before == {str(old)}
 
 
 def test_a_pool_of_lifecycle_alone_has_no_first_category(
@@ -1230,3 +1267,28 @@ def test_the_check_compares_with_the_copy_kept_for_a_designer_outside_the_run(
     assert workers.run_pool(4) == 0
     assert 'PASS' in _the_line(capsys.readouterr().out)
     assert defaults.domain == {'session.mainWindow.state': b'the user'}
+
+
+def test_the_wait_for_crash_dumps_lasts_while_one_may_come_looked_at_every_poll(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # REVIEW.md SRV-151: it slept 10 s after the last quit whatever happened; it waits while a Designer's crash handler
+    # runs with no dump yet (common.dumps_may_come), until `until` at most
+    workers = fresh('workers')
+    looks = iter([True, True, True, False])
+    asked: list[tuple[list[int], set[str], bool]] = []
+
+    def may_come(ports: Sequence[int], before: set[str], run_port: bool = True) -> bool:
+        asked.append((list(ports), before, run_port))
+        return next(looks)
+
+    slept: list[float] = []
+    monkeypatch.setitem(vars(workers), 'dumps_may_come', may_come)
+    monkeypatch.setitem(vars(workers), 'sleep', slept.append)
+    workers.wait_for_dumps([5001, 5002], {'a.dmp'}, time.time() + 60)
+    assert slept == [workers.POLL_S] * 3
+    assert asked[0] == ([5001, 5002], {'a.dmp'}, False), "the parent's: no Designer on the default port"
+    slept.clear()
+    monkeypatch.setitem(vars(workers), 'dumps_may_come', lambda ports, before, run_port=True: True)
+    workers.wait_for_dumps([5001], set(), time.time() - 1)  # past its limit: no wait
+    assert slept == []

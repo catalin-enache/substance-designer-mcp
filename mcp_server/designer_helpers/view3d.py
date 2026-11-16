@@ -6,11 +6,11 @@ viewpoint, the camera turned and panned, the zoom and the tiling (ROADMAP items 
 - Designer builds the 3D view's menu bar and viewport once a graph is opened (before, its dock has neither).
 - The 3D view's menu bar: Scene lists the meshes (MESHES, among other entries), Camera the viewpoints (VIEWS) and
   Frame. Their actions trigger from code once the menu's aboutToShow has filled it, as the screenshot's Copy Render
-  does. The camera turns to a viewpoint over a moment, and a Frame triggered at once cancels the turn, so it waits
-  VIEW_TURN first.
+  does. The camera turns to a viewpoint over a moment, and a Frame triggered at once cancels the turn, so Frame waits
+  for the turn to end (_Frames.moved: frames3d.py).
 - Zoom: wheel events on the viewport (the visible Alg::Gui3D::ViewportWidget), taken as from the mouse although the
   view is GPU-drawn: about 1.11x a step closer, 1.09x a step away, from wherever the camera is. Sent back to back,
-  some are dropped, so they go WHEEL_PAUSE apart.
+  some are dropped, so each waits for the view to take the one before (_Frames.taking: frames3d.py).
 - The camera's position and angles are in none of its properties (Camera > Edit properties shows its lens, clip
   planes and exposure; the Scene Browser's Camera the same), so orbit and pan are Designer's own navigation: mouse
   drags on the viewport, taken as from the mouse, in any number of moves. A left-drag turns the camera around the
@@ -25,10 +25,12 @@ viewpoint, the camera turned and panned, the zoom and the tiling (ROADMAP items 
   HLP-121).
   A drag sent too soon after another undoes it, or part of it: a pan 0.02 s after a pan left the first undone (0.05 s
   later, both taken), two turns sent back to back came out wrong (0.1 s apart, as two calls), and wheel steps right
-  after a drag zoomed less; so each drag is followed by DRAG_PAUSE. A mouse move with no button held, as the user's
+  after a drag zoomed less. Sent once the view drew a frame after it, both were taken (frames3d.py), so each drag is
+  followed by a wait for that frame; off screen, where the view draws none, for its request for one (_Frames.taking;
+  REVIEW.md HLP-149). A mouse move with no button held, as the user's
   mouse sends over the viewport, ends a drag where it is: one after the 5th of 10 moves left orbit=[90, 0] 60 grey
   levels from Designer's Right view, and pan=[0.25, 0] at 0.099 of the view (REVIEW.md HLP-122). So while a drag
-  runs, its pause included, a filter on the viewport drops every mouse event (MOUSE_EVENTS) _mouse isn't sending;
+  runs, its wait included, a filter on the viewport drops every mouse event (MOUSE_EVENTS) _mouse isn't sending;
   the filter goes when the drag ends, or with the drag's frame, after an abort.
 - The toolbar's Camera and Light tools are one group: under Light, neither drags nor the wheel move the camera (the
   wheel's zoom was said and not done: REVIEW.md HLP-120), so orbit, pan and zoom select the Camera tool and put the
@@ -41,25 +43,29 @@ viewpoint, the camera turned and panned, the zoom and the tiling (ROADMAP items 
   opening that graph again doesn't apply them either. The Explorer's "View Outputs In 3D View" does, but only from its
   context menu: the action triggered by itself does nothing. So the graph is selected in the Explorer
   (setExplorerSelection, which the user sees, and which expands a collapsed package), the menu opened on its row with
-  a QContextMenuEvent, and a timer picks the action while the menu runs. A graph with one output makes Designer ask
-  which channel to show it in, a second menu: such a graph is refused first.
+  a QContextMenuEvent, and a timer picks the action while the menu runs, as soon as the menu shows: the action is
+  there, enabled, at the first look (three menus, 2 to 6 ms after the event; 2026-11-15). A graph with one output
+  makes Designer ask which channel to show it in, a second menu: such a graph is refused first.
 - That menu is a new QMenu each time, with no parent, deleted once closed: nothing can be connected to it before it
   opens. It shows above every app's windows, also while the 3D shot keeps Designer's own transparent: picked after
   100 ms, it was on screen for 240 ms; made transparent by a timer at 0 ms as it opens, for 0, 9 and 0 ms (three
-  shots, a watch of the window server's list from another process, 2026-11-14). So a third timer does that; the
-  self-test watches it (REVIEW.md HLP-134). On macOS it makes the menu click-through too (the user's choice:
-  DECISIONS.md): whether a click reaches a menu that is only transparent couldn't be measured without clicking on the
-  user's screen. Click-through, the menu's action is still picked (2026-11-14). A menu closed by something else
+  shots, a watch of the window server's list from another process, 2026-11-14). So the timer makes it transparent
+  first, then picks its action; the self-test watches it (REVIEW.md HLP-134). On macOS it makes the menu
+  click-through too (the user's choice: DECISIONS.md): whether a click reaches a menu that is only transparent
+  couldn't be measured without clicking on the user's screen. Click-through, the menu's action is still picked
+  (2026-11-14). A menu closed by something else
   between the fade and the pick was deleted by the Explorer as usual, but its window stayed, hidden, transparent and
   click-through (a scratch run closing it so; the self-test's final check met it, 2026-11-14). So on macOS the fade
-  holds the menu's window, and once the menu closed gives it its look back (REVIEW.md HLP-146). An open menu holds
-  the job, and with it the bridge, so a guard closes whatever popup is still open after MENU_GUARD ms, above any open
-  before (the user's). An abort (a cancel, the job's
-  timeout) raised in a Qt slot is dropped and raised again at the next Python line run (the plugin's _make_tracer), so
-  the timer that picks the action closes its menu in a `finally`, and the guard is made of C callables only
-  (_popup_closer). The timers have a parent the function holds alone, so they go with it even when an abort lands in
-  the `finally` that stops them: without one, a timer whose slot holds it outlives the function (the self-test's
-  designer fact).
+  holds the menu's window, and once the menu closed gives it its look back (REVIEW.md HLP-146). Twice in full runs
+  something closed the menu before its action was picked, and the shot was refused (2026-11-15). What closed it wasn't
+  found: another Designer an agent starts, started and quit while a menu was held open, closed nothing. So a menu
+  closed before its pick, or never seen open, is opened again, MENU_TRIES times at most (REVIEW.md HLP-147). An open
+  menu holds the job, and with it the bridge, so a guard closes whatever popup is still open after MENU_GUARD ms,
+  above any open before (the user's). An abort (a cancel, the job's timeout) raised in a Qt slot is dropped and
+  raised again at the next Python line run (the plugin's _make_tracer), so the timer that picks the action closes its
+  menu in a `finally`, and the guard is made of C callables only (_popup_closer). The timers have a parent the
+  function holds alone, so they go with it even when an abort lands in the `finally` that stops them: without one, a
+  timer whose slot holds it outlives the function (the self-test's designer fact).
 - Tiling is the 3D material's UVs > Tiling, shown in the Parameters panel by Materials > <material> > Edit properties.
   A material added to the mesh (Materials > Add) is listed as "(unused)", and isn't counted.
   Its spin box takes a value only through its own valueChanged() signal (neither setValue, Return, nor its slider's
@@ -68,10 +74,25 @@ viewpoint, the camera turned and panned, the zoom and the tiling (ROADMAP items 
 - What is set stays: for the next shots, and in the user's 3D view.
 """
 
-from .core import _APP, Any, APIException, Callable, SDSBSCompGraph, SDUIMgr, _current_graph, cast, find_graph, sys
+from .core import (
+    _APP,
+    Any,
+    APIException,
+    Callable,
+    SDSBSCompGraph,
+    SDUIMgr,
+    Sequence,
+    _current_graph,
+    cast,
+    find_graph,
+    sys,
+)
 from .editor import _process_events, _wheel
+from .frames3d import _Frames, _viewport
 from .mac_window import _MacWindow
-from .screenshots import _PANEL_AREAS, _3d_dock, _visible_dock
+from .screenshots import _PANEL_AREAS, _3d_dock, _3d_render, _visible_dock
+from .shot3d import _on_screen
+from .waits import _settle
 
 MESHES = (
     'Cube',
@@ -88,31 +109,16 @@ MESHES = (
 )
 VIEWS = ('Default', 'Front', 'Right', 'Back', 'Left', 'Top', 'Bottom')
 VIEW_OUTPUTS = 'View Outputs In 3D View'
-VIEW_TURN = 1.0  # s for the camera to turn to a viewpoint: Frame after 0.5 s kept it, at once undid it (2026-11-12)
-WHEEL_PAUSE = 0.2  # s between wheel steps: sent back to back, the 3D view took 1 to 3 of 3 (2026-11-12)
 MENU_GUARD = 5000  # ms the Explorer's context menu may stay open
+MENU_TRIES = 3  # times the Explorer's context menu is opened when something closes it before its action is picked
 ORBIT_ACROSS = 0.45  # degrees the camera turns a pixel dragged across (the module docstring)
 ORBIT_UP = 0.35  # degrees a pixel dragged up or down
 PAN_WIDTH = 356  # pixels dragged a view's width panned, at the point the camera looks at
 DRAG_MOVES = 10  # mouse moves a drag is sent in: 1, 2, 10 or 40 turned the camera alike
-DRAG_PAUSE = 0.2  # s after a drag, before the next one or the wheel (the module docstring)
 TOOLS = ('Camera', 'Light')  # the 3D view's toolbar's tools a drag and the wheel go to, one group
 # what the guard on the viewport drops during a drag unless _mouse is sending it (the module docstring)
 MOUSE_EVENTS = ('MouseButtonPress', 'MouseButtonRelease', 'MouseButtonDblClick', 'MouseMove', 'Wheel')
 _OWN_MOUSE = [False]  # _mouse sending an event
-
-
-def _settle(seconds: float) -> None:
-    """Let Designer process its events for a while (the 3D view redraws, a menu runs)."""
-    import time
-
-    from PySide6 import QtWidgets
-
-    app = cast(QtWidgets.QApplication, QtWidgets.QApplication.instance())
-    end = time.time() + seconds
-    while time.time() < end:
-        app.processEvents()
-        time.sleep(0.02)
 
 
 def _menu_action(bar: Any, keep: list[Any], *path: str) -> Any:
@@ -170,24 +176,31 @@ def _row_point(tree: Any, row: Any, graph: str) -> Any:
 
 
 class _MenuPick:
-    """What _apply_outputs' pick timer does while the Explorer's context menu runs, and what went wrong, said after.
-    `before` is the popup open before the menu, maybe the user's: never taken for it."""
+    """What _menu_once's look does in one try, while the Explorer's context menu runs, and what went wrong, said
+    after. `before` is the popup open before the menu, maybe the user's: never taken for it."""
 
-    def __init__(self, action: str, before: Any) -> None:
+    def __init__(self, action: str, before: Any) -> None:  # Any: a Qt widget, or None (screenshots.py)
         self.action = action
         self.before = before
         self.menus = 0  # menus pick found open
         self.disabled = False  # the action found disabled
         self.picked = False  # the action triggered in one
         self.faded = False  # a menu made transparent by fade
+        self.closed = False  # a menu pick found closed already, by something else
+        self.fade_error: str | None = None  # why fade raised, the menu closed then (REVIEW.md HLP-153)
         self.held: tuple[_MacWindow, int] | None = None  # on macOS, that menu's window, held till unfade
 
-    def pick(self, menu: Any) -> bool:
+    def pick(self, menu: Any) -> bool:  # Any: a Qt widget (screenshots.py: Qt widgets are Any in signatures)
         """In the menu opened since, trigger the action if enabled and close the menu, even when the trigger raises
-        (an abort: the module docstring): True. No such menu yet (None, or `before`): False, so its timer looks
-        again."""
+        (an abort: the module docstring): True. A menu closed already by something else is left: True too. No such
+        menu yet (None, or `before`): False, so its timer looks again."""
         if menu is None or menu is self.before:
             return False
+        # closed as fade made it transparent, by something else (REVIEW.md HLP-147); one closed before the look is
+        # one that didn't open, the look picking in the slot that fades
+        if not menu.isVisible():
+            self.closed = True
+            return True
         self.menus += 1
         try:
             for action in menu.actions():
@@ -203,7 +216,14 @@ class _MenuPick:
     def fade(self, menu: Any) -> bool:  # Any: a Qt widget (screenshots.py: Qt widgets are Any in signatures)
         """Makes the menu opened since transparent, so it doesn't show over the user's windows while the 3D shot keeps
         Designer's own transparent (the module docstring), and on macOS click-through: True. No such menu yet (None,
-        or `before`): False, so its timer looks again."""
+        or `before`): False, so its timer looks again. Raising, it says why in fade_error first (REVIEW.md HLP-153)."""
+        try:
+            return self._fade(menu)
+        except BaseException as e:
+            self.fade_error = '%s: %s' % (type(e).__name__, e)
+            raise
+
+    def _fade(self, menu: Any) -> bool:  # Any: a Qt widget (screenshots.py)
         from PySide6 import QtCore
 
         if menu is None or menu is self.before:
@@ -223,26 +243,46 @@ class _MenuPick:
     def unfade(self) -> None:
         """Once the menu closed: makes the window of the menu fade made transparent opaque and clickable again, and
         ends its hold (macOS). The window of a menu closed before its action was picked stayed transparent and
-        click-through (REVIEW.md HLP-146)."""
+        click-through (REVIEW.md HLP-146). Cut short by an abort, it can run again: the look is set again, and the
+        hold, forgotten just before it ends, ends once. An abort landing between the two leaves the hold: a closed
+        window kept, where ending it twice could free it while Designer uses it (REVIEW.md HLP-177)."""
         if self.held is None:
             return
         mac, window = self.held
+        mac.set_appearance(window, 1.0, False)
         self.held = None
-        try:
-            mac.set_appearance(window, 1.0, False)
-        finally:
-            mac.let_go(window)
+        mac.let_go(window)
 
-    def failure(self, graph: str, held: bool) -> str | None:
-        """Why the outputs of `graph` may not be on the mesh, or None; `held`: the guard had to close a menu."""
-        if not self.picked:
-            if self.menus:
-                what = ('had %r disabled' if self.disabled else 'had no %r') % self.action
-            elif self.faded:  # opened, then closed by something else before the pick looked (REVIEW.md HLP-146)
-                what = 'closed before its action was picked'
-            else:
-                what = "didn't open"
-            return "the Explorer's menu for graph %s %s" % (graph, what)
+    def closed_early(self) -> bool:
+        """Whether no menu was looked in: none opened, or something else closed it first (REVIEW.md HLP-147). A menu
+        that couldn't be made transparent isn't opened again."""
+        return not self.menus and self.fade_error is None
+
+    def what(self, held: bool) -> str | None:
+        """What went wrong with this try's menu, said after "the Explorer's menu for graph X"; None once its action
+        was picked. `held`: the guard had to close a menu."""
+        if self.fade_error is not None:
+            return "couldn't be made transparent (%s), and was closed" % self.fade_error
+        if self.picked:
+            return None
+        if self.menus:
+            return ('had %r disabled' if self.disabled else 'had no %r') % self.action
+        if held:  # open, and nothing picked: closed by the guard (REVIEW.md HLP-153: said not to have opened)
+            return 'was still open %d s after it opened, and was closed with nothing picked' % (MENU_GUARD // 1000)
+        if self.closed or self.faded:  # opened, then closed by something else before the pick (REVIEW.md HLP-146)
+            return 'closed before its action was picked'
+        return "didn't open"
+
+    def failure(self, graph: str, held: bool, tries: int = 1, earlier: Sequence[str] = ()) -> str | None:
+        """Why the outputs of `graph` may not be on the mesh, or None; `held`: the guard had to close a menu; `tries`:
+        the tries made, whether their menu opened or not, this one the last; `earlier`: what went wrong in the tries before, each try's `what`."""
+        what = self.what(held)
+        if what is not None:
+            whats = [*earlier, what]
+            if len(set(whats)) > 1:  # REVIEW.md HLP-153: said with the last try's reason alone
+                return "the Explorer's menu for graph %s: %s (%d tries)" % (graph, ', then '.join(whats), tries)
+            each = ', in each of %d tries' % tries if tries > 1 else ''
+            return "the Explorer's menu for graph %s %s%s" % (graph, what, each)
         if held:
             return (
                 'a menu was still open %d s after %r (Designer asking something more?), and was closed unanswered'
@@ -284,10 +324,8 @@ def _explorer_tree(mw: Any, keep: list[Any]) -> Any:
 
 def _apply_outputs(tree: Any, graph: SDSBSCompGraph, keep: list[object]) -> None:  # Any: a Qt widget (screenshots.py)
     """The Explorer's "View Outputs In 3D View" for `graph`, from its context menu on the Explorer's `tree` (the module
-    docstring)."""
-    from PySide6 import QtCore, QtGui, QtWidgets
-
-    app = QtWidgets.QApplication
+    docstring). A menu closed before its action was picked, by something else, is opened again, MENU_TRIES times at
+    most (REVIEW.md HLP-147)."""
     cast(SDUIMgr, _APP.getUIMgr()).setExplorerSelection(graph)  # Designer runs with its UI
     _process_events()
     rows = tree.selectionModel().selectedRows()
@@ -296,42 +334,83 @@ def _apply_outputs(tree: Any, graph: SDSBSCompGraph, keep: list[object]) -> None
             "graph %s wasn't selected in the Explorer (%d rows are)" % (graph.getIdentifier(), len(rows))
         )
     at = _row_point(tree, rows[0], graph.getIdentifier())
+    tried, earlier = 0, []
+    while True:
+        tried += 1
+        state, held = _menu_once(tree, at, keep)
+        if held or not state.closed_early() or tried == MENU_TRIES:
+            break
+        earlier.append(cast(str, state.what(held)))  # closed early: something went wrong
+    failure = state.failure(graph.getIdentifier(), held, tried, earlier)
+    if failure:
+        raise RuntimeError(failure)
+
+
+def _menu_once(tree: Any, at: Any, keep: list[object]) -> tuple[_MenuPick, bool]:  # Any: Qt (screenshots.py)
+    """The Explorer's context menu opened once at `at` on `tree`, and its action picked while it runs: what the pick
+    found, and whether the guard had to close a menu. An abort raised at the look's call, or at its first line, comes
+    before any of the look runs: the menu then stays as it opened until the guard closes it, MENU_GUARD at most
+    (REVIEW.md HLP-177)."""
+    from PySide6 import QtCore, QtGui, QtWidgets
+
+    app = QtWidgets.QApplication
     before = app.activePopupWidget()  # a popup already open, maybe the user's: left alone
     keep.append(before)
     state = _MenuPick(VIEW_OUTPUTS, before)
 
-    def pick() -> None:
-        menu = app.activePopupWidget()
-        menu = menu if isinstance(menu, QtWidgets.QMenu) else None
-        keep.append(menu)
-        if not state.pick(menu):
-            timers[0].start(100)
+    def look() -> None:
+        # the menu made transparent as it opens, then its action picked at once: there at the first look (measured).
+        # No `try:` inside this one: an abort raised at a `try:` line escapes the `try` around it in the same function
+        # (measured on Python 3.12 and Designer's 3.13; REVIEW.md HLP-177)
+        try:
+            menu = app.activePopupWidget()
+            menu = menu if isinstance(menu, QtWidgets.QMenu) else None
+            keep.append(menu)
+            if not state.fade(menu):
+                timers[0].start(0)
+                return
+            state.pick(menu)
+        except BaseException:
+            # closed at once, not left open over the user's windows (REVIEW.md HLP-153): a menu fade couldn't make
+            # transparent, and one an abort left open before its fade or as pick closed it, here untraced (REVIEW.md
+            # HLP-177). A popup open before it, maybe the user's, is left. Found again, not the menu found above: one
+            # closed already may be deleted, and anything but the abort raised here would end the abort (the plugin
+            # takes up only its own after a slot)
+            left = app.activePopupWidget()
+            if left is not None and left is not before:
+                left.close()
+            raise
 
-    def fade() -> None:
-        if not state.fade(app.activePopupWidget()):
-            timers[2].start(0)
-
-    # the timers' parent, held by this frame alone: they go with it, whatever an abort lets run of the finally below
-    owner = QtCore.QObject()
-    timers: list[QtCore.QTimer] = []
-    try:  # from the first timer on: an abort landing as the second starts must stop the first
-        # the guard: an open menu holds this job, and with it the bridge; the fade: the menu transparent as it opens
-        for run, after in ((pick, 100), (_popup_closer(app.activePopupWidget, before), MENU_GUARD), (fade, 0)):
-            timers.append(QtCore.QTimer(owner))
-            timers[-1].setSingleShot(True)
-            timers[-1].timeout.connect(run)
-            timers[-1].start(after)
-        viewport = tree.viewport()
-        event = QtGui.QContextMenuEvent(QtGui.QContextMenuEvent.Reason.Mouse, at, viewport.mapToGlobal(at))
-        app.sendEvent(viewport, event)  # returns once the menu has closed
-        held = not timers[1].isActive()  # the guard ran
-    finally:
+    def put_back() -> None:
         for timer in timers:  # neither may act later, on a menu of the user's
             timer.stop()
         state.unfade()  # the menu closed: its window opaque and clickable again
-    failure = state.failure(graph.getIdentifier(), held)
-    if failure:
-        raise RuntimeError(failure)
+
+    # the timers' parent, held by this frame alone: they go with it once nothing keeps the frame (an abort's traceback
+    # does, so the handler below stops them too)
+    owner = QtCore.QObject()
+    timers: list[QtCore.QTimer] = []
+    try:
+        try:  # from the first timer on: an abort landing as the second starts must stop the first
+            # the look, at once: the menu transparent as it opens; the guard: an open menu holds this job, and the
+            # bridge
+            for run, after in ((look, 0), (_popup_closer(app.activePopupWidget, before), MENU_GUARD)):
+                timers.append(QtCore.QTimer(owner))
+                timers[-1].setSingleShot(True)
+                timers[-1].timeout.connect(run)
+                timers[-1].start(after)
+            viewport = tree.viewport()
+            event = QtGui.QContextMenuEvent(QtGui.QContextMenuEvent.Reason.Mouse, at, viewport.mapToGlobal(at))
+            app.sendEvent(viewport, event)  # returns once the menu has closed
+            held = not timers[1].isActive()  # the guard ran
+        finally:
+            put_back()
+    except BaseException:
+        # the plugin raises an abort at a traced line, then stops tracing: landed in the put-back, it skipped the rest
+        # of it. Here, untraced, it is done again: both steps can be (REVIEW.md HLP-177)
+        put_back()
+        raise
+    return state, held
 
 
 def _tiling_spin(params: Any, keep: list[Any]) -> Any:
@@ -394,7 +473,7 @@ def _set_tiling(params: Any, bar: Any, value: float, keep: list[Any]) -> str:
     return 'tiling %g (%s)' % (tiling, panel)
 
 
-def _navigation_tools(dock: Any, keep: list[Any]) -> tuple[Any, Any]:
+def _navigation_tools(dock: Any, keep: list[object]) -> tuple[Any, Any]:  # Any: a Qt dock and actions (screenshots.py)
     """The 3D view's toolbar's Camera and Light tools: drags and the wheel move the camera under the Camera tool alone
     (the module docstring)."""
     from PySide6 import QtWidgets
@@ -407,7 +486,7 @@ def _navigation_tools(dock: Any, keep: list[Any]) -> tuple[Any, Any]:
     return found['Camera'], found['Light']
 
 
-def _tool_back(light: Any, switched: bool) -> None:
+def _tool_back(light: Any, switched: bool) -> None:  # Any: a Qt action (screenshots.py)
     """The Light tool selected again if it was before the Camera tool was (`switched`) and isn't now."""
     if switched and not light.isChecked():
         light.trigger()
@@ -457,7 +536,9 @@ def _pan_drags(pan: list[float], width: int, height: int) -> tuple[list[tuple[in
     return _drags('pan', pan, (1 / PAN_WIDTH, -width / (height * PAN_WIDTH)), ' of the view')
 
 
-def _mouse(viewport: Any, kind: Any, x: float, y: float, button: Any, buttons: Any) -> None:
+def _mouse(  # Any: a Qt widget, an event type, a mouse button and buttons (screenshots.py)
+    viewport: Any, kind: Any, x: float, y: float, button: Any, buttons: Any
+) -> None:
     """One mouse event at (x, y) in `viewport`, as Designer takes them from the mouse, marked as sent here while it is
     (_OWN_MOUSE), so the guard of a drag lets it through (_mouse_guard)."""
     from PySide6 import QtCore, QtGui, QtWidgets
@@ -473,7 +554,7 @@ def _mouse(viewport: Any, kind: Any, x: float, y: float, button: Any, buttons: A
     _process_events(2)
 
 
-def _mouse_guard() -> Any:
+def _mouse_guard() -> Any:  # Any: a Qt event filter, made here (screenshots.py)
     """An event filter, for a viewport while a drag runs, dropping every mouse event (MOUSE_EVENTS) _mouse isn't
     sending: the user's mouse moving over it would end the drag (the module docstring)."""
     from PySide6 import QtCore
@@ -487,17 +568,28 @@ def _mouse_guard() -> Any:
     return MouseGuard()
 
 
-def _release(viewport: Any, button: Any, x: float, y: float) -> None:
+def _release(
+    viewport: Any, button: Any, x: float, y: float
+) -> None:  # Any: a Qt widget and mouse button (screenshots.py)
     """`button` released at (x, y) in `viewport`."""
     from PySide6 import QtCore
 
     _mouse(viewport, QtCore.QEvent.Type.MouseButtonRelease, x, y, button, QtCore.Qt.MouseButton.NoButton)
 
 
-def _drag(viewport: Any, button: Any, dx: int, dy: int, pressed: list[Any]) -> None:
+def _drag(  # Any: a Qt widget, and a Qt mouse button, in `pressed` too (screenshots.py)
+    viewport: Any,
+    button: Any,
+    dx: int,
+    dy: int,
+    pressed: list[tuple[Any, float, float]],
+    taking: Callable[[], Callable[[], object]] | None = None,
+) -> None:
     """A drag with `button` from the middle of `viewport`, dx and dy pixels (right, down), in DRAG_MOVES moves, then
-    released, even when a move fails, and DRAG_PAUSE for Designer to take it; a guard on the viewport drops the user's
-    mouse from before the press to after the pause (_mouse_guard). `pressed` holds (button, x, y), where it is
+    released, even when a move fails. `taking`, when given, runs before the press and returns the wait for Designer to
+    take the drag, run after the release (_Frames.taking: a frame of the 3D view drawn once the drag's events ran;
+    off screen, an UpdateRequest since the press). A guard on the viewport drops the user's mouse from before the press to the end of that wait
+    (_mouse_guard). `pressed` holds (button, x, y), where it is
     released, from before the press to after the release: an abort skipping the release finds it there (set_3d_view's
     handler). The guard, held by this frame alone, goes with it after an abort that skips its removal."""
     from PySide6 import QtCore
@@ -507,6 +599,7 @@ def _drag(viewport: Any, button: Any, dx: int, dy: int, pressed: list[Any]) -> N
     guard = _mouse_guard()
     viewport.installEventFilter(guard)
     try:
+        taken = taking() if taking is not None else None
         pressed.append(end)
         try:
             _mouse(viewport, QtCore.QEvent.Type.MouseButtonPress, x, y, button, button)
@@ -516,7 +609,8 @@ def _drag(viewport: Any, button: Any, dx: int, dy: int, pressed: list[Any]) -> N
         finally:
             _release(viewport, *end)
             pressed.remove(end)
-        _settle(DRAG_PAUSE)
+        if taken is not None:
+            taken()
     finally:
         viewport.removeEventFilter(guard)
 
@@ -550,12 +644,17 @@ def _3d_set_up(
     tiling: float | None = None,
     orbit: list[float] | None = None,
     pan: list[float] | None = None,
-) -> Callable[[Callable[[], None] | None], None]:
+) -> Callable[[Callable[[], None] | None, _Frames | None], None]:
     """set_3d_view checked, changing nothing: what the arguments rule out, the graph, the panels, the menu entries and
     the tools it needs, an orbit or pan of less than a pixel's drag; refused here (shoot_3d calls it before it puts
     Designer's window on screen: REVIEW.md HLP-127). Returns its steps, to run: set_3d_view's docstring. They run
-    `between`, when given, before each step: the 3D shot's look whether the user made Designer the active app
-    (shot3d.py; REVIEW.md HLP-136)."""
+    `between`, when given, before each step: the 3D shot's look whether the user made Designer the active app, which
+    also puts the window on screen again if it went off screen (shot3d.py; REVIEW.md HLP-136, HLP-158). Run without a
+    watch, the viewpoint's turn and Frame run with the window on screen, transparent (_on_screen): off screen nothing
+    says the turn ended (frames3d.py; REVIEW.md HLP-158). A caller giving its watch keeps the window on screen itself,
+    and passes its look as `between`: the shot, or set_3d_view with a move (REVIEW.md HLP-168, HLP-174). The same look
+    runs after the turn, before Frame (REVIEW.md HLP-163). Each step waits for the 3D view to take it on the watch of
+    its frames they are given, or on one of their own (frames3d.py; REVIEW.md HLP-148)."""
     from PySide6 import QtCore, QtGui, QtWidgets
 
     g = _set_up_checked(graph, mesh, view)
@@ -563,13 +662,10 @@ def _3d_set_up(
     keep: list[object] = [mw]
     dock = _3d_dock(mw)
     bars = dock.findChildren(QtWidgets.QMenuBar)
-    viewports = [
-        w for w in dock.findChildren(QtWidgets.QWidget) if w.metaObject().className() == 'Alg::Gui3D::ViewportWidget'
-    ]
-    if not bars or not viewports:
-        raise RuntimeError("the 3D View's menu bar or viewport wasn't found")
+    if not bars:
+        raise RuntimeError("the 3D View's menu bar wasn't found")
     bar = bars[0]
-    viewport = viewports[0]
+    viewport = _viewport(dock)  # refused when there is none
     keep += [dock, bar, viewport]
     orbit_drags, turned = _orbit_drags(orbit) if orbit else ([], [])
     pan_drags, panned = _pan_drags(pan, viewport.width(), viewport.height()) if pan else ([], [])
@@ -594,8 +690,11 @@ def _3d_set_up(
     for path in needed:
         _menu_action(bar, keep, *path)  # there; looked up again as it is used, after the mesh may have changed
 
-    def run(between: Callable[[], None] | None) -> None:
-        """The set-up's steps, checked by _3d_set_up, `between` run before each."""
+    def run(between: Callable[[], None] | None, frames: _Frames | None = None) -> None:
+        """The set-up's steps, checked by _3d_set_up, `between` run before each. Each waits for the 3D view to take
+        it on `frames`, the watch of a caller keeping the window on screen (the shot's, or set_3d_view's with a move),
+        or on one of its own (frames3d.py; REVIEW.md HLP-174)."""
+        watched = frames if frames is not None else _Frames(viewport, lambda: _3d_render(mw))
         done: list[str] = []
         tiling_begun = False  # an abort's handler then turns the Parameters panel back
         switched = False  # the Light tool was selected, the Camera tool selected for the drags and the wheel
@@ -610,66 +709,97 @@ def _3d_set_up(
             return step
 
         try:
-            if mesh is not None:
-                step = begin(mesh)
-                _menu_action(bar, keep, 'Scene', mesh).trigger()
-                _settle(0.5)
-                done.append(step)
-            if g is not None:
-                step = begin("graph %s's outputs on the mesh" % g.getIdentifier())
-                g.compute()  # its outputs ready for the mesh
-                _apply_outputs(tree, g, keep)
-                _settle(1.0)
-                done.append(step)
-            if view is not None:
-                step = begin('view %s, framed' % view)
-                _menu_action(bar, keep, 'Camera', view).trigger()
-                _settle(VIEW_TURN)  # Frame at once cancels the camera's turn
-                _menu_action(bar, keep, 'Camera', 'Frame').trigger()
-                _settle(0.3)
-                done.append(step)
-            if camera is not None and light is not None:  # moving: looked up above
-                switched = light.isChecked()  # read before the change: an abort landing on it finds nothing changed
-                try:
-                    if switched:
-                        camera.trigger()
-                        _process_events()
-                    if orbit_drags:
-                        step = begin('orbit ' + _directions(turned, ' degrees'))
-                        for dx, dy in orbit_drags:
-                            _drag(viewport, QtCore.Qt.MouseButton.LeftButton, dx, dy, pressed)
-                        done.append(step)
-                    if pan_drags:
-                        step = begin('pan ' + _directions(panned, ' of the view'))
-                        for dx, dy in pan_drags:
-                            _drag(viewport, QtCore.Qt.MouseButton.MiddleButton, dx, dy, pressed)
-                        done.append(step)
-                    if zoom:
-                        step = begin('%+d wheel steps' % zoom)
-                        _wheel(viewport, zoom, WHEEL_PAUSE)
-                        done.append(step)
-                finally:
+            try:
+                if mesh is not None:
+                    step = begin(mesh)
+                    since = watched.mark()
+                    _menu_action(bar, keep, 'Scene', mesh).trigger()
+                    watched.settled(since)
+                    done.append(step)
+                if g is not None:
+                    step = begin("graph %s's outputs on the mesh" % g.getIdentifier())
+                    since = watched.mark()
+                    g.compute()  # its outputs ready for the mesh
+                    _apply_outputs(tree, g, keep)
+                    watched.settled(since)
+                    done.append(step)
+                if view is not None:
+                    step = begin('view %s, framed' % view)
+
+                    # off screen nothing says the camera's turn ended (frames3d.py): set up on its own, the window is
+                    # shown for it, transparent, as the 3D shot shows it; in a shot it is on screen already, looked at
+                    # before each step (`between`; REVIEW.md HLP-158, the user's choice)
+                    def turn(look: Callable[[], None] | None) -> None:
+                        since = watched.mark()
+                        _menu_action(bar, keep, 'Camera', view).trigger()
+                        watched.moved(since)  # Frame at once cancels the camera's turn
+                        # off screen meanwhile, moved() ended there: the look puts the window on screen again and
+                        # waits for the view to settle there, which it does once the turn ends (REVIEW.md HLP-163)
+                        if look is not None:
+                            look()
+                        since = watched.mark()
+                        _menu_action(bar, keep, 'Camera', 'Frame').trigger()
+                        watched.settled(since)
+
+                    if frames is None:
+                        with _on_screen(mw, watched) as screen:
+                            turn(screen.again)
+                    else:
+                        turn(between)
+                    done.append(step)
+                if camera is not None and light is not None:  # moving: looked up above
+                    switched = light.isChecked()  # read before the change: an abort landing on it finds none
+                    # each option's moves are marked after its look (begin), which may put the window on screen again
+                    # and wait for the view's restart: from a mark before it, that restart ended the moves' wait
+                    # (REVIEW.md HLP-161). The last option's mark is the one waited from
+                    try:
+                        if switched:
+                            camera.trigger()
+                            _process_events()
+                        if orbit_drags:
+                            step = begin('orbit ' + _directions(turned, ' degrees'))
+                            since = watched.mark()
+                            for dx, dy in orbit_drags:
+                                _drag(viewport, QtCore.Qt.MouseButton.LeftButton, dx, dy, pressed, watched.taking)
+                            done.append(step)
+                        if pan_drags:
+                            step = begin('pan ' + _directions(panned, ' of the view'))
+                            since = watched.mark()
+                            for dx, dy in pan_drags:
+                                _drag(viewport, QtCore.Qt.MouseButton.MiddleButton, dx, dy, pressed, watched.taking)
+                            done.append(step)
+                        if zoom:
+                            step = begin('%+d wheel steps' % zoom)
+                            since = watched.mark()
+                            _wheel(viewport, zoom, watched.taking)
+                            done.append(step)
+                    finally:
+                        _tool_back(light, switched)
+                    watched.settled(since)
+                if tiling is not None:
+                    begin('tiling %g' % tiling)
+                    tiling_begun = True
+                    since = watched.mark()
+                    done.append(_set_tiling(params, bar, tiling, keep))
+                    watched.settled(since)
+                print('3D view: ' + ', '.join(done))
+            except (Exception, APIException) as e:  # the sd API's error is a BaseException too
+                if not done:
+                    raise
+                raise RuntimeError('%s; the 3D view was already set: %s' % (e, ', '.join(done))) from e
+            except (
+                BaseException
+            ):  # an abort (the plugin's ScriptAborted): its steps said as begun; this handler runs untraced
+                for button, x, y in pressed:  # one landing on a drag's finally skipped its release
+                    _release(viewport, button, x, y)
+                if light is not None:  # or the Light tool's way back
                     _tool_back(light, switched)
-            if tiling is not None:
-                begin('tiling %g' % tiling)
-                tiling_begun = True
-                done.append(_set_tiling(params, bar, tiling, keep))
-            print('3D view: ' + ', '.join(done))
-            _settle(0.5)
-        except (Exception, APIException) as e:  # the sd API's error is a BaseException too
-            if not done:
+                if tiling_begun:  # one landing on _set_tiling's finally's first line skipped its turn-back
+                    _parameters_back()
                 raise
-            raise RuntimeError('%s; the 3D view was already set: %s' % (e, ', '.join(done))) from e
-        except (
-            BaseException
-        ):  # an abort (the plugin's ScriptAborted): its steps said as begun; this handler runs untraced
-            for button, x, y in pressed:  # one landing on a drag's finally skipped its release
-                _release(viewport, button, x, y)
-            if light is not None:  # or the Light tool's way back
-                _tool_back(light, switched)
-            if tiling_begun:  # one landing on _set_tiling's finally's first line skipped its turn-back
-                _parameters_back()
-            raise
+        finally:
+            if frames is None:
+                watched.close()
 
     return run
 
@@ -689,5 +819,21 @@ def set_3d_view(
     material's tiling. The graph, the panels, the menu entries and the tools it needs are checked before anything
     changes (with mesh=, the new mesh's material once it shows). Prints '3D view, setting: <step>' before each change,
     so an abort leaves the steps it began said; an error after a change says what was set; then one line,
-    '3D view: ...', of what it set."""
-    _3d_set_up(graph, mesh, view, zoom, tiling, orbit, pan)(None)
+    '3D view: ...', of what it set. Where the view shows no count (Display > Samples off), each step's wait on screen
+    compares renders, taken through the clipboard: only the user's clipboard text is put back, as for a 3D screenshot
+    (DECISIONS.md; REVIEW.md HLP-152). Off screen it takes none (REVIEW.md HLP-170).
+    With orbit, pan or zoom, the whole set-up runs with Designer's window on screen, transparent and click-through, as a
+    3D screenshot sets up (_on_screen): off screen, the same moves came out differently between runs (frames3d.py;
+    REVIEW.md HLP-168, the user's choice). Without, only a viewpoint's turn runs on screen (_3d_set_up)."""
+    set_up = _3d_set_up(graph, mesh, view, zoom, tiling, orbit, pan)  # checked first, the window not changed yet
+    if not (orbit or pan or zoom):
+        set_up(None, None)
+        return
+    mw = _APP.getQtForPythonUIMgr().getMainWindow()  # type: ignore[no-untyped-call]  # sd: no annotations
+    dock = _3d_dock(mw)  # held: without, the viewport's wrapper went stale (as in shoot_3d)
+    frames = _Frames(_viewport(dock), lambda: _3d_render(mw))
+    try:
+        with _on_screen(mw, frames) as screen:
+            set_up(screen.again, frames)  # before each step, the window put on screen again if it went off
+    finally:
+        frames.close()

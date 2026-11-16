@@ -3,9 +3,10 @@ checked before anything changes, what an error says was set, the graph's row fou
 there, what the timers do while that menu runs, and the drags that turn and pan the camera, under its Camera tool. The live self-test checks the 3D view itself
 (editor_panels_and_fit)."""
 
+import contextlib
 import sys
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest import mock
@@ -95,9 +96,16 @@ def test_a_point_that_isnt_on_the_graphs_row_is_refused(helpers: types.ModuleTyp
 
 
 class Menu:
-    def __init__(self, *texts: str, disabled: tuple[str, ...] = (), raising: bool = False) -> None:
+    """The Explorer's context menu. `closed_as_faded`: something else closes it as the fade makes it transparent, before
+    its action is picked (the live check does so: popups.closed_early)."""
+
+    def __init__(
+        self, *texts: str, disabled: tuple[str, ...] = (), raising: bool = False, closed_as_faded: bool = False
+    ) -> None:
         self.triggered: list[str] = []
         self.closed = False
+        self.closed_as_faded = closed_as_faded
+        self.opacity_at_trigger: float | None = None
         self.opacity: float | None = None  # what setWindowOpacity set last
         self.opacities: list[float] = []  # each opacity setWindowOpacity set, in order
         self.native: list[str] = []  # what was done to its own window through _MacWindow (MenuWindow)
@@ -106,6 +114,7 @@ class Menu:
         def trigger(t: str) -> None:
             if raising:
                 raise KeyboardInterrupt('an abort landing in the trigger')
+            self.opacity_at_trigger = self.opacity
             self.triggered.append(t)
 
         self._actions = [
@@ -128,6 +137,8 @@ class Menu:
     def setWindowOpacity(self, opacity: float) -> None:
         self.opacity = opacity
         self.opacities.append(opacity)
+        if self.closed_as_faded:
+            self.closed = True
 
     def windowHandle(self) -> SimpleNamespace:
         return SimpleNamespace(setFlag=lambda flag, on: self.flags.append((flag, on)))
@@ -213,6 +224,23 @@ def test_a_menu_that_never_opened_is_said(helpers: types.ModuleType) -> None:
     assert pick.failure('g', held=False) == "the Explorer's menu for graph g didn't open"
 
 
+def test_a_menu_closed_before_its_pick_isnt_looked_in_and_is_said(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-146, HLP-147: closed by something else once open, before its action was picked
+    pick = helpers._MenuPick(VIEW, None)
+    menu = Menu(VIEW)
+    menu.close()
+    assert pick.pick(menu) is True  # its timer stops looking
+    assert menu.triggered == [] and pick.closed
+    assert pick.failure('g', held=False) == "the Explorer's menu for graph g closed before its action was picked"
+
+
+def test_a_failure_in_every_try_says_how_many(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-147: the menu is opened again when it closed before its pick, MENU_TRIES times at most
+    pick = helpers._MenuPick(VIEW, None)
+    pick.pick(None)
+    assert pick.failure('g', held=False, tries=3) == "the Explorer's menu for graph g didn't open, in each of 3 tries"
+
+
 def test_a_menu_the_guard_closed_after_the_action_is_a_failure(helpers: types.ModuleType) -> None:
     # a second menu (Designer asking which channel) holds the job until the guard closes it, unanswered
     pick = helpers._MenuPick(VIEW, None)
@@ -283,8 +311,8 @@ class Timer:
 def _outputs_applied(
     helpers: types.ModuleType, send_event: Any, aborted_start: int | None = None, timers: list[Timer] | None = None
 ) -> None:
-    """_apply_outputs on a faked Explorer, the menu's run being `send_event(timers)`; the timers it makes go in
-    `timers` (the one numbered `aborted_start` raising as it starts)."""
+    """_apply_outputs on a faked Explorer, each menu's run being `send_event(timers)`; the timers it makes go in
+    `timers`, two a try (the look, the guard), the one numbered `aborted_start` raising as it starts."""
     made: list[Timer] = [] if timers is None else timers
 
     def new_timer(*args: Any) -> Timer:
@@ -299,7 +327,18 @@ def _outputs_applied(
     helpers._apply_outputs(tree, SimpleNamespace(getIdentifier=lambda: 'g'), [])
 
 
-@pytest.mark.parametrize('menu_run', ['returns', 'raises', 'aborted as the guard starts', 'aborted as the fade starts'])
+def _menus(*menus: 'Menu | None') -> None:
+    """The popups open as each try begins (none), then as its look runs: `menus`, one a try (None: none opened)."""
+    qt('QtWidgets').QMenu = Menu
+    qt('QtWidgets').QApplication.activePopupWidget.side_effect = [x for menu in menus for x in (None, menu)]
+
+
+def _looked(timers: list[Timer]) -> None:
+    """A try's menu run: its look, the first of its two timers."""
+    timers[-2].run()
+
+
+@pytest.mark.parametrize('menu_run', ['returns', 'raises', 'aborted as the guard starts'])
 def test_every_timer_is_stopped_whatever_the_menu_does(helpers: types.ModuleType, menu_run: str) -> None:
     # REVIEW.md TST-316: a timer left running would later pick from, close or fade a menu of the user's; HLP-112: an
     # abort landing as a timer starts, the ones before it already running
@@ -308,10 +347,11 @@ def test_every_timer_is_stopped_whatever_the_menu_does(helpers: types.ModuleType
             raise KeyboardInterrupt('an abort as the menu runs')
 
     timers: list[Timer] = []
-    aborted = {'aborted as the guard starts': 1, 'aborted as the fade starts': 2}.get(menu_run)
+    aborted = 1 if menu_run == 'aborted as the guard starts' else None
     with pytest.raises((RuntimeError, KeyboardInterrupt)):  # returning without a menu: it didn't open
         _outputs_applied(helpers, send_event, aborted, timers)
-    assert len(timers) == (3 if aborted is None else aborted + 1) and not any(t.active for t in timers)
+    tries = helpers.MENU_TRIES if menu_run == 'returns' else 1  # an abort isn't tried again
+    assert len(timers) == 2 * tries and not any(t.active for t in timers)
 
 
 def test_the_timers_go_with_the_function_whatever_runs_of_its_finally(helpers: types.ModuleType) -> None:
@@ -320,84 +360,94 @@ def test_the_timers_go_with_the_function_whatever_runs_of_its_finally(helpers: t
     timers: list[Timer] = []
     with pytest.raises(RuntimeError):  # no menu: it didn't open
         _outputs_applied(helpers, lambda made: None, timers=timers)
-    assert [t.parent for t in timers] == [qt('QtCore').QObject.return_value] * 3
+    assert [t.parent for t in timers] == [qt('QtCore').QObject.return_value] * (2 * helpers.MENU_TRIES)
 
 
 def test_a_menu_the_guard_had_to_close_is_a_failure(helpers: types.ModuleType) -> None:
     # REVIEW.md TST-326: the guard's timer has run (no longer active) as the menu's loop ends
     def send_event(timers: list[Timer]) -> None:
-        timers[0].run()  # the pick, with the menu open
-        timers[1].active = False
+        _looked(timers)  # the menu open: picked
+        timers[-1].active = False
 
-    qt('QtWidgets').QMenu = Menu
-    qt('QtWidgets').QApplication.activePopupWidget.side_effect = [None, Menu(VIEW)]
+    _menus(Menu(VIEW))
     with pytest.raises(RuntimeError, match="a menu was still open 5 s after 'View Outputs In 3D View'"):
         _outputs_applied(helpers, send_event)
 
 
-def test_the_menu_opened_is_made_transparent_before_its_action_is_picked(helpers: types.ModuleType) -> None:
-    # REVIEW.md HLP-134: the fade's timer starts at once, the pick's after 100 ms
+def test_the_menu_is_made_transparent_and_picked_as_soon_as_it_opens(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-134: transparent as it opens; HLP-147: its action is there at the first look (measured), so it is
+    # picked then too, leaving nothing the time to close the menu before
     menu = Menu(VIEW)
-    seen: list[float | None] = []
-
-    def send_event(timers: list[Timer]) -> None:
-        timers[2].run()  # the fade, with the menu open
-        seen.append(menu.opacity)
-        timers[0].run()  # the pick
-
-    qt('QtWidgets').QMenu = Menu
-    qt('QtWidgets').QApplication.activePopupWidget.side_effect = [None, menu, menu]
-    _outputs_applied(helpers, send_event)
-    assert seen == [0.0] and menu.triggered == [VIEW] and menu.closed
+    _menus(menu)
+    _outputs_applied(helpers, _looked)
+    assert menu.opacity_at_trigger == 0.0 and menu.triggered == [VIEW] and menu.closed
 
 
-def test_the_pick_the_guard_and_the_fade_start_at_their_times(helpers: types.ModuleType) -> None:
-    # REVIEW.md TST-406: the fade at once, so the menu is transparent as it opens; the pick after 100 ms; the guard
-    # after MENU_GUARD
+def test_the_look_starts_at_once_and_the_guard_after_menu_guard(helpers: types.ModuleType) -> None:
+    # REVIEW.md TST-406: the look at once, so the menu is transparent as it opens; the guard after MENU_GUARD
     timers: list[Timer] = []
     with pytest.raises(RuntimeError):  # no menu: it didn't open
         _outputs_applied(helpers, lambda made: None, timers=timers)
-    assert [t.starts for t in timers] == [[100], [helpers.MENU_GUARD], [0]]
+    assert [t.starts for t in timers] == [[0], [helpers.MENU_GUARD]] * helpers.MENU_TRIES
 
 
-def test_the_fade_looks_again_until_the_menu_opens_then_stops(helpers: types.ModuleType) -> None:
+def test_the_look_looks_again_until_the_menu_opens_then_stops(helpers: types.ModuleType) -> None:
     # REVIEW.md TST-406
     menu = Menu(VIEW)
     timers: list[Timer] = []
 
     def send_event(made: list[Timer]) -> None:
-        made[2].run()  # no popup open yet
-        made[2].run()  # the menu open
-        made[0].run()  # the pick
+        made[0].run()  # no popup open yet
+        made[0].run()  # the menu open
 
     qt('QtWidgets').QMenu = Menu
-    # before the menu, the fade twice, the pick
-    qt('QtWidgets').QApplication.activePopupWidget.side_effect = [None, None, menu, menu]
+    qt('QtWidgets').QApplication.activePopupWidget.side_effect = [None, None, menu]  # before the menu, two looks
     _outputs_applied(helpers, send_event, timers=timers)
-    assert timers[2].starts == [0, 0] and menu.opacities[0] == 0.0 and menu.triggered == [VIEW]
+    assert timers[0].starts == [0, 0] and menu.opacities[0] == 0.0 and menu.triggered == [VIEW]
+
+
+def test_a_menu_closed_before_its_pick_is_opened_again(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-147: something closed the menu before its action was picked, and the whole shot was refused
+    first, second = Menu(VIEW, closed_as_faded=True), Menu(VIEW)
+    _menus(first, second)
+    _outputs_applied(helpers, _looked)
+    assert first.triggered == [] and second.triggered == [VIEW]
+
+
+def test_a_menu_that_didnt_open_is_opened_again(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-147: closed before the look saw it, a menu is one that didn't open
+    menu = Menu(VIEW)
+    _menus(None, menu)
+    _outputs_applied(helpers, _looked)
+    assert menu.triggered == [VIEW]
 
 
 @pytest.mark.parametrize('platform', ['darwin', 'win32'])
-def test_a_menu_closed_before_its_pick_is_said_so_and_its_window_gets_its_look_back(
+def test_a_menu_closed_before_its_pick_in_every_try_is_said_so_and_each_window_gets_its_look_back(
     helpers: types.ModuleType, monkeypatch: pytest.MonkeyPatch, platform: str
 ) -> None:
-    # REVIEW.md HLP-146: made transparent and click-through at once, then closed by something else before the pick
-    # looked. "didn't open" was said, and on macOS its window stayed so: the Explorer deletes the menu as it closes, and
-    # its window was kept. Off macOS nothing was measured: only transparent, nothing held
+    # REVIEW.md HLP-146: made transparent and click-through at once, then closed by something else before the pick.
+    # "didn't open" was said, and on macOS its window stayed so: the Explorer deletes the menu as it closes, and its
+    # window was kept. Off macOS nothing was measured: only transparent, nothing held. HLP-147: tried again each time
     monkeypatch.setattr(sys, 'platform', platform)
-    menu = Menu(VIEW)
+    menus = [Menu(VIEW, closed_as_faded=True) for _ in range(helpers.MENU_TRIES)]
+    _menus(*menus)
+    with pytest.raises(
+        RuntimeError,
+        match="the Explorer's menu for graph g closed before its action was picked, in each of %d tries"
+        % helpers.MENU_TRIES,
+    ):
+        _outputs_applied(helpers, _looked)
+    for menu in menus:
+        assert menu.native == (['hold', 'look 1 False', 'let go'] if platform == 'darwin' else [])
+        assert not menu.triggered
 
-    def send_event(timers: list[Timer]) -> None:
-        timers[2].run()  # the fade, with the menu open
-        menu.close()  # closed by something else
-        timers[0].run()  # the pick: no popup open any more
 
-    qt('QtWidgets').QMenu = Menu
-    qt('QtWidgets').QApplication.activePopupWidget.side_effect = [None, menu, None]  # before, the fade, the pick
-    with pytest.raises(RuntimeError, match="the Explorer's menu for graph g closed before its action was picked"):
-        _outputs_applied(helpers, send_event)
-    assert menu.native == (['hold', 'look 1 False', 'let go'] if platform == 'darwin' else [])
-    assert not menu.triggered
+def test_a_menu_without_the_action_isnt_opened_again(helpers: types.ModuleType) -> None:
+    # Designer's answer, not something closing the menu: the same in every try
+    _menus(Menu('Open', 'Rename'), Menu(VIEW))
+    with pytest.raises(RuntimeError, match=r"the Explorer's menu for graph g had no 'View Outputs In 3D View'$"):
+        _outputs_applied(helpers, _looked)
 
 
 def test_a_menu_picked_has_its_window_given_its_look_back_once_closed(helpers: types.ModuleType) -> None:
@@ -405,23 +455,12 @@ def test_a_menu_picked_has_its_window_given_its_look_back_once_closed(helpers: t
     menu = Menu(VIEW)
 
     def send_event(timers: list[Timer]) -> None:
-        timers[2].run()  # the fade
-        timers[0].run()  # the pick, which closes it
-        assert menu.native == ['hold']  # still transparent while it was open
+        _looked(timers)  # the fade and the pick, which closes the menu
+        assert menu.native == ['hold']  # still transparent while it ran
 
-    qt('QtWidgets').QMenu = Menu
-    qt('QtWidgets').QApplication.activePopupWidget.side_effect = [None, menu, menu]
+    _menus(menu)
     _outputs_applied(helpers, send_event)
     assert menu.native == ['hold', 'look 1 False', 'let go'] and menu.triggered == [VIEW] and menu.closed
-
-
-def test_a_menu_closed_by_the_pick_alone_is_no_failure(helpers: types.ModuleType) -> None:
-    def send_event(timers: list[Timer]) -> None:
-        timers[0].run()
-
-    qt('QtWidgets').QMenu = Menu
-    qt('QtWidgets').QApplication.activePopupWidget.side_effect = [None, Menu(VIEW)]
-    _outputs_applied(helpers, send_event)
 
 
 def _materials_menu(helpers: types.ModuleType, *names: str) -> None:
@@ -451,6 +490,44 @@ def test_a_mesh_with_several_materials_is_refused(helpers: types.ModuleType) -> 
     _materials_menu(helpers, 'Body', 'Glass')
     with pytest.raises(RuntimeError, match="the 3D view's mesh has 2 materials: Body, Glass"):
         helpers._material(object(), [])
+
+
+class Frames:
+    """_Frames, faked: each wait recorded in `events` as ('wait', (what,)), and raising as an abort would at the
+    `abort_at`-th (from 1). `closed` once it stops watching."""
+
+    def __init__(self, events: list[tuple[str, tuple[str, ...]]]) -> None:
+        self.events = events
+        self.abort_at = 0
+        self.closed = False
+        self.settled_since: list[int] = []  # the marks settled() waited from
+        self._waits = 0
+
+    def _wait(self, what: str) -> None:
+        self._waits += 1
+        if self._waits == self.abort_at:
+            raise KeyboardInterrupt('an abort in a wait')
+        self.events.append(('wait', (what,)))
+
+    def mark(self) -> int:
+        return len(self.events)
+
+    def settled(self, since: int) -> None:
+        self.settled_since.append(since)
+        self._wait('settled')
+
+    def moved(self, since: int) -> None:
+        self._wait('moved')
+
+    def taken(self) -> bool:
+        self._wait('taken')
+        return True
+
+    def taking(self) -> Callable[[], bool]:
+        return self.taken
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class Designer:
@@ -498,11 +575,26 @@ class Designer:
         vars(helpers)['_menu_action'] = menu_action
         vars(helpers)['_material'] = lambda bar, keep: 'Default (overridden)'
         vars(helpers)['_home_screen'] = lambda: None
-        vars(helpers)['_wheel'] = lambda viewport, steps, pause: self.events.append(('trigger', ('wheel', str(steps))))
 
-        def drag(viewport: Any, button: Any, dx: int, dy: int, pressed: list[Any]) -> None:
+        def wheel(viewport: object, steps: int, taking: Callable[[], Callable[[], object]]) -> None:
+            self.events.append(('trigger', ('wheel', str(steps))))
+            for _ in range(abs(steps)):
+                taking()()
+
+        vars(helpers)['_wheel'] = wheel
+
+        def drag(
+            viewport: object,
+            button: object,
+            dx: int,
+            dy: int,
+            pressed: list[object],
+            taking: Callable[[], Callable[[], object]],
+        ) -> None:
             which = 'left' if button is qt('QtCore').Qt.MouseButton.LeftButton else 'middle'
+            taken = taking()
             self.events.append(('trigger', ('drag', which, str(dx), str(dy))))
+            taken()
 
         vars(helpers)['_drag'] = drag
         vars(helpers)['_apply_outputs'] = lambda tree, g, keep: self.events.append(
@@ -514,6 +606,16 @@ class Designer:
             return 'tiling %g' % value
 
         vars(helpers)['_set_tiling'] = set_tiling
+        self.frames = Frames(self.events)
+        frames = self.frames
+
+        class Watching:  # a class, as _Frames is: the set-up's own annotation names it (frames: _Frames | None)
+            def __new__(cls, viewport: object, render: object) -> Frames:  # type: ignore[misc]  # a fake made by its class
+                return frames
+
+        vars(helpers)['_Frames'] = Watching
+        # the window as it is: the turn shown on screen has a test of its own (REVIEW.md HLP-158)
+        vars(helpers)['_on_screen'] = lambda mw, frames: contextlib.nullcontext(SimpleNamespace(again=lambda: None))
         vars(helpers)['find_graph'] = lambda name: SimpleNamespace(
             getIdentifier=lambda: name, getOutputNodes=lambda: [object()] * outputs, compute=lambda: None
         )
@@ -521,7 +623,7 @@ class Designer:
     def triggered(self) -> list[tuple[str, ...]]:
         return [path for kind, path in self.events if kind == 'trigger']
 
-    def _tool(self, name: str) -> Any:
+    def _tool(self, name: str) -> SimpleNamespace:
         """A toolbar action; Camera and Light are one exclusive group, as in Designer."""
 
         def trigger() -> None:
@@ -608,38 +710,138 @@ def test_an_abort_after_a_change_says_what_was_set_and_goes_on(
     assert capsys.readouterr().out == "3D view, setting: Plane\n3D view, setting: graph g's outputs on the mesh\n"
 
 
-def _settle_aborted_at(helpers: types.ModuleType, call: int) -> None:
-    """_settle raising as an abort would, on its `call`-th call (from 1): most of a set-up's time is its waits."""
-    calls = [0]
-
-    def settle(seconds: float) -> None:
-        calls[0] += 1
-        if calls[0] == call:
-            raise KeyboardInterrupt('an abort in a wait')
-
-    vars(helpers)['_settle'] = settle
-
-
 def test_an_abort_during_a_steps_wait_says_that_step(
     helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # REVIEW.md HLP-116: the mesh changed, then the abort in the wait after it
-    Designer(helpers)
-    _settle_aborted_at(helpers, 1)
+    # REVIEW.md HLP-116: the mesh changed, then the abort in the wait after it: most of a set-up's time is its waits
+    designer = Designer(helpers)
+    designer.frames.abort_at = 1
     with pytest.raises(KeyboardInterrupt):
         helpers.set_3d_view(mesh='Plane')
     assert capsys.readouterr().out == '3D view, setting: Plane\n'
+    assert designer.frames.closed
 
 
-def test_an_abort_in_the_last_wait_says_all_that_was_set(
+def test_an_abort_in_the_last_wait_says_each_step_begun(
     helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # REVIEW.md HLP-116: the waits after the mesh, the view's turn and its frame, then the last one
-    Designer(helpers)
-    _settle_aborted_at(helpers, 4)
+    # REVIEW.md HLP-116: the waits after the mesh, the view's turn, then its Frame, the last one
+    designer = Designer(helpers)
+    designer.frames.abort_at = 3
     with pytest.raises(KeyboardInterrupt):
         helpers.set_3d_view(mesh='Plane', view='Top')
-    assert capsys.readouterr().out.splitlines()[-1] == '3D view: Plane, view Top, framed'
+    assert capsys.readouterr().out.splitlines() == ['3D view, setting: Plane', '3D view, setting: view Top, framed']
+    assert designer.frames.closed
+
+
+@pytest.mark.parametrize('shot', [False, True], ids=['set up on its own', "in a shot, on the shot's watch"])
+def test_the_cameras_turn_is_watched_with_designers_window_on_screen(helpers: types.ModuleType, shot: bool) -> None:
+    # REVIEW.md HLP-158 (the user's choice, 2026-11-16): off screen the view draws no frame, nothing says the turn
+    # ended, and Frame at once cancels it. Set up on its own, the viewpoint and Frame run with Designer's window on
+    # screen, transparent, as the 3D shot shows it (_on_screen); in a shot, the window is on screen already
+    designer = Designer(helpers)
+
+    def again() -> None:  # _Screen.again: the window put on screen again if it went off, the view waited for there
+        designer.events.append(('screen', ('again',)))
+
+    @contextlib.contextmanager
+    def on_screen(mw: object, frames: object) -> Iterator[SimpleNamespace]:
+        assert frames is designer.frames
+        designer.events.append(('screen', ('on screen',)))
+        try:
+            yield SimpleNamespace(again=again)
+        finally:
+            designer.events.append(('screen', ('put back',)))
+
+    vars(helpers)['_on_screen'] = on_screen
+    if shot:
+        helpers._3d_set_up(mesh='Plane', view='Top')(again, designer.frames)
+    else:
+        helpers.set_3d_view(mesh='Plane', view='Top')
+    seen = [path if kind == 'trigger' else path[0] for kind, path in designer.events if kind != 'lookup']
+    # REVIEW.md HLP-163: off screen nothing says the turn ended, so moved() ends there; the look after it puts the
+    # window back on screen and waits for the view there, before Frame
+    turn = [('Camera', 'Top'), 'moved', 'again', ('Camera', 'Frame'), 'settled']
+    if shot:
+        assert seen == ['again', ('Scene', 'Plane'), 'settled', 'again', *turn], seen
+    else:
+        assert seen == [('Scene', 'Plane'), 'settled', 'on screen', *turn, 'put back'], seen
+
+
+@pytest.mark.parametrize(
+    'options, moves',
+    [
+        ({'orbit': [90.0, 0.0]}, True),
+        ({'pan': [0.25, 0.0]}, True),
+        ({'zoom': 2}, True),
+        ({'mesh': 'Sphere', 'orbit': [90.0, 0.0]}, True),
+        ({'mesh': 'Sphere', 'view': 'Top'}, False),
+    ],
+    ids=['orbit', 'pan', 'zoom', 'a mesh and an orbit', 'no move'],
+)
+def test_a_set_up_that_moves_the_camera_runs_with_designers_window_on_screen(
+    helpers: types.ModuleType, options: dict[str, object], moves: bool
+) -> None:
+    # REVIEW.md HLP-168 (the user's choice, 2026-11-16): off screen, the same moves from the same start came out
+    # differently between runs (a pan 68.5 grey levels apart in 1 of 2); on screen, as a 3D shot sets up, they repeated
+    # exactly. So a set-up that moves the camera runs whole with the window on screen, on that watch, each step after
+    # the shot's look (again); one that doesn't stays off screen but for a viewpoint's turn (HLP-158)
+    designer = Designer(helpers)
+
+    def again() -> None:
+        designer.events.append(('screen', ('again',)))
+
+    @contextlib.contextmanager
+    def on_screen(mw: object, frames: object) -> Iterator[SimpleNamespace]:
+        assert frames is designer.frames
+        designer.events.append(('screen', ('on screen',)))
+        try:
+            yield SimpleNamespace(again=again)
+        finally:
+            designer.events.append(('screen', ('put back',)))
+
+    vars(helpers)['_on_screen'] = on_screen
+    helpers.set_3d_view(**options)
+    seen = [path if kind == 'trigger' else path[0] for kind, path in designer.events if kind != 'lookup']
+    if moves:
+        assert seen[0] == 'on screen' and seen[-1] == 'put back' and seen.count('on screen') == 1, seen
+        moved = [i for i, step in enumerate(seen) if isinstance(step, tuple) and step[0] in ('drag', 'wheel')]
+        assert moved and 'again' in seen[: moved[0]], seen
+    else:  # only the turn on screen, its own (HLP-158)
+        assert seen[0] == ('Scene', 'Sphere') and seen.index('on screen') > 0, seen
+    assert designer.frames.closed
+
+
+@pytest.mark.parametrize(
+    'options, waits',
+    [
+        ({'mesh': 'Sphere'}, [('Scene', 'Sphere'), 'settled']),
+        ({'graph': 'g'}, [('outputs', 'g'), 'settled']),
+        ({'view': 'Top'}, [('Camera', 'Top'), 'moved', ('Camera', 'Frame'), 'settled']),
+        # REVIEW.md HLP-149: each drag and wheel step waits for the view to take it, also off screen, where it draws no
+        # frame: sent back to back there, they were lost
+        ({'orbit': [90.0, 0.0]}, [('drag', 'left', '-200', '0'), 'taken', 'settled']),
+        ({'zoom': 2}, [('wheel', '2'), 'taken', 'taken', 'settled']),
+        ({'tiling': 2.0}, [('tiling', '2.0'), 'settled']),
+    ],
+    ids=['mesh', 'graph', 'view', 'orbit', 'zoom', 'tiling'],
+)
+def test_each_step_waits_for_the_3d_view_to_take_it(
+    helpers: types.ModuleType, options: dict[str, object], waits: list[object]
+) -> None:
+    # REVIEW.md HLP-148: on the view's frames, never a fixed time (frames3d.py); a set-up of its own stops watching
+    designer = Designer(helpers)
+    helpers.set_3d_view(**options)
+    seen = [path if kind == 'trigger' else path[0] for kind, path in designer.events if kind in ('trigger', 'wait')]
+    assert [step for step in seen if step != ('tool', 'Camera') and step != ('tool', 'Light')] == waits
+    assert designer.frames.closed
+
+
+def test_a_set_up_given_the_shots_frames_leaves_them_watching(helpers: types.ModuleType) -> None:
+    designer = Designer(helpers)
+    run = helpers._3d_set_up(mesh='Sphere')
+    run(None, designer.frames)
+    assert not designer.frames.closed and ('wait', ('settled',)) in designer.events
 
 
 def test_an_api_error_after_a_change_says_what_was_set(helpers: types.ModuleType) -> None:
@@ -757,10 +959,29 @@ def test_the_set_up_runs_the_shots_look_at_the_active_app_before_each_step(helpe
     designer = Designer(helpers)
     vars(helpers)['print'] = lambda line: designer.events.append(('print', (line,)))
     run = helpers._3d_set_up('g', 'Plane', 'Top', 2, 2.0, [90.0, 30.0], [0.25, -0.4])
-    run(lambda: designer.events.append(('between', ())))
+    run(lambda: designer.events.append(('between', ())), designer.frames)
     said = [event for event in designer.events if event[0] in ('print', 'between')]
     steps = [i for i, (kind, line) in enumerate(said) if kind == 'print' and line[0].startswith('3D view, setting: ')]
     assert len(steps) == 7 and all(said[i - 1] == ('between', ()) for i in steps)
+
+
+@pytest.mark.parametrize(
+    'options',
+    [{'orbit': [90.0, 0.0], 'pan': [0.25, 0.0]}, {'orbit': [90.0, 0.0], 'zoom': 2}, {'pan': [0.25, 0.0]}],
+    ids=['orbit then pan', 'orbit then zoom', 'pan alone'],
+)
+def test_the_moves_wait_from_a_mark_taken_after_the_look_before_the_last_of_them(
+    helpers: types.ModuleType, options: dict[str, object]
+) -> None:
+    # REVIEW.md HLP-161: the look before a step (`between`) brings the window back on screen if it went off, and waits
+    # for the view to restart and settle; from a mark taken before it, that restart ended the moves' wait
+    designer = Designer(helpers)
+    run = helpers._3d_set_up(**options)
+    run(lambda: designer.events.append(('between', ())), designer.frames)
+    looks = [i for i, event in enumerate(designer.events) if event == ('between', ())]
+    moves = [i for i, (kind, path) in enumerate(designer.events) if kind == 'trigger' and path[0] in ('drag', 'wheel')]
+    assert len(designer.frames.settled_since) == 1, designer.frames.settled_since
+    assert looks[-1] < designer.frames.settled_since[0] <= min(i for i in moves if i > looks[-1]), designer.events
 
 
 def _drags(designer: Designer) -> list[tuple[str, ...]]:
@@ -799,7 +1020,7 @@ def test_a_turn_or_pan_of_zero_is_no_drag(helpers: types.ModuleType, capsys: pyt
     ids=['across', 'across with a turn up', 'down', 'right', 'up with a pan right'],
 )
 def test_a_turn_or_pan_under_a_pixel_is_refused_before_anything_changes(
-    helpers: types.ModuleType, options: dict[str, Any]
+    helpers: types.ModuleType, options: dict[str, object]
 ) -> None:
     # REVIEW.md HLP-121: rounded to no pixel, it was dropped and said as set ('3D view: ' alone for orbit=[0.2, 0])
     designer = Designer(helpers)
@@ -824,7 +1045,7 @@ def test_the_turn_and_pan_said_are_what_the_drags_carry(
     'options', [{'orbit': [90.0, 0.0]}, {'pan': [0.25, 0.0]}, {'zoom': 2}], ids=['orbit', 'pan', 'zoom']
 )
 def test_under_the_light_tool_the_camera_tool_moves_the_camera_then_the_light_tool_comes_back(
-    helpers: types.ModuleType, options: dict[str, Any]
+    helpers: types.ModuleType, options: dict[str, object]
 ) -> None:
     # REVIEW.md HLP-120: under the Light tool, drags and the wheel don't move the camera; zoom= said it zoomed
     designer = Designer(helpers, tool='Light')
@@ -858,7 +1079,9 @@ def test_a_toolbar_without_the_camera_tool_is_refused_before_anything_changes(he
 def test_the_light_tool_comes_back_when_a_drag_fails(helpers: types.ModuleType) -> None:
     designer = Designer(helpers, tool='Light')
 
-    def failing(viewport: Any, button: Any, dx: int, dy: int, pressed: list[Any]) -> None:
+    def failing(
+        viewport: object, button: object, dx: int, dy: int, pressed: list[object], taken: Callable[[], object]
+    ) -> None:
         raise RuntimeError('a drag failed')
 
     vars(helpers)['_drag'] = failing
@@ -875,7 +1098,7 @@ def test_an_abort_landing_as_the_light_tool_comes_back_brings_it_back(helpers: t
     real = helpers._tool_back
     calls: list[int] = []
 
-    def tool_back(light: Any, switched: bool) -> None:
+    def tool_back(light: object, switched: bool) -> None:
         calls.append(1)
         if len(calls) == 1:
             raise KeyboardInterrupt('an abort as the Light tool comes back')
@@ -889,9 +1112,11 @@ def test_an_abort_landing_as_the_light_tool_comes_back_brings_it_back(helpers: t
 
 def test_an_abort_that_skipped_a_drags_release_releases_its_button(helpers: types.ModuleType) -> None:
     Designer(helpers)
-    released: list[tuple[Any, float, float]] = []
+    released: list[tuple[object, float, float]] = []
 
-    def aborted(viewport: Any, button: Any, dx: int, dy: int, pressed: list[Any]) -> None:
+    def aborted(
+        viewport: object, button: object, dx: int, dy: int, pressed: list[object], taken: Callable[[], object]
+    ) -> None:
         pressed.append((button, 0.0, 57.0))  # pressed, then the abort landing before its release
         raise KeyboardInterrupt('an abort in a drag')
 
@@ -904,7 +1129,8 @@ def test_an_abort_that_skipped_a_drags_release_releases_its_button(helpers: type
 
 class Mouse:
     """What _drag does to a 400 x 300 viewport, faked: (what, x, y) each, what its mouse events (press, move, release),
-    'pause' (x the seconds), 'guard on' or 'guard off' (the filter for the user's mouse installed or removed)."""
+    'mark' and 'taken' (the wait for the view to take it: before the press, and after the release), 'guard on' or
+    'guard off' (the filter for the user's mouse installed or removed)."""
 
     def __init__(self, fail_at_move: int = 0) -> None:
         self.sent: list[tuple[str, float, float]] = []
@@ -915,8 +1141,8 @@ class Mouse:
             id(core.QEvent.Type.MouseButtonRelease): 'release',
         }
         self.fail_at_move = fail_at_move
-        self.pressed: list[Any] = []  # the `pressed` handed to _drag
-        self.held: list[list[Any]] = []  # what it held at each mouse event
+        self.pressed: list[object] = []  # the `pressed` handed to _drag
+        self.held: list[list[object]] = []  # what it held at each mouse event
         self.viewport = SimpleNamespace(
             width=lambda: 400,
             height=lambda: 300,
@@ -925,7 +1151,7 @@ class Mouse:
             removeEventFilter=lambda guard: self.sent.append(('guard off', 0.0, 0.0)),
         )
 
-    def mouse(self, viewport: Any, kind: Any, x: float, y: float, button: Any, buttons: Any) -> None:
+    def mouse(self, viewport: object, kind: object, x: float, y: float, button: object, buttons: object) -> None:
         self.sent.append((self.kinds[id(kind)], x, y))
         self.held.append(list(self.pressed))
         if self.kinds[id(kind)] == 'move' and sum(what == 'move' for what, _, _ in self.sent) == self.fail_at_move:
@@ -935,30 +1161,36 @@ class Mouse:
         return [what for what, _, _ in self.sent]
 
 
-def test_a_drag_is_a_press_moves_and_a_release_from_the_middle_then_a_pause_all_guarded(
+def test_a_drag_is_a_press_moves_and_a_release_from_the_middle_then_the_wait_for_the_view_all_guarded(
     helpers: types.ModuleType,
 ) -> None:
-    # the pause: a drag right after another cancelled it, or part of it; the guard: the user's mouse moving over the
-    # viewport in a drag stopped it (REVIEW.md HLP-122), and a press in the pause would undo it (designer_helpers/view3d.py)
+    # the wait: a drag right after another cancelled it, or part of it; the guard: the user's mouse moving over the
+    # viewport in a drag stopped it (REVIEW.md HLP-122), and a press before the view took it would undo it
+    # (designer_helpers/view3d.py)
     mouse = Mouse()
     vars(helpers)['_mouse'] = mouse.mouse
-    vars(helpers)['_settle'] = lambda seconds: mouse.sent.append(('pause', seconds, 0.0))
-    pressed: list[Any] = []
-    helpers._drag(mouse.viewport, qt('QtCore').Qt.MouseButton.LeftButton, -200, 50, pressed)
+    pressed: list[object] = []
+
+    # the mark before the press, then the wait for the view to take the drag: its next frame, or off screen its next
+    # UpdateRequest, which can come while the drag's own events run (REVIEW.md HLP-148, HLP-164)
+    def taking() -> Callable[[], object]:
+        mouse.sent.append(('mark', 0.0, 0.0))
+        return lambda: mouse.sent.append(('taken', 0.0, 0.0))
+
+    helpers._drag(mouse.viewport, qt('QtCore').Qt.MouseButton.LeftButton, -200, 50, pressed, taking)
     moves = ['move'] * helpers.DRAG_MOVES
-    assert mouse.what() == ['guard on', 'press', *moves, 'release', 'pause', 'guard off']
-    assert mouse.sent[1] == ('press', 200.0, 150.0) and mouse.sent[-4:-2] == [
+    assert mouse.what() == ['guard on', 'mark', 'press', *moves, 'release', 'taken', 'guard off']
+    assert mouse.sent[2] == ('press', 200.0, 150.0) and mouse.sent[-4:-2] == [
         ('move', 0.0, 200.0),
         ('release', 0.0, 200.0),
     ]
-    assert mouse.sent[-2] == ('pause', helpers.DRAG_PAUSE, 0.0) and helpers.DRAG_PAUSE >= 0.1
     assert pressed == []
 
 
 def test_a_drag_whose_move_fails_still_releases_its_button_and_removes_its_guard(helpers: types.ModuleType) -> None:
     mouse = Mouse(fail_at_move=3)
     vars(helpers)['_mouse'] = mouse.mouse
-    pressed: list[Any] = []
+    pressed: list[object] = []
     with pytest.raises(RuntimeError, match='a move failed'):
         helpers._drag(mouse.viewport, qt('QtCore').Qt.MouseButton.MiddleButton, 100, 0, pressed)
     assert mouse.what()[-2:] == ['release', 'guard off'] and mouse.sent[-2] == ('release', 300.0, 150.0)
@@ -982,7 +1214,7 @@ def test_the_mouse_events_the_helpers_send_are_marked_for_the_guard_while_sent(
     # REVIEW.md HLP-122: the drag's guard lets through only the events _mouse is sending
     marked: list[bool] = []
 
-    def send(viewport: Any, event: Any) -> None:
+    def send(viewport: object, event: object) -> None:
         marked.append(helpers._OWN_MOUSE[0])
         if fails:
             raise RuntimeError('sendEvent failed')
@@ -1102,3 +1334,66 @@ def test_the_tiling_said_is_the_spin_boxs(helpers: types.ModuleType) -> None:
     _tiling(helpers, lambda params, keep: spin)
     assert helpers._set_tiling(panel(), object(), 2.0, []) == 'tiling 2.5 (the Parameters panel back on g)'
     assert spin.set == [2.0]
+
+
+def test_tries_failing_for_different_reasons_say_each_one(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-153: "in each of N tries" was said with the last try's reason
+    _menus(Menu(VIEW, closed_as_faded=True), None, None)
+    with pytest.raises(RuntimeError) as raised:
+        _outputs_applied(helpers, _looked)
+    assert str(raised.value) == (
+        "the Explorer's menu for graph g: closed before its action was picked, then didn't open, then didn't open "
+        '(%d tries)' % helpers.MENU_TRIES
+    )
+
+
+def test_a_fade_that_raises_closes_the_menu_at_once_and_says_why(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-153: fade and pick run in one slot; a fade raising left the menu open until the guard closed it, 5 s
+    # later, said not to have opened. Picked from then, the action would run with the menu not transparent
+    class Unheld(MenuWindow):
+        def hold(self, window: int) -> None:
+            raise RuntimeError('no window to hold')
+
+    vars(helpers)['_MacWindow'] = Unheld
+    menu = Menu(VIEW)
+    _menus(menu)
+    # and still open as the look's handler asks for the popup it left open (REVIEW.md HLP-177)
+    qt('QtWidgets').QApplication.activePopupWidget.side_effect = [None, menu, menu]
+
+    def send_event(timers: list[Timer]) -> None:
+        with pytest.raises(RuntimeError, match='no window to hold'):  # a slot's: Qt prints it and goes on
+            _looked(timers)
+
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setattr(sys, 'platform', 'darwin')
+        with pytest.raises(RuntimeError) as raised:
+            _outputs_applied(helpers, send_event)
+    assert menu.closed and menu.triggered == []
+    assert str(raised.value) == (
+        "the Explorer's menu for graph g couldn't be made transparent (RuntimeError: no window to hold), and was closed"
+    )
+
+
+def test_a_menu_the_guard_closed_with_nothing_picked_is_said_so(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-153: it was said not to have opened
+    pick = helpers._MenuPick(VIEW, None)
+    assert pick.failure('g', held=True) == (
+        "the Explorer's menu for graph g was still open %d s after it opened, and was closed with nothing picked"
+        % (helpers.MENU_GUARD // 1000)
+    )
+
+
+def test_each_wheel_notch_waits_from_a_mark_taken_before_it_is_sent(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-164, measured: off screen the view asks for a frame once a notch. Delivered while the notch's own
+    # events ran, it came before a mark taken after them, and the wait ran NO_RESTART
+    done: list[str] = []
+    sys.modules['PySide6.QtWidgets'].QApplication.sendEvent = lambda viewport, event: done.append('notch')
+    vars(helpers)['_process_events'] = lambda times=1: done.append('events')
+
+    def taking() -> Callable[[], object]:
+        done.append('mark')
+        return lambda: done.append('taken')
+
+    viewport = SimpleNamespace(width=lambda: 400, height=lambda: 300, mapToGlobal=lambda point: point)
+    helpers._wheel(viewport, -2, taking)
+    assert done == ['mark', 'notch', 'events', 'taken'] * 2, done

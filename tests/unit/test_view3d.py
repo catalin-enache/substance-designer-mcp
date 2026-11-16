@@ -77,7 +77,7 @@ def test_3d_options_need_the_3d_panel(monkeypatch: pytest.MonkeyPatch, temp_fold
         ('pan', [0.5], r'pan is \[right, up\] in fractions of the view'),
     ],
 )
-def test_options_out_of_range_are_refused(
+def test_options_out_of_range_are_refused(  # Any: `value` goes to parameters of several types
     monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], option: str, value: Any, message: str
 ) -> None:
     sent = _bridge(monkeypatch, temp_folders)

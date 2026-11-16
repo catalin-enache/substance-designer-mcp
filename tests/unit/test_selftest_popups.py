@@ -23,10 +23,16 @@ def test_popups_are_seen_from_the_first_sample_showing_one_to_the_last(popups: M
 
 
 @pytest.mark.skipif(sys.platform != 'darwin', reason="the window server's list is macOS's")
-def test_the_watch_samples_the_window_list_and_sees_no_popup_of_a_process_with_none(popups: ModuleType) -> None:
-    # this test's own process has no window at all
-    with popups.PopupWatch(os.getpid()) as watch:
-        time.sleep(0.1)
+@pytest.mark.parametrize('layer', [None, 0], ids=['popups', 'every window: REVIEW.md TST-472'])
+def test_the_watch_samples_the_window_list_and_sees_no_popup_of_a_process_with_none(
+    popups: ModuleType, layer: int | None
+) -> None:
+    # this test's own process has no window at all. Looked at every 0.1 s until it has sampled, 10 s at most: a fixed
+    # sleep sampled as fast as the window server answered, which a loaded machine slows (REVIEW.md TST-469)
+    with popups.PopupWatch(os.getpid(), *(() if layer is None else (layer,))) as watch:
+        deadline = time.monotonic() + 10
+        while watch.samples <= 10 and time.monotonic() < deadline:
+            time.sleep(0.1)
     assert watch.samples > 10 and watch.listed == 0 and watch.times == [] and watch.shown_ms == 0.0
 
 
@@ -34,11 +40,15 @@ PID = 42
 POPUP, NORMAL = 101, 0  # window layers
 
 
+# a window as Server lists it: (layer, alpha, pid), and its bounds for test_selftest_window_server's Bounded
+FakeWindow = tuple[int, float, int] | tuple[int, float, int, tuple[float, float, float, float]]
+
+
 class Server:
     """CoreGraphics and CoreFoundation as _seen calls them, faked: the window server's list of windows, each a
     (layer, alpha, pid) read by its index (the keys 0, 1 and 2); no list at all when `listed` is False."""
 
-    def __init__(self, *windows: tuple[int, float, int], listed: bool = True) -> None:
+    def __init__(self, *windows: FakeWindow, listed: bool = True) -> None:
         self.windows = windows
         self.listed = listed
         self.released: list[object] = []
@@ -49,13 +59,13 @@ class Server:
     def CFArrayGetCount(self, listed: object) -> int:
         return len(self.windows)
 
-    def CFArrayGetValueAtIndex(self, listed: object, i: int) -> tuple[int, float, int]:
+    def CFArrayGetValueAtIndex(self, listed: object, i: int) -> FakeWindow:
         return self.windows[i]
 
-    def CFDictionaryGetValue(self, info: tuple[int, float, int], key: int) -> float:
+    def CFDictionaryGetValue(self, info: FakeWindow, key: int) -> object:
         return info[key]
 
-    def CFNumberGetValue(self, number: float, kind: int, out: Any) -> bool:  # Any: byref()'s result, untyped
+    def CFNumberGetValue(self, number: object, kind: int, out: Any) -> bool:  # Any: byref()'s result, untyped
         out._obj.value = number  # the ctypes value byref() points at
         return True
 

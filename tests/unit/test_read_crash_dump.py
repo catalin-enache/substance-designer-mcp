@@ -13,8 +13,9 @@ import subprocess
 import sys
 import time
 import tracemalloc
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -60,8 +61,8 @@ def _dump(tmp_path: Path, crash: Crash | None = None, name: str = 'a1b2.dmp', pa
     return path
 
 
-def _said(path: Path, **kw: Any) -> str:
-    return '\n'.join(_reader().describe(str(path), **kw))
+def _said(path: Path, name_frames: Callable[[str, int, list[int]], list[str]]) -> str:
+    return '\n'.join(_reader().describe(str(path), name_frames=name_frames))
 
 
 def test_the_crashing_threads_frames_follow_its_frame_pointers(tmp_path: Path) -> None:
@@ -85,6 +86,24 @@ def test_the_first_frame_outside_the_systems_libraries_is_named(tmp_path: Path) 
 def test_an_abort_is_said_with_its_signal(tmp_path: Path) -> None:
     said = _said(_dump(tmp_path), name_frames=lambda path, base, addresses: [])
     assert 'exception: EXC_CRASH, signal SIGABRT' in said
+
+
+def test_a_dumps_signal_is_named_as_macos_numbers_it_whatever_system_reads_it() -> None:
+    # REVIEW.md INS-39: Windows' C runtime numbers SIGABRT 22, and CPython's signal module takes that numbering, so read
+    # there an abort said "signal 6"
+    import enum
+
+    reader = _reader()
+    windows = enum.IntEnum(
+        'windows', {'SIGINT': 2, 'SIGILL': 4, 'SIGFPE': 8, 'SIGSEGV': 11, 'SIGTERM': 15, 'SIGABRT': 22}
+    )
+    vars(reader)['signal'] = SimpleNamespace(Signals=windows)
+    said = [reader._exception(0, [EXC_CRASH, number << 24, 0]) for number in (6, 10, 11)]
+    assert [line.split(' (')[0] for line in said] == [
+        'EXC_CRASH, signal SIGABRT',
+        'EXC_CRASH, signal SIGBUS',
+        'EXC_CRASH, signal SIGSEGV',
+    ], said
 
 
 def test_the_messages_crashpad_kept_are_said_with_their_module(tmp_path: Path) -> None:
@@ -300,6 +319,15 @@ def test_a_dump_given_by_its_file_name_alone_has_designers_log(tmp_path: Path, m
     assert 'the last line' in _said(Path('a1b2.dmp'), name_frames=_no_names)
 
 
+@pytest.fixture(params=['macOS', 'no user ids'])
+def user_ids(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A test standing for macOS's agents' folders, run where `os` has no getuid too, as on Windows: its unit suite
+    runs them (REVIEW.md INS-38). After tmp_path, which pytest makes with the user's id."""
+    if request.param == 'no user ids':
+        monkeypatch.delattr(os, 'getuid', raising=False)
+
+
+@pytest.mark.usefixtures('user_ids')
 def test_the_dumps_are_looked_for_in_each_designers_crashpad_folders(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -307,15 +335,46 @@ def test_the_dumps_are_looked_for_in_each_designers_crashpad_folders(
     # done or skipped (REVIEW.md INS-29, TST-347)
     reader = _reader()
     _home_is(monkeypatch, tmp_path / 'me')
-    monkeypatch.setitem(vars(reader), 'agent_designer_folders', lambda: ['/tmp/sd_mcp_501_9902'])
+    agents = tmp_path / 'sd_mcp_501_9902'
+    agents.mkdir()  # the user's own (REVIEW.md INS-37)
+    monkeypatch.setitem(vars(reader), 'agent_designer_folders', lambda: [str(agents)])
     # joined as the reader does: on Windows with a backslash (REVIEW.md TST-352)
-    homes = [str(tmp_path / 'me'), os.path.join('/tmp/sd_mcp_501_9902', 'home')]
+    homes = [str(tmp_path / 'me'), os.path.join(str(agents), 'home')]
     expected = [
         os.path.join(home, *DATA, 'Sentry-Crashpad', part) for home in homes for part in ('pending', 'completed')
     ]
     assert reader.dump_folders() == expected
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason="no folders of agents' Designers there")
+def test_a_folder_in_tmp_that_isnt_the_users_own_isnt_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md INS-37: matched by its name alone in the shared /tmp, which another account may make first; the server
+    # (_checked_folder) and uninstall.py read only the user's own folders, not links
+    reader = _reader()
+    _home_is(monkeypatch, tmp_path / 'me')
+    own, elsewhere, other = tmp_path / 'own', tmp_path / 'elsewhere', tmp_path / 'other'
+    for folder in (own, elsewhere, other):
+        folder.mkdir()
+    link = tmp_path / 'link'
+    link.symlink_to(elsewhere)
+    monkeypatch.setitem(vars(reader), 'agent_designer_folders', lambda: [str(own), str(link), str(other)])
+    real_lstat = os.lstat
+
+    def lstat(path: str) -> os.stat_result:
+        info = real_lstat(path)
+        if str(path) != str(other):
+            return info
+        return os.stat_result((*info[:4], os.getuid() + 1, *info[5:10]))  # another account's
+
+    monkeypatch.setattr(os, 'lstat', lstat)
+    homes = [str(tmp_path / 'me'), str(own / 'home')]
+    expected = [
+        os.path.join(home, *DATA, 'Sentry-Crashpad', part) for home in homes for part in ('pending', 'completed')
+    ]
+    assert reader.dump_folders() == expected
+
+
+@pytest.mark.usefixtures('user_ids')
 def test_a_dump_waiting_for_its_upload_is_read_as_the_newest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

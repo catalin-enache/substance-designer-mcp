@@ -118,7 +118,7 @@ def test_region_is_clamped_not_wrapped() -> None:
 
 
 def test_sweep_reports_a_value_that_failed(monkeypatch: pytest.MonkeyPatch, temp_folders: list[str]) -> None:
-    # REVIEW.md SRV-2: tiles for the first values, then an error, then "restored" from the finally
+    # REVIEW.md SRV-2: tiles for the first values, then "restored" from the put-back, then the error (HLP-179)
     def fake_bridge(code: str, path: str | None = None, timeout: float | None = None) -> str:
         with open(os.path.join(temp_folders[-1], '0.raw'), 'wb') as f:  # the folder the server made
             f.write(bytes([128]))

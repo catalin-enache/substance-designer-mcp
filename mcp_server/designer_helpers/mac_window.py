@@ -12,9 +12,10 @@ Measured on macOS in a Designer an agent started (2026-11-13; what the 3D view d
   that doesn't exist, it puts it behind every window, as orderBack: does: so the shot asks first (lowest).
 - A window covered whole by an always-on-top window (Qt's WindowStaysOnTopHint: layer 8) has no normal window in front
   of it, so none is found (2026-11-14).
-- A Designer an agent starts becomes the active app as it starts, the one the keyboard types into, taking it from the
-  app in front: the user's, or another agent's Designer. One that quits as the active app hands it back to the app
-  active before it. Hidden (hide:), Designer makes the app active before it active again; shown again without being
+- A Designer an agent starts became the active app as it started, the one the keyboard types into, taking it from the
+  app in front: the user's, or another agent's Designer. launch_designer opens an app bundle hidden; a binary in
+  SD_DESIGNER_APP starts shown (server_tools/lifecycle.py; REVIEW.md SRV-149, SRV-152). One that quits as the active app hands it back to the app active
+  before it. Hidden (hide:), Designer makes the app active before it active again; shown again without being
   made active (unhideWithoutActivation), it stays so (2026-11-14, the front app read with lsappinfo: REVIEW.md SRV-148).
 """
 
@@ -22,8 +23,9 @@ import ctypes
 import ctypes.util
 
 from .core import _APP, Any, cast, sys
-from .view3d import _settle
+from .waits import _event_signal, _until
 
+ACTIVATION_WAIT = 3.0  # s at most for Designer to be no longer the active app once hidden, then shown again: a limit
 NS_VISIBLE = 2  # NSWindowOcclusionStateVisible: part of the window is on screen
 NS_BELOW = -1  # NSWindowBelow, for orderWindow:relativeTo:
 CG_ON_SCREEN = (1 << 0) | (1 << 4)  # kCGWindowListOptionOnScreenOnly, kCGWindowListExcludeDesktopElements
@@ -48,14 +50,21 @@ class _MacWindow:
         result: type[ctypes.c_void_p | ctypes.c_bool | ctypes.c_ulong | ctypes.c_long | ctypes.c_double],
         receiver: int | None,
         selector: str,
+        argument: int | None = None,
     ) -> object:
-        """objc_msgSend: `selector` sent to `receiver`, with nil as its argument (a selector without one ignores it)."""
+        """objc_msgSend: `selector` sent to `receiver`, with `argument`, nil when omitted (a selector without one ignores
+        it). An object or an index alike: either goes in one register of 64 bits."""
         prototype = ctypes.CFUNCTYPE(result, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
         send = prototype(('objc_msgSend', self._objc))
-        return cast(object, send(receiver, self._objc.sel_registerName(selector.encode()), None))
+        return cast(object, send(receiver, self._objc.sel_registerName(selector.encode()), argument))
 
-    def _object(self, receiver: int | None, selector: str) -> int | None:
-        return cast(int | None, self._send(ctypes.c_void_p, receiver, selector))
+    def _object(self, receiver: int | None, selector: str, argument: int | None = None) -> int | None:
+        return cast(int | None, self._send(ctypes.c_void_p, receiver, selector, argument))
+
+    def _items(self, listed: int | None) -> list[int]:
+        """The objects of the NSArray `listed`; none when it is nil."""
+        count = cast(int, self._send(ctypes.c_ulong, listed, 'count'))
+        return [cast(int, self._object(listed, 'objectAtIndex:', i)) for i in range(count)]
 
     def _flag(self, receiver: int | None, selector: str) -> bool:
         return bool(self._send(ctypes.c_bool, receiver, selector))
@@ -97,11 +106,25 @@ class _MacWindow:
         """The main window; with `every`, each of Designer's windows (NSApp's windows, shown or not)."""
         if not every:
             return [cast(int, self._window)]
-        listed = self._object(self._app, 'windows')
-        prototype = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong)
-        at = prototype(('objc_msgSend', self._objc))
-        count = cast(int, self._send(ctypes.c_ulong, listed, 'count'))
-        return [cast(int, at(listed, self._objc.sel_registerName(b'objectAtIndex:'), i)) for i in range(count)]
+        return self._items(self._object(self._app, 'windows'))
+
+    def hand_over_clipboard(self) -> None:
+        """Reads every type on the general pasteboard back, in Designer's own process, so what Qt only promised there is
+        the pasteboard's. On macOS, Qt's setMimeData promises the data: Designer hands it over when another app asks,
+        and reading it here asks at once. Left promised, the text a 3D shot put back made another app's paste wait while
+        Designer's main thread was busy, and was gone once Designer was killed. Measured 2026-11-16, in Designers an
+        agent started (REVIEW.md HLP-181), 1 of 1 each: a paste 2 s into a 12 s job came only as the job ended, and
+        after a SIGKILL nothing came; read back first, the paste came in 0.013 s, and the text was there after a
+        SIGKILL. Not read back, a normal quit kept it. macOS only, as _MacWindow is."""
+        self._objc.objc_autoreleasePoolPush.restype = ctypes.c_void_p
+        self._objc.objc_autoreleasePoolPop.argtypes = [ctypes.c_void_p]
+        pool = self._objc.objc_autoreleasePoolPush()  # each read freed at once, not at the job's end
+        try:
+            board = self._object(self._objc.objc_getClass(b'NSPasteboard'), 'generalPasteboard')
+            for kind in self._items(self._object(board, 'types')):  # nil when empty: no items
+                self._object(board, 'dataForType:', kind)
+        finally:
+            self._objc.objc_autoreleasePoolPop(pool)
 
     def hold(self, window: int) -> None:
         """Keeps `window` from being freed, even once closed, until let_go: a window Designer closes while it is held
@@ -187,18 +210,54 @@ def _mac_window(mw: Any) -> _MacWindow | None:  # Any: a Qt widget (screenshots.
     return _MacWindow(mw) if sys.platform == 'darwin' else None
 
 
-def give_back_activation() -> None:
+def _wait_unhidden(mac: _MacWindow, handle: Any, limit: float) -> bool:  # Any: a QWindow (screenshots.py)
+    """Waits, at most `limit` s, for macOS to no longer say Designer is hidden once it was unhidden: looked at as Qt's
+    expose events for `handle`, the main window's, come, and every TICK ms. Returns whether macOS said so. The unhide
+    takes as Designer's events run (shot3d.py's module docstring; REVIEW.md HLP-160). The window's exposure is no sign
+    of it: the window can come back behind the active app's, and once covered whole Qt no longer exposes it (REVIEW.md
+    HLP-166)."""
+    spy = _event_signal(handle, ('Expose',))
+    try:
+        return _until(lambda: not mac.hidden(), limit, [spy.fired])
+    finally:
+        handle.removeEventFilter(spy)
+
+
+def give_back_activation(started_hidden: bool = False) -> None:
     """Gives the keyboard back to the app in front before Designer, if Designer is the active app: Designer hidden, then
-    shown without being made active (the module docstring). For launch_designer, once a Designer it started answers,
-    since one becomes the active app as it starts (REVIEW.md SRV-148). Prints what it did; nothing when Designer isn't
-    the active app, or elsewhere than macOS."""
-    mac = _mac_window(_APP.getQtForPythonUIMgr().getMainWindow())  # type: ignore[no-untyped-call]  # sd: no annotations
+    shown without being made active (the module docstring). Left hidden when it was hidden, or `started_hidden`:
+    becoming the active app unhides a hidden Designer (measured 2026-11-16: REVIEW.md SRV-161), so a Designer opened
+    hidden reads shown by then. For launch_designer, once a Designer it started answers, in case that Designer became
+    the active app anyway: one started hidden doesn't (REVIEW.md SRV-148, SRV-152, SRV-149). Each step is waited for on
+    Qt's callbacks, ACTIVATION_WAIT at most: the hide until Designer is no longer the active app (Qt's
+    applicationStateChanged), the show until macOS no longer says Designer is hidden (_wait_unhidden; REVIEW.md
+    SRV-150, HLP-166).
+    Prints what it did; nothing when Designer isn't the active app, or elsewhere than macOS."""
+    from PySide6 import QtGui
+
+    mw = _APP.getQtForPythonUIMgr().getMainWindow()  # type: ignore[no-untyped-call]  # sd: no annotations
+    mac = _mac_window(mw)
     if mac is None or not mac.active():
         return
+    app = cast(QtGui.QGuiApplication, QtGui.QGuiApplication.instance())  # Designer's own: always there
+    # hidden while active: not seen, as becoming the active app unhides Designer (REVIEW.md SRV-161), a defence;
+    # test_a_designer_started_hidden_that_became_the_active_app_stays_hidden builds that state
+    hidden = mac.hidden()
     mac.hide()  # the app active before it becomes active again
-    _settle(1.0)
+    _until(lambda: not mac.active(), ACTIVATION_WAIT, [app.applicationStateChanged])
+    if hidden or started_hidden:
+        print(
+            'gave the keyboard back to the app in front before it, %s'
+            % ('still hidden' if hidden else 'hidden again, as it was started')
+            if not mac.active()
+            else 'still the active app after it was hidden'
+        )
+        return
+    top = mw.window()  # the top-level window: getMainWindow() is a page of it
+    # held: a handle taken through a wrapper dropped at once is deleted by the next line (REVIEW.md SRV-155)
+    handle = top.windowHandle()
     mac.unhide()
-    _settle(1.0)
+    _wait_unhidden(mac, handle, ACTIVATION_WAIT)
     print(
         'gave the keyboard back to the app in front before it'
         if not mac.active()

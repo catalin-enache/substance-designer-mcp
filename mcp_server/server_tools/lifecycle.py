@@ -5,7 +5,7 @@ A Designer an agent started is disposable: it can be ended however works. Any ot
 Several Designers side by side (macOS; other platforms not tried). Designer is single-instance: starting, it reads the
 ID of the last one started (`session.instancePID`, preferences plist) and looks for its socket (`algipc-...-<ID>`, 41
 bytes) in its own temp folder; found, it hands over its arguments and exits (`[IPC] Found instance PID` in the log). So
-launch_designer starts the binary, in `/`, with `SD_BRIDGE_PORT`, `TMPDIR=/tmp/sd_mcp_<uid>_<port>/temp/` (a socket path
+launch_designer starts Designer (on macOS an app bundle through `open`: below), in `/`, with `SD_BRIDGE_PORT`, `TMPDIR=/tmp/sd_mcp_<uid>_<port>/temp/` (a socket path
 has at most 103 bytes; under `/var/folders/...` it was too long and Designer made none) and, on macOS,
 `CFFIXED_USER_HOME=.../home`: Designer then keeps its log, settings and crash-dump database there (not one byte to the
 user's log, their `user_preferences.xml` left as it was) and loads user plugins from `SBS_DESIGNER_PYTHON_PATH`, set to
@@ -17,6 +17,28 @@ under the lock it is saved under, which a launch holds until its Designer is rec
 change in it is put back once none runs (designer_preferences.py).
 Tests: test_lifecycle_env.py, lifecycle.check_launch_on_another_port,
 lifecycle.check_a_designer_sharing_the_temp_folder_hands_over.
+
+Starting hidden (macOS, measured 2026-11-15). Started from its binary, as below, a Designer's window still came up in
+front of the active app's for up to 5.66 s in later launches (REVIEW.md SRV-152). So an app bundle is opened by `open -n
+-g -j` (_opened): a new instance, not brought to the front, hidden; in 4 of 4 launches none of its windows showed and
+it was never the active app. `open` says no process ID: the new process whose environment has the launch's port and
+its home is its (_found_launched; the port alone is in a Designer the user starts with SD_BRIDGE_PORT set: REVIEW.md
+SRV-165).
+
+Starting behind the app in front (macOS, measured 2026-11-15, from Designer's binary). Designer's Qt (6.8.6) makes the app the active one as it
+finishes launching, unless `QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM` (STAY_BEHIND) is set, so launch_designer
+sets it. Watched from another process every 50 ms, with another app in front:
+- without it, a Designer was the active app for 4.6 s of its start, and its window was in front of the other apps' for
+  1.9 s. The user's typing went into it.
+- with it, in four launches (two with `QT_MAC_SET_RAISE_PROCESS=0` too), Designer was never the active app, and its
+  window was never the frontmost. It came up behind the active app's window, but over the other apps' windows: for
+  1.9 s of one launch (2026-11-15, read with each window's bounds). One more window of Designer's showed above every
+  normal window: at popup level, 575 x 387 in the middle of the screen, fading out for 0.1 to 0.2 s as Designer
+  answered (its splash or Home screen, most likely).
+`QT_MAC_SET_RAISE_PROCESS=0` would also stop a raise from making Designer the active app. It isn't set: it changed
+nothing at the launch, and the self-test's Undo needs a raise to make Designer the active app (REVIEW.md TST-234).
+give_back_activation stays, for a Designer that still becomes the active app (REVIEW.md SRV-148, SRV-149). Test:
+lifecycle.check_launch_on_another_port.
 
 Quitting. The window the user sees is a top-level `QStackedWidget` ("Adobe Substance 3D Designer"), not the hidden
 `getMainWindow()`; closing the visible top-level widgets quits Designer normally, with a modal dialog open too. If a
@@ -35,9 +57,9 @@ So quit_designer only closes the windows, and past its wait the server ends the 
 for a Designer an agent started; launch_designer ends one not answering past its start-up the same way. Before either
 force, on macOS, the server runs macOS's `sample` on it for a second, writing its threads' stacks into that Designer's
 own folder, to read what a hang waits on (ROADMAP item 70): 1.5 to 2 s, without admin rights. The sample of one stuck in
-the thread pool's wait holds `QThreadPool::waitForDone`, or `NglSSOHandler::Stop` while its shutdown still stops Adobe's
-sign-in before it (measured, lifecycle's two sample checks). launch_designer
-records the process it started (its own child), its start time and, on macOS, its home in `agent_designer_file(port)` (project_constants.py), one per port, so a /mcp reconnect keeps it and a
+its shutdown shows its main thread in `destroyApplication`, Designer's teardown, at whichever of its steps it waits
+(measured: tests/test_all_tools/lifecycle/samples.py, and lifecycle's two sample checks). launch_designer
+records the process it started, its start time and, on macOS, its home in `agent_designer_file(port)` (project_constants.py), one per port, so a /mcp reconnect keeps it and a
 reused ID doesn't count; on Windows nothing is recorded, so every Designer counts as the user's. A close goes to
 whichever Designer holds the port, so it names the recorded process and any other refuses (`os.getpid()` inside Designer
 is that process, checked live). The plugin answers status from another thread, so a main thread frozen outside
@@ -63,6 +85,7 @@ import glob
 import json
 import os
 import re
+import select
 import signal
 import socket
 import stat
@@ -72,15 +95,15 @@ import tempfile
 import threading
 import time
 import urllib.parse
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from textwrap import dedent
+from typing import Protocol, cast
 from xml.etree import ElementTree
 
 from mcp.server.mcpserver.exceptions import ToolError
 
 import designer_preferences  # beside project_constants (on sys.path: core.py puts the repo root there)
 from project_constants import (  # on sys.path: the package's __init__ imports .core, which puts it there
-    DESIGNER_PROCESS,
     PLUGIN,
     QUIT_CLOSED,
     QUIT_FORCED_IN_SHUTDOWN,
@@ -101,6 +124,8 @@ from .core import (
     _designer_data_dir,
     _designer_running,
     _helpers_call,
+    _NoListing,
+    _pgrep,
     _Refused,
     _sentence,
     _server_versions,
@@ -182,10 +207,8 @@ DESIGNER_APP = {
     'win32': r'C:\Program Files\Adobe\Adobe Substance 3D Designer\Adobe Substance 3D Designer.exe',
 }
 DESIGNER_BINARY = 'Adobe Substance 3D Designer'  # macOS: in the app's Contents/MacOS
-
-
-class _NoListing(ToolError):
-    """pgrep couldn't list Designer's processes: an empty list would read as none running (REVIEW.md SRV-83)."""
+# read by Designer's Qt on macOS: set, Qt doesn't make Designer the active app as it starts (the module docstring)
+STAY_BEHIND = 'QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM'
 
 
 def _designer_pids() -> list[int]:
@@ -193,15 +216,7 @@ def _designer_pids() -> list[int]:
     _NoListing when pgrep fails (exit code 2 or 3; 1 is nothing found)."""
     if sys.platform == 'win32':
         return []
-    try:
-        done = subprocess.run(['pgrep', '-f', DESIGNER_PROCESS], capture_output=True, text=True)
-    except OSError as e:
-        raise _NoListing("Designer's processes couldn't be listed: %s" % e) from e
-    if done.returncode not in (0, 1):
-        raise _NoListing(
-            "Designer's processes couldn't be listed (pgrep exit code %d: %s)" % (done.returncode, done.stderr.strip())
-        )
-    return [int(pid) for pid in done.stdout.split()]
+    return [int(pid) for pid in _pgrep().stdout.split()]
 
 
 def _process_start(pid: int) -> str | None:
@@ -323,9 +338,10 @@ def _plugin_paths() -> str:
 
 def _designer_env(port: int, temp: str | None, home: str | None, plugins: str) -> dict[str, str]:
     """The environment of a Designer started on `port`: the server's, less its Python settings, with the bridge port,
-    a temp folder (TMPDIR) and a home of its own (CFFIXED_USER_HOME, with its plugin folders) when given. Shared by
-    _start_designer and the self-test's hand-over check, which starts the binary itself (REVIEW.md TST-148)."""
-    # the server's own Python settings aren't for Designer's Python (not seen: `open -a` never passed them on)
+    a temp folder (TMPDIR) and a home of its own (CFFIXED_USER_HOME, with its plugin folders) when given. On macOS it
+    also sets STAY_BEHIND, so Designer starts behind the app in front (REVIEW.md SRV-149). Shared by _start_designer
+    and the self-test's hand-over check, which starts the binary itself (REVIEW.md TST-148)."""
+    # the server's own Python settings aren't for Designer's Python
     env = {k: v for k, v in os.environ.items() if not k.startswith('PYTHON') and k != '__PYVENV_LAUNCHER__'}
     env['SD_BRIDGE_PORT'] = str(port)
     if temp:
@@ -333,6 +349,8 @@ def _designer_env(port: int, temp: str | None, home: str | None, plugins: str) -
     if home:
         env['CFFIXED_USER_HOME'] = home
         env['SBS_DESIGNER_PYTHON_PATH'] = plugins
+    if sys.platform == 'darwin':
+        env[STAY_BEHIND] = '1'
     return env
 
 
@@ -354,8 +372,9 @@ def _start_designer(
     if it couldn't be recorded (_remember_started), why and whether it was ended; _NotStarted when it isn't started
     then. Recorded, or ended when it can't be, before the lock the preferences are saved under goes: another launch,
     which waits for it, then never takes this Designer for the user's (_appeared; REVIEW.md SRV-141, SRV-144); one that
-    can't be ended either counts as the user's, as launch_designer's error says. Its own binary, not `open -a`, which
-    brings back a Designer already running and passes no environment (ROADMAP item 49)."""
+    can't be ended either counts as the user's, as launch_designer's error says. On macOS an app bundle is opened as a
+    new instance with its environment (`open -n --env`; `open -a` alone brings back a Designer already running and
+    passes no environment: ROADMAP item 49), hidden (_opened); otherwise its own binary is started."""
     home = _own_home(port)
     env = _designer_env(port, _own_temp(port), home, _plugin_paths() if home else '')
     quiet = subprocess.DEVNULL
@@ -369,25 +388,35 @@ def _start_designer(
         designer_preferences.saved(_any_designer, ended=ended, check=refuse) if home else contextlib.nullcontext('')
     )
     unrecorded: tuple[OSError | _NoListing, bool] | None = None
+    unfound: _OpenedUnfound | None = None
     with saving as said:
         try:
             proc = _started(app, env, quiet)
+        except _OpenedUnfound as e:  # it may run: the copy stays for its put-back, as when unrecorded (SRV-156)
+            unfound = e
+            unfound.said, unfound.home = said, home
+            if e.pid is not None:  # before the lock goes: unrecorded, another launch would take it for the user's
+                with contextlib.suppress(_NoListing):  # new, with the launch's port and home: this launch's
+                    unfound.ended = _force_end(e.pid, port, b'')
         except ToolError as e:  # what the save did stands: said too (REVIEW.md SRV-129)
             raise _NotStarted(said, e) from e
-        # reaped when it exits, or it would linger as a zombie, its ID and start time still there; with the server gone
-        # first, the system reaps it
-        # reaps it once it ends; without it (no thread to be had) it is still the server's child, recorded as usual,
-        # only left a zombie when it ends (REVIEW.md SRV-100)
-        with contextlib.suppress(RuntimeError):
-            threading.Thread(target=proc.wait, daemon=True).start()
-        try:
-            _remember_started(port, proc.pid, home)
-        except (OSError, _NoListing) as e:  # the folder filled, or its start can't be read (REVIEW.md SRV-97)
-            try:  # before the lock goes: unrecorded, another launch's look would take it for the user's (SRV-144)
-                gone = _force_end(proc.pid, port, b'')  # its own child, just started: certainly an agent's
-            except _NoListing:  # its end can't be seen either: said, with what to do (REVIEW.md SRV-100)
-                gone = False
-            unrecorded = (e, gone)
+        else:
+            # a binary started here is the server's child: reaped when it exits, or it would linger as a zombie, its ID
+            # and start time still there; with the server gone first, the system reaps it. Without the thread (none to
+            # be had) it is recorded as usual, only left a zombie when it ends (REVIEW.md SRV-100). One `open` started
+            # is launchd's child: its wait returns at once (_Opened)
+            with contextlib.suppress(RuntimeError):
+                threading.Thread(target=proc.wait, daemon=True).start()
+            try:
+                _remember_started(port, proc.pid, home)
+            except (OSError, _NoListing) as e:  # the folder filled, or its start can't be read (REVIEW.md SRV-97)
+                try:  # before the lock goes: unrecorded, another launch's look would take it for the user's (SRV-144)
+                    gone = _force_end(proc.pid, port, b'')  # just started by this launch: certainly an agent's
+                except _NoListing:  # its end can't be seen either: said, with what to do (REVIEW.md SRV-100)
+                    gone = False
+                unrecorded = (e, gone)
+    if unfound is not None:  # raised once saved() has kept the copy: raised inside, it is dropped (REVIEW.md SRV-138)
+        raise unfound
     return proc.pid, home, said, unrecorded
 
 
@@ -410,8 +439,125 @@ def _appeared(port: int) -> ToolError | None:
     )
 
 
-def _started(app: str, env: dict[str, str], quiet: int) -> 'subprocess.Popen[bytes]':
-    """Designer's process, started from `app` with `env`."""
+OPEN_HIDDEN = ('open', '-n', '-g', '-j')  # a new instance, not brought to the front, hidden (REVIEW.md SRV-152)
+OPENED_ENV = ('SD_', 'SBS_', 'QT_', 'TMPDIR', 'CFFIXED_USER_HOME')  # the variables passed as `open --env`
+LAUNCH_FOUND_S = 60  # s at most for the process `open` started to be listed: a limit, in case it never is
+OPEN_WAIT_S = 60  # s at most for `open` itself to exit: a limit, in case it never does (REVIEW.md SRV-160)
+
+
+class _OpenedUnfound(ToolError):
+    """Designer may run: `open` exited 0, or never exited, but its process wasn't found (REVIEW.md SRV-156). `pid`: the
+    process found at a last look, or None. Once _start_designer has tried to end it: `ended`, whether it did; `said`,
+    what was said of Designer's preferences, whose copy is kept; `home`, the home it got."""
+
+    def __init__(self, why: str, pid: int | None) -> None:
+        super().__init__(why)
+        self.why = why
+        self.pid = pid
+        self.ended = False
+        self.said = ''
+        self.home: str | None = None
+
+
+class _Opened:
+    """The Designer `open` started, as _start_designer uses a process: launchd's child, so nothing to reap."""
+
+    def __init__(self, pid: int) -> None:
+        self.pid = pid
+
+    def wait(self) -> int:
+        return 0
+
+
+def _launch_marks(env: dict[str, str]) -> tuple[str, ...]:
+    """The variables of a launch's environment `env` that the Designer it starts has and no other: its port, and its
+    home when it has one of its own. A Designer the user starts with SD_BRIDGE_PORT set has the port too (README,
+    Configuration; REVIEW.md SRV-165)."""
+    return tuple('%s=%s' % (key, env[key]) for key in ('SD_BRIDGE_PORT', 'CFFIXED_USER_HOME') if env.get(key))
+
+
+def _carries(pid: int, marks: Sequence[str]) -> bool:
+    """Whether process `pid`'s environment has each of `marks` (VAR=value; ps -E: this user's processes). Each a whole
+    variable of ps's line, which ends with a newline (REVIEW.md SRV-157)."""
+    shown = subprocess.run(['ps', '-E', '-p', str(pid), '-o', 'command='], capture_output=True, text=True).stdout
+    variables = shown.split()
+    return all(mark in variables for mark in marks)
+
+
+def _launched_now(before: set[int], marks: Sequence[str]) -> int | None:
+    """The process of the Designer `open` started with `marks` (_launch_marks), looked for once (_found_launched's
+    look); None when none is listed, or the processes can't be."""
+    try:
+        return next((pid for pid in sorted(set(_designer_pids()) - before, reverse=True) if _carries(pid, marks)), None)
+    except (_NoListing, OSError):
+        return None
+
+
+def _found_launched(opener: 'subprocess.Popen[bytes]', before: set[int], marks: Sequence[str]) -> int:
+    """The process of the Designer `open` (`opener`, exited) just started: a new one, not in `before`, whose
+    environment has the launch's `marks` (_launch_marks), so neither another launch's starting at once nor a Designer
+    the user starts meanwhile is taken for it. `open` says no process ID, and nothing says when the process appears:
+    looked for every POLL_S, LAUNCH_FOUND_S at most. The tests' fake takes the process from `opener`."""
+    deadline = time.monotonic() + LAUNCH_FOUND_S
+    while True:
+        for pid in sorted(set(_designer_pids()) - before, reverse=True):
+            if _carries(pid, marks):
+                return pid
+        if time.monotonic() >= deadline:
+            raise ToolError("its process wasn't found within %d s" % LAUNCH_FOUND_S)
+        time.sleep(POLL_S)
+
+
+def _opened(app: str, env: dict[str, str], quiet: int) -> _Opened:
+    """Designer opened from the app bundle `app` by macOS's `open`: a new instance, hidden, never brought to the
+    front, with `env`, passed whole (`open` passes its own environment on: measured 2026-11-15, as `man open` says; the
+    OPENED_ENV variables also go as `--env`). Started from its binary, its window came up in front of the active app's
+    for up to 5.66 s, STAY_BEHIND set (REVIEW.md SRV-152, measured 2026-11-15): opened so, none of its windows showed
+    and it was never the active app, in 4 of 4 launches. ToolError when `open` failed, with what it said;
+    _OpenedUnfound when Designer may run but its process wasn't found (REVIEW.md SRV-156)."""
+    before = set(_designer_pids())
+    marks = _launch_marks(env)
+    passed = [
+        arg for key, value in env.items() if key.startswith(OPENED_ENV) for arg in ('--env', '%s=%s' % (key, value))
+    ]
+    with tempfile.TemporaryFile() as said:  # what `open` says when it fails (REVIEW.md SRV-160)
+        opener = subprocess.Popen(
+            [*OPEN_HIDDEN, *passed, '-a', app], env=env, stdin=quiet, stdout=quiet, stderr=said, cwd='/'
+        )
+        try:
+            code = opener.wait(timeout=OPEN_WAIT_S)
+        except subprocess.TimeoutExpired:
+            opener.kill()
+            raise _OpenedUnfound("`open` didn't exit within %d s" % OPEN_WAIT_S, _launched_now(before, marks)) from None
+        said.seek(0)
+        message = said.read().decode('utf-8', 'replace').strip()
+    if code != 0:
+        raise ToolError(
+            'Designer could not be started from %r: `open` exited with %d%s; set SD_DESIGNER_APP'
+            % (app, code, ' (%s)' % message if message else '')
+        )
+    try:
+        return _Opened(_found_launched(opener, before, marks))
+    except (ToolError, OSError) as e:  # opened: Designer may run (REVIEW.md SRV-156)
+        raise _OpenedUnfound(str(e), _launched_now(before, marks)) from e
+
+
+def _opens_hidden(app: str) -> bool:
+    """Whether a Designer started from `app` is opened hidden by `open` (_opened): an app bundle, on macOS."""
+    return sys.platform == 'darwin' and os.path.isdir(app)
+
+
+def _started(app: str, env: dict[str, str], quiet: int) -> 'subprocess.Popen[bytes] | _Opened':
+    """Designer's process, started from `app` with `env`: on macOS an app bundle is opened hidden (_opened)."""
+    if _opens_hidden(app):
+        try:
+            return _opened(app, env, quiet)
+        except _OpenedUnfound:  # opened: not a start that failed (REVIEW.md SRV-156)
+            raise
+        except _NoListing as e:
+            raise ToolError('Designer could not be started from %r: %s' % (app, e)) from e
+        except OSError as e:
+            raise ToolError('Designer could not be started from %r: %s; set SD_DESIGNER_APP' % (app, e)) from e
     try:
         if sys.platform == 'win32':
             detached = getattr(subprocess, 'DETACHED_PROCESS', 0x8) | getattr(
@@ -461,7 +607,8 @@ def _unrecorded(port: int, error: Exception, note: str, started: str) -> ToolErr
 
 
 def _remember_started(port: int, pid: int, home: str | None) -> None:
-    """Record the process launch_designer started for `port`: its own child, so no other can be taken for it; and
+    """Record the process launch_designer started for `port`: the one it started, or the one `open` started with
+    the launch's port and home (_found_launched), so no other can be taken for it; and
     its home, where it writes its log (None: the user's). OSError when the record can't be written; nothing when the
     process has already ended."""
     if sys.platform == 'win32':  # nothing counts as an agent's there (ROADMAP item 18)
@@ -635,41 +782,141 @@ def _running_on(port: int) -> bool:
     return not _designer_pids() or bool(_sorted_out(port)[0])
 
 
+def _may_hold(port: int) -> bool:
+    """_running_on, with "can't tell" read as a Designer that may hold `port`: a listing failing once doesn't end a wait
+    for one (REVIEW.md SRV-164)."""
+    try:
+        return _running_on(port)
+    except _NoListing:
+        return True
+
+
 def _still_starting(port: int) -> bool:
     """Whether the record, written as the process started, is younger than STARTUP_LIMIT."""
     try:
-        return time.time() - os.path.getmtime(agent_designer_file(port)) < STARTUP_LIMIT
-    except OSError:
+        written = os.path.getmtime(agent_designer_file(port))
+    except OSError:  # no record
         return False
+    return time.time() - written < STARTUP_LIMIT
+
+
+POLL_S = 0.1  # s between looks at a state whose change nothing says (AGENTS.md: callbacks first)
+FORCE_WAIT_S = 5  # s a forced end waits for the process to exit after each signal: a limit, in case it never does
+
+
+class _Queue(Protocol):
+    """A kqueue, as _ExitWatch uses it: select.kqueue exists only on BSD and macOS (REVIEW.md SRV-153: its name in an
+    annotation failed mypy for the other platforms)."""
+
+    def control(self, changelist: None, max_events: int, timeout: float | None = None, /) -> object: ...
+
+    def close(self) -> None: ...
+
+
+class _ExitWatch:
+    """A watch of one process's exit: a kqueue process-exit event (macOS), or none needed, as it had exited already."""
+
+    def __init__(self, queue: _Queue | None) -> None:
+        self._queue = queue
+        self._ended = queue is None
+
+    def wait(self, limit: float) -> bool:
+        """Whether the process exits within `limit` s, woken as it does. The watch is done after."""
+        try:
+            return self._ended or bool(self._queue is not None and self._queue.control(None, 1, limit))
+        finally:
+            self.close()
+
+    def ended(self) -> bool:
+        """Whether the process has exited, at once: its exit event come (REVIEW.md SRV-154)."""
+        if not self._ended and self._queue is not None:
+            self._ended = bool(self._queue.control(None, 1, 0))
+        return self._ended
+
+    def close(self) -> None:
+        """The watch done: its kqueue closed."""
+        if self._queue is not None:
+            self._queue.close()
+            self._queue = None
+
+
+def _exit_watch(pid: int) -> _ExitWatch | None:
+    """A watch of process `pid`'s exit, or None where none can be made: off macOS, or a process this user can't
+    watch."""
+    if sys.platform != 'darwin':
+        return None
+    try:
+        queue = select.kqueue()  # no file descriptor left: the poll instead (REVIEW.md SRV-153)
+    except OSError:
+        return None
+    exit_event = select.kevent(pid, select.KQ_FILTER_PROC, select.KQ_EV_ADD | select.KQ_EV_ONESHOT, select.KQ_NOTE_EXIT)
+    try:
+        queue.control([exit_event], 0, 0)
+    except ProcessLookupError:  # gone before the watch began
+        queue.close()
+        return _ExitWatch(None)
+    except OSError:
+        queue.close()
+        return None
+    return _ExitWatch(queue)
+
+
+def _exited(pid: int, limit: float) -> bool:
+    """Whether Designer's process `pid` exits within `limit` s: woken by its exit where it can be watched
+    (_exit_watch), else looked for every POLL_S (REVIEW.md SRV-150: every second). A negative limit is none: kqueue
+    refuses one (REVIEW.md SRV-159)."""
+    limit = max(0.0, limit)
+    if pid not in _designer_pids():
+        return True
+    watch = _exit_watch(pid)
+    if watch is not None:
+        return watch.wait(limit) or pid not in _designer_pids()
+    deadline = time.monotonic() + limit  # each look's pgrep counts too (REVIEW.md SRV-153: it ran past the limit)
+    while True:
+        time.sleep(POLL_S)
+        if pid not in _designer_pids():
+            return True
+        if time.monotonic() >= deadline:
+            return False
 
 
 def _force_end(pid: int, port: int, seen: bytes) -> bool:
-    """End `pid`, the Designer an agent started on `port`, whose record was `seen`."""
+    """End `pid`, the Designer an agent started on `port`, whose record was `seen`: SIGTERM, then SIGKILL, each followed
+    by a wait for its exit, FORCE_WAIT_S at most."""
     for sig in (signal.SIGTERM, signal.SIGKILL):
         with contextlib.suppress(ProcessLookupError, PermissionError):
             os.kill(pid, sig)
-        for _ in range(5):
-            if pid not in _designer_pids():
-                _forget_started(port, seen)
-                return True
-            time.sleep(1)
+        if _exited(pid, FORCE_WAIT_S):
+            _forget_started(port, seen)
+            return True
     return False
 
 
 def _end_if_past_startup(port: int) -> str | None:
     """End the Designer an agent started on `port`, unless it may still be starting: it is disposable, so it isn't
     waited for past that (REVIEW.md HLP-82), but a retry mustn't kill one that is only slow (REVIEW.md SRV-75). Its
-    threads are sampled first, as it may be hung in its shutdown (REVIEW.md SRV-113). Returns _sampled_before_force's
-    sentence ('' when no sample was tried), or None when nothing was ended."""
+    threads are sampled first, as it may be hung in its shutdown (REVIEW.md SRV-113). Returns what to say of it, or
+    None when nothing was ended: the sentence saying its crash reports may still be uploaded, when they couldn't be
+    turned off, then _sampled_before_force's sentence, which ends with the sample's path when one was written. Either
+    can be ''. The error when it can't be ended says them too; so does the one when its processes can't be listed
+    meanwhile, after saying it was being ended (REVIEW.md SRV-171)."""
+    if _still_starting(port):  # a stat, before the record's pgrep and ps (REVIEW.md SRV-158)
+        return None
     found = _agent_record(port)
-    if found is None or _still_starting(port):
+    if found is None:
         return None
     own, seen = found
     uploads = _crash_uploads_off(_home_in(seen))  # a crash in its teardown isn't uploaded (REVIEW.md SRV-124)
-    sampled = _sampled_before_force(own, port)
-    if not _force_end(own, port, seen):
-        raise ToolError(_could_not_end(own) + sampled + uploads)  # once is enough (REVIEW.md SRV-79)
-    return sampled + uploads
+    # the path last, as quit_designer says it: a stop after it would be read as part of it (REVIEW.md SRV-168)
+    said = uploads + _sampled_before_force(own, port)
+    try:
+        ended = _force_end(own, port, seen)
+    except _NoListing as e:  # what it was doing and found, said too (REVIEW.md SRV-169, SRV-171)
+        ending = 'Designer %d, which an agent started, was not answering past its start-up and was being ended. ' % own
+        raise _NoListing(ending + _sentence(str(e)) + said) from e
+    if not ended:
+        raise ToolError(_could_not_end(own) + said)  # once is enough (REVIEW.md SRV-79)
+    return said
 
 
 def _home_in(seen: bytes) -> str | None:
@@ -686,8 +933,12 @@ def _could_not_end(pid: int) -> str:
 
 
 def _how_to_end(port: int) -> str:
-    """What the user can do about a Designer the tools won't end."""
-    pids = _sorted_out(port)[0] or _designer_pids()
+    """What the user can do about a Designer the tools won't end: without its process IDs when they can't be listed,
+    so that the message it ends keeps the rest (REVIEW.md SRV-171)."""
+    try:
+        pids = _sorted_out(port)[0] or _designer_pids()
+    except _NoListing:
+        return 'ask the user to end it in Activity Monitor'  # only macOS lists them (pgrep)
     if not pids:
         return 'ask the user to end it in Task Manager'
     if len(pids) > 1:
@@ -759,8 +1010,9 @@ def _users_next_to(port: int, note: str) -> ToolError | None:
 @_tool()
 def launch_designer(wait_s: int = 180, port: int | None = None) -> str:
     """Start Substance Designer if it isn't running and wait until the bridge plugin answers.
-    When it starts Designer it also closes the Home screen, so the editor panels are visible, and on macOS gives the
-    keyboard back to the app in front before it, which the new Designer takes as it starts.
+    When it starts Designer it also closes the Home screen, so the editor panels are visible. On macOS it starts
+    Designer hidden, without taking the keyboard (and gives it back if Designer takes it anyway): its Dock icon
+    shows it.
     A Designer that is running but not answering yet is waited for, not started again; if it exits
     during the wait, a new one is started and gets its own wait_s, so the call can then take up to
     about twice wait_s. One an agent started is waited for only until 180 s after it started; past that, not answering,
@@ -777,7 +1029,7 @@ def launch_designer(wait_s: int = 180, port: int | None = None) -> str:
     since the last copy), which quit_designer puts back; a line before the result or error says what it did with them:
     a copy left behind put back or dropped, saved again, or not saved.
     For tests and work on this project: if a task needs Designer and it is closed, ask the user to open it.
-    Override the app location with SD_DESIGNER_APP (on macOS the .app, whose own binary is started)."""
+    Override the app location with SD_DESIGNER_APP (on macOS the .app, opened hidden; a binary there starts shown)."""
     port = _port(port)
     try:
         status = _control('status', wait=5, port=port)
@@ -832,6 +1084,24 @@ def launch_designer(wait_s: int = 180, port: int | None = None) -> str:
                 raise _unrecorded(port, unwritable, none_left(), 'No Designer was started')
             try:
                 pid, home, said, unrecorded = _start_designer(app, port, ended=bool(note))
+            except _OpenedUnfound as e:  # opened, its process not found: it may run (REVIEW.md SRV-156)
+                if e.said:
+                    preferences.append(e.said)
+                homes.append(e.home)
+                if e.ended:  # none of its own runs now: the copy put back
+                    raise ToolError(
+                        '%sDesigner was opened, but %s; its process %d, found then, was ended.'
+                        % (none_left(), e.why, cast(int, e.pid))
+                    ) from e
+                if e.pid is not None:
+                    raise ToolError(
+                        '%sDesigner was opened, but %s; its process %d could not be ended (ask the user to run `kill '
+                        "-9 %d`): unrecorded, it counts as the user's." % (told(), e.why, e.pid, e.pid)
+                    ) from e
+                raise ToolError(
+                    "%sDesigner was opened, but %s: if one started, it isn't recorded as an agent's, so it counts as "
+                    "the user's (ask the user to quit it)." % (told(), e.why)
+                ) from e
             except ToolError as e:  # none started: its folder refused, one appeared, or it couldn't start (SRV-135)
                 if isinstance(e, _NotStarted) and e.said:  # before what none_left() says, as it came first (SRV-138)
                     preferences.append(e.said)
@@ -852,73 +1122,109 @@ def launch_designer(wait_s: int = 180, port: int | None = None) -> str:
                 raise _unrecorded(port, error, told(), started % (pid, pid)) from error
             return True
 
-    running, restarted = _running_on(port), False
-    if not running:
-        running = not start()
-    started = time.time()
-    while time.time() - started < wait_s:
-        time.sleep(2)
-        try:
-            status = _control('status', wait=5, port=port)
-        except _Refused as refused:
-            refusal = _with_uploads_off(refused, homes[-1] if homes else _agent_home(port))
-            raise (_Refused(told() + str(refusal)) if told() else refusal) from None  # a refusal still (SRV-129)
-        except ToolError:
-            ended_sample = _end_if_past_startup(port) if running else None
-            if ended_sample is not None:
-                note = ended_note % ended_sample
-            if running and not _running_on(port):  # it exited, or turned out to be the user's on another port
-                restarted = True
-                running = not start()
-                started = time.time()  # the new one gets the whole wait (REVIEW.md SRV-19)
-            continue
-        if running:
-            return told() + _already_running(port, status)
-        # Designer turns them on as it starts, so only now, before anything else that may fail (the module's
-        # docstring: Crash reports; REVIEW.md SRV-120)
-        uploads = _crash_uploads_off(homes[-1] if homes else None)
-        # we started it, so nobody is using the Home screen: show the editor panels
-        try:
-            home = _bridge(_helpers_call('leave_home_screen()'), timeout=30, port=port).strip()
-            # it became the active app as it started, the user's keyboard in it (REVIEW.md SRV-148)
-            given = _bridge(_helpers_call('give_back_activation()'), timeout=30, port=port).strip()
-        except ToolError as e:
-            if not told():
-                raise
-            raise ToolError(told() + str(e)) from e
-        done = '; '.join(part for part in (home, given) if part)
-        return told() + 'Designer started in %.0fs, on port %d%s: %s' % (
-            time.time() - started,
-            port,
-            ' (%s)' % done if done else '',
-            _with_uploads(status, uploads),
+    watched: dict[int, _ExitWatch | None] = {}  # the Designers waited for, by process: their exits watched
+
+    def may_have_exited() -> bool:
+        """Whether the Designer this call waits for on this port may no longer hold it. The one another launch recorded
+        holds it until it exits, so it is looked up again only once its exit event comes, or when it can't be watched
+        (REVIEW.md SRV-154, SRV-158: pgrep, ps and lsof ran every POLL_S while it started). With none recorded, always:
+        an unrecorded Designer (the user's starting, or another launch's not recorded yet) can leave the port without
+        exiting, as another launch records it on its own port or it listens on another, and nothing says so (REVIEW.md
+        SRV-162)."""
+        if watched and not any(watch is None or watch.ended() for watch in watched.values()):
+            return False
+        for watch in watched.values():
+            if watch is not None:
+                watch.close()
+        watched.clear()
+        found = _agent_record(port)
+        if found is not None:
+            watched[found[0]] = _exit_watch(found[0])
+        return not watched or None in watched.values()
+
+    try:
+        running, restarted = _running_on(port), False
+        if not running:
+            running = not start()
+        started = time.time()
+        while time.time() - started < wait_s:
+            # nothing says when its bridge starts listening, and a refused connection costs nothing (REVIEW.md SRV-150)
+            time.sleep(POLL_S)
+            try:
+                status = _control('status', wait=5, port=port)
+            except _Refused as refused:
+                refusal = _with_uploads_off(refused, homes[-1] if homes else _agent_home(port))
+                raise (_Refused(told() + str(refusal)) if told() else refusal) from None  # a refusal still (SRV-129)
+            except ToolError:
+                try:
+                    ended_sample = _end_if_past_startup(port) if running else None
+                except _NoListing:
+                    raise  # with none_left() in front, below
+                except ToolError as e:  # what the call did before it, said first, as its other errors (SRV-169)
+                    raise ToolError(told() + str(e)) from e
+                if ended_sample is not None:
+                    note = ended_note % ended_sample
+                # it exited, or turned out to be the user's on another port
+                if running and may_have_exited() and not _may_hold(port):
+                    restarted = True
+                    running = not start()
+                    started = time.time()  # the new one gets the whole wait (REVIEW.md SRV-19)
+                continue
+            if running:
+                return told() + _already_running(port, status)
+            # Designer turns them on as it starts, so only now, before anything else that may fail (the module's
+            # docstring: Crash reports; REVIEW.md SRV-120)
+            uploads = _crash_uploads_off(homes[-1] if homes else None)
+            # we started it, so nobody is using the Home screen: show the editor panels
+            try:
+                home = _bridge(_helpers_call('leave_home_screen()'), timeout=30, port=port).strip()
+                # in case it became the active app anyway, the user's keyboard in it (REVIEW.md SRV-148, SRV-149); one
+                # opened hidden is left hidden, as becoming the active app unhides it (REVIEW.md SRV-161)
+                give_back = 'give_back_activation(%s)' % ('started_hidden=True' if app and _opens_hidden(app) else '')
+                given = _bridge(_helpers_call(give_back), timeout=30, port=port).strip()
+            except ToolError as e:
+                if not told():
+                    raise
+                raise ToolError(told() + str(e)) from e
+            done = '; '.join(part for part in (home, given) if part)
+            return told() + 'Designer started in %.0fs, on port %d%s: %s' % (
+                time.time() - started,
+                port,
+                ' (%s)' % done if done else '',
+                _with_uploads(status, uploads),
+            )
+        if not running:
+            what_next = (
+                ' If it needs longer, call this with a larger wait_s.'  # a retry may never finish (REVIEW.md SRV-80)
+            )
+        elif _agent_designer(port) is not None:
+            what_next = (
+                ' An agent started it: calling this again waits for it, and ends it once it has had %ds to start.'
+                % STARTUP_LIMIT
+            )
+        else:
+            what_next = (
+                ' If its windows have closed, it is stuck closing and nothing is lost: %s. If they are open, ask the user to '
+                'save and close it.' % _how_to_end(port)
+            )
+        raise ToolError(
+            '%s%s did not answer within %ds%s. It may be showing a dialog, or the %s plugin did not load (check the '
+            'Designer log).%s'
+            % (
+                none_left(),  # the one it started may have exited meanwhile (REVIEW.md SRV-135)
+                'Designer is already running, but its bridge' if running else 'Designer',
+                wait_s,
+                ' of being started' if restarted else '',
+                PLUGIN,
+                what_next,
+            )
         )
-    if not running:
-        what_next = (
-            ' If it needs longer, call this with a larger wait_s.'  # a retry may never finish (REVIEW.md SRV-80)
-        )
-    elif _agent_designer(port) is not None:
-        what_next = (
-            ' An agent started it: calling this again waits for it, and ends it once it has had %ds to start.'
-            % STARTUP_LIMIT
-        )
-    else:
-        what_next = (
-            ' If its windows have closed, it is stuck closing and nothing is lost: %s. If they are open, ask the user to '
-            'save and close it.' % _how_to_end(port)
-        )
-    raise ToolError(
-        '%s%s did not answer within %ds%s. It may be showing a dialog, or the %s plugin did not load (check the '
-        'Designer log).%s'
-        % (
-            none_left(),  # the one it started may have exited meanwhile (REVIEW.md SRV-135)
-            'Designer is already running, but its bridge' if running else 'Designer',
-            wait_s,
-            ' of being started' if restarted else '',
-            PLUGIN,
-            what_next,
-        )
-    )
+    except _NoListing as e:  # what the call did before it, said first (REVIEW.md SRV-164)
+        raise _NoListing(none_left() + str(e)) from e
+    finally:  # the wait's watches closed, however it ends (REVIEW.md SRV-158)
+        for watch in watched.values():
+            if watch is not None:
+                watch.close()
 
 
 CRASHPAD_MAGIC = 0x43506473  # Crashpad's settings file ('sdPC'); its options next but one, bit 0 uploads enabled
@@ -1045,31 +1351,36 @@ def _quit(port: int, wait_s: int) -> tuple[str, bool]:
         # a frozen main thread reads as idle too, and a close running late runs in the process being ended (REVIEW.md SRV-78)
         reply = _bridge(call, timeout=30, wait=max(wait_s, 10), port=port)
         notes = _checked(reply).replace('closing Designer', '').strip()
+        step = 'Designer %d was asked to close. ' % own  # said if its processes can't be listed (REVIEW.md SRV-171)
     except ToolError as e:  # it can't be asked, only ended; or the reply was lost as it quit
         notes = 'Designer was not asked to close, or did not reply: %s' % e
+        step = ''  # the notes say so
     prefix = ''.join(line + '\n' for line in (notes, uploads) if line)
     started = time.time()
-    while time.time() - started < wait_s:
-        time.sleep(1)
-        if own not in _designer_pids():
+    sampled = ''
+    try:  # what was done before the processes can't be listed, said with the error too (REVIEW.md SRV-169)
+        if _exited(own, wait_s):  # woken as it exits (REVIEW.md SRV-150)
             _forget_started(port, seen)  # only its own: another server may have recorded a new one (REVIEW.md SRV-91)
             return prefix + 'Designer quit after %.0fs.' % (time.time() - started), True
-    from .log import _quit_evidence  # here: log.py imports from this module
+        from .log import _quit_evidence  # here: log.py imports from this module
 
-    sampled = _sampled_before_force(own, port)  # what it is stuck in (ROADMAP item 70)
-    # read while it still runs, after the sample: how far its quit got (REVIEW.md SRV-111)
-    evidence = _quit_evidence(port)
-    if own not in _designer_pids():  # it ended while those were read: by itself (REVIEW.md SRV-108)
-        _forget_started(port, seen)
-        # a shutdown that hung past its wait, then ended: its sample is a hang's evidence (REVIEW.md SRV-115)
-        return prefix + 'Designer quit after %.0fs.%s' % (time.time() - started, sampled), True
-    if _force_end(
-        own, port, seen
-    ):  # it can hang in its own shutdown, past anything inside it (REVIEW.md HLP-82, ROADMAP item 69)
+        step = 'Designer %d did not quit within %ds and was being ended. ' % (own, wait_s)
+        sampled = _sampled_before_force(own, port)  # what it is stuck in (ROADMAP item 70)
+        # read while it still runs, after the sample: how far its quit got (REVIEW.md SRV-111)
+        evidence = _quit_evidence(port)
+        if own not in _designer_pids():  # it ended while those were read: by itself (REVIEW.md SRV-108)
+            _forget_started(port, seen)
+            # a shutdown that hung past its wait, then ended: its sample is a hang's evidence (REVIEW.md SRV-115)
+            return prefix + 'Designer quit after %.0fs.%s' % (time.time() - started, sampled), True
+        # it can hang in its own shutdown, past anything inside it (REVIEW.md HLP-82, ROADMAP item 69)
+        forced = _force_end(own, port, seen)
+    except _NoListing as e:
+        raise _NoListing(prefix + step + _sentence(str(e)) + sampled) from e
+    if forced:
         took = time.time() - started
         if evidence is None:
             return prefix + 'Designer quit after %.0fs (forced; its log could not be read).%s' % (took, sampled), True
         closed, last = evidence
         how = QUIT_FORCED_IN_SHUTDOWN + ': its close had taken' if closed else QUIT_FORCED_NOT_CLOSED
         return prefix + 'Designer quit after %.0fs (%s; its log stopped at "%s").%s' % (took, how, last, sampled), True
-    raise ToolError(_could_not_end(own) + sampled)
+    raise ToolError(prefix + _could_not_end(own) + sampled)  # its notes and uploads line too (REVIEW.md SRV-166)

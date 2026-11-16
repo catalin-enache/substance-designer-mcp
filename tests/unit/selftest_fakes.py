@@ -126,6 +126,13 @@ def pool(
     waits: list[float] = []
     monkeypatch.setitem(vars(workers), 'sleep', waits.append)
     workers.waits = waits
+    looked: list[tuple[list[int], float, set[str]]] = []  # each wait for crash dumps: its ports, until when, before
+
+    def wait_for_dumps(ports: Collection[int], before: set[str], until: float) -> None:
+        looked.append((sorted(ports), until, set(before)))
+
+    monkeypatch.setitem(vars(workers), 'wait_for_dumps', wait_for_dumps)
+    workers.looked = looked
     started: list[str] = []
 
     gates: list[_Gate] = []

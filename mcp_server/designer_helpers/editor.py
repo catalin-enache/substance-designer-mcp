@@ -5,6 +5,7 @@ from .core import (
     _PM,
     Any,
     APIException,
+    Callable,
     SDApplicationPath,
     SDProperty,
     SDPropertyCategory,
@@ -21,6 +22,7 @@ from .core import (
     node_kind,
     os,
 )
+from .describe import _package_uids, _unload_new_packages
 from .edits import _node
 from .layout import _nodes_bbox
 from .screenshots import _PANEL_AREAS, _graph_view, _visible_dock
@@ -132,17 +134,20 @@ def _wheel_zoom(view: Any, notches: int) -> None:
     _wheel(view.viewport(), notches)
 
 
-def _wheel(viewport: Any, notches: int, pause: float = 0.0) -> None:
-    """Mouse-wheel notches (positive: in) at the middle of a widget, as Designer takes them from the mouse. pause:
-    seconds between notches, for a view that drops some sent back to back (the 3D view: designer_helpers/view3d.py)."""
-    import time
-
+def _wheel(  # Any: a Qt widget
+    viewport: Any, notches: int, taking: Callable[[], Callable[[], object]] | None = None
+) -> None:
+    """Mouse-wheel notches (positive: in) at the middle of a widget, as Designer takes them from the mouse. `taking`,
+    when given, runs before each notch and returns the wait run after it, for a view that drops some sent back to
+    back: the 3D view's _Frames.taking, a frame drawn once the notch's event ran, or off screen an UpdateRequest since
+    the notch (designer_helpers/view3d.py; REVIEW.md HLP-164)."""
     from PySide6.QtCore import QPoint, QPointF, Qt
     from PySide6.QtGui import QWheelEvent
     from PySide6.QtWidgets import QApplication
 
     centre = QPointF(viewport.width() / 2.0, viewport.height() / 2.0)
     for _ in range(abs(notches)):
+        taken = taking() if taking is not None else None
         event = QWheelEvent(
             centre,
             QPointF(viewport.mapToGlobal(centre.toPoint())),
@@ -155,10 +160,8 @@ def _wheel(viewport: Any, notches: int, pause: float = 0.0) -> None:
         )
         QApplication.sendEvent(viewport, event)
         _process_events(2)
-        end = time.time() + pause
-        while time.time() < end:
-            _process_events(1)
-            time.sleep(0.02)
+        if taken is not None:
+            taken()
 
 
 def _whole_graph_rect(g: SDSBSCompGraph) -> tuple[float, float, float, float, str] | None:
@@ -346,15 +349,18 @@ def list_atomic() -> None:
     g = _current_graph()
     if not isinstance(g, SDSBSCompGraph):  # a function graph lists sbs::function::* instead
         g = None
-    tmp = None
-    if g is None:
-        tmp = _PM.newUserPackage()
-        g = SDSBSCompGraph.sNew(tmp)
+    before = _package_uids()
     try:
-        ids = sorted(d.getId() for d in g.getNodeDefinitions())
-        print('RESOURCES_DIR=' + _APP.getPath(SDApplicationPath.DefaultResourcesDir))
-        for i in ids:
-            print('ATOMIC=' + i)
-    finally:
-        if tmp is not None:
-            _PM.unloadUserPackage(tmp)
+        try:
+            if g is None:
+                g = SDSBSCompGraph.sNew(_PM.newUserPackage())
+            ids = sorted(d.getId() for d in g.getNodeDefinitions())
+            print('RESOURCES_DIR=' + _APP.getPath(SDApplicationPath.DefaultResourcesDir))
+            for i in ids:
+                print('ATOMIC=' + i)
+        finally:
+            _unload_new_packages(before)
+    except BaseException:
+        # untraced after an abort, which fires once: as describe_node's (REVIEW.md HLP-177)
+        _unload_new_packages(before)
+        raise

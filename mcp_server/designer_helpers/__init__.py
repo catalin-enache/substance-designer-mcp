@@ -20,7 +20,9 @@ import os
 PARTS = (
     'core',
     'describe',
+    'waits',
     'screenshots',
+    'frames3d',
     'view3d',
     'mac_window',
     'shot3d',

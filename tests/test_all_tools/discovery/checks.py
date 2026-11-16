@@ -1,8 +1,63 @@
 """Finding nodes: search_nodes and describe_node."""
 
 import os
+import re
+from textwrap import dedent
 
-from test_all_tools.common import Ctx, check, text
+from test_all_tools.common import ABORT_AT, Ctx, check, helper_lines, text
+
+# a package made and unloaded: what was listed before it, the one new, then as before (designer facts, the helpers'
+# _unload_new_packages relies on them: describe.py)
+NEW_PACKAGE = dedent("""
+    def listed():
+        return [(p.getUID(), p.getFilePath() or '') for p in _PM.getUserPackages()]
+    before = listed()
+    new = _PM.newUserPackage()
+    made = new.getUID()
+    after = listed()
+    _PM.unloadUserPackage(new)
+    print('NEW=%r BACK=%r' % ([entry for entry in after if entry not in before] == [(made, '')], listed() == before))
+""")
+
+
+async def check_a_package_made_has_a_uid_of_its_own_and_no_file_and_goes_once_unloaded(ctx: Ctx) -> None:
+    """A user package made by the API is listed with a UID none of the packages listed before has, and no file;
+    unloaded, the list is as before (designer facts: describe.py's _unload_new_packages finds the packages a call made
+    by them, unloading none twice, which crashed Designer: REVIEW.md HLP-177)."""
+    t = text(await ctx.c('execute_designer_code', {'code': ctx.helper_source + NEW_PACKAGE}))
+    check(
+        'designer facts',
+        'a package made has a UID of its own and no file, and the list is as before once it is unloaded',
+        'NEW=True BACK=True' in t,
+        t.strip()[-150:],
+    )
+
+
+# describe_node, aborted at the first of __LINES__ it reaches (common.ABORT_AT); the packages it left, then unloaded for
+# the checks after it
+DESCRIBE_ABORTED = dedent("""
+    before = {p.getUID() for p in _PM.getUserPackages()}
+    _aborted_at(__LINES__, lambda: describe_node('levels'))
+    left = [p for p in _PM.getUserPackages() if p.getUID() not in before]
+    print('LEFT=%d' % len(left))
+    for p in left:
+        _PM.unloadUserPackage(p)
+""")
+
+
+async def check_an_abort_unloading_describe_nodes_package_still_unloads_it(ctx: Ctx) -> None:
+    """An abort landing on describe_node's unload of the package it makes still unloads it (REVIEW.md HLP-177: it was
+    left in the user's Explorer). The abort is the plugin's, raised by a tracer of the check's at that line."""
+    lines = helper_lines(ctx.helper_source, r'_PM\.unloadUserPackage\(')
+    code = ctx.helper_source + ABORT_AT + DESCRIBE_ABORTED.replace('__LINES__', repr(lines))
+    t = text(await ctx.c('execute_designer_code', {'code': code}))
+    left = re.search(r'LEFT=(\d+)', t)
+    check(
+        'describe_node',
+        "an abort unloading describe_node's package still unloads it",
+        'ABORTED' in t and left is not None and left.group(1) == '0',
+        t.strip()[-150:],
+    )
 
 
 async def run(ctx: Ctx) -> None:
@@ -77,3 +132,5 @@ async def run(ctx: Ctx) -> None:
     check('describe_node', 'atomic enum', 'max=5' in t, '')
     t = text(await c('describe_node', {'definition': 'slope_blur.sbs/slope_blur_grayscale_2'}))
     check('describe_node', 'library', "output connector ids: ['Slope_Blur']" in t, t.splitlines()[0])
+    await check_a_package_made_has_a_uid_of_its_own_and_no_file_and_goes_once_unloaded(ctx)
+    await check_an_abort_unloading_describe_nodes_package_still_unloads_it(ctx)

@@ -1397,7 +1397,9 @@ def test_a_job_whose_run_fails_still_answers_its_client(bridge: Bridge, monkeypa
     plugin, _, _ = bridge
     real_run = plugin._run
 
-    def run(code: str, path: str | None, timeout: float | None, cancel: threading.Event) -> Any:
+    def run(
+        code: str, path: str | None, timeout: float | None, cancel: threading.Event, after: object = None
+    ) -> object:
         if 'boom' in code:
             raise MemoryError('reading the output')
         return real_run(code, path, timeout, cancel)
@@ -1467,3 +1469,110 @@ def test_the_plugin_declares_the_supported_designer() -> None:
     """Only the current Designer is supported (README.md; REVIEW.md PLG-31)."""
     with open(os.path.join(os.path.dirname(PLUGIN_PACKAGE_DIR), 'pluginInfo.json'), encoding='utf-8') as f:
         assert json.load(f)['min_designer_version'].split('.')[0] == '16'
+
+
+def test_a_jobs_after_reply_callbacks_run_on_the_main_thread_once_its_reply_is_sent(bridge: Bridge) -> None:
+    # REVIEW.md SRV-151: quit_designer closed Designer's windows 300 ms after its call returned, a time, so the bridge
+    # could still reply; the plugin now runs what a job hands it (_after_reply) once the reply is sent, on the main
+    # thread, as the waker's `after` signal delivers it
+    import builtins
+
+    plugin, srv, _ = bridge
+    ran: list[str] = []
+    vars(builtins)['mcp_after_reply_ran'] = ran
+    try:
+        code = "import builtins\n_after_reply(lambda: builtins.mcp_after_reply_ran.append('after'))\nprint('JOB')"
+        reply = _call(plugin, {'code': code})
+        assert reply['ok'] and reply['output'] == 'JOB\n' and ran == []  # the reply first: nothing run yet
+        deadline = time.monotonic() + 10
+        while srv.waker.after.emitted == 0 and time.monotonic() < deadline:  # the client's thread, after its send
+            time.sleep(0.01)
+        assert srv.waker.after.emitted == 1
+        assert (srv.waker._on_after, 'queued') in srv.waker.after.slots, "queued: run on the waker's thread"
+        srv.waker._on_after()  # the main thread, delivering it
+        assert ran == ['after']
+        srv.waker._on_after()
+        assert ran == ['after'], 'each runs once'
+    finally:
+        del vars(builtins)['mcp_after_reply_ran']
+
+
+def test_a_jobs_after_reply_callbacks_are_handed_over_once_its_reply_is_sent_and_its_connection_closed(
+    bridge: Bridge,
+) -> None:
+    # REVIEW.md TST-437: the test above passed with the emit moved before the send, as the fake signal never delivers;
+    # here the connection logs its send and its close, and the waker its emit
+    _, srv, _ = bridge
+    log: list[str] = []
+
+    class Connection:
+        def __enter__(self) -> 'Connection':
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            log.append('closed')
+
+        def sendall(self, data: bytes) -> None:
+            log.append('sent the greeting' if b'nonce' in data else 'sent the reply')
+
+        def settimeout(self, seconds: float) -> None:
+            pass
+
+        def recv(self, size: int) -> bytes:
+            return b''  # the request, read whole: its answer isn't what is tested
+
+    def authorised(
+        data: bytes, nonce: str, release: object = None, after: list[Callable[[], object]] | None = None
+    ) -> dict[str, object]:
+        assert after is not None
+        after.append(lambda: log.append('ran'))
+        return {'ok': True, 'output': 'JOB', 'error': ''}
+
+    srv._authorised = authorised  # the request's answer isn't what is tested
+    srv.waker.after = types.SimpleNamespace(emit=lambda: log.append('emitted'))  # the reply's signal, its emit logged
+    srv._handle(Connection())
+    assert log == ['sent the greeting', 'sent the reply', 'closed', 'emitted'], log
+    srv.waker._on_after()
+    assert log[-1] == 'ran'
+
+
+def test_an_abort_of_another_job_doesnt_land_in_an_after_reply_callback(bridge: Bridge) -> None:
+    # REVIEW.md PLG-43: delivered inside another job's nested event loop, a callback ran under that job's tracer, whose
+    # abort (a BaseException) left the callbacks queued after it unrun
+    plugin, srv, _ = bridge
+    ran: list[str] = []
+    srv.waker.pending.put(lambda: ran.append('first'))
+    srv.waker.pending.put(lambda: ran.append('second'))
+    tracer = plugin._make_tracer(None, threading.Event(), [True])  # an abort due at the next traced event
+
+    def delivered_in_another_job() -> None:
+        sys.settrace(tracer)
+        try:
+            srv.waker._on_after()
+        finally:
+            sys.settrace(None)
+
+    delivered_in_another_job()
+    assert ran == ['first', 'second']
+
+
+def test_an_after_reply_callback_that_raises_doesnt_stop_the_others(bridge: Bridge) -> None:
+    import builtins
+
+    plugin, srv, _ = bridge
+    ran: list[str] = []
+    vars(builtins)['mcp_after_reply_ran'] = ran
+    try:
+        code = (
+            'import builtins\n'
+            '_after_reply(lambda: 1 / 0)\n'
+            "_after_reply(lambda: builtins.mcp_after_reply_ran.append('second'))"
+        )
+        assert _call(plugin, {'code': code})['ok']
+        deadline = time.monotonic() + 10
+        while srv.waker.after.emitted == 0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        srv.waker._on_after()
+        assert ran == ['second']
+    finally:
+        del vars(builtins)['mcp_after_reply_ran']

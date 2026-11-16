@@ -10,7 +10,6 @@ the self-test's graphs are closed (CLEAN), the library packages the category loa
 graph's snapshots are removed."""
 
 import importlib
-import time
 import traceback
 from collections.abc import Callable, Sequence
 from typing import NamedTuple
@@ -25,8 +24,6 @@ from test_all_tools.common import (
     restore_library_packages,
     text,
 )
-
-PAUSE_S = 0.5  # between the clean-up's calls, so graph views are torn down first
 
 
 class Ran(NamedTuple):
@@ -115,7 +112,8 @@ async def _cleaned(ctx: Ctx, libs_before: list[str] | None) -> bool:
     that recorded no failure."""
     before = _failures()
     print('clean-up: %s' % text(await ctx.c('execute_designer_code', {'code': CLEAN})).strip())
-    time.sleep(PAUSE_S)
+    # in a call of its own, as the graph views CLEAN unloaded are torn down before it starts (REVIEW.md SRV-150: an
+    # unload's widgets were all gone as the next call started; link_display's designer fact)
     await restore_library_packages(ctx.c, libs_before)
     remove_test_snapshots()
     return _failures() == before

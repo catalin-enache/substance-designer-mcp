@@ -3,7 +3,6 @@ sweep_param, Designer library packages, two open graphs with one name."""
 
 import os
 import re
-import time
 from collections.abc import Callable
 from textwrap import dedent
 from typing import Any
@@ -65,7 +64,7 @@ async def run(ctx: Ctx) -> None:
     # a batch applied up to the bad op shows as a change; one "before" per case, so one failure
     # doesn't fail the cases after it (REVIEW.md TST-86)
     first = {'op': 'move', 'position': [100, 100]}
-    cases: tuple[tuple[str, Callable[[str], list[dict[str, Any]]], str], ...] = (
+    cases: tuple[tuple[str, Callable[[str], list[dict[str, object]]], str], ...] = (
         (
             'a bad id',
             lambda p: [{**first, 'node': p}, {'op': 'set', 'node': 'no_such_node', 'params': {}}],
@@ -484,7 +483,7 @@ async def run(ctx: Ctx) -> None:
             g = sd.getContext().getSDApplication().getQtForPythonUIMgr().getCurrentGraph()
             print('STATE', g.getIdentifier(), len(g.getNodes()), g.getPackage().isModified())""")
         state = text(await c('execute_designer_code', {'code': lib_state}))
-        edits: list[tuple[str, dict[str, Any]]] = [
+        edits: list[tuple[str, dict[str, object]]] = [
             ('apply_edits', {'ops': [{'op': 'add', 'definition': 'levels'}]}),
             ('arrange_graph', {}),
             ('add_frame', {'node_ids': ['1'], 'title': 'x'}),
@@ -569,14 +568,14 @@ async def run(ctx: Ctx) -> None:
     check('save_package', 'finds a dependency never saved', refuses and "'mcp_selftest_dep'" in t, t.strip()[-200:])
     if refuses:
         host = {'graph': 'mcp_selftest_host'}
-        calls: list[tuple[str, dict[str, Any]]] = [
+        calls: list[tuple[str, dict[str, object]]] = [
             ('save_package', {'graph_or_path': 'mcp_selftest_host'}),
             ('snapshot_graph', {**host, 'label': 'unsaved dependency'}),
             ('diff_graph', {**host, 'against': 'saved'}),
             ('set_link_display', {**host, 'from_nodes': ['1']}),
         ]
-        for tool, args in calls:
-            r_ = await c(tool, args)
+        for tool, arguments in calls:
+            r_ = await c(tool, arguments)
             check(tool, 'refuses a dependency never saved', r_.is_error and 'never saved' in text(r_), text(r_)[-250:])
         folder = os.path.join(
             os.environ.get('SD_SNAPSHOT_DIR') or os.path.expanduser('~/.sd_mcp/snapshots'), 'mcp_selftest_host'
@@ -776,8 +775,8 @@ async def run(ctx: Ctx) -> None:
     )
     # unloaded in a separate call, after Designer's event loop has run: both were open in
     # editor views, and an unload in the same call as the opening risks a crash (GUIDE.md,
-    # Portals; after an unload in one call, Designer crashed once as the test ended, PLG-9)
-    time.sleep(0.5)
+    # Portals; after an unload in one call, Designer crashed once as the test ended, PLG-9). The
+    # bridge runs Designer's event loop between two calls (REVIEW.md SRV-150)
     await designer_script(c, 'shared/unload_packages', paths=[dup_a, dup_b])
     found = ' | '.join(l for l in t.splitlines() if l.startswith(('OPEN=', 'FOCUS_B=', 'sd.api.')))
     check('open_graph', 'two graphs with one name: the given one is focused', 'FOCUS_B=True' in t, found)
@@ -817,7 +816,7 @@ async def run(ctx: Ctx) -> None:
             },
         )
     )
-    time.sleep(0.5)  # unloaded in a separate call, as above
+    # unloaded in a separate call, as above
     await designer_script(c, 'shared/unload_packages', paths=[orig, copy])
     found = ' | '.join(
         l for l in t.splitlines() if l.startswith(('SAME_UID=', 'FOUND_COPY=', 'OPEN=', 'FOCUS_', 'sd.'))

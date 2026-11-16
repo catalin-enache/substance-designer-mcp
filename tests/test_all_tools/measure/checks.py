@@ -7,7 +7,19 @@ from typing import Any
 
 from mcp.types import CallToolResult
 
-from test_all_tools.common import PLUGIN, TEST_GRAPH, Ctx, added_id, check, designer_script, is_image, refs, text
+from test_all_tools.common import (
+    ABORT_AT,
+    PLUGIN,
+    TEST_GRAPH,
+    Ctx,
+    added_id,
+    check,
+    designer_script,
+    helper_lines,
+    is_image,
+    refs,
+    text,
+)
 
 
 def _a_feeding_pair(G: dict[str, str]) -> dict[str, Any]:
@@ -151,6 +163,126 @@ async def check_a_node_measured_right_after_the_one_feeding_it(ctx: Ctx) -> None
     await c('apply_edits', {'ops': [{'op': 'delete', 'node': n} for n in (up, down, out)], **G})
 
 
+# sweep_param on $outputsize, aborted at the first of __LINES__ it reaches (common.ABORT_AT); the node's inheritance and
+# value are read after it by the check
+SWEEP_ABORTED = dedent("""
+    import shutil, tempfile
+    out = tempfile.mkdtemp()
+    _aborted_at(__LINES__, lambda: sweep_param(__GRAPH__, __NODE__, '$outputsize', [[7, 7], [8, 8]], out))
+    shutil.rmtree(out, ignore_errors=True)
+""")
+
+
+async def check_an_abort_putting_a_sweeps_parameter_back_still_puts_it_back(ctx: Ctx) -> None:
+    """An abort landing on sweep_param's put-back of the parameter's inheritance, or of its value, still puts both back,
+    a relative $outputsize with its offset (REVIEW.md HLP-177: it skipped the rest of the `finally`, and the node kept
+    an Absolute inheritance, or the last value swept). The abort is the plugin's, raised by a tracer of the check's at
+    that line."""
+    c, lv = ctx.c, ctx.lv
+    put_backs = {
+        'its inheritance': r'target\.setPropertyInheritanceMethod\(prop, inherit\)',
+        'its value': r'target\.setPropertyValue\(prop, original\)',
+    }
+    try:
+        for what, line in put_backs.items():
+            await designer_script(c, 'measure/relative_size', graph=TEST_GRAPH, node=lv)
+            before = text(await designer_script(c, 'shared/node_size_inheritance', graph=TEST_GRAPH, node=lv))
+            code = SWEEP_ABORTED.replace('__LINES__', repr(helper_lines(ctx.helper_source, line)))
+            code = code.replace('__GRAPH__', repr(TEST_GRAPH)).replace('__NODE__', repr(lv))
+            t = text(await c('execute_designer_code', {'code': ctx.helper_source + ABORT_AT + code}))
+            after = text(await designer_script(c, 'shared/node_size_inheritance', graph=TEST_GRAPH, node=lv))
+            check(
+                'sweep_param',
+                'an abort putting back %s still puts the parameter back' % what,
+                'ABORTED' in t and 'RelativeToParent' in before and after == before,
+                'before %s | after %s | %s' % (before.strip(), after.strip(), t.strip()[-60:]),
+            )
+    finally:  # as the checks after it find the node (run)
+        await designer_script(c, 'shared/node_size_inheritance', graph=TEST_GRAPH, node=lv, relative_to_input=True)
+
+
+# sweep_param whose second value fails, as one giving no texture would: _with_node_texture, a name of the helpers' script,
+# replaced for the call, then put back
+SWEEP_STOPPED = dedent("""
+    import shutil, tempfile
+    out = tempfile.mkdtemp()
+    measured, measures = _with_node_texture, []
+    def _with_node_texture(g, node, output, use):
+        measures.append(node)
+        if len(measures) == 2:
+            raise RuntimeError('the self-test: no texture for the second value')
+        measured(g, node, output, use)
+    try:
+        sweep_param(__GRAPH__, __NODE__, '$outputsize', [[7, 7], [8, 8]], out)
+    except RuntimeError as e:
+        print('STOPPED: %s' % e)
+    finally:
+        _with_node_texture = measured
+        shutil.rmtree(out, ignore_errors=True)
+""")
+
+
+async def check_a_sweep_stopped_by_an_error_says_its_parameter_is_back(ctx: Ctx) -> None:
+    """A sweep stopped by an error on a later value says it put the parameter back, which it did: the server warns that
+    the parameter may not be back unless the helper says so (REVIEW.md HLP-179: the line came after the put-back's
+    `try`, and the error skipped it)."""
+    c, lv = ctx.c, ctx.lv
+    try:
+        await designer_script(c, 'measure/relative_size', graph=TEST_GRAPH, node=lv)
+        before = text(await designer_script(c, 'shared/node_size_inheritance', graph=TEST_GRAPH, node=lv))
+        code = SWEEP_STOPPED.replace('__GRAPH__', repr(TEST_GRAPH)).replace('__NODE__', repr(lv))
+        t = text(await c('execute_designer_code', {'code': ctx.helper_source + code}))
+        after = text(await designer_script(c, 'shared/node_size_inheritance', graph=TEST_GRAPH, node=lv))
+        said = re.search(r'^restored .*$', t, re.M)
+        stopped = re.search(r'^STOPPED: .*$', t, re.M)
+        check(
+            'sweep_param',
+            'a sweep stopped by an error on a later value says its parameter is back',
+            stopped is not None and said is not None and after == before,
+            '%s | %s | before %s | after %s'
+            % (
+                stopped.group(0) if stopped else 'not stopped',
+                said.group(0) if said else 'no restored line',
+                before.strip(),
+                after.strip(),
+            ),
+        )
+    finally:  # as the checks after it find the node (run)
+        await designer_script(c, 'shared/node_size_inheritance', graph=TEST_GRAPH, node=lv, relative_to_input=True)
+
+
+# _with_node_texture on a node feeding no output, so through a temporary output, aborted at the first of __LINES__ it
+# reaches (common.ABORT_AT); the graph's nodes counted before and after
+TEXTURE_ABORTED = dedent("""
+    g = find_graph(__GRAPH__)
+    node = g.getNodeFromId(__NODE__)
+    before = g.getNodes().getSize()
+    _aborted_at(__LINES__, lambda: _with_node_texture(g, node, None, lambda texture, prop: None))
+    print('NODES=%d,%d' % (before, g.getNodes().getSize()))
+""")
+
+
+async def check_an_abort_removing_a_measures_temporary_output_still_removes_it(ctx: Ctx) -> None:
+    """An abort landing on the removal of the temporary output node, through which node_stats, preview_node and
+    sweep_param compute a node feeding no output, still removes it (REVIEW.md HLP-177: it was left in the user's
+    graph). The abort is the plugin's, raised by a tracer of the check's at that line."""
+    c, G = ctx.c, ctx.G
+    alone = added_id(text(await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'levels'}], **G})))
+    try:
+        code = TEXTURE_ABORTED.replace('__LINES__', repr(helper_lines(ctx.helper_source, r'g\.deleteNode\(')))
+        code = code.replace('__GRAPH__', repr(TEST_GRAPH)).replace('__NODE__', repr(alone))
+        t = text(await c('execute_designer_code', {'code': ctx.helper_source + ABORT_AT + code}))
+        counted = re.search(r'NODES=(\d+),(\d+)', t)
+        check(
+            'node_stats',
+            "an abort removing a measure's temporary output still removes it",
+            'ABORTED' in t and counted is not None and counted.group(1) == counted.group(2),
+            t.strip()[-200:],
+        )
+    finally:
+        await c('apply_edits', {'ops': [{'op': 'delete', 'node': alone}], **G})
+
+
 async def run(ctx: Ctx) -> None:
     c, G, clouds, slope, lv = ctx.c, ctx.G, ctx.clouds, ctx.slope, ctx.lv
     await check_an_output_added_right_after_the_node_feeding_it_was_measured(ctx)
@@ -263,3 +395,6 @@ async def run(ctx: Ctx) -> None:
     t = text(await c('read_designer_log', {'lines': 5, 'since_last_start': False}))
     check('read_designer_log', 'whole log', 'log.txt' in t, t.splitlines()[0])
     await check_a_node_measured_right_after_the_one_feeding_it(ctx)
+    await check_a_sweep_stopped_by_an_error_says_its_parameter_is_back(ctx)
+    await check_an_abort_putting_a_sweeps_parameter_back_still_puts_it_back(ctx)
+    await check_an_abort_removing_a_measures_temporary_output_still_removes_it(ctx)

@@ -161,10 +161,11 @@ def test_a_shot_is_taken_again_until_the_checker_shows_on_the_mesh(
     renders: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # REVIEW.md TST-383, TST-388: in a full run the 3D shots once didn't follow the camera for about 20 s, the cause
-    # unknown; a second apart, so that the retakes last (TST-386)
+    # unknown. TST-421: retaken a second apart, so that the retakes last (TST-386); now as each shot returns, each
+    # waiting for the 3D view itself (frames3d.py), until RETAKE_S have passed
     c, calls, pauses = _shots_in_turn(monkeypatch, [_shot(_plain()), _shot(_plain()), _shot(_checker(8))])
     r = asyncio.run(renders.with_checker(c, ARGS))
-    assert renders.transitions(renders.grey(r)) >= renders.CHECKER and pauses == [1.0, 1.0]
+    assert renders.transitions(renders.grey(r)) >= renders.CHECKER and pauses == []
     assert calls == [('screenshot_designer', ARGS)] + [('screenshot_designer', {'panel': '3d', 'max_size': 700})] * 2
     assert 'the checker showed on the mesh after 2 retakes' in capsys.readouterr().out
 
@@ -195,9 +196,17 @@ def test_a_shot_waits_for_the_checker_only_so_long(
     renders: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     c, calls, _pauses = _shots_in_turn(monkeypatch, [_shot(_plain())])
-    r = asyncio.run(renders.with_checker(c, ARGS))
-    assert renders.transitions(renders.grey(r)) == 0 and len(calls) == 1 + renders.RETAKES
-    assert "the checker didn't show on the mesh after %d retakes" % renders.RETAKES in capsys.readouterr().out
+    now = [0.0]
+
+    async def a_second_a_shot(name: str, args: dict[str, object] | None = None) -> SimpleNamespace:
+        now[0] += 1.0
+        return await c(name, args)
+
+    monkeypatch.setitem(vars(renders), '_now', lambda: now[0])
+    r = asyncio.run(renders.with_checker(a_second_a_shot, ARGS))
+    assert renders.transitions(renders.grey(r)) == 0 and len(calls) == renders.RETAKE_S  # the first, then retakes
+    retakes = renders.RETAKE_S - 1
+    assert "the checker didn't show on the mesh after %d retakes" % retakes in capsys.readouterr().out
 
 
 def test_a_shot_that_failed_isnt_taken_again(renders: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:

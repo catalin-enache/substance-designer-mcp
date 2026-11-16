@@ -16,7 +16,7 @@ import sys
 import time
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from textwrap import dedent
-from typing import Any, Protocol
+from typing import Any, Protocol, TypedDict
 
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
@@ -47,6 +47,8 @@ SAVED_GRAPH = 'mcp_selftest_saved'  # create_graph(save_path=...)
 DUP_GRAPH = 'mcp_selftest_dup'  # two open graphs with the same identifier
 EXAMPLE_GRAPH = 'mcp_selftest_trimsheet'  # examples/build_dwarf_trimsheet.py, renamed
 PORT = int(os.environ.get('SD_BRIDGE_PORT', '9877'))
+POLL_S = 0.1  # s between looks at a state whose change nothing says (AGENTS.md: callbacks first)
+END_WAIT_S = 5  # s a Designer the run left open may take to exit after SIGTERM: a limit, then SIGKILL
 # this process's whole environment: stdio_client passes a minimal one otherwise, without SD_BRIDGE_PORT, and the
 # server would listen for another port than PORT (REVIEW.md TST-153)
 PARAMS = StdioServerParameters(command=sys.executable, args=[SERVER], env=dict(os.environ))
@@ -127,6 +129,14 @@ def read_greeting(sock: socket.socket) -> bytes:
             raise ConnectionResetError('closed before the greeting')
         hello += chunk
     return hello
+
+
+class Reply(TypedDict, total=False):
+    """The plugin's reply to a request, as raw_request returns it (the plugin's docstring)."""
+
+    ok: bool
+    output: str
+    error: str
 
 
 def raw_request(request: dict[str, Any] | bytes, token: str | None = None, signed: bytes | None = None) -> Any:
@@ -281,6 +291,40 @@ SAME_GRAPH_BACK = dedent("""\
     same = cur is not None and g is not None and cur.getPackage().getUID() == g.getPackage().getUID() and cur.getIdentifier() == g.getIdentifier()
     print('SAME=%s current=%s' % (same, cur.getIdentifier() if cur else None))""")
 
+# The plugin's abort, raised as its tracer raises one: at a traced line, then no more tracing (sys.settrace's docs).
+# _aborted_at(lines, call) raises it at the first of `lines` the call reaches, lines of the helpers' text
+# (helper_lines), and prints ABORTED once it reached the caller. Appended to the helpers' text (REVIEW.md HLP-177)
+ABORT_AT = dedent("""
+    import sys as _sys
+
+
+    class _Aborted(BaseException):
+        pass
+
+
+    def _aborted_at(lines, call):
+        previous = _sys.gettrace()  # the plugin's, which watches the job's time
+        here = _aborted_at.__code__.co_filename
+
+        def tracer(frame, event, arg):
+            if event == 'line' and frame.f_code.co_filename == here and frame.f_lineno in lines:
+                raise _Aborted()
+            return tracer
+
+        _sys.settrace(tracer)
+        try:
+            call()
+        except _Aborted:
+            print('ABORTED')
+        finally:
+            _sys.settrace(previous)
+""")
+
+
+def helper_lines(helper_source: str, pattern: str) -> list[int]:
+    """The lines of the helpers' text matching `pattern` (a regex), numbered as code appended to it runs them."""
+    return [i for i, line in enumerate(helper_source.splitlines(), 1) if re.search(pattern, line)]
+
 
 def agent_folder(port: int) -> str:
     """The folder launch_designer makes for the Designer it starts on `port` (its temp folder and home inside)."""
@@ -319,6 +363,40 @@ def _report(dump: str) -> tuple[str, str]:
     return os.path.dirname(os.path.dirname(dump)), os.path.basename(dump)
 
 
+def crash_handlers() -> list[str] | None:
+    """The crash handlers running (Crashpad's: every app's that uses it, Designer's among them), each process's ID and
+    command line; None when pgrep fails, as nothing is known then (REVIEW.md TST-447: its empty output read as none
+    running). pgrep exits 1 when nothing matches."""
+    if sys.platform != 'darwin':
+        return []
+    try:
+        listed = subprocess.run(['pgrep', '-fl', 'crashpad_handler'], capture_output=True, text=True)
+    except OSError:
+        return None
+    return listed.stdout.splitlines() if listed.returncode in (0, 1) else None
+
+
+def dumps_may_come(ports: Sequence[int], before: set[str], run_port: bool = True) -> bool:
+    """Whether a crash dump may still come from a Designer this run started (on PORT unless not `run_port`, and on
+    `ports`): its crash handler still runs, its database in that Designer's home, and no dump new since `before` is
+    there. Measured on macOS (2026-11-15, REVIEW.md SRV-151): at a quit the handler ends with its Designer; after a crash
+    the dump is written as Adobe's crash window opens, and the handler runs as long as that window does. Elsewhere, or
+    when the handlers can't be listed, nothing is known: True, and the wait runs to its limit."""
+    if sys.platform != 'darwin':
+        return True
+    handlers = crash_handlers()
+    if handlers is None:
+        return True
+    for port in ((PORT,) if run_port else ()) + tuple(ports):
+        home = os.path.join(agent_folder(port), 'home')
+        mark = '/%s/home/' % agent_folder_name(port)  # /tmp or /private/tmp, as the handler was given it
+        if not any('--database=' in line and mark in line for line in handlers):
+            continue
+        if not {d for d in new_dumps(crash_dumps([port], run_port=False), before) if d.startswith(home)}:
+            return True
+    return False
+
+
 def new_dumps(after: set[str], before: set[str]) -> set[str]:
     """The dumps of `after` (crash_dumps) whose reports `before` didn't hold, in either folder (REVIEW.md TST-351)."""
     held = {_report(d) for d in before}
@@ -333,7 +411,7 @@ def new_crash_dumps(before: set[str], wait_s: float = 10, ports: Sequence[int] =
         new = new_dumps(crash_dumps(ports), before)
         if new or time.time() >= deadline:
             return new
-        time.sleep(0.5)
+        time.sleep(POLL_S)
 
 
 def end_own_designer() -> None:
@@ -342,14 +420,12 @@ def end_own_designer() -> None:
         with open(agent_designer_file(PORT), encoding='utf-8') as f:
             record = json.load(f)
         pid, start = int(record['pid']), record['start']
-        from server_tools.lifecycle import (
-            _process_start,
-        )  # the server's reading, which wrote the record (REVIEW.md SRV-92)
+        # the server's: its reading wrote the record (REVIEW.md SRV-92); its wait, woken by the exit (TST-421)
+        from server_tools.lifecycle import _exited, _process_start
 
         if _process_start(pid) == start:
             os.kill(pid, signal.SIGTERM)
-            time.sleep(5)
-            if pid in designer_pids():  # its own, not any Designer: another run's may be up (REVIEW.md TST-170)
+            if not _exited(pid, END_WAIT_S):  # its own, not any Designer: another run's may be up (REVIEW.md TST-170)
                 os.kill(pid, signal.SIGKILL)
             print('ended the Designer this run started and left open:', pid)
     except Exception as e:  # a clean-up in main()'s finally: a line, not a traceback (the server's ToolError too)
@@ -434,6 +510,35 @@ class Call(Protocol):
     """ctx.c: one tool call over the run's MCP session, `c(name, args)`."""
 
     def __call__(self, name: str, args: dict[str, Any] | None = None, /) -> Coroutine[Any, Any, CallToolResult]: ...
+
+
+# a Designer the self-test started, hidden once it answers, so nothing of it shows on the user's screen (DECISIONS.md,
+# Project rules): every category's checks passed in a Designer hidden so (2026-11-15), and the 3D shot shows its
+# windows transparent for its renders; macOS only, with the helpers' text
+HIDE = dedent("""
+    mw = _APP.getQtForPythonUIMgr().getMainWindow()
+    mac = _MacWindow(mw)
+    top = mw.window()  # the top-level window: getMainWindow() is a page of it
+    # held: a handle taken through a wrapper dropped at once is deleted by the next line (REVIEW.md TST-432)
+    handle = top.windowHandle()
+    spy = _event_signal(handle, ('Expose',))
+    try:
+        mac.hide()
+        # off screen: macOS says it hidden, Qt's expose event that the window no longer is (REVIEW.md TST-421)
+        _until(lambda: mac.hidden() and not handle.isExposed(), 3.0, [spy.fired])
+    finally:
+        handle.removeEventFilter(spy)
+    print('HIDDEN=%s' % mac.hidden())
+""")
+
+
+async def hide_designer(c: Call, helper_source: str) -> None:
+    """Hides the Designer the self-test started (HIDE), on macOS; a refusal or a Designer still shown is said."""
+    if sys.platform != 'darwin':
+        return
+    t = text(await c('execute_designer_code', {'code': helper_source + HIDE}))
+    if 'HIDDEN=True' not in t:
+        print("self-test: Designer wasn't hidden: %s" % ' / '.join(t.strip().splitlines()[-2:]))
 
 
 Step = Callable[['Ctx'], Awaitable[None]]  # a category's run(ctx), one of its checks, or its prepare(ctx)
@@ -523,8 +628,27 @@ def refs(t: str) -> dict[str, str]:
     return dict(re.findall(r"^\s*ref '(\w+)' = (\d+)", t, re.M))
 
 
-async def cancel_from_second_client() -> str:
-    await asyncio.sleep(2)
+def job_running(token: str) -> bool:
+    """Whether the bridge says a job runs now: its status, which the plugin's own thread answers, a job running or not
+    (`token` the bridge's, used, never printed)."""
+    return 'running for' in str(raw_request({'cmd': 'status'}, token).get('output', ''))
+
+
+async def until_job_running(limit: float) -> None:
+    """Returns once the bridge says a job runs, `limit` s at most: its status looked at every POLL_S, as nothing says a
+    job started (REVIEW.md TST-421: 2 s, whatever the job did)."""
+    with open(TOKEN_FILE) as f:
+        token = f.read().strip()  # used, never printed
+    deadline = time.monotonic() + limit
+    # off the event loop, a blocking socket call: the job's own call is sent meanwhile (REVIEW.md TST-426)
+    while not await asyncio.to_thread(job_running, token) and time.monotonic() < deadline:
+        await asyncio.sleep(POLL_S)
+
+
+async def cancel_from_second_client(limit: float = 30.0) -> str:
+    """cancel_designer_job from a second client, a server of its own, once the bridge says a job runs (until_job_running,
+    `limit` s at most)."""
+    await until_job_running(limit)
     async with stdio_client(PARAMS) as (r, w), ClientSession(r, w) as s:
         await s.initialize()
         return text(await s.call_tool('cancel_designer_job', {}))

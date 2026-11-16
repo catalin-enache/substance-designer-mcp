@@ -112,8 +112,27 @@ def _designer_data_dir(home: str | None = None) -> str:
     return os.path.join(base, 'Adobe', 'Adobe Substance 3D Designer')
 
 
+class _NoListing(ToolError):
+    """pgrep couldn't list Designer's processes: an empty list would read as none running (REVIEW.md SRV-83)."""
+
+
+def _pgrep() -> subprocess.CompletedProcess[str]:
+    """pgrep for Designer's processes: exit code 0 with their IDs, or 1 when none is found. Raises _NoListing when
+    pgrep fails (exit code 2 or 3) or can't run."""
+    try:
+        done = subprocess.run(['pgrep', '-f', DESIGNER_PROCESS], capture_output=True, text=True)
+    except OSError as e:
+        raise _NoListing("Designer's processes couldn't be listed: %s" % e) from e
+    if done.returncode not in (0, 1):
+        raise _NoListing(
+            "Designer's processes couldn't be listed (pgrep exit code %d: %s)" % (done.returncode, done.stderr.strip())
+        )
+    return done
+
+
 def _designer_running() -> bool:
-    """True while a Designer process exists (the bridge port closes before the process exits)."""
+    """True while a Designer process exists (the bridge port closes before the process exits). Raises _NoListing when
+    pgrep fails, which isn't none running (REVIEW.md SRV-163)."""
     if sys.platform == 'win32':
         # CSV: the default table cuts image names to 25 characters
         out = subprocess.run(
@@ -122,7 +141,7 @@ def _designer_running() -> bool:
             text=True,
         ).stdout
         return '"Adobe Substance 3D Designer.exe"' in out
-    return subprocess.run(['pgrep', '-f', DESIGNER_PROCESS], capture_output=True).returncode == 0
+    return _pgrep().returncode == 0
 
 
 server = MCPServer(name='substance-designer', instructions=INSTRUCTIONS)

@@ -14,15 +14,22 @@ CALL = re.compile(r' *\+[ !:|+]*?(\d+) (.+?) {2}\(in (.+?)\)')
 SYSTEM = ('libsystem_kernel', 'libsystem_pthread')
 
 
-# where Designer's shutdown waits with Qt's thread pool held (lifecycle/hold_thread_pool): stopping Adobe's sign-in,
-# left within about 2.5 s idle but still there once in a full run, then the pool's wait for good (measured 2026-11-14:
-# REVIEW.md TST-400)
-SHUTDOWN_WAITS = ('NglSSOHandler::Stop', 'QThreadPool::waitForDone')
+# The call in which Designer tears itself down once its event loop has ended (measured 2026-11-16, sampled from its
+# windows' close on, with Qt's thread pool held by lifecycle/hold_thread_pool: REVIEW.md TST-400). Before it, the main
+# thread deletes the main window and exports the brush presets, about 30 ms in all. Every slower step runs inside it:
+# - deleting the render engine, which can wait on macOS's file events (0.01 to 0.75 s idle; held the sample in a full
+#   run);
+# - deleting the other components, Adobe's sign-in stop among them (held the sample in an earlier full run);
+# - unloading the render back end;
+# - deleting the application, whose pool wait never ends while the pool is held.
+# It logs TEARDOWN_LOGGED as the log's last line, before the application's pool wait.
+SHUTDOWN_CALL = 'destroyApplication'
+TEARDOWN_LOGGED = '[INFO][Environment] Destroy Application'
 
 
 def in_shutdown(stacks: str) -> bool:
-    """Whether a sample shows Designer at one of its shutdown's waits with the thread pool held (SHUTDOWN_WAITS)."""
-    return any(wait in stacks for wait in SHUTDOWN_WAITS)
+    """Whether a sample shows Designer in its teardown (SHUTDOWN_CALL), at any of its steps."""
+    return SHUTDOWN_CALL in stacks
 
 
 def sampled(result: str) -> tuple[str, str]:

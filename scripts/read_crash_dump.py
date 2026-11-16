@@ -25,7 +25,7 @@ import argparse
 import datetime
 import glob
 import os
-import signal
+import stat
 import struct
 import subprocess
 import sys
@@ -55,6 +55,40 @@ MACH_EXCEPTIONS = {
     11: 'EXC_RESOURCE',
     12: 'EXC_GUARD',
     13: 'EXC_CORPSE_NOTIFY',
+}
+# <sys/signal.h> on macOS, whatever system reads the dump: Windows numbers SIGABRT 22 (REVIEW.md INS-39)
+MACOS_SIGNALS = {
+    1: 'SIGHUP',
+    2: 'SIGINT',
+    3: 'SIGQUIT',
+    4: 'SIGILL',
+    5: 'SIGTRAP',
+    6: 'SIGABRT',
+    7: 'SIGEMT',
+    8: 'SIGFPE',
+    9: 'SIGKILL',
+    10: 'SIGBUS',
+    11: 'SIGSEGV',
+    12: 'SIGSYS',
+    13: 'SIGPIPE',
+    14: 'SIGALRM',
+    15: 'SIGTERM',
+    16: 'SIGURG',
+    17: 'SIGSTOP',
+    18: 'SIGTSTP',
+    19: 'SIGCONT',
+    20: 'SIGCHLD',
+    21: 'SIGTTIN',
+    22: 'SIGTTOU',
+    23: 'SIGIO',
+    24: 'SIGXCPU',
+    25: 'SIGXFSZ',
+    26: 'SIGVTALRM',
+    27: 'SIGPROF',
+    28: 'SIGWINCH',
+    29: 'SIGINFO',
+    30: 'SIGUSR1',
+    31: 'SIGUSR2',
 }
 SYSTEM_LIBRARIES = ('/usr/lib/', '/System/Library/')
 ADDRESS = (1 << 47) - 1  # a return address's pointer-authentication bits dropped
@@ -205,10 +239,7 @@ def _exception(code: int, params: list[int]) -> str:
     said = MACH_EXCEPTIONS.get(params[0], 'Mach exception %d' % params[0])
     if params[0] == EXC_CRASH and len(params) > 1:
         number = (params[1] >> 24) & 0xFF
-        try:
-            said += ', signal %s' % signal.Signals(number).name
-        except ValueError:
-            said += ', signal %d' % number
+        said += ', signal %s' % MACOS_SIGNALS.get(number, str(number))
         if code:
             said += ', from %s' % MACH_EXCEPTIONS.get(code, 'Mach exception %d' % code)
     return '%s (codes %s)' % (said, ', '.join('%#x' % p for p in params[1:]))
@@ -358,10 +389,25 @@ def describe(
     return lines + _log_tail(path)
 
 
+def _own_folder(folder: str) -> bool:
+    """Whether `folder` is a folder of this user's own, not a link: /tmp is shared, and another account may have made one
+    named as launch_designer names them first (the server's _checked_folder and uninstall.py check the same; REVIEW.md
+    INS-37). Its owner is compared only where `os` has user IDs: Windows has none, and no agents' folders either
+    (agent_designer_folders lists none there), but the unit tests standing for macOS's run there (REVIEW.md INS-38)."""
+    try:
+        info = os.lstat(folder)
+    except OSError:
+        return False
+    getuid = getattr(os, 'getuid', None)
+    return stat.S_ISDIR(info.st_mode) and (getuid is None or info.st_uid == getuid())
+
+
 def dump_folders() -> list[str]:
-    """Where Designers keep their crash dumps: the user's, then those of the Designers agents started (macOS); in each,
-    the reports waiting for their upload, then those done with it (REVIEW.md INS-29)."""
-    homes = [os.path.expanduser('~')] + [os.path.join(folder, 'home') for folder in agent_designer_folders()]
+    """Where Designers keep their crash dumps: the user's, then those of the Designers agents started (macOS), their
+    folders this user's own (_own_folder); in each, the reports waiting for their upload, then those done with it
+    (REVIEW.md INS-29)."""
+    agents = [folder for folder in agent_designer_folders() if _own_folder(folder)]
+    homes = [os.path.expanduser('~')] + [os.path.join(folder, 'home') for folder in agents]
     return [os.path.join(home, *DATA, 'Sentry-Crashpad', part) for home in homes for part in ('pending', 'completed')]
 
 

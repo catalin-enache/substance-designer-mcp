@@ -18,7 +18,9 @@ The server and client/sd_run.py send nothing to a greeting of another protocol.
           sooner than 30 ms after the one before ended: a job reaching an idle bridge wakes that
           thread, and starts once those 30 ms are over (at once after a pause); one queued
           behind another starts when they are over too. With "timeout" (seconds) the script is aborted once it
-          exceeds that time.
+          exceeds that time. A function the script hands `_after_reply(fn)`, a name in its scope, while
+          it runs, runs on the main thread after the reply, once its send is done or failed
+          (quit_designer's close: REVIEW.md SRV-151). One handed over after the script ended never runs.
   cancel: {"cmd": "cancel"}              -> {"ok", "output"}
           Aborts the running script (and drops queued ones).
   status: {"cmd": "status"}              -> {"ok", "output"}
@@ -83,6 +85,7 @@ class _Box(TypedDict, total=False):
     result: Reply
     started: bool
     abandoned: bool
+    after: list[Callable[[], object]]  # what the job handed _after_reply, run once its reply is sent
 
 
 # (code, path, timeout, box, done): one queued script; the path is the client's, unchecked
@@ -188,10 +191,19 @@ class _TailBuffer(io.TextIOBase):
         return ('[output cut: the first %d characters are not shown]\n' % cut if cut else '') + value[-MAX_OUTPUT:]
 
 
-def _run(code: str, path: str | None, timeout: float | None, cancel: threading.Event) -> Reply:
+def _run(
+    code: str,
+    path: str | None,
+    timeout: float | None,
+    cancel: threading.Event,
+    after: list[Callable[[], object]] | None = None,
+) -> Reply:
     buf = _TailBuffer()
     result: Reply = {'ok': True, 'output': '', 'error': ''}
-    scope: dict[str, Any] = {'__name__': '__main__', '__file__': path or '<%s>' % NAME}
+    scope: dict[str, object] = {'__name__': '__main__', '__file__': path or '<%s>' % NAME}
+    if after is not None:
+        # what the job hands it runs on the main thread once its reply is sent (_Waker.after; REVIEW.md SRV-151)
+        scope['_after_reply'] = after.append
     deadline = time.monotonic() + timeout if timeout else None
     started = time.monotonic()
     previous = sys.gettrace()
@@ -206,7 +218,7 @@ def _run(code: str, path: str | None, timeout: float | None, cancel: threading.E
         pending[0] = True
         sys.settrace(tracer)
 
-    def untraced(hook: Callable[..., Any], *args: Any) -> None:
+    def untraced(hook: Callable[..., object], *args: object) -> None:
         # Python drops an exception raised in a hook, unreported to this one, so the abort must not
         # land in the previous hooks (REVIEW.md PLG-26); tracing goes back as it was: off once the
         # abort reached the script, so its cleanup runs to the end
@@ -217,7 +229,7 @@ def _run(code: str, path: str | None, timeout: float | None, cancel: threading.E
         finally:
             sys.settrace(was)
 
-    def unraisable(info: Any) -> None:  # a __del__, a weakref callback
+    def unraisable(info: Any) -> None:  # Any: sys.UnraisableHookArgs is typeshed's only; a __del__, a weakref callback
         if isinstance(info.exc_value, ScriptAborted):
             rearm()
         else:
@@ -286,14 +298,38 @@ class _Waker(QtCore.QObject):
     and a cycle would keep a stopped server until a garbage collection (REVIEW.md PLG-36)."""
 
     wake = QtCore.Signal()
+    after = QtCore.Signal()  # a reply sent: what its job handed _after_reply waits in `pending`
 
     def __init__(self, drain: Callable[[], None]) -> None:
         super().__init__()
         self.drain = weakref.WeakMethod(drain)  # a bound method: _Server._drain
+        self.pending: queue.Queue[Callable[[], object]] = queue.Queue()
         self.delay = QtCore.QTimer(self)
         self.delay.setSingleShot(True)
         self.delay.timeout.connect(self._on_wake)
         self.wake.connect(self._on_wake, QtCore.Qt.ConnectionType.QueuedConnection)
+        self.after.connect(self._on_after, QtCore.Qt.ConnectionType.QueuedConnection)
+
+    def _on_after(self) -> None:  # a method of this QObject: run on its thread, Designer's main one
+        """Runs what jobs handed _after_reply, each once, in order, once their replies were sent (REVIEW.md SRV-151:
+        quit_designer closed Designer's windows 300 ms after its call, so the bridge could still reply). One that
+        raises is printed to Designer's log, or into the output of a job running then; the others still run. Tracing is off meanwhile, as _run's untraced does for
+        its hooks: delivered inside another job's nested event loop, they ran under that job's tracer, whose abort (a
+        BaseException) left the ones after it unrun (REVIEW.md PLG-43). It goes back as it was after."""
+        was = sys.gettrace()
+        sys.settrace(None)
+        try:
+            while True:
+                try:
+                    then = self.pending.get_nowait()
+                except queue.Empty:
+                    return
+                try:
+                    then()
+                except Exception:
+                    print('[%s] an after-reply callback failed:\n%s' % (NAME, traceback.format_exc()))
+        finally:
+            sys.settrace(was)
 
     def later(self, ms: int) -> None:  # main thread only: from _drain
         self.delay.start(ms)
@@ -413,6 +449,7 @@ class _Server:
         return _fail('unknown cmd %r' % cmd)
 
     def _handle(self, conn: socket.socket, release: Callable[[], None] = lambda: None) -> None:
+        after: list[Callable[[], object]] = []  # what the job handed _after_reply
         with conn:
             try:
                 nonce = secrets.token_hex(16)
@@ -422,15 +459,25 @@ class _Server:
                 except (ValueError, OSError):
                     reply = _fail('bad request')  # no details before authentication
                 else:
-                    reply = self._authorised(data, nonce, release)
+                    reply = self._authorised(data, nonce, release, after)
             except Exception:
                 reply = _fail('bad request')
             try:
                 conn.sendall(json.dumps(reply).encode('utf-8'))
             except OSError:
                 pass
+        if after:  # the reply sent, or the client gone: run on the main thread
+            for then in after:
+                self.waker.pending.put(then)
+            self.waker.after.emit()
 
-    def _authorised(self, data: bytes, nonce: str, release: Callable[[], None] = lambda: None) -> Reply:
+    def _authorised(
+        self,
+        data: bytes,
+        nonce: str,
+        release: Callable[[], None] = lambda: None,
+        after: list[Callable[[], object]] | None = None,
+    ) -> Reply:
         """The answer checked over the bytes as received, and only then the request parsed (module docstring)."""
         end = data.find(b'\n', 0, ANSWER_LENGTH + 1)  # looked for where an answer ends, not through the whole request
         body = memoryview(data)[end + 1 :] if end >= 0 else memoryview(b'')
@@ -439,7 +486,7 @@ class _Server:
             return _fail('invalid token')
         release()
         try:
-            req = json.loads(body.tobytes().decode('utf-8'))
+            req: object = json.loads(body.tobytes().decode('utf-8'))  # checked next
             if not isinstance(req, dict):
                 raise ValueError
         except (ValueError, UnicodeDecodeError):
@@ -470,6 +517,8 @@ class _Server:
                     box['abandoned'] = True  # _drain skips it: never run with nobody waiting
                     return _fail('Designer was busy for %ds; the script was not run' % QUEUE_WAIT)
         done.wait()  # started: it ends by itself, by its timeout or by a cancel
+        if after is not None:
+            after.extend(box.get('after', []))
         return box['result']
 
     def _drain(self) -> None:
@@ -500,7 +549,7 @@ class _Server:
                     self.cancel.clear()
                     self.busy_since = time.monotonic()
                 try:
-                    box['result'] = _run(code, path, timeout, self.cancel)
+                    box['result'] = _run(code, path, timeout, self.cancel, box.setdefault('after', []))
                 except BaseException:  # _run catches the script's own errors; this is the bridge's
                     box['result'] = _fail('the bridge failed running the job:\n' + traceback.format_exc())
                 finally:

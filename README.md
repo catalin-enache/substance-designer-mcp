@@ -266,9 +266,13 @@ checks the Security promises below (unsigned and wrongly signed requests refused
 reachable from the network, private token file), the command-line client, that the plugin Designer loaded matches
 this repo (re-run `install.py` if not), and that the example trim sheet still builds (a renamed
 copy, so a trim sheet you have open is never touched). The screenshot of a panel not visible in your Designer (Windows) is skipped; the clipboard checks run
-on macOS only: they use your clipboard for a few seconds, then put your text back (only the text). On macOS the 3D
-view's checks minimize, cover and hide the self-test's own Designer for a few seconds each, never making it the active
-app. Exit code 0 means everything that ran passed; the summary lists tools whose checks
+on macOS only: they use your clipboard for a few seconds, then put your text back (only the text). On macOS the
+self-test's Designers start hidden, without taking your keyboard, but for one a `lifecycle` check starts from
+Designer's binary, and all but the `lifecycle` checks' own stay hidden once they answer. The window checks, which measure what a 3D screenshot does with a minimized, covered
+or hidden Designer, set those states up behind your windows. The few that need a window in front of yours (where a
+click on Designer's window lands, the 3D view drawn while visible, windows brought over Designer's during a 3D
+screenshot, and a few more) run together, near the end of `editor_panels_and_fit`, for a few seconds each. Exit code
+0 means everything that ran passed; the summary lists tools whose checks
 were all skipped (`quit_designer` on Windows) instead of counting them as
 covered. Run it after installing, after updates, and
 after a Designer update (`--no-unit` where the unit tests' packages aren't installed). To run chosen checks on their own, in an environment built for them (how agents see a check
@@ -321,7 +325,7 @@ a quick fix (⌥⏎), or apply them all with `ruff check --fix .`.
 | Variable | Default | Used for |
 |---|---|---|
 | `SD_DESIGNER_BIN_DIR` | macOS: `/Applications/Adobe Substance 3D Designer/Adobe Substance 3D Designer.app/Contents/MacOS`; Windows: `C:\Program Files\Adobe\Adobe Substance 3D Designer` | finding `sbscooker` / `sbsrender` |
-| `SD_DESIGNER_APP` | macOS: `/Applications/Adobe Substance 3D Designer/Adobe Substance 3D Designer.app`; Windows: `C:\Program Files\Adobe\Adobe Substance 3D Designer\Adobe Substance 3D Designer.exe` | `launch_designer` (on macOS the .app, whose own binary it starts) |
+| `SD_DESIGNER_APP` | macOS: `/Applications/Adobe Substance 3D Designer/Adobe Substance 3D Designer.app`; Windows: `C:\Program Files\Adobe\Adobe Substance 3D Designer\Adobe Substance 3D Designer.exe` | `launch_designer` (on macOS the .app, which it opens hidden; a binary there starts shown) |
 | `SD_DESIGNER_LOG` | newest `log.txt` in Designer's settings folder (see Troubleshooting) | `read_designer_log` |
 | `SD_SNAPSHOT_DIR` | `~/.sd_mcp/snapshots` | where `snapshot_graph` keeps snapshots (one folder per graph, each snapshot noting its package; safe to delete, except a snapshot you opened and saved in place, which may hold your work: `list_snapshots` marks those taken by this version) |
 | `SD_BRIDGE_PORT` | `9877` | plugin, MCP server and CLI client (set the same value for all three; the plugin reads it from Designer's environment, so start Designer from a shell where it is set, or set it system-wide; `launch_designer` sets it for the Designer it starts, and on macOS a temp folder and home of its own) |

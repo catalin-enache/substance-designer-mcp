@@ -138,10 +138,11 @@ addressed in one go (the ones the user named, or the batch in the plan) are hand
 the whole project, where they can't, so only what is settled goes there, and only what a reviewer could plausibly
 raise again:
 
-- **What the user decides goes in now:** their answer when asked to decide on a finding, or what they say about one
-  unprompted: won't fix, a rule to follow from now on, one option out of several, how something should
-  work. It can come with a fix: a rule chosen over closing a finding as won't fix is both. Give the reason
-  the user gave or agreed to, and the date.
+- **What the user decides goes in now, if a reviewer could raise it again:** their answer when asked to decide on a
+  finding, or what they say about one unprompted: won't fix, a rule to follow from now on, one option out of several,
+  how something should work. A choice that a rule in AGENTS.md or the code's comments already answer stays in
+  `REVIEW.md` and the code. It can come with a fix: a rule chosen over closing a finding as won't fix is both. Keep the
+  entry to the decision, the reason the user gave or agreed to in a few words, the date and the reopen condition.
 - **A false finding stays in `REVIEW.md` for now:** a *not a bug* or *not reproducible* answer you reached alone, also
   when a defensive change came with it. The `cleanup-review` skill proposes the ones worth keeping, and they move
   when the user acknowledges them.

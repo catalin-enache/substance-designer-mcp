@@ -96,7 +96,6 @@ def _isolated_run(
     the test (REVIEW.md TST-244)."""
     c = FakeDesigner()
     run = sys.modules['test_all_tools.category_run']
-    monkeypatch.setitem(vars(run), 'PAUSE_S', 0)
     monkeypatch.setitem(vars(run), 'preparation', lambda step: prepare)
     ctx = selftest.Ctx(c=c, s=None, scratch=str(tmp_path), helper_source='h', was_running=False)
     asyncio.run(selftest.run_steps(ctx, steps))

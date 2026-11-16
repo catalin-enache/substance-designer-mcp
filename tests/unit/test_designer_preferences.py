@@ -11,7 +11,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import NoReturn
+from typing import IO, NoReturn
 
 import pytest
 from fake_defaults import FakeDefaults, lock_held
@@ -693,19 +693,35 @@ def test_a_start_holds_the_copy_until_its_designer_is_started(defaults: FakeDefa
 
 
 @MACOS
-def test_a_put_back_waits_for_a_start_in_progress(defaults: FakeDefaults) -> None:
+def test_a_put_back_waits_for_a_start_in_progress(defaults: FakeDefaults, monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md TST-477: it waited 0.3 s for the put-back to block, and a thread slower than that passed with no lock at
+    # all; the put-back's thread now says when it meets the start's lock, and the test waits for that
+    import fcntl
+
     defaults.domain = dict(BEFORE)
     _saved(defaults)
     _a_designer_changes(defaults)
     running: list[bool] = []
     done: list[str] = []
+    blocked = threading.Event()
+    flock = fcntl.flock
+
+    def met(fd: int | IO[str], operation: int) -> None:  # the lock taken, saying first when it is held elsewhere
+        if operation == fcntl.LOCK_EX:
+            try:
+                flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+            except BlockingIOError:
+                blocked.set()
+        flock(fd, operation)
+
+    monkeypatch.setattr(fcntl, 'flock', met)
     with prefs.saved(lambda: bool(running), ended=False):  # a start in progress: what it changes is put back at its end
         waiting = threading.Thread(target=lambda: done.append(prefs.put_back(lambda: bool(running), ended=True)))
         waiting.start()
-        waiting.join(0.3)
-        assert waiting.is_alive() and not done, 'waits for the start'
+        assert blocked.wait(10) and not done, 'waits for the start'  # 10 s: a limit, the lock met at once
         running.append(True)  # the one started
-    waiting.join(5)
+    waiting.join(10)
     assert done == [''] and os.path.exists(prefs.saved_file()), 'it found the new one running'
 
 

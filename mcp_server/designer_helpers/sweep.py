@@ -1,7 +1,6 @@
 """sweep_param."""
 
 from .core import (
-    Any,
     SDNode,
     SDProperty,
     SDPropertyCategory,
@@ -28,7 +27,7 @@ def sweep_param(
     identifier: str | SDSBSCompGraph | None,
     node_id: str | None,
     param: str,
-    values: list[Any],
+    values: list[object],  # parsed JSON, checked by _make_value
     out_dir: str,
     view_node: str | None = None,
     output: str | None = None,
@@ -59,43 +58,59 @@ def sweep_param(
     made = [_make_value(prop, value) for value in values]  # all of them before anything changes
     original = cast(SDValue, target.getPropertyValue(prop))  # a parameter always has a value
     original_text = fmt(original)
-    inherit = None
-    if param.startswith('$') and hasattr(target, 'getPropertyInheritanceMethod'):
-        # like set_params: $outputsize/$format only take effect when not inherited
-        from sd.api.sdproperty import SDPropertyInheritanceMethod
+    from sd.api.sdproperty import SDPropertyInheritanceMethod
 
-        inherit = target.getPropertyInheritanceMethod(prop)
-        target.setPropertyInheritanceMethod(prop, SDPropertyInheritanceMethod.Absolute)
-    try:
-        for i, (value, new_value) in enumerate(zip(values, made, strict=True)):
-            target.setPropertyValue(prop, new_value)
+    inherit: SDPropertyInheritanceMethod | None = None  # once read, put back
+    put = [False]
 
-            def use(texture: SDTexture, out_prop: SDProperty, i: int = i, value: Any = value) -> None:
-                size = texture.getSize()
-                pitch = texture.getRowPitch()
-                with open(os.path.join(out_dir, '%d.raw' % i), 'wb') as f:
-                    f.write(ctypes.string_at(texture.getPixelBufferAddress(), pitch * size.y))
-                print(
-                    'SWEEP='
-                    + json.dumps(
-                        {
-                            'index': i,
-                            'value': fmt(target.getPropertyValue(prop)),
-                            'width': size.x,
-                            'height': size.y,
-                            'pitch': pitch,
-                            'bpp': texture.getBytesPerPixel(),
-                            'format': str(texture.getPixelFormat()).split('.')[-1],
-                        }
-                    )
-                )
-
-            _with_node_texture(g, view, output, use)
-    finally:
-        # the inheritance first: changing it resets the value to the default (REVIEW.md HLP-26)
+    def put_back() -> None:
+        """The parameter as it was: its inheritance first, as changing it resets the value to the default (REVIEW.md
+        HLP-26), then its value, even if putting the inheritance back fails. Then says so: the server warns that the
+        parameter may not be back without that line, which a sweep stopped by an error says too (REVIEW.md SRV-2,
+        HLP-179). Run twice, it sets the same again, and says it again."""
         try:
             if inherit is not None:
                 target.setPropertyInheritanceMethod(prop, inherit)
-        finally:  # the value goes back even if putting the inheritance back fails
+        finally:
             target.setPropertyValue(prop, original)
         print('restored %s.%s to %r' % (node_id or 'graph', param, original_text))
+        put[0] = True
+
+    try:  # from the inheritance's change on: an abort landing on a `try:` line isn't caught by its `finally`
+        try:
+            if param.startswith('$') and hasattr(target, 'getPropertyInheritanceMethod'):
+                # like set_params: $outputsize/$format only take effect when not inherited
+                inherit = target.getPropertyInheritanceMethod(prop)
+                target.setPropertyInheritanceMethod(prop, SDPropertyInheritanceMethod.Absolute)
+            for i, (value, new_value) in enumerate(zip(values, made, strict=True)):
+                target.setPropertyValue(prop, new_value)
+
+                def use(texture: SDTexture, out_prop: SDProperty, i: int = i, value: object = value) -> None:
+                    size = texture.getSize()
+                    pitch = texture.getRowPitch()
+                    with open(os.path.join(out_dir, '%d.raw' % i), 'wb') as f:
+                        f.write(ctypes.string_at(texture.getPixelBufferAddress(), pitch * size.y))
+                    print(
+                        'SWEEP='
+                        + json.dumps(
+                            {
+                                'index': i,
+                                'value': fmt(target.getPropertyValue(prop)),
+                                'width': size.x,
+                                'height': size.y,
+                                'pitch': pitch,
+                                'bpp': texture.getBytesPerPixel(),
+                                'format': str(texture.getPixelFormat()).split('.')[-1],
+                            }
+                        )
+                    )
+
+                _with_node_texture(g, view, output, use)
+        finally:
+            put_back()
+    except BaseException:
+        # the plugin raises an abort at a traced line, then stops tracing: landed in the put-back, it skipped the rest
+        # of it. Here, untraced, it is done again unless it was (REVIEW.md HLP-177)
+        if not put[0]:
+            put_back()
+        raise

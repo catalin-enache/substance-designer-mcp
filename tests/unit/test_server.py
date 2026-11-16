@@ -226,7 +226,6 @@ def test_a_failed_reload_says_the_package_was_closed_and_where_it_is(monkeypatch
 
     answers = iter(['unloaded 1 package(s): /p/mat.sbs', '--- ERROR ---\nRuntimeError: cannot read /p/mat.sbs'])
     patch_server(monkeypatch, '_bridge', lambda code, *a, **kw: next(answers))
-    patch_server(monkeypatch, 'RELOAD_SETTLE_S', 0)
     with pytest.raises(server.ToolError) as error:
         server._reload_package_file('/p/mat.sbs', '/snaps/mat_before.sbs')
     message = str(error.value)
@@ -252,7 +251,6 @@ def test_a_failed_reloads_message_keeps_its_own_period(monkeypatch: pytest.Monke
         raise server.ToolError(said)
 
     patch_server(monkeypatch, '_bridge', bridge)
-    patch_server(monkeypatch, 'RELOAD_SETTLE_S', 0)
     with pytest.raises(server.ToolError) as error:
         server._reload_package_file('/p/mat.sbs')
     assert str(error.value).startswith(said + ' The package was closed in Designer'), str(error.value)
