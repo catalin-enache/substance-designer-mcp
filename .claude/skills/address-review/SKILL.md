@@ -143,9 +143,10 @@ raise again:
   how something should work. A choice that a rule in AGENTS.md or the code's comments already answer stays in
   `REVIEW.md` and the code. It can come with a fix: a rule chosen over closing a finding as won't fix is both. Keep the
   entry to the decision, the reason the user gave or agreed to in a few words, the date and the reopen condition.
-- **A false finding stays in `REVIEW.md` for now:** a *not a bug* or *not reproducible* answer you reached alone, also
-  when a defensive change came with it. The `cleanup-review` skill proposes the ones worth keeping, and they move
-  when the user acknowledges them.
+- **A false finding is proposed now, if a reviewer could raise it again:** a *not a bug* or *not reproducible* answer
+  you reached alone, also when a defensive change came with it. In your report (**After a group**),
+  propose its entry to the user, and add it once they approve. Any other false finding stays in `REVIEW.md` only.
+  A cleanup of `REVIEW.md` moves nothing to `DECISIONS.md`, so this is the time.
 
 For what goes in:
 
@@ -166,3 +167,5 @@ For what goes in:
   commit as the fixes they record.
 - New problems found along the way go into `REVIEW.md` as new entries (the `project-code-review`
   skill's rules: append, the next free ID, update the header's **Last used**), not silently fixed.
+- Work for later that isn't a finding (a follow-up, an idea): propose it to the user for `ROADMAP.md` in the same
+  report, and add it once they approve. A cleanup of `REVIEW.md` moves nothing there.

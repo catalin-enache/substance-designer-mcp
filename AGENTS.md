@@ -192,7 +192,7 @@ deliberate: the sentence saying what REVIEW.md and DECISIONS.md each remember.
 | Architecture: what the plugin, server, helpers and CLI tools each do | **README.md**, "How it works" |
 | How to deploy changes, diagnostics an **agent** needs | **AGENTS.md**, Deploying and diagnosing |
 | New or changed tool | Its entry and the tool count in README.md's Tools table, and checks in `tests/test_all_tools/` |
-| What is settled for the whole project that a reviewer could plausibly raise again: the user's won't fix, rule or choice; a not-a-bug or not-reproducible answer the user acknowledged at a cleanup | **DECISIONS.md** (read by the review skills; agents may update its names and paths, anything else takes the user) |
+| What is settled for the whole project that a reviewer could plausibly raise again: the user's won't fix, rule or choice; a not-a-bug or not-reproducible answer the user approved when it was proposed, during a review or while the findings were addressed | **DECISIONS.md** (read by the review skills; agents may update its names and paths, anything else takes the user) |
 | Work still to do, ideas, follow-ups | **ROADMAP.md** (check an item when done; checked items can be deleted later, git keeps the record) |
 
 Open work lives in [ROADMAP.md](ROADMAP.md): check it before proposing improvements, and add new ideas there.

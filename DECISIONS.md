@@ -14,9 +14,10 @@ says so. Measured Designer behaviour lives in `GUIDE.md` or the module's docstri
 
 An entry is a bold one-line decision, then the reason, then `Reopen if: <condition>.`, with who decided and
 when if the user did. An entry comes from a decision of the user's, on a finding or about the project, or from a
-not-a-bug or not-reproducible answer the user acknowledged at a cleanup, which also suggests entries to remove. Agents
-may update the names and paths an entry points at; changing what was decided, or removing an entry, takes the user
-(the `address-review` skill, **Recording decisions**).
+not-a-bug or not-reproducible answer the user approved when it was proposed, during a review or while the findings were
+addressed. Only what would stop reviewers raising the same finding again goes in. A cleanup of `REVIEW.md` adds
+nothing here. Agents may update the names and paths an entry points at; changing what was decided, or removing an
+entry, takes the user (the `address-review` skill, **Recording decisions**).
 
 ## Project rules
 

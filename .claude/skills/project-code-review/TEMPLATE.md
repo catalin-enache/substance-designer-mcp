@@ -58,7 +58,7 @@ of the repo. If it can't, it says why: the ID never existed, a squash lost it, o
   questioned (by which new ID)>.
 - **Findings:** <IDs added, with counts per severity; duplicates merged>.
 - **Suggested order:** <optional: which findings to address first, and why>.
-- **Simplifications:** <optional: worthwhile refactors that aren't defects>.
+- **Simplifications:** <optional: worthwhile refactors that aren't defects; those for later proposed for `ROADMAP.md`>.
 - **Checked and found fine:** <what was examined and holds, so the next review needn't redo it>.
 
 ---

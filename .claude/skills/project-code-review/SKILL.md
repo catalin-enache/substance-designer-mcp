@@ -183,6 +183,12 @@ line of the review log, with the decision's title. An answer in `REVIEW.md` can 
 7. Report the totals and the most severe new findings to the user; the file has the rest. A review that finds
    nothing new says so: the work is then ready for the final check (both suites in full), which runs only when the user
    asks for it (AGENTS.md, Running the tests).
+8. **Propose to the user, in the same report,** what the review brings up for later and for good:
+   - a `ROADMAP.md` item for each simplification or follow-up worth doing later;
+   - a `DECISIONS.md` entry only for an answer that would stop reviewers raising the same finding again.
+
+   Add each once the user approves it. A cleanup of `REVIEW.md` moves nothing to either file (the `cleanup-review`
+   skill), so this is the time.
 
 ## Follow-up chains
 

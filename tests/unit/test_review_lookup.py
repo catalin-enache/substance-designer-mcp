@@ -326,26 +326,6 @@ def test_a_finding_lost_in_a_squash_prints_nothing_but_its_number_isnt_reused(tm
     assert _last_used(tmp_path) == ['HLP-2']
 
 
-@needs_sh
-def test_the_cleanup_search_finds_every_wording_of_an_answer(tmp_path: Path) -> None:
-    found = re.findall(r'```sh\n\s*(grep -nE .*?)```', _read(os.path.join(SKILLS, 'cleanup-review', 'SKILL.md')), re.S)
-    assert len(found) == 1
-    answers = [
-        '**Resolution: not a bug** x',
-        '**Resolution: not reproducible** x',
-        '**Resolution: not reproduced** x',
-        '**Resolution: done, defensively; not reproducible in Designer** x',
-        '**Resolution: done; no loss reproduced** x',
-        "**Resolution: won't fix** x",
-        '**Resolution: done** A rule, chosen by the user over closing it.',
-    ]
-    plain = '**Resolution: done** the ordinary kind'
-    (tmp_path / 'REVIEW.md').write_text('\n'.join([*answers, plain]) + '\n', encoding='utf-8')
-    printed = _sh(found[0], tmp_path)
-    assert all(answer in printed for answer in answers)
-    assert plain not in printed
-
-
 @pytest.mark.parametrize(
     'path',
     (
@@ -386,12 +366,20 @@ def test_decisions_says_it_is_the_memory_for_the_whole_project() -> None:
     assert 'memory for the whole project' in _read('DECISIONS.md').replace('\n', ' ')
 
 
-def test_a_false_finding_waits_for_the_cleanup_and_the_users_acknowledgment() -> None:
-    address = _read(os.path.join(SKILLS, 'address-review', 'SKILL.md'))
-    cleanup = _read(os.path.join(SKILLS, 'cleanup-review', 'SKILL.md'))
-    assert 'every *not a bug*' not in address and 'add the answer to `DECISIONS.md`' not in address
-    assert 'plausibly raise again' in cleanup and 'acknowledg' in cleanup
-    assert 'suggest' in cleanup and 'A cleanup only adds' not in cleanup
+def test_decisions_and_roadmap_are_proposed_while_reviewing_and_addressing_never_at_a_cleanup() -> None:
+    # the user's rule (2026-11-16): REVIEW.md is the memory per branch; what goes in DECISIONS.md (only what stops
+    # reviewers raising the same finding again) or ROADMAP.md is proposed to them during the reviews and while the
+    # findings are addressed, and added once they approve, never at a cleanup
+    project = _read(os.path.join(SKILLS, 'project-code-review', 'SKILL.md')).replace('\n', ' ')
+    address = _read(os.path.join(SKILLS, 'address-review', 'SKILL.md')).replace('\n', ' ')
+    cleanup = _read(os.path.join(SKILLS, 'cleanup-review', 'SKILL.md')).replace('\n', ' ')
+    assert 'moves nothing to `DECISIONS.md` or `ROADMAP.md`' in cleanup
+    assert 'Simplifications' not in cleanup and 'Resolution: ' not in cleanup, 'no search for what to move'
+    assert 'The `cleanup-review` skill proposes' not in address
+    assert 'propose its entry to the user' in address and 'propose it to the user for `ROADMAP.md`' in address
+    assert '**Propose to the user' in project and 'a `ROADMAP.md` item' in project
+    for path in ('AGENTS.md', 'DECISIONS.md'):
+        assert 'at a cleanup' not in _read(path).replace('\n', ' '), path
 
 
 def test_a_review_reads_decisions_first_then_review() -> None:
@@ -734,26 +722,6 @@ def test_a_cleaned_up_file_passes_the_checks_on_the_file() -> None:
     cleaned = _cleaned_up(_read('REVIEW.md'))
     assert _used_twice(cleaned) == [] and _counter_problems(cleaned) == [] and _status_problems(cleaned) == []
     assert 'python3 scripts/review_lookup.py HLP-56' in cleaned
-
-
-@needs_sh
-def test_the_cleanup_lists_what_the_log_and_notes_would_take_with_them(tmp_path: Path) -> None:
-    found = re.findall(
-        r"`(grep -nE '[^`]*Simplifications[^`]*)`", _read(os.path.join(SKILLS, 'cleanup-review', 'SKILL.md'))
-    )
-    assert len(found) == 1
-    wanted = [
-        '- **Simplifications:** a dead fallback',
-        '  - Note (2026-11-02): a leftover',
-        '    - Note (2026-11-03): deeper',
-    ]
-    (tmp_path / 'REVIEW.md').write_text(
-        '\n'.join([*wanted, '- **How:** five reviewers', '  - **Fix.** Note this']) + '\n', encoding='utf-8'
-    )
-    printed = _sh(found[0], tmp_path)
-    assert all(line in printed for line in wanted)
-    assert 'five reviewers' not in printed and 'Note this' not in printed
-    assert 'ROADMAP.md' in _read(os.path.join(SKILLS, 'cleanup-review', 'SKILL.md'))
 
 
 def test_resolutions_no_longer_record_commit_hashes() -> None:
