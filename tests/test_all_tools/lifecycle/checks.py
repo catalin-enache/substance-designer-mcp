@@ -6,7 +6,6 @@ run() starts from a Designer of its own and leaves none running, so it also runs
 import asyncio
 import contextlib
 import glob
-import json
 import os
 import re
 import shutil
@@ -26,6 +25,7 @@ from project_constants import (
     STARTUP_LIMIT,
     TOKEN_FILE,
     agent_designer_file,
+    read_agent_record,
 )
 from test_all_tools import common, launch_lock, window_server
 from test_all_tools.common import (
@@ -200,7 +200,7 @@ async def check_launch_on_another_port(ctx: Ctx) -> None:
                     % (other, text(await c('designer_status', {'port': other})))
                 )
                 return
-            second = json.loads(Path(record).read_text())['pid']
+            second = read_agent_record(record)['pid']
             if 'Designer started in' not in t:
                 return  # the check above failed, with why; the finally ends it
             if sys.platform == 'darwin':
@@ -607,7 +607,7 @@ async def check_quitting_and_starting_again(ctx: Ctx) -> None:
         check(
             'designer_status',
             'names the process answering, the one recorded',
-            'process %s\n' % pid in status and str(json.loads(Path(record).read_text())['pid']) == pid,
+            'process %s\n' % pid in status and str(read_agent_record(record)['pid']) == pid,
             pid,
         )
 

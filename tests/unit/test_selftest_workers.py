@@ -5,15 +5,19 @@ import inspect
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from types import ModuleType
+from typing import IO, TYPE_CHECKING
 
 import pytest
 from selftest_fakes import fresh
 
 from conftest import SELFTEST_DIR
 
+if TYPE_CHECKING:  # for the checker only: fresh() imports the self-test's modules afresh, test by test
+    from test_all_tools.workers import WorkerResults, _Start
 
-def _workers() -> Any:
+
+def _workers() -> ModuleType:
     return fresh('workers')
 
 
@@ -48,8 +52,18 @@ def test_a_worker_gets_its_port_and_snapshots_by_their_real_path(tmp_path: Path)
 # --- one summary
 
 
-def _part(tools: list[str], results: dict[str, list[bool]], skipped: list[Any], times: dict[str, float]) -> Any:
-    return {'tools': tools, 'results': results, 'skipped': skipped, 'times': times}
+def _part(
+    tools: list[str], results: dict[str, list[bool]], skipped: list[list[str]], times: dict[str, float]
+) -> 'WorkerResults':
+    return {
+        'tools': tools,
+        'results': results,
+        'skipped': skipped,
+        'times': times,
+        'quit': None,
+        'quit_at': None,
+        'forced_in_shutdown': [],
+    }
 
 
 def test_the_results_merge_into_one_summary() -> None:
@@ -80,17 +94,19 @@ def test_the_unit_suite_runs_whole_from_the_repository_in_a_temp_folder_of_its_o
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     workers = _workers()
-    seen: dict[str, Any] = {}
+    commands: list[list[str]] = []  # each start's command
+    seen: _Start = {}  # the last start's keywords; stdout: unit.log, open
 
-    def popen(command: list[str], **kwargs: Any) -> str:
-        seen.update(command=command, **kwargs)
+    def popen(command: list[str], cwd: str, env: dict[str, str], stdout: IO[bytes], stderr: int) -> str:
+        commands.append(command)
+        seen.update({'cwd': cwd, 'env': env, 'stdout': stdout, 'stderr': stderr})
         return 'process'
 
     monkeypatch.setattr(workers.subprocess, 'Popen', popen)
     folder = tmp_path / 'unit'
     folder.mkdir()
     assert workers.start_unit(str(folder)) == 'process'
-    assert seen['command'] == [sys.executable, '-m', 'pytest', '-q']  # no test ids: the whole suite (AGENTS.md)
+    assert commands[-1] == [sys.executable, '-m', 'pytest', '-q']  # no test ids: the whole suite (AGENTS.md)
     assert seen['cwd'] == os.path.dirname(os.path.dirname(SELFTEST_DIR))
     assert seen['env']['TMPDIR'] == os.path.join(os.path.realpath(folder), 'tmp')  # no folder shared with a worker
     assert os.path.isdir(seen['env']['TMPDIR'])

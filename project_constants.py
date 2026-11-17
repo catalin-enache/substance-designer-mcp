@@ -9,8 +9,11 @@ match, that no other code spells the name out, and that README.md, AGENTS.md and
 
 from __future__ import annotations
 
+import json
 import os
 import re
+from collections.abc import Mapping, Sequence
+from typing import Literal, TypedDict, Union
 
 PLUGIN = 'sd_claude_bridge_kve'
 
@@ -28,6 +31,53 @@ BRIDGE_PROTOCOL = 2
 # The nonce in its greeting, as the plugin makes it (secrets.token_hex(16)): the clients sign nothing with another, which
 # could hold a newline and shift the signed message's lines (REVIEW.md SRV-94; tests/unit/test_plugin.py checks it).
 NONCE = re.compile(r'[0-9a-f]{32}')
+# A JSON value, as json.loads gives it and json.dumps takes it: the bridge's messages, the agent records and the tools'
+# JSON arguments. Union: this alias is evaluated, and the installer and the client run on Python 3.9 too, which has no |.
+Json = Union[bool, int, float, str, list['Json'], dict[str, 'Json'], None]  # noqa: UP007
+# A JSON value to send, only read on its way: as Json, with any sequence or mapping of them. So a list[str] is one, where
+# it is no list[Json]: a list[Json] may be given any JSON value, which a list[str] must not hold.
+JsonSent = Union[bool, int, float, str, Sequence['JsonSent'], Mapping[str, 'JsonSent'], None]  # noqa: UP007
+# A tool's arguments as the tests send them: JSON values by name
+ToolArgs = Mapping[str, JsonSent]
+
+
+# The bridge's messages (the plugin's docstring), for its clients: the server, the CLI client and the self-test. The
+# plugin, which can't import this file, has its own Reply and reads requests as plain JSON.
+class Greeting(TypedDict):
+    """The plugin's greeting line, the first thing it sends on a connection."""
+
+    nonce: str
+    protocol: int
+
+
+class _Script(TypedDict):
+    code: str
+    path: str | None
+
+
+class ScriptRequest(_Script, total=False):
+    """A script for the plugin to run: its code, the path it runs as (its __file__, named in its tracebacks), and the
+    seconds before the plugin aborts it."""
+
+    timeout: float
+
+
+class ControlRequest(TypedDict):
+    """A control request: cancel or status."""
+
+    cmd: Literal['cancel', 'status']
+
+
+# What a client sends: one JSON object
+Request = Union[ScriptRequest, ControlRequest]  # noqa: UP007 (a module-level alias is evaluated: Python 3.9 has no |)
+
+
+class Reply(TypedDict, total=False):
+    """The plugin's reply to a request."""
+
+    ok: bool
+    output: str
+    error: str
 
 
 # Seconds launch_designer gives a Designer an agent started before it counts as stuck: its default wait
@@ -56,6 +106,24 @@ def agent_designer_file(port: int) -> str:
     doesn't lose it. One file per port; launches on one port take turns (launch_designer's lock), and each record is
     written whole, then put in place, so a server reading it meanwhile never sees part of one."""
     return os.path.join(AGENT_RECORD_DIR, '.%s_agent_designer_%d.json' % (PLUGIN, port))
+
+
+class AgentRecord(TypedDict):
+    """What an agent_designer_file holds, as launch_designer writes it: the process ID of the Designer it started, that
+    process's start as ps says it, and the Designer's home (None: the user's). The server's reader
+    (server_tools/lifecycle.py, _agent_record) checks what it reads; read_agent_record, for the tests, doesn't."""
+
+    pid: int
+    start: str
+    home: str | None
+
+
+def read_agent_record(path: str) -> AgentRecord:
+    """The record in `path`, an agent_designer_file, taken as launch_designer writes it. The tests read records with it,
+    and it checks nothing. Raises OSError when the file can't be read, and ValueError when it isn't JSON."""
+    with open(path, encoding='utf-8') as f:
+        record: AgentRecord = json.load(f)
+    return record
 
 
 def agent_designer_ports() -> list[int]:

@@ -16,14 +16,27 @@ import subprocess
 import sys
 from collections.abc import Callable
 from textwrap import dedent
-from typing import Any, ParamSpec, TypedDict, TypeVar
+from typing import Annotated, Literal, ParamSpec, TypeVar
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from pydantic import JsonValue, WithJsonSchema
 
 PORT = int(os.environ.get('SD_BRIDGE_PORT', '9877'))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from project_constants import BRIDGE_PROTOCOL, DESIGNER_PROCESS, NONCE, PLUGIN, QUEUE_WAIT, TOKEN_FILE  # noqa: E402  (the plugin's name lives there)
+from project_constants import (  # noqa: E402  (the plugin's name and the bridge's messages live there)
+    BRIDGE_PROTOCOL,
+    DESIGNER_PROCESS,
+    NONCE,
+    PLUGIN,
+    QUEUE_WAIT,
+    TOKEN_FILE,
+    Json,
+    JsonSent,
+    Reply,
+    Request,
+    ScriptRequest,
+)
 
 # Folder holding sbscooker / sbsrender. Override with SD_DESIGNER_BIN_DIR.
 DEFAULT_BIN_DIRS = {
@@ -154,9 +167,16 @@ _session: dict[str, bool] = {
 P = ParamSpec('P')
 R = TypeVar('R')
 
+# The types of the tools' JSON parameters: a JSON object, and any JSON value. Their schemas are pinned to the ones
+# agents saw before these parameters were narrowed to JsonValue.
+JsonObject = Annotated[dict[str, JsonValue], WithJsonSchema({'additionalProperties': True, 'type': 'object'})]
+AnyJson = Annotated[JsonValue, WithJsonSchema({})]
 
-def _not_finite(value: Any, where: str) -> tuple[str, float] | None:
-    """The first number in `value`, its lists and dicts walked, that isn't finite, and where it is; or None."""
+
+def _not_finite(value: JsonSent, where: str) -> tuple[str, float] | None:
+    """The first number in `value`, its lists and dicts walked, that isn't finite, and where it is; or None. `value` is
+    one of a tool's arguments, a JSON value once they are validated."""
+    items: list[tuple[str, JsonSent]]
     if isinstance(value, float):
         return None if math.isfinite(value) else (where, value)
     if isinstance(value, dict):
@@ -246,7 +266,7 @@ def bridge_answer(token: str, nonce: str, port: int, body: bytes) -> bytes:
     return hmac.new(token.encode('utf-8'), message, hashlib.sha256).hexdigest().encode('ascii')
 
 
-def _exchange(sock: socket.socket, token: str, request: dict[str, Any], port: int) -> bytes:
+def _exchange(sock: socket.socket, token: str, request: Request, port: int) -> bytes:
     """The bridge protocol (plugin docstring): read the greeting, send the answer (an HMAC of the nonce, the port and
     the request's bytes) on a line before those bytes, instead of the token itself, and return the raw reply bytes. A
     greeting of another protocol gets nothing."""
@@ -256,7 +276,7 @@ def _exchange(sock: socket.socket, token: str, request: dict[str, Any], port: in
         if not chunk:
             raise ConnectionResetError('closed before the greeting')
         hello += chunk
-    greeting = json.loads(hello.decode('utf-8'))
+    greeting: Json = json.loads(hello.decode('utf-8'))  # checked next
     if not isinstance(greeting, dict):
         raise ValueError("not the bridge's greeting")
     # the protocol first: another one's greeting may hold no nonce (REVIEW.md SRV-88)
@@ -276,15 +296,7 @@ def _exchange(sock: socket.socket, token: str, request: dict[str, Any], port: in
     return data
 
 
-class Reply(TypedDict, total=False):
-    """The plugin's reply to a request (plugin docstring)."""
-
-    ok: bool
-    output: str
-    error: str
-
-
-def _send(request: dict[str, Any], wait: float, port: int | None = None) -> Reply:
+def _send(request: Request, wait: float, port: int | None = None) -> Reply:
     """Send one JSON request to the plugin on `port` (this server's PORT by default) and return its reply dict."""
     try:
         with open(TOKEN_FILE) as f:
@@ -315,7 +327,7 @@ def _send(request: dict[str, Any], wait: float, port: int | None = None) -> Repl
         raise ToolError('Designer closed the connection without a reply (it may be starting or quitting).') from e
 
 
-def _control(cmd: str, wait: float, port: int | None = None) -> str:
+def _control(cmd: Literal['cancel', 'status'], wait: float, port: int | None = None) -> str:
     """A control request ('status', 'cancel') and its output; a refusal raises _Refused with the
     plugin's error instead of reading as an answer (REVIEW.md SRV-33)."""
     reply = _send({'cmd': cmd}, wait=wait, port=port)
@@ -330,7 +342,7 @@ def _bridge(
     # timeout: seconds before the plugin aborts the script (None = no limit)
     # wait: seconds to wait for a reply, for a job that may start late or not at all (None = as long as it may take)
     # port: the plugin's port (None = this server's PORT; launch_designer, designer_status and quit_designer take one)
-    request: dict[str, Any] = {'code': code, 'path': path}
+    request: ScriptRequest = {'code': code, 'path': path}
     if timeout:
         request['timeout'] = timeout
     # wait for the plugin's queue and the script itself, or a job we gave up on could start later

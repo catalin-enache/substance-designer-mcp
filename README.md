@@ -107,8 +107,8 @@ changes to your graphs, Claude can take a snapshot and afterwards show you exact
 - Substance 3D Designer 16 (tested on 16.0.7, which bundles Python 3.13). Older versions aren't supported.
 - Python **3.10+** (only for the MCP server; the plugin uses Designer's own Python). 3.10 is the
   minimum the installer accepts; the tests run on 3.12. The installer and `designer_status` show
-  which Python the server uses. `install.py` and `uninstall.py` start on an older `python3` (a stock
-  Mac's is 3.9): the installer then says it needs 3.10+, and the uninstaller works.
+  which Python the server uses. `install.py` and `uninstall.py` start on an older `python3`, 3.9 or
+  later (a stock Mac's is 3.9): the installer then says it needs 3.10+, and the uninstaller works.
 - Claude Code (`claude` command), or any MCP client
 
 ## Install

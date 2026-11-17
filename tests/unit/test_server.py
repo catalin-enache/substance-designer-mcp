@@ -5,7 +5,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import pytest
 from mcp.client.session import ClientSession
@@ -13,7 +13,17 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.types import CallToolResult
 
 import designer_helpers
-from conftest import ROOT, SELFTEST_DIR, patch_server, selftest_check_sources, selftest_sources, server, server_source
+from conftest import (
+    ROOT,
+    SELFTEST_DIR,
+    fake_bridge,
+    patch_server,
+    selftest_check_sources,
+    selftest_sources,
+    server,
+    server_source,
+)
+from project_constants import Json
 
 SERVER = os.path.join(ROOT, 'mcp_server', 'server.py')
 
@@ -28,13 +38,15 @@ async def _list_tools() -> tuple[str, dict[str, str]]:
     async with stdio_client(params) as (r, w), ClientSession(r, w) as s:
         init = await s.initialize()
         tools = (await s.list_tools()).tools
-        global SCHEMAS
+        global SCHEMAS, PROPERTIES
         SCHEMAS = {t.name: set((t.input_schema or {}).get('properties', {})) for t in tools}
+        PROPERTIES = {t.name: (t.input_schema or {}).get('properties', {}) for t in tools}
         return init.instructions or '', {t.name: t.description or '' for t in tools}
 
 
 TOOLS: tuple[str, dict[str, str]] | None = None
 SCHEMAS: dict[str, set[str]] = {}
+PROPERTIES: dict[str, dict[str, Json]] = {}  # each tool's parameters' JSON schemas
 
 
 def _tools() -> tuple[str, dict[str, str]]:
@@ -200,11 +212,11 @@ def test_relative_paths_are_resolved_here_not_in_designer(monkeypatch: pytest.Mo
     # directory (`/` when started from the Finder), unlike render_sbs or preview_maps
     sent: list[str] = []
 
-    def bridge(code: str, *a: Any, **kw: Any) -> str:
+    def bridge(code: str) -> str:
         sent.append(code)
         return 'ok'
 
-    patch_server(monkeypatch, '_bridge', bridge)
+    fake_bridge(monkeypatch, bridge)
     monkeypatch.chdir(tmp_path)
     here = str(tmp_path)
     server.export_outputs('renders', graph='Mat')
@@ -225,7 +237,7 @@ def test_a_failed_reload_says_the_package_was_closed_and_where_it_is(monkeypatch
     import pytest
 
     answers = iter(['unloaded 1 package(s): /p/mat.sbs', '--- ERROR ---\nRuntimeError: cannot read /p/mat.sbs'])
-    patch_server(monkeypatch, '_bridge', lambda code, *a, **kw: next(answers))
+    fake_bridge(monkeypatch, lambda code: next(answers))
     with pytest.raises(server.ToolError) as error:
         server._reload_package_file('/p/mat.sbs', '/snaps/mat_before.sbs')
     message = str(error.value)
@@ -244,13 +256,13 @@ def test_a_failed_reloads_message_keeps_its_own_period(monkeypatch: pytest.Monke
     said = 'Designer closed the connection without a reply (it may be starting or quitting).'
     calls: list[str] = []
 
-    def bridge(code: str, *a: Any, **kw: Any) -> str:  # the unload, then the load
+    def bridge(code: str) -> str:  # the unload, then the load
         calls.append(code)
         if len(calls) == 1:
             return 'unloaded 1 package(s): /p/mat.sbs'
         raise server.ToolError(said)
 
-    patch_server(monkeypatch, '_bridge', bridge)
+    fake_bridge(monkeypatch, bridge)
     with pytest.raises(server.ToolError) as error:
         server._reload_package_file('/p/mat.sbs')
     assert str(error.value).startswith(said + ' The package was closed in Designer'), str(error.value)
@@ -262,11 +274,11 @@ def test_a_sweep_with_no_values_is_refused_before_designer(monkeypatch: pytest.M
 
     sent: list[str] = []
 
-    def bridge(code: str, *a: Any, **kw: Any) -> str:
+    def bridge(code: str) -> str:
         sent.append(code)
         return ''
 
-    patch_server(monkeypatch, '_bridge', bridge)
+    fake_bridge(monkeypatch, bridge)
     with pytest.raises(server.ToolError) as error:
         server.sweep_param('n1', 'scale', [])
     assert 'values' in str(error.value) and not sent
@@ -344,11 +356,11 @@ def test_every_tools_graph_can_be_left_out_except_open_graphs(monkeypatch: pytes
     assert {n for n, p in with_graph.items() if p.default is inspect.Parameter.empty} == {'open_graph'}
     sent: list[str] = []
 
-    def bridge(code: str, path: str | None = None, timeout: float | None = None) -> str:
+    def bridge(code: str) -> str:
         sent.append(code)
         return 'ok'
 
-    patch_server(monkeypatch, '_bridge', bridge)
+    fake_bridge(monkeypatch, bridge)
     server.export_outputs('/tmp/renders')
     assert "export_outputs(None, '/tmp/renders'," in sent[-1]
 
@@ -378,26 +390,26 @@ def test_the_self_test_passes_no_field_an_op_doesnt_take() -> None:
 
 
 def _sent_by_script(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, source: str, args: dict[str, Any] | None
-) -> tuple[str, dict[str, Any]]:
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, source: str, args: dict[str, Json] | None
+) -> tuple[str, Json]:
     """What run_designer_script sends for this script, and the ARGS that text defines."""
     sent: list[str] = []
 
-    def bridge(code: str, path: str | None = None, timeout: float | None = None) -> str:
+    def bridge(code: str) -> str:
         sent.append(code)
         return 'ok'
 
-    patch_server(monkeypatch, '_bridge', bridge)
+    fake_bridge(monkeypatch, bridge)
     script = tmp_path / 'probe.py'
     script.write_text(source, encoding='utf-8')
     server.run_designer_script(str(script), args=args)
-    scope: dict[str, Any] = {}
+    scope: dict[str, object] = {}
     exec(sent[0].split('\n', 1)[0], scope)
-    return sent[0], scope['ARGS']
+    return sent[0], cast(Json, scope['ARGS'])  # the first line sets ARGS with json.loads
 
 
 def test_run_designer_script_passes_args(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    args = {'name': 'it\'s "quoted" → é', 'ids': [1, 2.5, None, True], 'nested': {'a': 'b\nc'}}
+    args: dict[str, Json] = {'name': 'it\'s "quoted" → é', 'ids': [1, 2.5, None, True], 'nested': {'a': 'b\nc'}}
     _, received = _sent_by_script(monkeypatch, tmp_path, 'print(1)\n', args)
     assert received == args
 
@@ -418,3 +430,27 @@ def test_the_fallback_client_sends_no_args() -> None:
     """GUIDE.md: a script reading ARGS runs through the MCP tool, not client/sd_run.py (REVIEW.md SRV-62)."""
     assert 'ARGS' not in _read('client', 'sd_run.py')
     assert 'no `ARGS`' in _read(os.path.join('mcp_server', 'GUIDE.md'))
+
+
+# The JSON parameters' schemas, as agents saw them before the parameters were typed as pydantic's JsonValue, which
+# would describe each nested value (ROADMAP item 98)
+_PINNED: dict[tuple[str, str], Json] = {
+    ('apply_edits', 'ops'): {
+        'items': {'additionalProperties': True, 'type': 'object'},
+        'title': 'Ops',
+        'type': 'array',
+    },
+    ('sweep_param', 'values'): {'items': {}, 'title': 'Values', 'type': 'array'},
+    ('run_designer_script', 'args'): {
+        'anyOf': [{'additionalProperties': True, 'type': 'object'}, {'type': 'null'}],
+        'default': None,
+        'title': 'Args',
+    },
+}
+
+
+@pytest.mark.parametrize(('tool', 'name'), list(_PINNED), ids=['%s.%s' % key for key in _PINNED])
+def test_the_json_parameters_keep_the_schemas_agents_saw(tool: str, name: str) -> None:
+    # REVIEW.md TST-485: the schemas were said to be pinned, with no test
+    _tools()
+    assert PROPERTIES[tool][name] == _PINNED[(tool, name)]

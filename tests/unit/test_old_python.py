@@ -1,7 +1,7 @@
-"""The standalone scripts still behave on a Python older than 3.10 (a stock Mac's `python3` is 3.9):
-install.py refuses with its message instead of a traceback, uninstall.py (which tells users to run it
+"""The standalone scripts still behave on Python 3.9, the oldest supported (DECISIONS.md, Project rules; a stock Mac's
+`python3` is 3.9): install.py refuses with its message instead of a traceback, uninstall.py (which tells users to run it
 with the system Python) works, sd_run.py explains a timeout (REVIEW.md INS-25), and read_crash_dump.py reads a dump. Skipped when no
-such interpreter is installed."""
+Python 3.9 is installed."""
 
 import os
 import shutil
@@ -14,7 +14,7 @@ from minidumps import an_abort, minidump
 
 from conftest import ROOT
 
-CANDIDATES = ('/usr/bin/python3', 'python3.9', 'python3.8')
+CANDIDATES = ('/usr/bin/python3', 'python3.9')  # 3.9 at the oldest (DECISIONS.md, Project rules; REVIEW.md INS-40)
 
 
 def _old_python() -> str | None:
@@ -24,7 +24,10 @@ def _old_python() -> str | None:
             continue
         try:
             out = subprocess.run(
-                [exe, '-c', 'import sys; print(sys.version_info < (3, 10))'], capture_output=True, text=True, timeout=30
+                [exe, '-c', 'import sys; print((3, 9) <= sys.version_info < (3, 10))'],
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
         except (OSError, subprocess.TimeoutExpired):
             continue
@@ -37,7 +40,7 @@ def _old_python() -> str | None:
 def old_python() -> str:
     exe = _old_python()
     if exe is None:
-        pytest.skip('no Python older than 3.10 installed')
+        pytest.skip('no Python 3.9 installed')
     return exe
 
 

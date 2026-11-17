@@ -9,13 +9,13 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Any
+from types import ModuleType
 
 import pytest
 
 import server_tools
 from conftest import REAL_DESIGNER_RUNNING, ROOT, SELFTEST_DIR, patch_server, selftest_sources, server
-from project_constants import BRIDGE_PROTOCOL
+from project_constants import BRIDGE_PROTOCOL, JsonSent
 
 
 def test_windows_process_check_reads_full_names(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -31,7 +31,7 @@ def test_windows_process_check_reads_full_names(monkeypatch: pytest.MonkeyPatch)
         assert server._designer_running() == (state == 'running')
 
 
-def _greeting(**fields: object) -> bytes:
+def _greeting(**fields: JsonSent) -> bytes:
     """A greeting of this protocol (BRIDGE_PROTOCOL's, so a new one doesn't stop the cases below at its check)."""
     return json.dumps({'protocol': BRIDGE_PROTOCOL, **fields}).encode() + b'\n'
 
@@ -128,7 +128,7 @@ def test_the_bridge_tests_pass_where_the_plugin_never_ran(tmp_path: Path) -> Non
     assert run.returncode == 0, run.stdout[-2000:]
 
 
-def _selftest_common() -> Any:  # a module imported by name: PyCharm can't see its names
+def _selftest_common() -> ModuleType:  # a module imported by name: PyCharm can't see its names
     tests_dir = os.path.dirname(SELFTEST_DIR)
     if tests_dir not in sys.path:
         sys.path.insert(0, tests_dir)

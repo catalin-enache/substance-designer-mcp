@@ -1,11 +1,17 @@
 """Runs inside Designer: closes the open packages saved at these paths. ARGS: paths."""
 
-from typing import Any
+from typing import TypedDict
 
 import sd
+from sd.api.sdpackagemgr import SDPackageMgr
 
-ARGS: dict[str, Any] = globals()['ARGS']
-pm = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
+
+class Args(TypedDict):
+    paths: list[str]
+
+
+ARGS: Args = globals()['ARGS']
+pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
 
 for p in list(pm.getUserPackages()):
     if (p.getFilePath() or '') in ARGS['paths']:

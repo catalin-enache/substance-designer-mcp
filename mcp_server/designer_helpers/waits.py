@@ -1,9 +1,16 @@
 """Waiting in Designer for something to happen: woken by the callbacks that say it did, looking again every TICK ms
 where none comes, with a limit in case it never does (AGENTS.md: callbacks first, never a time measured here)."""
 
-from .core import Any, Callable, Sequence, cast
+from .core import Callable, Protocol, QtCore, Sequence, _qt_app, cast
 
 TICK = 100  # ms between looks where no callback wakes the wait
+
+
+class _EventSpy(Protocol):
+    """The event filter _event_signal returns: a QObject whose `fired` signal fires for each event it watches for. It is
+    a Protocol, not a QObject subclass, so loading the helpers makes no Qt class. _unwatch removes it."""
+
+    fired: QtCore.SignalInstance
 
 
 def _settle(seconds: float) -> None:
@@ -11,24 +18,20 @@ def _settle(seconds: float) -> None:
     (AGENTS.md)."""
     import time
 
-    from PySide6 import QtWidgets
-
-    app = cast(QtWidgets.QApplication, QtWidgets.QApplication.instance())
+    app = _qt_app()
     end = time.time() + seconds
     while time.time() < end:
         app.processEvents()
         time.sleep(0.02)
 
 
-def _event_signal(  # Any: a Qt object, and the filter made here (screenshots.py: Qt objects are Any in signatures)
-    watched: Any, kinds: Sequence[str], seen: Callable[[str], None] | None = None
-) -> Any:
+def _event_signal(
+    watched: QtCore.QObject, kinds: Sequence[str], seen: Callable[[str], None] | None = None
+) -> _EventSpy:
     """An event filter installed on `watched`, a Qt object: for each of its events of `kinds` (QEvent.Type names), calls
     `seen` with the event's kind (when given), then fires its `fired` signal, which a wait can be woken by (_until).
-    The event goes on as usual. The caller removes it with `watched.removeEventFilter(it)`."""
-    from PySide6 import QtCore
-
-    types = {getattr(QtCore.QEvent.Type, kind): kind for kind in kinds}
+    The event goes on as usual. The caller removes it with _unwatch."""
+    types: dict[QtCore.QEvent.Type, str] = {getattr(QtCore.QEvent.Type, kind): kind for kind in kinds}
 
     class Seen(QtCore.QObject):
         fired = QtCore.Signal()
@@ -46,7 +49,12 @@ def _event_signal(  # Any: a Qt object, and the filter made here (screenshots.py
     return spy
 
 
-def _until(state: Callable[[], bool], limit: float, signals: Sequence[Any] = ()) -> bool:  # Any: Qt's signals
+def _unwatch(watched: QtCore.QObject, spy: _EventSpy) -> None:
+    """Removes the event filter `spy`, which _event_signal installed on `watched`."""
+    watched.removeEventFilter(cast(QtCore.QObject, spy))
+
+
+def _until(state: Callable[[], bool], limit: float, signals: Sequence[QtCore.SignalInstance] = ()) -> bool:
     """Waits for `state()` to be true, looking whenever one of `signals` fires and every TICK ms, while Designer goes
     on with its events. Gives up after `limit` s, a safety net, never the time the wait should take. Returns
     `state()`.
@@ -58,8 +66,6 @@ def _until(state: Callable[[], bool], limit: float, signals: Sequence[Any] = ())
 
     Once Designer quits (QCoreApplication.exit()), exec() returns -1 at once, running no event and no timer, so the wait
     ends there (REVIEW.md HLP-157: measured, it ran on, past its limit)."""
-    from PySide6 import QtCore
-
     if state():
         return True
     loop = QtCore.QEventLoop()  # the timers' parent too: they go with this frame, whatever an abort leaves undone
@@ -68,7 +74,7 @@ def _until(state: Callable[[], bool], limit: float, signals: Sequence[Any] = ())
     end = QtCore.QTimer(loop)
     end.setSingleShot(True)
     end.timeout.connect(loop.quit)
-    connected = []
+    connected: list[QtCore.SignalInstance] = []
     try:
         for signal in signals:
             signal.connect(loop.quit)

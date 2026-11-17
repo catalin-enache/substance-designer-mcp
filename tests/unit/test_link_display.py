@@ -8,7 +8,7 @@ from typing import cast
 
 import pytest
 
-from conftest import patch_server, server
+from conftest import fake_bridge, full_disk, patch_server, server
 
 
 def test_reload_is_split_in_separate_calls_with_no_pause(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -18,11 +18,11 @@ def test_reload_is_split_in_separate_calls_with_no_pause(monkeypatch: pytest.Mon
     # fact): the 0.5 s pauses after the unload and the load waited for nothing (REVIEW.md SRV-150)
     events: list[str] = []
 
-    def bridge(code: str, path: str | None = None, timeout: float | None = None) -> str:
+    def bridge(code: str) -> str:
         events.append(code.rsplit('\n', 2)[-2].split('(')[0])
         return 'ok'
 
-    patch_server(monkeypatch, '_bridge', bridge)
+    fake_bridge(monkeypatch, bridge)
     monkeypatch.setattr(time, 'sleep', lambda s: events.append('sleep %.1f' % s))
     server._reload_package_file('/x/pkg.sbs')
     assert events == ['unload_package_file', 'load_package_file']
@@ -52,12 +52,12 @@ def test_set_link_display_reports_success_when_the_reopen_fails(
     live.write_bytes(sbs.read_bytes())
     patch_server(monkeypatch, 'SNAPSHOT_DIR', str(tmp_path / 'snaps'))
 
-    def bridge(code: str, path: str | None = None, timeout: float | None = None) -> str:
+    def bridge(code: str) -> str:
         if 'open_graph(graph_in_file(' in code:  # the reopen, through the package file (REVIEW.md SRV-34)
             return "--- ERROR ---\nRuntimeError: graph 'g' not found in the package %s%s" % (sbs, stop)
         return 'FILE=%s\nGRAPH=g\nOPEN=1' % sbs
 
-    patch_server(monkeypatch, '_bridge', bridge)
+    fake_bridge(monkeypatch, bridge)
     patch_server(monkeypatch, 'snapshot_graph', lambda gid, label: 'saved: %s' % live)
     patch_server(monkeypatch, '_reload_package_file', lambda path, snapshot=None: None)
     os.chmod(sbs, 0o644)
@@ -98,7 +98,7 @@ def test_set_link_displays_copy_of_the_saved_file_keeps_relative_paths_working(
     live = tmp_path / 'live.sbs'
     live.write_bytes(sbs.read_bytes())
     patch_server(monkeypatch, 'SNAPSHOT_DIR', str(tmp_path / 'snaps'))
-    patch_server(monkeypatch, '_bridge', lambda code, path=None, timeout=None: 'FILE=%s\nGRAPH=g\nOPEN=0' % sbs)
+    fake_bridge(monkeypatch, lambda code: 'FILE=%s\nGRAPH=g\nOPEN=0' % sbs)
     patch_server(monkeypatch, 'snapshot_graph', lambda gid, label: 'saved: %s' % live)
     patch_server(monkeypatch, '_reload_package_file', lambda path, snapshot=None: None)
     server.set_link_display('g', from_nodes=['1'])
@@ -120,10 +120,6 @@ def test_set_link_displays_copy_of_the_saved_file_leaves_nothing_when_its_note_f
 ) -> None:
     # REVIEW.md SRV-43: a copy whose note failed to write (a full disk) stayed without a note, counted for
     # every package; now it is removed, and nothing is changed (the error comes before the save)
-    import builtins
-    import errno
-    from typing import Any
-
     sbs = tmp_path / 'p.sbs'
     content = (
         '<?xml version="1.0" encoding="UTF-8"?><package><fileUID v="{5f3c0a6e-1111-2222-3333-444455556666}"/>'
@@ -135,18 +131,11 @@ def test_set_link_displays_copy_of_the_saved_file_leaves_nothing_when_its_note_f
     live = tmp_path / 'live.sbs'
     live.write_text(content)
     patch_server(monkeypatch, 'SNAPSHOT_DIR', str(tmp_path / 'snaps'))
-    patch_server(monkeypatch, '_bridge', lambda code, path=None, timeout=None: 'FILE=%s\nGRAPH=g\nOPEN=0' % sbs)
+    fake_bridge(monkeypatch, lambda code: 'FILE=%s\nGRAPH=g\nOPEN=0' % sbs)
     patch_server(monkeypatch, 'snapshot_graph', lambda gid, label: 'saved: %s' % live)
     reloaded: list[str] = []
     patch_server(monkeypatch, '_reload_package_file', lambda path, snapshot=None: reloaded.append(path))
-    real_open = builtins.open
-
-    def fake_open(file: Any, mode: str = 'r', *a: Any, **kw: Any) -> Any:
-        if str(file).endswith('.sbs.json') and 'w' in mode:
-            raise OSError(errno.ENOSPC, 'No space left on device')
-        return real_open(file, mode, *a, **kw)
-
-    monkeypatch.setattr(builtins, 'open', fake_open)
+    full_disk(monkeypatch, lambda file, mode: file.endswith('.sbs.json') and 'w' in mode)
     with pytest.raises(OSError):
         server.set_link_display('g', from_nodes=['1'])
     assert not [p for p in (tmp_path / 'snaps').rglob('*') if p.is_file()]
@@ -161,8 +150,6 @@ def test_a_failed_write_of_the_temporary_file_leaves_the_users_file_as_saved(
     # This covers that write failing: the file stays as saved, and the error names the snapshot (the rename
     # after it isn't reached here)
     import builtins
-    import errno
-    from typing import Any
 
     from mcp.server.mcpserver.exceptions import ToolError
 
@@ -179,20 +166,17 @@ def test_a_failed_write_of_the_temporary_file_leaves_the_users_file_as_saved(
     live = tmp_path / 'live.sbs'
     live.write_text(content)
     patch_server(monkeypatch, 'SNAPSHOT_DIR', str(tmp_path / 'snaps'))
-    patch_server(monkeypatch, '_bridge', lambda code, path=None, timeout=None: 'FILE=%s\nGRAPH=g\nOPEN=0' % sbs)
+    fake_bridge(monkeypatch, lambda code: 'FILE=%s\nGRAPH=g\nOPEN=0' % sbs)
     patch_server(monkeypatch, 'snapshot_graph', lambda gid, label: 'saved: %s' % live)
     reloaded: list[str] = []
     patch_server(monkeypatch, '_reload_package_file', lambda path, snapshot=None: reloaded.append(path))
     real_open = builtins.open
-
-    def fake_open(file: Any, mode: str = 'r', *a: Any, **kw: Any) -> Any:
-        # a full disk in the project folder: the file is opened (and emptied), then the write fails
-        if str(file).startswith(str(project)) and ('w' in mode or 'a' in mode):
-            real_open(file, mode, *a, **kw).close()
-            raise OSError(errno.ENOSPC, 'No space left on device')
-        return real_open(file, mode, *a, **kw)
-
-    monkeypatch.setattr(builtins, 'open', fake_open)
+    # a full disk in the project folder: the file is opened (and emptied), then the write fails
+    full_disk(
+        monkeypatch,
+        lambda file, mode: file.startswith(str(project)) and ('w' in mode or 'a' in mode),
+        opened_first=True,
+    )
     with pytest.raises(ToolError) as raised:
         server.set_link_display('g', from_nodes=['1'])
     monkeypatch.setattr(builtins, 'open', real_open)
@@ -206,7 +190,7 @@ def _link_display_setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, sbs: Pa
     live = tmp_path / 'live.sbs'
     live.write_text(sbs.read_text())
     patch_server(monkeypatch, 'SNAPSHOT_DIR', str(tmp_path / 'snaps'))
-    patch_server(monkeypatch, '_bridge', lambda code, path=None, timeout=None: 'FILE=%s\nGRAPH=g\nOPEN=0' % sbs)
+    fake_bridge(monkeypatch, lambda code: 'FILE=%s\nGRAPH=g\nOPEN=0' % sbs)
     patch_server(monkeypatch, 'snapshot_graph', lambda gid, label: 'saved: %s' % live)
     reloaded: list[str] = []
     patch_server(monkeypatch, '_reload_package_file', lambda path, snapshot=None: reloaded.append(path))
@@ -288,8 +272,6 @@ def test_a_hard_linked_sbs_that_cant_be_written_keeps_the_edit_and_says_where(
     # SRV-51: written in place for its other names, a failed write must not lose the edit: the temporary
     # file stays, and the error names it and the snapshot
     import builtins
-    import errno
-    from typing import Any
 
     from mcp.server.mcpserver.exceptions import ToolError
 
@@ -301,12 +283,7 @@ def test_a_hard_linked_sbs_that_cant_be_written_keeps_the_edit_and_says_where(
     _link_display_setup(monkeypatch, tmp_path, sbs)
     real_open = builtins.open
 
-    def fake_open(file: Any, mode: str = 'r', *a: Any, **kw: Any) -> Any:
-        if str(file) == str(sbs) and ('w' in mode or 'a' in mode):
-            raise OSError(errno.ENOSPC, 'No space left on device')
-        return real_open(file, mode, *a, **kw)
-
-    monkeypatch.setattr(builtins, 'open', fake_open)
+    full_disk(monkeypatch, lambda file, mode: file == str(sbs) and ('w' in mode or 'a' in mode))
     with pytest.raises(ToolError) as raised:
         server.set_link_display('g', from_nodes=['1'])
     monkeypatch.setattr(builtins, 'open', real_open)
@@ -321,7 +298,6 @@ def test_a_hard_linked_sbs_whose_temporary_file_cant_be_removed_still_counts_as_
     # REVIEW.md SRV-52: with the edit already in the file, a failed removal of the temporary file reported
     # the file as unchanged and skipped the reload, leaving Designer's old graph over the edited file
     import errno
-    from typing import Any
 
     project = tmp_path / 'project'
     project.mkdir()
@@ -332,10 +308,10 @@ def test_a_hard_linked_sbs_whose_temporary_file_cant_be_removed_still_counts_as_
     reloaded = _link_display_setup(monkeypatch, tmp_path, sbs)
     real_remove = os.remove
 
-    def fake_remove(path: Any, **kw: Any) -> None:
+    def fake_remove(path: str | bytes | os.PathLike[str] | os.PathLike[bytes], *, dir_fd: int | None = None) -> None:
         if str(path).startswith(str(project)) and str(path).endswith('.tmp'):
             raise OSError(errno.EACCES, 'Permission denied')
-        real_remove(path, **kw)
+        real_remove(path, dir_fd=dir_fd)
 
     monkeypatch.setattr(os, 'remove', fake_remove)
     result = server.set_link_display('g', from_nodes=['1'])

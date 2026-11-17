@@ -3,10 +3,12 @@ an unknown field was ignored, and the result said the op was applied."""
 
 import sys
 import types
-from typing import Any
+from typing import cast
 from unittest import mock
 
 import pytest
+
+from project_constants import Json
 
 
 @pytest.fixture
@@ -15,14 +17,14 @@ def helpers(faked_helpers: types.ModuleType) -> types.ModuleType:
     return faked_helpers
 
 
-def graph() -> Any:
+def graph() -> mock.MagicMock:
     g = mock.MagicMock()
     g.getNodeFromId.side_effect = lambda ident: object() if ident == '1' else None
     g.getIdentifier.return_value = 'G'
     return g
 
 
-TYPOS: list[tuple[dict[str, Any], str]] = [
+TYPOS: list[tuple[dict[str, Json], str]] = [
     ({'op': 'add', 'definition': 'levels', 'postion': [1, 2]}, 'postion'),
     ({'op': 'add', 'definition': 'levels', 'parmas': {}}, 'parmas'),
     ({'op': 'bitmap', 'path': '/a.png', 'embedd': 'copy'}, 'embedd'),
@@ -35,9 +37,9 @@ TYPOS: list[tuple[dict[str, Any], str]] = [
 ]
 
 
-@pytest.mark.parametrize(('op', 'field'), TYPOS, ids=[t[0]['op'] for t in TYPOS])
+@pytest.mark.parametrize(('op', 'field'), TYPOS, ids=[cast(str, t[0]['op']) for t in TYPOS])
 def test_a_field_the_op_doesnt_take_refuses_the_batch(
-    helpers: types.ModuleType, op: dict[str, Any], field: str
+    helpers: types.ModuleType, op: dict[str, Json], field: str
 ) -> None:
     with pytest.raises(RuntimeError) as raised:
         helpers._check_batch(graph(), [{'op': 'add', 'definition': 'blur'}, op])
@@ -73,7 +75,7 @@ def test_a_field_the_op_doesnt_take_refuses_the_batch(
     ],
     ids=lambda op: op['op'],
 )
-def test_every_documented_field_passes(helpers: types.ModuleType, op: dict[str, Any]) -> None:
+def test_every_documented_field_passes(helpers: types.ModuleType, op: dict[str, Json]) -> None:
     helpers._check_batch(graph(), [op])
 
 
@@ -81,7 +83,7 @@ def test_every_documented_field_passes(helpers: types.ModuleType, op: dict[str, 
 OUTPUT = 'sbs::compositing::output'
 
 
-def _node(definition: str, identifier: str = '') -> Any:
+def _node(definition: str, identifier: str = '') -> mock.MagicMock:
     node = mock.MagicMock()
     node.getDefinition.return_value.getId.return_value = definition
     node.getIdentifier.return_value = identifier or 'node'
@@ -89,7 +91,7 @@ def _node(definition: str, identifier: str = '') -> Any:
     return node
 
 
-def outputs_graph(*names: str) -> Any:
+def outputs_graph(*names: str) -> mock.MagicMock:
     """A graph with a levels node '1' and an output node per name, '2' and up."""
     g = graph()
     nodes = {'1': _node('sbs::compositing::levels')}
@@ -100,7 +102,7 @@ def outputs_graph(*names: str) -> Any:
     return g
 
 
-REFUSED: list[tuple[list[dict[str, Any]], str]] = [
+REFUSED: list[tuple[list[dict[str, Json]], str]] = [
     ([{'op': 'add', 'definition': 'levels', 'identifier': 'a'}], 'only an output node'),
     ([{'op': 'add', 'definition': 'levels', 'label': 'a'}], 'only an output node'),
     ([{'op': 'add', 'definition': 'levels', 'usage': 'normal'}], 'only an output node'),
@@ -126,7 +128,7 @@ REFUSED: list[tuple[list[dict[str, Any]], str]] = [
 
 @pytest.mark.parametrize(('ops', 'said'), REFUSED, ids=[str(i) for i in range(len(REFUSED))])
 def test_a_wrong_output_field_refuses_the_batch(
-    helpers: types.ModuleType, ops: list[dict[str, Any]], said: str
+    helpers: types.ModuleType, ops: list[dict[str, Json]], said: str
 ) -> None:
     with pytest.raises(RuntimeError) as raised:
         helpers._check_batch(outputs_graph('height'), ops)
@@ -151,12 +153,12 @@ def test_a_wrong_output_field_refuses_the_batch(
         [{'op': 'add', 'definition': 'output', 'ref': 'o'}, {'op': 'set', 'node': 'o', 'usage': 'normal'}],
     ],
 )
-def test_right_output_fields_pass_the_check(helpers: types.ModuleType, ops: list[dict[str, Any]]) -> None:
+def test_right_output_fields_pass_the_check(helpers: types.ModuleType, ops: list[dict[str, Json]]) -> None:
     helpers._check_batch(outputs_graph('height'), ops)
 
 
 def test_a_ref_reused_for_another_node_is_judged_by_the_newer_one(helpers: types.ModuleType) -> None:
-    ops: list[dict[str, Any]] = [
+    ops: list[dict[str, Json]] = [
         {'op': 'add', 'definition': 'output', 'ref': 'n'},
         {'op': 'add', 'definition': 'levels', 'ref': 'n'},
         {'op': 'set', 'node': 'n', 'label': 'a'},
@@ -213,7 +215,9 @@ def test_an_output_can_keep_its_own_name(helpers: types.ModuleType) -> None:
     node.setAnnotationPropertyValueFromId.assert_called_once()
 
 
-def test_renaming_an_existing_output_tells_the_agent_to_tell_the_user(helpers: types.ModuleType, capsys: Any) -> None:
+def test_renaming_an_existing_output_tells_the_agent_to_tell_the_user(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
     # a closed graph using it keeps the old connector and computes black, with no error (REVIEW.md HLP-81)
     helpers.set_output_tags(outputs_graph(), _node(OUTPUT, 'old'), 'new', None, None, warn_rename=True)
     said = capsys.readouterr().out
@@ -231,12 +235,12 @@ def test_renaming_an_existing_output_tells_the_agent_to_tell_the_user(helpers: t
     ],
 )
 def test_no_warning_without_a_rename_of_an_existing_output(
-    helpers: types.ModuleType, capsys: Any, identifier: str | None, label: str | None, warn: bool
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str], identifier: str | None, label: str | None, warn: bool
 ) -> None:
     helpers.set_output_tags(outputs_graph(), _node(OUTPUT, 'old'), identifier, label, None, warn_rename=warn)
     assert 'Tell the user' not in capsys.readouterr().out
 
 
-def test_only_a_change_of_case_still_warns(helpers: types.ModuleType, capsys: Any) -> None:
+def test_only_a_change_of_case_still_warns(helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]) -> None:
     helpers.set_output_tags(outputs_graph(), _node(OUTPUT, 'old'), 'OLD', None, None, warn_rename=True)
     assert 'Tell the user' in capsys.readouterr().out

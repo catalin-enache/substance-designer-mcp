@@ -6,11 +6,14 @@ import os
 import sys
 import time
 from types import ModuleType
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from selftest_fakes import fresh
 from test_selftest_popups import NORMAL, PID, POPUP, Server
+
+if TYPE_CHECKING:  # for the checker only: each test imports window_server.py afresh (fresh())
+    from test_all_tools.window_server import Rect, Sample, Window
 
 OTHER = PID + 1  # another app's process
 WHOLE, LEFT, RIGHT = (0.0, 0.0, 1000.0, 800.0), (0.0, 0.0, 400.0, 800.0), (500.0, 0.0, 400.0, 800.0)  # x, y, w, h
@@ -20,9 +23,7 @@ class Bounded(Server):
     """The fake window server of test_selftest_popups, each window's bounds too: (layer, alpha, pid, rect), read by
     the keys 0 to 3."""
 
-    def CGRectMakeWithDictionaryRepresentation(
-        self, rect: tuple[float, float, float, float], out: ctypes.Array[ctypes.c_double]
-    ) -> bool:
+    def CGRectMakeWithDictionaryRepresentation(self, rect: 'Rect', out: ctypes.Array[ctypes.c_double]) -> bool:
         for i, value in enumerate(rect):
             out[i] = value  # the four doubles' array on_screen passes
         return True
@@ -30,17 +31,13 @@ class Bounded(Server):
 
 @pytest.fixture
 def window_server() -> ModuleType:
-    return cast(ModuleType, fresh('window_server'))
+    return fresh('window_server')
 
 
-Seen = tuple[int | None, tuple[tuple[int, float, int, tuple[float, float, float, float]], ...]]
+Seen = tuple[int | None, tuple['Window', ...]]
 
 
-# window_server.Sample, a NamedTuple, by its fields (at, active, windows): each test reads a fresh module's
-Sampled = tuple[float, int | None, tuple[tuple[int, float, int, tuple[float, float, float, float]], ...]]
-
-
-def samples(window_server: ModuleType, *seen: Seen) -> list[Sampled]:
+def samples(window_server: ModuleType, *seen: Seen) -> list['Sample']:
     """One sample a second, each (the active app, the windows on screen front to back)."""
     return [window_server.Sample(float(i), active, windows) for i, (active, windows) in enumerate(seen)]
 
@@ -85,7 +82,7 @@ def test_no_list_is_no_window(window_server: ModuleType) -> None:
     ],
 )
 def test_a_window_counts_in_front_only_over_another_apps_window_it_overlaps(
-    window_server: ModuleType, windows: tuple[tuple[int, float, int, tuple[float, ...]], ...], covers: bool
+    window_server: ModuleType, windows: tuple['Window', ...], covers: bool
 ) -> None:
     # alone on screen (another desktop, a full-screen app's space), Designer's window is in front of nothing of the
     # user's: a watch taking the frontmost window for one in front failed a run with nothing in front (2026-11-15)
@@ -197,7 +194,7 @@ def test_the_front_watch_samples_the_active_app_and_the_windows_on_screen(window
     ids=['a normal window', 'a transparent one', 'at popup level', "another app's", 'none'],
 )
 def test_an_app_shows_a_window_when_one_of_its_normal_windows_is_on_screen_opaque(
-    window_server: ModuleType, windows: tuple[tuple[int, float, int, tuple[float, ...]], ...], shows: bool
+    window_server: ModuleType, windows: tuple['Window', ...], shows: bool
 ) -> None:
     # REVIEW.md HLP-160: the shot's unhide check judges only while the active app shows a window Designer's could go
     # behind
@@ -281,7 +278,7 @@ def test_a_designer_started_hidden_shows_no_window_and_never_becomes_the_active_
 def test_whether_the_active_app_shows_a_window_is_unknown_when_either_reading_is_missing(
     window_server: ModuleType,
     active: int | None,
-    windows: tuple[tuple[int, float, int, tuple[float, ...]], ...],
+    windows: tuple['Window', ...],
     shows: bool | None,
 ) -> None:
     # REVIEW.md TST-445: the HLP-160 check skipped when either reading was missing, so a broken reader made it a skip in

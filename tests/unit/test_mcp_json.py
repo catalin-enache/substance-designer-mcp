@@ -6,7 +6,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TypedDict
 
 import pytest
 from mcp.client.session import ClientSession
@@ -15,9 +15,17 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 from conftest import ROOT
 
 
-def _config() -> dict[str, Any]:
+class _Server(TypedDict):
+    """The server's entry in .mcp.json."""
+
+    type: str
+    command: str
+    args: list[str]
+
+
+def _config() -> _Server:
     with open(os.path.join(ROOT, '.mcp.json')) as f:
-        config: dict[str, Any] = json.load(f)['mcpServers']['substance-designer']
+        config: _Server = json.load(f)['mcpServers']['substance-designer']
         return config
 
 

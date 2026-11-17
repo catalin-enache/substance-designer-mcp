@@ -44,10 +44,11 @@ import sys
 import threading
 import time
 import traceback
+import typing
 import weakref
 from collections.abc import Callable
 from types import FrameType, TracebackType
-from typing import Any, TypedDict
+from typing import ParamSpec, Protocol, TypeAlias, TypedDict
 
 from PySide6 import QtCore
 
@@ -72,7 +73,7 @@ ANSWER_LENGTH = 64  # characters of the answer: an HMAC-SHA256 in hex
 
 
 class Reply(TypedDict, total=False):
-    """The reply to a request (module docstring); the server's server_tools/core.py reads the same shape."""
+    """The reply to a request (module docstring); its clients read the same shape (project_constants.py, Reply)."""
 
     ok: bool
     output: str
@@ -88,9 +89,27 @@ class _Box(TypedDict, total=False):
     after: list[Callable[[], object]]  # what the job handed _after_reply, run once its reply is sent
 
 
+# A JSON value, as json.loads gives it: a request and its fields before they are checked
+_Json: TypeAlias = bool | int | float | str | list['_Json'] | dict[str, '_Json'] | None
 # (code, path, timeout, box, done): one queued script; the path is the client's, unchecked
-_Job = tuple[str, Any, float | None, _Box, threading.Event]
-_TraceFunc = Callable[[FrameType, str, Any], Any]
+_Job = tuple[str, _Json, float | None, _Box, threading.Event]
+# sys.settrace's function: called with a frame, an event and the event's argument, it returns the function for the
+# frame's next events, or None
+_TraceFunc: TypeAlias = Callable[[FrameType, str, object], '_TraceFunc | None']
+_P = ParamSpec('_P')  # the parameters of a hook _run's untraced calls
+
+
+class _Unraisable(Protocol):
+    """What sys.unraisablehook is called with: typeshed's sys.UnraisableHookArgs, whose members it repeats, so that the
+    hook it replaces takes it too. That one isn't in sys at runtime (measured on Python 3.12 and Designer's 3.13), and
+    Designer's Python evaluates an annotation as its function is defined."""
+
+    exc_type: type[BaseException]
+    exc_value: BaseException | None
+    exc_traceback: TracebackType | None
+    err_msg: str | None
+    object: object
+
 
 _server: '_Server | None' = None
 
@@ -139,7 +158,7 @@ def _make_tracer(deadline: float | None, cancel: threading.Event, pending: list[
     can't land there (PLG-26)."""
     ticks = [0]
 
-    def tracer(frame: FrameType, event: str, arg: Any) -> _TraceFunc | None:
+    def tracer(frame: FrameType, event: str, arg: object) -> _TraceFunc | None:
         if frame.f_code.co_filename == _OWN_FILE:
             return None
         if pending[0]:
@@ -193,7 +212,7 @@ class _TailBuffer(io.TextIOBase):
 
 def _run(
     code: str,
-    path: str | None,
+    path: _Json,
     timeout: float | None,
     cancel: threading.Event,
     after: list[Callable[[], object]] | None = None,
@@ -218,18 +237,18 @@ def _run(
         pending[0] = True
         sys.settrace(tracer)
 
-    def untraced(hook: Callable[..., object], *args: object) -> None:
+    def untraced(hook: Callable[_P, object], *args: _P.args, **kwargs: _P.kwargs) -> None:
         # Python drops an exception raised in a hook, unreported to this one, so the abort must not
         # land in the previous hooks (REVIEW.md PLG-26); tracing goes back as it was: off once the
         # abort reached the script, so its cleanup runs to the end
         was = sys.gettrace()
         sys.settrace(None)
         try:
-            hook(*args)
+            hook(*args, **kwargs)  # no keyword arguments are given: the ParamSpec that types them needs both
         finally:
             sys.settrace(was)
 
-    def unraisable(info: Any) -> None:  # Any: sys.UnraisableHookArgs is typeshed's only; a __del__, a weakref callback
+    def unraisable(info: _Unraisable) -> None:  # a __del__, a weakref callback
         if isinstance(info.exc_value, ScriptAborted):
             rearm()
         else:
@@ -246,7 +265,8 @@ def _run(
     tracer = _make_tracer(deadline, cancel, pending)
     try:
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
-            compiled = compile(code, path or '<%s>' % NAME, 'exec')
+            # the client's path, unchecked: one that isn't a str raises TypeError here, the job's error
+            compiled = compile(code, path or '<%s>' % NAME, 'exec')  # type: ignore[arg-type]
             sys.unraisablehook, sys.excepthook = unraisable, excepthook
             sys.settrace(tracer)
             try:
@@ -254,6 +274,17 @@ def _run(
             finally:
                 sys.settrace(previous)
                 sys.unraisablehook, sys.excepthook = previous_hook, previous_excepthook
+                # typing keeps some of a job's objects, and their functions have this scope as their globals. Dropping
+                # them lets the scope go:
+                # - typing.overload keeps each stub it decorates, under its module's name: __main__ for every job
+                #   (REVIEW.md PLG-44);
+                # - typing's subscription caches keep the classes a job subscripts with, as in Optional[X], List[X] or
+                #   G[int] (REVIEW.md PLG-45).
+                registry = getattr(typing, '_overload_registry', None)
+                if isinstance(registry, dict):
+                    registry.pop('__main__', None)
+                for clear in getattr(typing, '_cleanups', ()):  # each cache's cache_clear
+                    clear()
     except ScriptAborted as e:
         result['ok'] = False
         result['error'] = 'ScriptAborted: %s after %.1fs\n%s' % (
@@ -418,7 +449,7 @@ class _Server:
         finally:
             release()
 
-    def _control(self, cmd: object) -> Reply:
+    def _control(self, cmd: _Json) -> Reply:
         if cmd == 'cancel':
             with self.lock:
                 dropped = 0
@@ -444,7 +475,8 @@ class _Server:
             busy = 'idle' if since is None else 'running for %.1fs' % (time.monotonic() - since)
             with self.lock:
                 # jobs dropped after QUEUE_WAIT stay in the queue until _drain skips them
-                waiting = sum(1 for job in list(self.jobs.queue) if not job[3].get('abandoned'))
+                queued: list[_Job] = list(self.jobs.queue)  # typeshed leaves Queue.queue, a deque, untyped
+                waiting = sum(1 for job in queued if not job[3].get('abandoned'))
             return {'ok': True, 'output': '%s v%d: %s, %d queued' % (NAME, VERSION, busy, waiting), 'error': ''}
         return _fail('unknown cmd %r' % cmd)
 
@@ -486,7 +518,7 @@ class _Server:
             return _fail('invalid token')
         release()
         try:
-            req: object = json.loads(body.tobytes().decode('utf-8'))  # checked next
+            req: _Json = json.loads(body.tobytes().decode('utf-8'))  # checked next
             if not isinstance(req, dict):
                 raise ValueError
         except (ValueError, UnicodeDecodeError):
@@ -601,7 +633,7 @@ def initializeSDPlugin() -> None:
 
 # A stopped server's Qt objects, kept: the thread that drops the server last can be a client's being served as the
 # plugin unloads, and they would be destroyed there, off the main thread they belong to (REVIEW.md PLG-39)
-_retired: list[object] = []
+_retired: list[QtCore.QObject] = []
 
 
 def uninitializeSDPlugin() -> None:

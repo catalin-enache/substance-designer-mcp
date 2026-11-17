@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import types
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 import pytest
@@ -272,7 +273,7 @@ def test_a_failed_copy_keeps_the_installed_plugin(
     marker = installed / PLUGIN / 'installed_before.txt'
     marker.write_text('previous install')
 
-    def failing_copy(src: str, dst: str, **kw: object) -> None:
+    def failing_copy(src: str, dst: str, *, ignore: Callable[[str, list[str]], Iterable[str]] | None = None) -> None:
         os.makedirs(dst)
         raise OSError('disk full')
 
@@ -412,3 +413,13 @@ def test_on_windows_step_3_gives_this_folders_command_not_mcp_json(
     step3 = capsys.readouterr().out.split('[3/4]')[1].split('[4/4]')[0]
     assert 'In this folder, .mcp.json registers it' not in step3
     assert 'this folder' in step3 and '--scope local' in step3, step3
+
+
+@pytest.mark.parametrize('info', ['[]', '"text"', '{"name": '], ids=['a list', 'a string', 'not JSON'])
+def test_a_plugin_info_holding_no_json_object_is_not_this_projects(install: Install, tmp_path: Path, info: str) -> None:
+    # REVIEW.md SRV-173: a pluginInfo.json holding JSON that isn't an object was taken for a dict, and its .get()
+    # raised AttributeError past except (OSError, ValueError): the install stopped with a traceback
+    module, _ = install
+    (tmp_path / 'pluginInfo.json').write_text(info)
+    assert module.is_our_plugin(str(tmp_path)) is False
+    assert module.is_old_plugin(str(tmp_path)) is False

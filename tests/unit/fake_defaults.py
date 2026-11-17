@@ -17,7 +17,7 @@ class FakeDefaults:
     plist_file), not there unless a test writes it."""
 
     def __init__(self, users_data: Path, preferences: Path) -> None:
-        self.domain: dict[str, object] = {}
+        self.domain: dict[str, designer_preferences.Plist] = {}
         self.calls: list[tuple[str, ...]] = []
         self.fail: dict[str, str] = {}
         self.lossy = False

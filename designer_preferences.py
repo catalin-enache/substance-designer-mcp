@@ -36,6 +36,7 @@ pool's end check (workers.check_the_preferences), which compares the file with w
 from __future__ import annotations
 
 import contextlib
+import datetime
 import glob
 import os
 import plistlib
@@ -43,7 +44,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Iterator
-from typing import IO
+from typing import IO, Union
 
 import project_constants
 
@@ -55,6 +56,11 @@ LEFTOVER_HOURS = 6
 RECHECK_EVERY = 50  # deletes between two looks for a Designer started meanwhile
 # why a put-back stops at one: running() is also True when Designers can't be listed (REVIEW.md SRV-145)
 STARTED = "a Designer started meanwhile, or Designers couldn't be listed"
+# A plist value, as plistlib reads one: a dict of keys, a list, text, data, a number, a bool or a date; a binary plist
+# can also hold a UID or a null. Union: this alias is evaluated, and this module runs on Python 3.9 too, which has no |.
+Plist = Union[  # noqa: UP007
+    bool, int, float, str, bytes, datetime.datetime, plistlib.UID, list['Plist'], dict[str, 'Plist'], None
+]
 
 
 class PreferencesError(Exception):
@@ -107,9 +113,9 @@ def users_log_time() -> float:
     return max(times)
 
 
-def _keys(data: bytes) -> dict[str, object]:
+def _keys(data: bytes) -> dict[str, Plist]:
     try:
-        read = plistlib.loads(data)
+        read: Plist = plistlib.loads(data)  # checked below
     except Exception as e:  # plistlib raises several kinds on what isn't a plist
         raise PreferencesError("what was read isn't a plist of keys (%s)" % e) from e
     if not isinstance(read, dict):
@@ -117,7 +123,7 @@ def _keys(data: bytes) -> dict[str, object]:
     return read
 
 
-def current() -> dict[str, object]:
+def current() -> dict[str, Plist]:
     """The file's keys and values, as `defaults` reads them."""
     return _keys(run_defaults('export', DOMAIN, '-'))
 
@@ -214,7 +220,7 @@ def _users_ran_since(made: float) -> bool:
     return users_log_time() > made
 
 
-def kept_copy() -> dict[str, object] | None:
+def kept_copy() -> dict[str, Plist] | None:
     """The keys of the copy kept, what the put-back after the last agent's Designer has quit restores: None without one
     (removed as it is read too, by a put-back elsewhere: REVIEW.md TST-372), with one given up (_give_up), or once the
     user's Designer has run since it was made (dropped then, or made again by the next start). PreferencesError or

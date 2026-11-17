@@ -3,11 +3,19 @@
 import os
 import time
 from pathlib import Path
-from typing import Any
+from typing import TypedDict
 
 import pytest
 
-from conftest import patch_server, server
+from conftest import fake_bridge, full_disk, patch_server, server
+
+
+class _Package(TypedDict):
+    """The package a fake bridge reports: its file, its UID, and the nodes of its graph."""
+
+    file: str
+    uid: str
+    nodes: int
 
 
 def test_snapshots_in_the_same_second_dont_overwrite(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -61,13 +69,12 @@ def test_snapshots_of_two_packages_with_one_graph_name_stay_apart(
     # REVIEW.md SRV-34: snapshots were kept per graph identifier only, and every new graph is
     # "New_Graph": a diff of package B against 'latest' compared it with package A's snapshot
     import re
-    from typing import Any
 
     patch_server(monkeypatch, 'SNAPSHOT_DIR', str(tmp_path / 'snaps'))
     xml = '<package><content><graph><identifier v="New_Graph"/><compNodes/></graph></content></package>'
     current = {'file': '/a/A.sbs', 'uid': '1a'}
 
-    def bridge(code: str, *a: Any, **kw: Any) -> str:
+    def bridge(code: str) -> str:
         info = 'PACKAGE=%s\nPACKAGE_UID=%s\nGRAPH=New_Graph\n' % (current['file'], current['uid'])
         copy = re.search(r"save_package_copy\(.*?, '(.*?)'\)", code)
         if copy:
@@ -77,7 +84,7 @@ def test_snapshots_of_two_packages_with_one_graph_name_stay_apart(
             return 'COPY=%s\n' % copy.group(1) + info
         return info
 
-    patch_server(monkeypatch, '_bridge', bridge)
+    fake_bridge(monkeypatch, bridge)
     server.snapshot_graph('New_Graph')  # package A
     assert 'New_Graph' in server.list_snapshots('New_Graph')
     for other in ({'file': '/b/B.sbs', 'uid': '2b'}, {'file': '', 'uid': '3c'}, {'file': '', 'uid': '4d'}):
@@ -110,10 +117,9 @@ def test_an_unsaved_package_and_a_recovered_copy_of_it_keep_their_snapshots_apar
     # recover keeps the package's UID; SRV-39: after a Save As the refusal said "take one", though the
     # package's earlier snapshots are there under its old file
     import re
-    from typing import Any
 
     patch_server(monkeypatch, 'SNAPSHOT_DIR', str(tmp_path / 'snaps'))
-    current: dict[str, Any] = {'file': '', 'uid': 'U', 'nodes': 1}
+    current: _Package = {'file': '', 'uid': 'U', 'nodes': 1}
 
     def xml() -> str:
         nodes = ''.join('<compNode><uid v="%d"/></compNode>' % i for i in range(current['nodes']))
@@ -122,7 +128,7 @@ def test_an_unsaved_package_and_a_recovered_copy_of_it_keep_their_snapshots_apar
             % nodes
         )
 
-    def bridge(code: str, *a: Any, **kw: Any) -> str:
+    def bridge(code: str) -> str:
         info = 'PACKAGE=%s\nPACKAGE_UID=%s\nGRAPH=New_Graph\n' % (current['file'], current['uid'])
         copy = re.search(r"save_package_copy\(.*?, '(.*?)'\)", code)
         if copy:
@@ -132,7 +138,7 @@ def test_an_unsaved_package_and_a_recovered_copy_of_it_keep_their_snapshots_apar
             return 'COPY=%s\n' % copy.group(1) + info
         return info
 
-    patch_server(monkeypatch, '_bridge', bridge)
+    fake_bridge(monkeypatch, bridge)
     s1 = server.snapshot_graph('New_Graph').split('saved: ')[1].strip()  # unsaved package A, 1 node
     current.update({'file': s1, 'nodes': 3})  # s1 opened in Designer to recover: R, same UID
     server.snapshot_graph('New_Graph')
@@ -209,11 +215,10 @@ def test_a_snapshot_gets_a_fresh_uid_and_a_recovered_copy_saved_elsewhere_stays_
     # the package's
     import re
     import xml.etree.ElementTree as ET
-    from typing import Any
 
     U = '{7118f88c-fa69-44e8-a0de-9d25423b6019}'  # a real UID's form: only that is re-stamped
     patch_server(monkeypatch, 'SNAPSHOT_DIR', str(tmp_path / 'snaps'))
-    current: dict[str, Any] = {'file': '', 'uid': U, 'nodes': 1}
+    current: _Package = {'file': '', 'uid': U, 'nodes': 1}
 
     def xml() -> str:
         nodes = ''.join('<compNode><uid v="%d"/></compNode>' % i for i in range(current['nodes']))
@@ -223,7 +228,7 @@ def test_a_snapshot_gets_a_fresh_uid_and_a_recovered_copy_saved_elsewhere_stays_
             % (current['uid'], nodes)
         )
 
-    def bridge(code: str, *a: Any, **kw: Any) -> str:
+    def bridge(code: str) -> str:
         info = 'PACKAGE=%s\nPACKAGE_UID=%s\nGRAPH=New_Graph\n' % (current['file'], current['uid'])
         copy = re.search(r"save_package_copy\(.*?, '(.*?)'\)", code)
         if copy:
@@ -233,11 +238,13 @@ def test_a_snapshot_gets_a_fresh_uid_and_a_recovered_copy_saved_elsewhere_stays_
             return 'COPY=%s\n' % copy.group(1) + info
         return info
 
-    patch_server(monkeypatch, '_bridge', bridge)
+    fake_bridge(monkeypatch, bridge)
     s1 = server.snapshot_graph('New_Graph').split('saved: ')[1].strip()  # unsaved package A
     root = ET.parse(s1).getroot()
-    fresh = root.find('fileUID').get('v')  # type: ignore[union-attr]
-    assert fresh not in (U, '0') and [d.get('v') for d in root.iter('fileUID')][1:] == ['0']
+    uid = root.find('fileUID')
+    assert uid is not None, 'the package has its own fileUID'
+    fresh = uid.get('v')  # a check, not a cast: one without its value fails here (REVIEW.md TST-482)
+    assert fresh is not None and fresh not in (U, '0') and [d.get('v') for d in root.iter('fileUID')][1:] == ['0']
     assert '"uid": "%s"' % U in Path(s1 + '.json').read_text()
     # s1 opened to recover (it loads with the UID in its file: measured), then saved elsewhere
     current.update({'file': '/proj/R.sbs', 'uid': fresh, 'nodes': 3})
@@ -302,11 +309,10 @@ def test_only_a_snapshot_of_an_unsaved_package_gets_a_uid_of_its_own(
     # SRV-42, Option 1b: a saved package's snapshots are told apart by its file, so they stay Designer's
     # exact copy; only an unsaved package's, which the notes tell apart by UID, gets one of its own
     import re
-    from typing import Any
 
     patch_server(monkeypatch, 'SNAPSHOT_DIR', str(tmp_path / 'snaps'))
 
-    def bridge(code: str, *a: Any, **kw: Any) -> str:
+    def bridge(code: str) -> str:
         info = 'PACKAGE=%s\nPACKAGE_UID={7118f88c-fa69-44e8-a0de-9d25423b6019}\nGRAPH=New_Graph\n' % package
         copy = re.search(r"save_package_copy\(.*?, '(.*?)'\)", code)
         if copy:
@@ -315,24 +321,14 @@ def test_only_a_snapshot_of_an_unsaved_package_gets_a_uid_of_its_own(
             return 'COPY=%s\n' % copy.group(1) + info
         return info
 
-    patch_server(monkeypatch, '_bridge', bridge)
+    fake_bridge(monkeypatch, bridge)
     snap = Path(server.snapshot_graph('New_Graph').split('saved: ')[1].strip())
     assert (snap.read_bytes() != _DESIGNER_SBS) is restamped
 
 
 def _failing_writes(monkeypatch: pytest.MonkeyPatch, suffix: str) -> None:
     """open() for writing a file ending in suffix fails as on a full disk."""
-    import builtins
-    import errno
-
-    real_open = builtins.open
-
-    def fake_open(file: Any, mode: str = 'r', *a: Any, **kw: Any) -> Any:
-        if str(file).endswith(suffix) and ('w' in mode or 'a' in mode):
-            raise OSError(errno.ENOSPC, 'No space left on device')
-        return real_open(file, mode, *a, **kw)
-
-    monkeypatch.setattr(builtins, 'open', fake_open)
+    full_disk(monkeypatch, lambda file, mode: file.endswith(suffix) and ('w' in mode or 'a' in mode))
 
 
 @pytest.mark.parametrize(
@@ -350,7 +346,7 @@ def test_a_snapshot_that_fails_after_its_copy_leaves_nothing_behind(
 
     patch_server(monkeypatch, 'SNAPSHOT_DIR', str(tmp_path / 'snaps'))
 
-    def bridge(code: str, *a: Any, **kw: Any) -> str:
+    def bridge(code: str) -> str:
         info = 'PACKAGE=%s\nPACKAGE_UID={7118f88c-fa69-44e8-a0de-9d25423b6019}\nGRAPH=New_Graph\n' % package
         copy = re.search(r"save_package_copy\(.*?, '(.*?)'\)", code)
         if copy:  # Designer writes the copy (not through Python's open)
@@ -359,7 +355,7 @@ def test_a_snapshot_that_fails_after_its_copy_leaves_nothing_behind(
             return 'COPY=%s\n' % copy.group(1) + info
         return info
 
-    patch_server(monkeypatch, '_bridge', bridge)
+    fake_bridge(monkeypatch, bridge)
     _failing_writes(monkeypatch, failing)
     with pytest.raises(OSError):
         server.snapshot_graph('New_Graph')
@@ -412,3 +408,23 @@ def test_a_refusal_counts_this_packages_snapshots_saved_over_apart(
     server._note_package(other, '/b/B.sbs', '{V}')
     text = server._others('g', ('/a/A.sbs', '{U}'))
     assert '1 from other packages' in text and '1 of this package' in text
+
+
+@pytest.mark.parametrize(
+    'note', ['[]', '"text"', '5', 'null', '{"package": '], ids=['a list', 'a string', 'a number', 'null', 'not JSON']
+)
+def test_a_note_holding_no_json_object_reads_as_no_note(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, note: str
+) -> None:
+    # REVIEW.md SRV-173: a note holding JSON that isn't an object was taken for a dict, and its .get() raised
+    # AttributeError past the readers' except (OSError, ValueError), which take a note that isn't JSON as none
+    from server_tools import snapshots
+
+    patch_server(monkeypatch, 'SNAPSHOT_DIR', str(tmp_path))
+    (tmp_path / 'New_Graph').mkdir()
+    path = tmp_path / 'New_Graph' / 'New_Graph_1.sbs'
+    path.write_text('<package/>')
+    Path(str(path) + '.json').write_text(note)
+    assert 'from (package not noted)' in server.list_snapshots('New_Graph')
+    assert snapshots._from_package(str(path), '/proj/A.sbs', 'U') is True  # no note: any package
+    assert snapshots._changed_since(str(path)) is False  # no note: can't tell

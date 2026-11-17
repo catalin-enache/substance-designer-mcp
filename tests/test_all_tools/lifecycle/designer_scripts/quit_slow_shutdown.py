@@ -4,12 +4,18 @@ slow_marker, files written when each one finishes."""
 
 import sys
 import time
-from typing import Any, cast
+from typing import TypedDict, cast
 
 from PySide6.QtCore import QEvent, QObject
 from PySide6.QtWidgets import QApplication, QLabel
 
-ARGS: dict[str, Any] = globals()['ARGS']
+
+class Args(TypedDict):
+    slow_close: str
+    slow_marker: str
+
+
+ARGS: Args = globals()['ARGS']
 
 
 def _busy(seconds: float) -> None:

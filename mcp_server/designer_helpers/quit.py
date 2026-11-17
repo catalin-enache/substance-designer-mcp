@@ -1,6 +1,6 @@
 """quit_designer: the part inside Designer. The server ends the process if this doesn't."""
 
-from .core import _PM, cast, os
+from .core import _PM, Callable, _qt_app, cast, os
 
 
 def quit_designer(agent_pid: int, closed_line: str) -> None:
@@ -21,7 +21,7 @@ def quit_designer(agent_pid: int, closed_line: str) -> None:
     it runs: a job of another client running then would take it into its own output (two clients on one port;
     sys.__stdout__ doesn't reach Designer's log, and `logging` lands there as an error: measured, REVIEW.md HLP-103)."""
     from PySide6.QtCore import QTimer
-    from PySide6.QtWidgets import QApplication, QStackedWidget
+    from PySide6.QtWidgets import QStackedWidget
 
     if os.getpid() != agent_pid:
         raise RuntimeError(
@@ -30,7 +30,7 @@ def quit_designer(agent_pid: int, closed_line: str) -> None:
     for p in [p for p in _PM.getUserPackages() if p.isModified()]:
         print('discarding unsaved changes:', p.getFilePath() or 'never-saved package')
         _PM.unloadUserPackage(p)
-    qt_app = cast(QApplication, QApplication.instance())  # Designer's own: always there
+    qt_app = _qt_app()
 
     def close_windows() -> None:
         shown = [w for w in qt_app.topLevelWidgets() if w.isVisible()]
@@ -52,7 +52,8 @@ def quit_designer(agent_pid: int, closed_line: str) -> None:
         else:
             print(closed_line)
 
-    after_reply = globals().get('_after_reply')  # the plugin's, in the job's scope
+    # the plugin's, in the job's scope: it adds a function to what runs once the reply is sent
+    after_reply = cast(Callable[[Callable[[], object]], None] | None, globals().get('_after_reply'))
     if after_reply is not None:
         after_reply(close_windows)
     else:

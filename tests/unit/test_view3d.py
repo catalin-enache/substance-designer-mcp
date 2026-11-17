@@ -2,14 +2,14 @@
 calls the helpers. Driving the 3D view itself is checked live (editor_panels_and_fit)."""
 
 import os
-from typing import Any
 
 import pytest
 from mcp.server.mcpserver import Image
 from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image as PILImage
 
-from conftest import patch_server, server
+from conftest import fake_bridge, server
+from server_tools import views
 
 NOTE = "3D view: Plane, graph g's outputs on the mesh, view Top, framed, +2 wheel steps, tiling 2 (the Parameters panel back on g)"
 
@@ -22,7 +22,7 @@ def _bridge(
     path has: REVIEW.md TST-325)."""
     sent: list[str] = []
 
-    def bridge(code: str, path: str | None = None, timeout: float | None = None) -> str:
+    def bridge(code: str) -> str:
         sent.append(code)
         shot_path = os.path.join(folders[-1], 'shot.png')
         assert repr(shot_path) in code  # where the helper is told to save it
@@ -30,7 +30,7 @@ def _bridge(
             PILImage.new('RGB', (4, 4)).save(shot_path)
         return printed
 
-    patch_server(monkeypatch, '_bridge', bridge)
+    fake_bridge(monkeypatch, bridge)
     return sent
 
 
@@ -77,8 +77,8 @@ def test_3d_options_need_the_3d_panel(monkeypatch: pytest.MonkeyPatch, temp_fold
         ('pan', [0.5], r'pan is \[right, up\] in fractions of the view'),
     ],
 )
-def test_options_out_of_range_are_refused(  # Any: `value` goes to parameters of several types
-    monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], option: str, value: Any, message: str
+def test_options_out_of_range_are_refused(
+    monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], option: str, value: float | list[float], message: str
 ) -> None:
     sent = _bridge(monkeypatch, temp_folders)
     with pytest.raises(ToolError, match=message):
@@ -112,7 +112,7 @@ STEPS = '3D view, setting: Plane\n3D view, setting: view Top, framed\n'
 def test_the_setup_line_comes_beside_the_image(monkeypatch: pytest.MonkeyPatch, temp_folders: list[str]) -> None:
     # the notes said before each step aren't kept once the summary line is there (REVIEW.md HLP-119)
     _bridge(monkeypatch, temp_folders, STEPS + NOTE + '\n3d render 4x4\n')
-    result: Any = server.screenshot_designer('3d', mesh='Plane')
+    result = views.screenshot_designer('3d', mesh='Plane')
     assert isinstance(result[0], Image) and result[1:] == [NOTE]
 
 
@@ -145,7 +145,7 @@ def test_what_was_done_to_designers_window_and_a_stale_render_come_beside_the_im
     # REVIEW.md SRV-146: the user's window changed, or the render may be the view's last frame
     printed = FRONT + '\n' + STEPS + NOTE + '\n3d render 4x4\n' + STALE + '\n' + BACK + '\n'
     _bridge(monkeypatch, temp_folders, printed)
-    result: list[str | Image] = server.screenshot_designer('3d', mesh='Plane')
+    result = views.screenshot_designer('3d', mesh='Plane')
     assert isinstance(result[0], Image) and result[1:] == [FRONT, NOTE, STALE, BACK]
 
 
@@ -171,10 +171,11 @@ def test_a_shot_that_failed_says_what_was_done_to_designers_window(
     ids=['orbit', 'pan', 'zoom', 'graph', 'mesh', 'view'],
 )
 def test_a_turn_pan_or_zoom_of_zero_or_an_empty_name_sets_nothing_up(
-    monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], panel: str, option: str, value: object
+    monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], panel: str, option: str, value: float | list[float] | str
 ) -> None:
     # REVIEW.md TST-336: nothing to set, so not sent, and not refused with another panel; SRV-147: '' is no name
     sent = _bridge(monkeypatch, temp_folders)
+    # through server, whose names the checker doesn't type: the keyword is chosen as the test runs
     result: list[str | Image] = server.screenshot_designer(panel, **{option: value})
     assert _call(sent[0]) == _plain(panel, temp_folders)
     assert len(result) == 1 and isinstance(result[0], Image)
@@ -185,7 +186,7 @@ def test_without_options_nothing_is_set_up_and_only_the_image_comes_back(
     monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], panel: str
 ) -> None:
     sent = _bridge(monkeypatch, temp_folders)
-    result: list[str | Image] = server.screenshot_designer(panel)
+    result = views.screenshot_designer(panel)
     assert _call(sent[0]) == _plain(panel, temp_folders)
     assert len(result) == 1 and isinstance(result[0], Image)
 
@@ -199,7 +200,7 @@ def test_without_options_nothing_is_set_up_and_only_the_image_comes_back(
     ids=['render', 'crop'],
 )
 def test_a_shot_that_fails_after_the_set_up_says_what_was_set(
-    monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], printed: str, options: dict[str, Any]
+    monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], printed: str, options: dict[str, list[float]]
 ) -> None:
     # REVIEW.md HLP-107: the user's 3D view was changed all the same
     _bridge(monkeypatch, temp_folders, printed, shot='crop' in options)

@@ -10,9 +10,11 @@ from selftest_fakes import fresh
 # measured in a scratch run (2026-11-16): a pan's counts, and a viewpoint's, held at 1 while the camera turned
 PAN = [8, 1, 1, 1, 2, 3, 4, 5, 6, 7, 8]
 VIEWPOINT = [8, 1, 1, 1, 1, 1, 1, 2, 3, 4, 5, 6, 7, 8]
+# FRAMES' events: whether the window was hidden before the show, and each event's (kind, count)
+Events = tuple[bool, list[tuple[str, int]]]
 # shown from hidden: after a pan made meanwhile, and with nothing changed (the frames fact's SHOWN and CHANGED)
-AFTER_A_PAN = (True, [('Paint', 8), ('UpdateRequest', 1), ('Paint', 1), ('UpdateRequest', 1), ('Paint', 2)])
-UNCHANGED = (True, [('Paint', 8), ('Paint', 8), ('Paint', 8)])
+AFTER_A_PAN: Events = (True, [('Paint', 8), ('UpdateRequest', 1), ('Paint', 1), ('UpdateRequest', 1), ('Paint', 2)])
+UNCHANGED: Events = (True, [('Paint', 8), ('Paint', 8), ('Paint', 8)])
 
 
 @pytest.fixture
@@ -34,7 +36,7 @@ def checks() -> ModuleType:
     ids=['a pan, measured', 'no restart', 'not back', 'not at rest before', 'two counts', 'none read'],
 )
 def test_a_change_counts_restarted_only_from_rest_back_to_rest(
-    checks: ModuleType, seen: object, restarted: bool
+    checks: ModuleType, seen: list[int] | None, restarted: bool
 ) -> None:
     assert checks._restarted(seen, 8) is restarted
 
@@ -74,7 +76,7 @@ def test_a_viewpoints_restart_is_held_only_when_read_at_two_paints_or_more(
     ],
 )
 def test_a_show_from_hidden_reads_a_change_or_none_only_in_the_order_measured(
-    checks: ModuleType, events: object, changed: bool, shown: bool
+    checks: ModuleType, events: Events | None, changed: bool, shown: bool
 ) -> None:
     assert checks._shown(events, changed) is shown
 
@@ -100,7 +102,9 @@ def test_a_show_from_hidden_reads_a_change_or_none_only_in_the_order_measured(
         'none read',
     ],
 )
-def test_a_show_after_a_pan_is_told_by_its_second_paint(checks: ModuleType, events: object, changed: bool) -> None:
+def test_a_show_after_a_pan_is_told_by_its_second_paint(
+    checks: ModuleType, events: Events | None, changed: bool
+) -> None:
     assert checks._changed_by_its_second_paint(events) is changed
 
 

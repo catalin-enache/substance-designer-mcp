@@ -3,21 +3,34 @@ compared in pixels, within a tolerance (GUIDE.md; checks.py). Everything is put 
 
 import array
 import ctypes
-from typing import Any
+from typing import TypedDict, cast
 
 import sd
-from sd.api.sdproperty import SDPropertyCategory, SDPropertyInheritanceMethod
+from sd.api.sbs.sdsbscompgraph import SDSBSCompGraph
+from sd.api.sbs.sdsbscompnode import SDSBSCompNode
+from sd.api.sdnode import SDNode
+from sd.api.sdpackagemgr import SDPackageMgr
+from sd.api.sdproperty import SDProperty, SDPropertyCategory, SDPropertyInheritanceMethod
+from sd.api.sdtexture import SDTexture
 from sd.api.sdvalueint import SDValueInt
+from sd.api.sdvaluetexture import SDValueTexture
 
-ARGS: dict[str, Any] = globals()['ARGS']
+
+class Args(TypedDict):
+    graph: str
+    node: str
+
+
+ARGS: Args = globals()['ARGS']
 IM = SDPropertyInheritanceMethod
-pm = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
-g: Any = next(
-    r for p in pm.getUserPackages() for r in p.getChildrenResources(False) if r.getIdentifier() == ARGS['graph']
+pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
+g = cast(
+    SDSBSCompGraph,
+    next(r for p in pm.getUserPackages() for r in p.getChildrenResources(False) if r.getIdentifier() == ARGS['graph']),
 )
 
 
-def pixels(t: Any) -> array.array[int]:
+def pixels(t: SDTexture) -> array.array[int]:
     """Only 8- and 16-bit integer formats, where a tolerance in steps means something (REVIEW.md TST-54, TST-56)."""
     fmt = str(t.getPixelFormat()).split('.')[-1]
     if not fmt.endswith(('8', '16')):
@@ -32,11 +45,15 @@ def apart(a: array.array[int], b: array.array[int]) -> int:
     return max(abs(x - y) for x, y in zip(a, b, strict=False))
 
 
-n = g.getNodeFromId(ARGS['node'])
+n = cast(SDSBSCompNode, g.getNodeFromId(ARGS['node']))
 out = n.getProperties(SDPropertyCategory.Output)[0]
-gp = g.getPropertyFromId('$randomseed', SDPropertyCategory.Input)
-np_ = n.getPropertyFromId('$randomseed', SDPropertyCategory.Input)
-kept = (g.getPropertyValue(gp).get(), n.getPropertyInheritanceMethod(np_), n.getPropertyValue(np_).get())
+gp = cast(SDProperty, g.getPropertyFromId('$randomseed', SDPropertyCategory.Input))
+np_ = cast(SDProperty, n.getPropertyFromId('$randomseed', SDPropertyCategory.Input))
+kept = (
+    cast(SDValueInt, g.getPropertyValue(gp)).get(),
+    n.getPropertyInheritanceMethod(np_),
+    cast(SDValueInt, n.getPropertyValue(np_)).get(),
+)
 
 
 def look(inherit: SDPropertyInheritanceMethod, graph_seed: int, node_seed: int) -> array.array[int]:
@@ -44,10 +61,10 @@ def look(inherit: SDPropertyInheritanceMethod, graph_seed: int, node_seed: int) 
     g.setPropertyValue(gp, SDValueInt.sNew(graph_seed))
     n.setPropertyValue(np_, SDValueInt.sNew(node_seed))
     g.compute()
-    return pixels(n.getPropertyValue(out).get())
+    return pixels(cast(SDTexture, cast(SDValueTexture, n.getPropertyValue(out)).get()))
 
 
-o = None
+o: SDNode | None = None
 try:  # the output node inside the try too (REVIEW.md TST-53)
     o = g.newNode('sbs::compositing::output')
     n.newPropertyConnectionFromId(out.getId(), o, 'inputNodeOutput')

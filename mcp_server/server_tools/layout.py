@@ -91,7 +91,7 @@ def set_link_display(
     if not (from_nodes or fanout_at_least or longer_than or links):
         raise ToolError('choose links with from_nodes, fanout_at_least, longer_than or links')
     text = _bridge(_helpers_call('package_file_of(%r)' % graph), timeout=120)
-    info = dict(re.findall(r'^(FILE|GRAPH|OPEN)=(.*)$', text, re.M))
+    info: dict[str, str] = dict(re.findall(r'^(FILE|GRAPH|OPEN)=(.*)$', text, re.M))
     if 'FILE' not in info:
         raise ToolError(text.strip().splitlines()[-1] if text.strip() else 'could not find the package file')
     path, gid = info['FILE'], info['GRAPH']

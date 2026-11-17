@@ -3,10 +3,20 @@ remove_graph_input, and parameters driven by functions."""
 
 import os
 import re
+from collections.abc import Mapping
 from textwrap import dedent
-from typing import Any
 
-from test_all_tools.common import GRAPH_OF, TEST_GRAPH, Ctx, added_id, check, designer_script, helpers_source, text
+from test_all_tools.common import (
+    GRAPH_OF,
+    TEST_GRAPH,
+    Ctx,
+    Json,
+    added_id,
+    check,
+    designer_script,
+    helpers_source,
+    text,
+)
 
 
 async def run(ctx: Ctx) -> None:
@@ -284,7 +294,7 @@ async def run(ctx: Ctx) -> None:
             and 'levelouthigh <-' not in t,
             t,
         )
-        attempts: dict[str, tuple[str, dict[str, Any]]] = {
+        attempts: dict[str, tuple[str, Mapping[str, Json]]] = {
             'set': (
                 'apply_edits',
                 {'ops': [{'op': 'set', 'node': stub, 'params': {'levelouthigh': [0.5] * 4}}], **G},
@@ -463,14 +473,15 @@ async def run(ctx: Ctx) -> None:
                 and 'graph input' not in t,
                 t,
             )
-            for tool, args in (
+            refusals: tuple[tuple[str, Mapping[str, Json]], ...] = (
                 ('apply_edits', {'ops': [{'op': 'set', 'node': gone, 'params': {'levelinhigh': [0.5] * 4}}], **G}),
                 ('sweep_param', {'node_id': gone, 'param': 'levelinhigh', 'values': [[0.4] * 4, [0.6] * 4], **G}),
                 (
                     'apply_edits',
                     {'ops': [{'op': 'expose', 'node': gone, 'param': 'levelinhigh', 'input_id': 'stray'}], **G},
                 ),
-            ):
+            )
+            for tool, args in refusals:
                 r_ = await c(tool, args)
                 refusal = text(r_)
                 check(
@@ -560,7 +571,7 @@ async def run(ctx: Ctx) -> None:
         check(
             'remove_graph_input',
             'the enum parameter holds that value',
-            re.search(r'blendingmode = .*\b(5|max)\b', t),
+            re.search(r'blendingmode = .*\b(5|max)\b', t) is not None,
             t,
         )
     finally:

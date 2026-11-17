@@ -11,7 +11,8 @@ import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 from test_server import _tools
 
-from conftest import ROOT, patch_server, server
+from conftest import ROOT, fake_bridge, patch_server, server
+from server_tools import scripting
 
 CLAUDE_CODE_LIMIT = 4096  # measured: the guide arrived cut at exactly this many characters
 # the sections of each file, by the audience that reads it
@@ -151,23 +152,22 @@ def test_cancelling_a_job_never_waits_for_the_guide(monkeypatch: pytest.MonkeyPa
 def test_code_is_refused_before_it_runs_until_the_scripting_part_is_read(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tool: str
 ) -> None:
-    sent: list[object] = []
+    sent: list[str] = []
 
-    def bridge(*a: object, **k: object) -> str:
-        sent.append(a)
+    def bridge(code: str) -> str:
+        sent.append(code)
         return 'printed'
 
-    patch_server(monkeypatch, '_bridge', bridge)
+    fake_bridge(monkeypatch, bridge)
     script = tmp_path / 'a.py'
     script.write_text('print(1)')
 
     def run() -> str:
-        result: str = (
-            server.execute_designer_code('print(1)')
+        return (
+            scripting.execute_designer_code('print(1)')
             if tool == 'execute_designer_code'
-            else server.run_designer_script(str(script))
+            else scripting.run_designer_script(str(script))
         )
-        return result
 
     monkeypatch.setitem(server._session, 'scripting_read', False)
     with pytest.raises(ToolError) as refused:

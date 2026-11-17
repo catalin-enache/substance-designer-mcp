@@ -1,11 +1,13 @@
 import copy
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import pytest
 
 from conftest import server
+from server_tools import snapshots
+from server_tools.snapshots import _GraphModel
 
 
 def test_graph_model(sbs_path: str) -> None:
@@ -185,7 +187,7 @@ def test_links_of_a_graph_without_nodes() -> None:
 def test_a_diff_names_the_output_of_a_link(tmp_path: Path) -> None:
     # REVIEW.md SRV-59: connRefOutput is a uid, so a rewired map read "<- 11.1102 added"; the name is in the source
     # node's outputBridging
-    def model(output_uid: str) -> Any:
+    def model(output_uid: str) -> _GraphModel:
         path = tmp_path / (output_uid + '.sbs')
         path.write_text(
             '<package><content><graph><identifier v="g"/><compNodes>'
@@ -198,7 +200,7 @@ def test_a_diff_names_the_output_of_a_link(tmp_path: Path) -> None:
             '<compImplementation><compOutputBridge/></compImplementation></compNode>'
             '</compNodes></graph></content></package>' % output_uid
         )
-        return server._graph_model(str(path), 'g')
+        return snapshots._graph_model(str(path), 'g')
 
     _, lines = server._diff_models(model('1101'), model('1102'), False)
     assert any('<- 11.basecolor added' in line for line in lines), lines
@@ -216,7 +218,7 @@ def _levels_with(tmp_path: Path, name: str, value_xml: str) -> str:
         '<filter v="levels"/><parameters><parameter><name v="levelinlow"/><paramValue>%s</paramValue></parameter>'
         '</parameters></compFilter></compImplementation></compNode></compNodes></graph></content></package>' % value_xml
     )
-    return cast(str, server._graph_model(str(sbs), 'g')['nodes']['1']['params']['levelinlow'])
+    return snapshots._graph_model(str(sbs), 'g')['nodes']['1']['params']['levelinlow']
 
 
 def _function(root: str = '<rootnode v="7"/>', get: str = 'a', x: str = '0') -> str:
@@ -273,7 +275,7 @@ def _filter_node(tmp_path: Path, name: str, body: str) -> dict[str, str]:
         '<package><content><graph><identifier v="g"/><compNodes><compNode><uid v="1"/><compImplementation><compFilter>'
         '<filter v="f"/>%s</compFilter></compImplementation></compNode></compNodes></graph></content></package>' % body
     )
-    return cast('dict[str, str]', server._graph_model(str(sbs), 'g')['nodes']['1']['params'])
+    return snapshots._graph_model(str(sbs), 'g')['nodes']['1']['params']
 
 
 def _gradient(*positions: str) -> str:

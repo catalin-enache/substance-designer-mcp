@@ -27,7 +27,7 @@ Layout (pixels from the top, all strips tile horizontally):
 import os
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
-from typing import Any, TypedDict, cast
+from typing import TypedDict, cast
 
 import sd
 from sd.api.apiexception import APIException
@@ -75,6 +75,13 @@ class Section(TypedDict):
     nodes: list[SDNode]
 
 
+class PlankLayout(TypedDict):
+    """Builder.tiles' keywords that the plank ends and the plank ids share, so their tiles line up."""
+
+    offset_random: float
+    seed: int
+
+
 OUT_SBS = os.path.join(os.path.expanduser('~'), 'Documents', 'dwarf_trimsheet', 'dwarf_trimsheet.sbs')
 GRAPH_ID = 'dwarf_trimsheet'
 SIZE_LOG2 = 11
@@ -113,7 +120,9 @@ class Builder:
     grad: SDNode  # the shared vertical gradient, set by build_into
 
     def __init__(self, ctx: Context) -> None:
-        self.app: SDApplication = ctx.getSDApplication()  # type: ignore[no-untyped-call]  # Adobe's Context isn't annotated
+        # cast, not only declared: mypy takes a declared attribute assigned an Any as Any for the rest of __init__, and
+        # pkg_mgr and lib_dir, made from it here, would then be Any in every method
+        self.app = cast(SDApplication, ctx.getSDApplication())  # type: ignore[no-untyped-call]  # Adobe's Context isn't annotated
         self.pkg_mgr = self.app.getPackageMgr()
         self.lib_dir = os.path.join(self.app.getPath(SDApplicationPath.DefaultResourcesDir), 'packages')
         # Close the previous build (the package saved at OUT_SBS) so re-running doesn't pile up
@@ -585,7 +594,7 @@ def build_into(b: Builder) -> None:
     # Rows get their own chamfered band so the long seams read as V-grooves
     rows = b.max_all([b.band(1664, 1792, 0.5, 6), b.band(1792, 1920, 0.5, 6), b.band(1920, 2048, 0.5, 6)])
     # Same layout/seed twice: once for end-joint bevels, once for a random grey per plank
-    plank_layout: dict[str, Any] = {'offset_random': 0.5, 'seed': 5}
+    plank_layout: PlankLayout = {'offset_random': 0.5, 'seed': 5}
     ends = b.levels(b.bevel(b.tiles(3, 16, 0.99, **plank_layout), distance=0.02), out_hi=0.5)
     plank_id = b.tiles(3, 16, 1.0, luminance_random=1.0, **plank_layout)
     # Grain shifted vertically by a different amount per plank, so it breaks at every joint

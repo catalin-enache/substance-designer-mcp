@@ -9,12 +9,15 @@ import sys
 import types
 from collections.abc import Callable, Sequence
 from types import SimpleNamespace
-from typing import Protocol, cast
+from typing import TYPE_CHECKING, NoReturn, cast
 from unittest import mock
 
 import pytest
 
 from designer_helpers import HERE
+
+if TYPE_CHECKING:  # for the checker only: the types the faked helpers take; PySide6 is faked at run time
+    from designer_helpers.frames3d import _Counts, _Frames
 
 
 @pytest.fixture
@@ -22,51 +25,15 @@ def helpers(faked_helpers: types.ModuleType) -> types.ModuleType:
     return faked_helpers
 
 
-class Counts(Protocol):
-    """_Counts, as these tests read it."""
-
-    seen: list[int | None]
-
-    def restart(self, since: int) -> int | None: ...
-
-    def settled(self, since: int, off: bool = False) -> bool: ...
-
-    def moved(self, since: int) -> bool: ...
-
-    def unchanged(self, since: int) -> bool: ...
-
-    def shown(self, since: int, asked: bool) -> bool: ...
-
-
-class Frames(Protocol):
-    """_Frames, as these tests read it (REVIEW.md TST-459)."""
-
-    _counts: Counts | None
-    _painted: int
-    _renders_alike: Callable[..., object]
-
-    def mark(self) -> tuple[int, int]: ...
-
-    def settled(self, since: tuple[int, int]) -> None: ...
-
-    def moved(self, since: tuple[int, int]) -> None: ...
-
-    def shown(self, since: tuple[int, int]) -> None: ...
-
-    def taking(self) -> Callable[[], bool]: ...
-
-    def _event(self, kind: str) -> None: ...
-
-
-def _counted(frames: Frames) -> Counts:
+def _counted(frames: '_Frames') -> '_Counts':
     """The counts `frames` read, once a count showed."""
     assert frames._counts is not None
     return frames._counts
 
 
-def counts(helpers: types.ModuleType, *seen: int | None) -> Counts:
+def counts(helpers: types.ModuleType, *seen: int | None) -> '_Counts':
     """A _Counts with `seen` read at its paints."""
-    read = cast(Counts, helpers._Counts())
+    read: _Counts = helpers._Counts()
     read.seen.extend(seen)
     return read
 
@@ -288,6 +255,12 @@ def test_one_name_for_the_3d_views_viewport_and_no_parameter_never_passed() -> N
     assert 'woken' not in _source('frames3d')
 
 
+def _frames(helpers: types.ModuleType, viewport: SimpleNamespace, render: Callable[[], str]) -> '_Frames':
+    """helpers._Frames(viewport, render), on a faked viewport, with renders faked by strings."""
+    frames: _Frames = helpers._Frames(viewport, render)
+    return frames
+
+
 def test_with_no_count_shown_renders_are_compared_between_polls_never_in_a_wait(helpers: types.ModuleType) -> None:
     # REVIEW.md HLP-148: taken in a wait's slot, each render ran Designer's events itself, a wait inside the wait; a
     # check's shot then held the bridge until its 120 s timeout
@@ -299,7 +272,7 @@ def test_with_no_count_shown_renders_are_compared_between_polls_never_in_a_wait(
         findChildren=lambda kind: [label], removeEventFilter=lambda spy: None, windowHandle=lambda: window
     )
 
-    def until(state: object, limit: float, signals: object = ()) -> bool:
+    def until(state: Callable[[], bool], limit: float, signals: Sequence[str] = ()) -> NoReturn:
         raise AssertionError('a wait')
 
     def render() -> str:
@@ -309,12 +282,12 @@ def test_with_no_count_shown_renders_are_compared_between_polls_never_in_a_wait(
     vars(helpers)['_event_signal'] = lambda watched, kinds, seen=None: SimpleNamespace(fired='its signal')
     vars(helpers)['_until'] = until
     vars(helpers)['_settle'] = lambda seconds: done.append('poll %g' % seconds)
-    frames = helpers._Frames(viewport, render)
+    frames = _frames(helpers, viewport, render)
     frames.settled(frames.mark())
     assert done == ['render', 'poll 0.1', 'render', 'poll 0.1', 'render', 'poll 0.1', 'render']
 
 
-def _frames_seeing(helpers: types.ModuleType, exposed: bool, *coming: str) -> tuple[Frames, list[float]]:
+def _frames_seeing(helpers: types.ModuleType, exposed: bool, *coming: str) -> tuple['_Frames', list[float]]:
     """A _Frames on a faked viewport whose window is `exposed` or not, and the limits its waits had: each wait sees the
     events `coming` (Paint, UpdateRequest) one by one, until its state holds."""
     label = SimpleNamespace(text=lambda: 'Samples: 8\nRender Time: 0.14 s')
@@ -322,26 +295,27 @@ def _frames_seeing(helpers: types.ModuleType, exposed: bool, *coming: str) -> tu
     viewport = SimpleNamespace(
         findChildren=lambda kind: [label], removeEventFilter=lambda spy: None, windowHandle=lambda: window
     )
-    seen: list[object] = []
+    seen: list[Callable[[str], None]] = []
     limits: list[float] = []
 
-    def event_signal(watched: object, kinds: object, on: object = None) -> SimpleNamespace:
+    def event_signal(
+        watched: SimpleNamespace, kinds: Sequence[str], on: Callable[[str], None] | None = None
+    ) -> SimpleNamespace:
         if on is not None:  # the viewport's paints and UpdateRequests; the window's expose events have none
             seen.append(on)
         return SimpleNamespace(fired='its signal')
 
-    def until(state: object, limit: float, signals: object = ()) -> bool:
+    def until(state: Callable[[], bool], limit: float, signals: Sequence[str] = ()) -> bool:
         limits.append(limit)
-        check = cast(Callable[[], bool], state)
         for kind in coming:
-            if check():
+            if state():
                 break
-            cast(Callable[[str], None], seen[0])(kind)
-        return check()
+            seen[0](kind)
+        return state()
 
     vars(helpers)['_event_signal'] = event_signal
     vars(helpers)['_until'] = until
-    return cast(Frames, helpers._Frames(viewport, lambda: 'a render')), limits
+    return _frames(helpers, viewport, lambda: 'a render'), limits
 
 
 @pytest.mark.parametrize(
@@ -367,7 +341,7 @@ def test_a_move_is_taken_once_the_view_draws_on_screen_or_asks_for_a_frame_off_s
 
 def _frames_counting(
     helpers: types.ModuleType, exposed: bool, coming: Sequence[tuple[str, int | None]], shows: str = 'Samples: 8'
-) -> tuple[Frames, list[float]]:
+) -> tuple['_Frames', list[float]]:
     """A _Frames whose overlay reads `shows` as it is made, on a faked viewport `exposed` or not, and the limits its
     waits had: the events `coming` (kind, the count the overlay shows as it comes, None for none) are given one by one
     while a wait's state doesn't hold. An 'Off' takes the window off screen, as covering it does."""
@@ -382,12 +356,14 @@ def _frames_counting(
     limits: list[float] = []
     left = list(coming)
 
-    def event_signal(watched: object, kinds: object, on: Callable[[str], None] | None = None) -> SimpleNamespace:
+    def event_signal(
+        watched: SimpleNamespace, kinds: Sequence[str], on: Callable[[str], None] | None = None
+    ) -> SimpleNamespace:
         if on is not None:  # the viewport's paints and UpdateRequests; the window's expose events have none
             seen.append(on)
         return SimpleNamespace(fired='its signal')
 
-    def until(state: Callable[[], bool], limit: float, signals: object = ()) -> bool:
+    def until(state: Callable[[], bool], limit: float, signals: Sequence[str] = ()) -> bool:
         limits.append(limit)
         while left and not state():
             kind, count = left.pop(0)
@@ -400,7 +376,7 @@ def _frames_counting(
 
     vars(helpers)['_event_signal'] = event_signal
     vars(helpers)['_until'] = until
-    return cast(Frames, helpers._Frames(viewport, lambda: 'a render')), limits
+    return _frames(helpers, viewport, lambda: 'a render'), limits
 
 
 def _paints(*counts: int) -> list[tuple[str, int]]:
@@ -438,7 +414,7 @@ def test_off_screen_a_step_ends_once_the_view_asks_for_a_frame(helpers: types.Mo
     looked = helpers._until
     held: list[bool] = []
 
-    def until(state: Callable[[], bool], limit: float, signals: object = ()) -> bool:
+    def until(state: Callable[[], bool], limit: float, signals: Sequence[str] = ()) -> bool:
         held.append(looked(state, limit, signals))
         return held[-1]
 
@@ -455,20 +431,22 @@ def test_the_waits_are_woken_as_the_view_goes_off_screen(helpers: types.ModuleTy
     viewport = SimpleNamespace(
         findChildren=lambda kind: [label], removeEventFilter=lambda spy: None, windowHandle=lambda: window
     )
-    watched: list[tuple[object, tuple[str, ...]]] = []
-    woken: list[list[object]] = []
+    watched: list[tuple[SimpleNamespace, tuple[str, ...]]] = []  # the stand-ins watched: the viewport, its window
+    woken: list[list[tuple[str, ...]]] = []  # each wait's signals: the fake spies' `fired`, their kinds
 
-    def event_signal(on: object, kinds: tuple[str, ...], seen: object = None) -> SimpleNamespace:
+    def event_signal(
+        on: SimpleNamespace, kinds: Sequence[str], seen: Callable[[str], None] | None = None
+    ) -> SimpleNamespace:
         watched.append((on, tuple(kinds)))
         return SimpleNamespace(fired=tuple(kinds))
 
-    def until(state: object, limit: float, signals: object = ()) -> bool:
-        woken.append(list(cast(list[object], signals)))
+    def until(state: Callable[[], bool], limit: float, signals: Sequence[tuple[str, ...]] = ()) -> bool:
+        woken.append(list(signals))
         return True
 
     vars(helpers)['_event_signal'] = event_signal
     vars(helpers)['_until'] = until
-    frames = helpers._Frames(viewport, lambda: 'a render')
+    frames = _frames(helpers, viewport, lambda: 'a render')
     frames.settled(frames.mark())
     frames.moved(frames.mark())
     assert (window, ('Expose',)) in watched, watched
@@ -490,10 +468,14 @@ def test_a_show_after_a_change_waits_for_its_restart_and_return(helpers: types.M
     assert limits == [helpers.SETTLE_LIMIT] and _counted(frames).seen == [8, 1, 2, 3, 4, 5, 6, 7, 8]
 
 
-def _comparing(frames: Frames) -> list[object]:
-    """The renders' comparisons `frames` runs (_renders_alike), recorded instead of run."""
-    compared: list[object] = []
-    frames._renders_alike = lambda *args, **kw: compared.append((args, kw))
+def _comparing(frames: '_Frames') -> list[tuple[Callable[[], bool], bool]]:
+    """The renders' comparisons `frames` runs (_renders_alike): what each was given, recorded instead of run."""
+    compared: list[tuple[Callable[[], bool], bool]] = []
+
+    def alike(ended: Callable[[], bool], changed: bool = True) -> None:
+        compared.append((ended, changed))
+
+    vars(frames)['_renders_alike'] = alike
     return compared
 
 
@@ -557,12 +539,14 @@ def test_with_no_count_shown_a_step_off_screen_takes_no_render_and_ends_once_the
     limits: list[float] = []
     states: list[tuple[bool, bool]] = []
 
-    def event_signal(watched: object, kinds: object, seen: Callable[[str], None] | None = None) -> SimpleNamespace:
+    def event_signal(
+        watched: SimpleNamespace, kinds: Sequence[str], seen: Callable[[str], None] | None = None
+    ) -> SimpleNamespace:
         if seen is not None:
             events.append(seen)
         return SimpleNamespace(fired='its signal')
 
-    def until(state: Callable[[], bool], limit: float, signals: object = ()) -> bool:
+    def until(state: Callable[[], bool], limit: float, signals: Sequence[str] = ()) -> bool:
         # what the wait's state said before the UpdateRequest, then after it (REVIEW.md HLP-176: a state that ends at
         # once or never would pass on the limits alone)
         limits.append(limit)
@@ -577,7 +561,7 @@ def test_with_no_count_shown_a_step_off_screen_takes_no_render_and_ends_once_the
 
     vars(helpers)['_event_signal'] = event_signal
     vars(helpers)['_until'] = until
-    frames = helpers._Frames(viewport, render)
+    frames = _frames(helpers, viewport, render)
     frames.settled(frames.mark())  # a step: ended by its UpdateRequest
     frames.moved(frames.mark())  # a turn: ends at once off screen, the look after it brings the window back
     assert limits == [helpers.NO_RESTART, helpers.NO_RESTART], limits
@@ -598,7 +582,7 @@ def test_with_no_count_shown_a_step_whose_window_comes_on_screen_during_its_wait
         findChildren=lambda kind: [label], removeEventFilter=lambda spy: None, windowHandle=lambda: window
     )
 
-    def until(state: Callable[[], bool], limit: float, signals: object = ()) -> bool:
+    def until(state: Callable[[], bool], limit: float, signals: Sequence[str] = ()) -> bool:
         exposed[0] = True  # shown meanwhile: the window's expose event wakes the wait
         done.append('wait, ended %s' % state())
         return state()
@@ -610,7 +594,7 @@ def test_with_no_count_shown_a_step_whose_window_comes_on_screen_during_its_wait
     vars(helpers)['_event_signal'] = lambda watched, kinds, seen=None: SimpleNamespace(fired='its signal')
     vars(helpers)['_until'] = until
     vars(helpers)['_settle'] = lambda seconds: done.append('poll')
-    frames = helpers._Frames(viewport, render)
+    frames = _frames(helpers, viewport, render)
     frames.settled(frames.mark())
     assert done == ['wait, ended True', 'render', 'poll', 'render', 'poll', 'render'], done
 
@@ -647,12 +631,12 @@ def test_frames_dropped_without_close_go_at_once_with_their_filters(helpers: typ
     )
 
     class Spy:  # the filter, holding its callback, as the real one's class closes over it
-        def __init__(self, seen: object) -> None:
+        def __init__(self, seen: Callable[[str], None] | None) -> None:
             self.fired, self.seen = 'its signal', seen
 
     spies: list[weakref.ref[Spy]] = []
 
-    def event_signal(watched: object, kinds: object, seen: object = None) -> Spy:
+    def event_signal(watched: SimpleNamespace, kinds: Sequence[str], seen: Callable[[str], None] | None = None) -> Spy:
         spy = Spy(seen)
         spies.append(weakref.ref(spy))
         return spy
@@ -660,7 +644,7 @@ def test_frames_dropped_without_close_go_at_once_with_their_filters(helpers: typ
     vars(helpers)['_event_signal'] = event_signal
     gc.disable()
     try:
-        frames = helpers._Frames(viewport, lambda: 'a render')
+        frames = _frames(helpers, viewport, lambda: 'a render')
         gone = weakref.ref(frames)
         del frames
         assert gone() is None and [spy() for spy in spies] == [None, None]

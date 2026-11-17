@@ -8,31 +8,21 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
 
 import pytest
+from selftest_fakes import fresh
 
 from conftest import SELFTEST_DIR
 
 
-def _categories() -> Any:  # a module imported by name: PyCharm can't see its names
-    """categories.py imported afresh with the self-test's modules, as the index and the pool import it."""
-    tests_dir = os.path.dirname(SELFTEST_DIR)
-    if tests_dir not in sys.path:
-        sys.path.insert(0, tests_dir)
-    for name in [m for m in sys.modules if m == 'test_all_tools' or m.startswith('test_all_tools.')]:
-        del sys.modules[name]
-    return importlib.import_module('test_all_tools.categories')
-
-
 def test_the_index_runs_the_declared_categories() -> None:
-    categories = _categories()
+    categories = fresh('categories')
     index = importlib.import_module('test_all_tools.__main__')
     assert index.CATEGORIES is categories.CATEGORIES
 
 
 def test_every_category_but_lifecycle_is_listed_once_by_its_run() -> None:
-    categories = _categories()
+    categories = fresh('categories')
     names = [categories.category_name(step) for step in categories.CATEGORIES]
     folders = sorted(n for n in os.listdir(SELFTEST_DIR) if Path(SELFTEST_DIR, n, 'checks.py').is_file())
     assert sorted(names) == sorted(set(folders) - {'lifecycle'}), 'each one whole: its run(ctx)'
@@ -66,7 +56,7 @@ USES_THE_CLIPBOARD = re.compile(r"'panel':\s*'3d'|\.clipboard\(\)|\bclipboard_te
 
 def test_the_clipboard_group_is_the_categories_that_use_the_clipboard() -> None:
     # never two of them at once in a pool, and no other category held back with them (REVIEW.md TST-241)
-    categories = _categories()
+    categories = fresh('categories')
     using = {
         folder.name
         for folder in Path(SELFTEST_DIR).iterdir()

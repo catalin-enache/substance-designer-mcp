@@ -11,17 +11,21 @@ import os
 import shutil
 import struct
 import tempfile
-from typing import Any, cast
+from collections.abc import Callable
+from typing import cast
 
 import sd
 from sd.api.sbs.sdsbscompgraph import SDSBSCompGraph
+from sd.api.sbs.sdsbscompnode import SDSBSCompNode
 from sd.api.sdbasetypes import ColorRGBA, float4, int2
 from sd.api.sdgraph import SDGraph
 from sd.api.sdnode import SDNode
 from sd.api.sdpackage import SDPackage
 from sd.api.sdpackagemgr import SDPackageMgr
 from sd.api.sdproperty import SDProperty, SDPropertyCategory, SDPropertyInheritanceMethod
+from sd.api.sdresource import SDResource
 from sd.api.sdtexture import SDTexture
+from sd.api.sdtype import SDType
 from sd.api.sdtypefloat4 import SDTypeFloat4
 from sd.api.sdtypeint import SDTypeInt
 from sd.api.sdtypeint2 import SDTypeInt2
@@ -35,7 +39,7 @@ from sd.api.sdvaluetexture import SDValueTexture
 
 C = SDPropertyCategory.Input
 PARAM = 'levelouthigh'
-pm = cast(SDPackageMgr, sd.getContext().getSDApplication().getPackageMgr())  # type: ignore[no-untyped-call]
+pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
 
 
 def grey(x: float) -> SDValueFloat4:
@@ -49,12 +53,27 @@ def new_package(identifier: str) -> tuple[SDPackage, SDSBSCompGraph]:
     return pkg, g
 
 
-def input_of(g: SDGraph, input_id: str) -> SDProperty:
-    return cast(SDProperty, g.getPropertyFromId(input_id, C))
+def property_of(owner: SDNode | SDResource, pid: str, category: SDPropertyCategory = C) -> SDProperty:
+    """`owner`'s property `pid`: an input unless `category` says otherwise."""
+    return cast(SDProperty, owner.getPropertyFromId(pid, category))
+
+
+def new_input(g: SDGraph, name: str, kind: SDType) -> SDProperty:
+    return cast(SDProperty, g.newProperty(name, kind, C))
+
+
+def texture_of(node: SDNode, output: SDProperty) -> SDTexture:
+    """The texture on `node`'s `output`, as the last compute left it."""
+    return cast(SDTexture, cast(SDValueTexture, node.getPropertyValue(output)).get())
+
+
+def enum_value(prop: SDProperty, value_id: str) -> SDValueEnum:
+    """The value `value_id` of the enum parameter `prop`."""
+    return SDValueEnum.sFromValueId(cast(SDType, prop.getType()).getId(), value_id)
 
 
 def add_get(fg: SDGraph, input_id: str) -> SDNode:
-    get = cast(SDNode, fg.newNode('sbs::function::get_float4'))
+    get: SDNode = fg.newNode('sbs::function::get_float4')
     get.setInputPropertyValueFromId('__constant__', SDValueString.sNew(input_id))
     return get
 
@@ -65,13 +84,13 @@ def add_function(node: SDNode, prop: SDProperty) -> SDGraph:
 
 
 def fresh(g: SDGraph, state: str) -> tuple[SDNode, SDProperty]:
-    source = cast(SDNode, g.newNode('sbs::compositing::uniform'))
+    source: SDNode = g.newNode('sbs::compositing::uniform')
     source.setInputPropertyValueFromId('outputcolor', SDValueColorRGBA.sNew(ColorRGBA(1, 1, 1, 1)))
-    levels = cast(SDNode, g.newNode('sbs::compositing::levels'))
+    levels: SDNode = g.newNode('sbs::compositing::levels')
     source.newPropertyConnectionFromId('unique_filter_output', levels, 'input1')
-    output = cast(SDNode, g.newNode('sbs::compositing::output'))
+    output: SDNode = g.newNode('sbs::compositing::output')
     levels.newPropertyConnectionFromId('unique_filter_output', output, 'inputNodeOutput')
-    prop = cast(SDProperty, levels.getPropertyFromId(PARAM, C))
+    prop = property_of(levels, PARAM)
     levels.setPropertyValue(prop, grey(0.5))
     if state != 'none':
         fg = add_function(levels, prop)
@@ -89,8 +108,7 @@ def computed(g: SDSBSCompGraph, levels: SDNode) -> str:
 
 def output_of(levels: SDNode) -> str:
     """The output as the last compute left it."""
-    value = cast(SDValueTexture, levels.getPropertyValue(levels.getProperties(SDPropertyCategory.Output)[0]))
-    texture = cast(SDTexture, value.get())
+    texture = texture_of(levels, levels.getProperties(SDPropertyCategory.Output)[0])
     raw = ctypes.string_at(texture.getPixelBufferAddress(), texture.getBytesPerPixel())
     if str(texture.getPixelFormat()).endswith('16'):
         return '%.2f' % (struct.unpack_from('<H', raw)[0] / 65535)
@@ -112,7 +130,7 @@ def states() -> None:
     try:
         g.setInputPropertyValueFromId('$outputsize', SDValueInt2.sNew(int2(4, 4)))
         for name, value in (('first', 0.25), ('second', 0.75)):
-            g.setPropertyValue(cast(SDProperty, g.newProperty(name, SDTypeFloat4.sNew(), C)), grey(value))
+            g.setPropertyValue(new_input(g, name, SDTypeFloat4.sNew()), grey(value))
         rows = []
         for state in ('none', 'empty', 'no-output', 'output'):
             as_made = fresh(g, state)
@@ -138,9 +156,9 @@ def states() -> None:
             ]
             print('%s | %s' % (state, ' | '.join(cells)))
         before = output_of(levels)
-        g.setPropertyValue(input_of(g, 'second'), grey(0.1))
+        g.setPropertyValue(property_of(g, 'second'), grey(0.1))
         changed = computed(g, levels)
-        g.deleteProperty(input_of(g, 'first'))
+        g.deleteProperty(property_of(g, 'first'))
         print(
             'unconnected get | output %s, its input changed %s, the connected input removed %s'
             % (before, changed, computed(g, levels))
@@ -158,9 +176,9 @@ def reload() -> None:
         ids = []
         try:
             for has_output in (True, False):
-                levels = cast(SDNode, g.newNode('sbs::compositing::levels'))
+                levels: SDNode = g.newNode('sbs::compositing::levels')
                 ids.append(levels.getIdentifier())
-                fg = add_function(levels, cast(SDProperty, levels.getPropertyFromId(PARAM, C)))
+                fg = add_function(levels, property_of(levels, PARAM))
                 get = add_get(fg, 'first')
                 if has_output:
                     fg.setOutputNode(get, True)
@@ -173,7 +191,7 @@ def reload() -> None:
             counts = []
             for node_id in ids:
                 levels = cast(SDNode, g.getNodeFromId(node_id))
-                prop = cast(SDProperty, levels.getPropertyFromId(PARAM, C))
+                prop = property_of(levels, PARAM)
                 counts.append(function_of(levels, prop))
             print('reloaded | %s' % ' | '.join(counts))
         finally:
@@ -182,30 +200,30 @@ def reload() -> None:
         shutil.rmtree(folder, ignore_errors=True)
 
 
-def uniform_source(g: Any, value: float) -> Any:
-    source = g.newNode('sbs::compositing::uniform')
+def uniform_source(g: SDGraph, value: float) -> SDNode:
+    source: SDNode = g.newNode('sbs::compositing::uniform')
     source.setInputPropertyValueFromId('outputcolor', SDValueColorRGBA.sNew(ColorRGBA(value, value, value, 1)))
     return source
 
 
-def with_output(g: Any, node: Any, connector: str = 'unique_filter_output') -> None:
+def with_output(g: SDGraph, node: SDNode, connector: str = 'unique_filter_output') -> None:
     node.newPropertyConnectionFromId(connector, g.newNode('sbs::compositing::output'), 'inputNodeOutput')
 
 
-def grey_of(g: Any, node: Any, connector: str = 'unique_filter_output') -> str:
+def grey_of(g: SDSBSCompGraph, node: SDNode, connector: str = 'unique_filter_output') -> str:
     g.compute()
     return grey_now(node, connector)
 
 
-def grey_now(node: Any, connector: str = 'unique_filter_output') -> str:
+def grey_now(node: SDNode, connector: str = 'unique_filter_output') -> str:
     """The output as the last compute left it."""
-    texture = node.getPropertyValue(node.getPropertyFromId(connector, SDPropertyCategory.Output)).get()
+    texture = texture_of(node, property_of(node, connector, SDPropertyCategory.Output))
     return '%.2f' % (ctypes.string_at(texture.getPixelBufferAddress(), 1)[0] / 255)
 
 
-def function_on(node: Any, prop: Any, getter: str, input_id: str, output: bool = True) -> None:
-    fg = node.newPropertyGraph(prop, 'SDSBSFunctionGraph')
-    get = fg.newNode('sbs::function::' + getter)
+def function_on(node: SDNode, prop: SDProperty, getter: str, input_id: str, output: bool = True) -> None:
+    fg = add_function(node, prop)
+    get: SDNode = fg.newNode('sbs::function::' + getter)
     get.setInputPropertyValueFromId('__constant__', SDValueString.sNew(input_id))
     if output:
         fg.setOutputNode(get, True)
@@ -217,42 +235,42 @@ def other_kinds() -> None:
     pkg, inner = new_package('mcp_selftest_functions_inner')
     try:
         # the instanced graph's output is its input
-        inner.setPropertyValue(cast(SDProperty, inner.newProperty('amount', SDTypeFloat4.sNew(), C)), grey(1.0))
-        levels: Any = inner.newNode('sbs::compositing::levels')
+        inner.setPropertyValue(new_input(inner, 'amount', SDTypeFloat4.sNew()), grey(1.0))
+        levels: SDNode = inner.newNode('sbs::compositing::levels')
         uniform_source(inner, 1.0).newPropertyConnectionFromId('unique_filter_output', levels, 'input1')
-        function_on(levels, levels.getPropertyFromId(PARAM, C), 'get_float4', 'amount')
-        result: Any = inner.newNode('sbs::compositing::output')
+        function_on(levels, property_of(levels, PARAM), 'get_float4', 'amount')
+        result: SDNode = inner.newNode('sbs::compositing::output')
         levels.newPropertyConnectionFromId('unique_filter_output', result, 'inputNodeOutput')
         result.setAnnotationPropertyValueFromId('identifier', SDValueString.sNew('result'))
-        g: Any = SDSBSCompGraph.sNew(pkg)
+        g = SDSBSCompGraph.sNew(pkg)
         g.setIdentifier('mcp_selftest_functions_kinds')
-        size = g.getPropertyFromId('$outputsize', C)
+        size = property_of(g, '$outputsize')
         g.setPropertyInheritanceMethod(size, SDPropertyInheritanceMethod.Absolute)
         g.setPropertyValue(size, SDValueInt2.sNew(int2(4, 4)))
         for name, kind, value in (('f4', SDTypeFloat4, grey(0.25)), ('i1', SDTypeInt, SDValueInt.sNew(3))):
-            g.setPropertyValue(g.newProperty(name, kind.sNew(), C), value)
-        g.setPropertyValue(g.newProperty('i2', SDTypeInt2.sNew(), C), SDValueInt2.sNew(int2(3, 3)))
+            g.setPropertyValue(new_input(g, name, kind.sNew()), value)
+        g.setPropertyValue(new_input(g, 'i2', SDTypeInt2.sNew()), SDValueInt2.sNew(int2(3, 3)))
 
-        def enum_case() -> tuple[Any, Any, Any]:
-            node = g.newNode('sbs::compositing::blend')
+        def enum_case() -> tuple[SDNode, SDProperty, Callable[[], str]]:
+            node: SDNode = g.newNode('sbs::compositing::blend')
             uniform_source(g, 0.5).newPropertyConnectionFromId('unique_filter_output', node, 'source')
             uniform_source(g, 0.5).newPropertyConnectionFromId('unique_filter_output', node, 'destination')
             with_output(g, node)
-            prop = node.getPropertyFromId('blendingmode', C)
-            node.setPropertyValue(prop, SDValueEnum.sFromValueId(prop.getType().getId(), 'add'))
+            prop = property_of(node, 'blendingmode')
+            node.setPropertyValue(prop, enum_value(prop, 'add'))
             return node, prop, lambda: grey_now(node)
 
-        def instance_case() -> tuple[Any, Any, Any]:
-            node = g.newInstanceNode(inner)
+        def instance_case() -> tuple[SDNode, SDProperty, Callable[[], str]]:
+            node = cast(SDNode, g.newInstanceNode(inner))
             with_output(g, node, 'result')
-            prop = node.getPropertyFromId('amount', C)
+            prop = property_of(node, 'amount')
             node.setPropertyValue(prop, grey(0.5))
             return node, prop, lambda: grey_now(node, 'result')
 
-        def enum_min(prop: Any) -> Any:
-            return SDValueEnum.sFromValueId(prop.getType().getId(), 'min')
+        def enum_min(prop: SDProperty) -> SDValueEnum:
+            return enum_value(prop, 'min')
 
-        def grey_six(prop: Any) -> Any:
+        def grey_six(prop: SDProperty) -> SDValueFloat4:
             return grey(0.6)
 
         # each case: a node read before and after its function graph is deleted, and a node set once it has one
@@ -289,10 +307,10 @@ def other_kinds() -> None:
         sizes = []
         for method in (SDPropertyInheritanceMethod.Absolute, SDPropertyInheritanceMethod.RelativeToParent):
             for state in ('none', 'empty', 'no-output', 'output'):
-                node = g.newNode('sbs::compositing::levels')
+                node = cast(SDSBSCompNode, g.newNode('sbs::compositing::levels'))
                 uniform_source(g, 1.0).newPropertyConnectionFromId('unique_filter_output', node, 'input1')
                 with_output(g, node)
-                prop = node.getPropertyFromId('$outputsize', C)
+                prop = property_of(node, '$outputsize')
                 node.setPropertyInheritanceMethod(prop, method)
                 node.setPropertyValue(prop, SDValueInt2.sNew(int2(5, 5)))
                 if state == 'empty':
@@ -302,9 +320,9 @@ def other_kinds() -> None:
                 sizes.append((method, state, node, prop))
         g.compute()
         for method, state, node, prop in sizes:
-            output = node.getPropertyFromId('unique_filter_output', SDPropertyCategory.Output)
-            pixels = node.getPropertyValue(output).get().getSize().x
-            held = node.getPropertyValue(prop).get()
+            output = property_of(node, 'unique_filter_output', SDPropertyCategory.Output)
+            pixels = texture_of(node, output).getSize().x
+            held = cast(SDValueInt2, node.getPropertyValue(prop)).get()
             inherited = node.getPropertyInheritanceMethod(prop).name
             if state != 'none':
                 node.deletePropertyGraph(prop)
@@ -321,8 +339,8 @@ def other_kinds() -> None:
                 )
             )
 
-        def switches(where: str, node: Any, pid: str) -> None:
-            prop = node.getPropertyFromId(pid, C)
+        def switches(where: str, node: SDSBSCompNode, pid: str) -> None:
+            prop = property_of(node, pid)
             cells = []
             for method in (SDPropertyInheritanceMethod.Absolute, SDPropertyInheritanceMethod.RelativeToParent):
                 node.setPropertyInheritanceMethod(prop, method)
@@ -331,10 +349,10 @@ def other_kinds() -> None:
                 cells.append('%s -> %s' % (method.name, node.getPropertyInheritanceMethod(prop).name))
             print('%s on %s: delete: %s' % (pid, where, ', '.join(cells)))
 
-        levels_node = g.newNode('sbs::compositing::levels')
+        levels_node = cast(SDSBSCompNode, g.newNode('sbs::compositing::levels'))
         for pid in ('$format', '$tiling', '$pixelratio', '$pixelsize', '$randomseed'):
             switches('levels', levels_node, pid)
-        switches('instance', g.newInstanceNode(inner), '$outputsize')
+        switches('instance', cast(SDSBSCompNode, g.newInstanceNode(inner)), '$outputsize')
     finally:
         pm.unloadUserPackage(pkg)
 
@@ -343,20 +361,19 @@ def fx_map() -> None:
     """An FX-Map's function reads the graph's input: the output follows it, and changes when it is removed."""
     pkg, g = new_package('mcp_selftest_functions_fx')
     try:
-        graph: Any = g
-        graph.setInputPropertyValueFromId('$outputsize', SDValueInt2.sNew(int2(4, 4)))
-        graph.setPropertyValue(graph.newProperty('f4', SDTypeFloat4.sNew(), C), grey(0.25))
-        fx = graph.newNode('sbs::compositing::fxmaps')
-        with_output(graph, fx)
-        paramset = fx.getReferencedResource().getNodes()[0]
-        pattern = paramset.getPropertyFromId('patterntype', C)
-        paramset.setPropertyValue(pattern, SDValueEnum.sFromValueId(pattern.getType().getId(), 'square'))
-        function_on(paramset, paramset.getPropertyFromId('opacity', C), 'get_float4', 'f4')
-        low = grey_of(graph, fx)
-        graph.setPropertyValue(graph.getPropertyFromId('f4', C), grey(0.75))
-        high = grey_of(graph, fx)
-        graph.deleteProperty(graph.getPropertyFromId('f4', C))
-        print('fx-map | input at 0.25 %s | at 0.75 %s | removed %s' % (low, high, grey_of(graph, fx)))
+        g.setInputPropertyValueFromId('$outputsize', SDValueInt2.sNew(int2(4, 4)))
+        g.setPropertyValue(new_input(g, 'f4', SDTypeFloat4.sNew()), grey(0.25))
+        fx: SDNode = g.newNode('sbs::compositing::fxmaps')
+        with_output(g, fx)
+        paramset = cast(SDGraph, fx.getReferencedResource()).getNodes()[0]
+        pattern = property_of(paramset, 'patterntype')
+        paramset.setPropertyValue(pattern, enum_value(pattern, 'square'))
+        function_on(paramset, property_of(paramset, 'opacity'), 'get_float4', 'f4')
+        low = grey_of(g, fx)
+        g.setPropertyValue(property_of(g, 'f4'), grey(0.75))
+        high = grey_of(g, fx)
+        g.deleteProperty(property_of(g, 'f4'))
+        print('fx-map | input at 0.25 %s | at 0.75 %s | removed %s' % (low, high, grey_of(g, fx)))
     finally:
         pm.unloadUserPackage(pkg)
 

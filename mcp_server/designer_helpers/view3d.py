@@ -75,14 +75,19 @@ viewpoint, the camera turned and panned, the zoom and the tiling (ROADMAP items 
 """
 
 from .core import (
-    _APP,
-    Any,
     APIException,
     Callable,
+    Kept,
+    QtCore,
+    QtGui,
+    QtWidgets,
     SDSBSCompGraph,
-    SDUIMgr,
     Sequence,
     _current_graph,
+    _main_window,
+    _menu,
+    _qt_app,
+    _ui_mgr,
     cast,
     find_graph,
     sys,
@@ -119,14 +124,15 @@ TOOLS = ('Camera', 'Light')  # the 3D view's toolbar's tools a drag and the whee
 # what the guard on the viewport drops during a drag unless _mouse is sending it (the module docstring)
 MOUSE_EVENTS = ('MouseButtonPress', 'MouseButtonRelease', 'MouseButtonDblClick', 'MouseMove', 'Wheel')
 _OWN_MOUSE = [False]  # _mouse sending an event
+# _drag's record of a drag's button held down: (button, x, y), where the drag releases it. set_3d_view's handler of an
+# abort releases what it finds there.
+Pressed = list[tuple[QtCore.Qt.MouseButton, float, float]]
 
 
-def _menu_action(bar: Any, keep: list[Any], *path: str) -> Any:
+def _menu_action(bar: QtWidgets.QMenuBar, keep: list[Kept], *path: str) -> QtGui.QAction:
     """The action at `path` in the 3D view's menu bar (a menu, its submenus, the action), each menu filled first.
     `keep` holds the wrappers, which go stale once no Python reference is left (GUIDE.md, Designer UI)."""
-    from PySide6 import QtWidgets
-
-    app = cast(QtWidgets.QApplication, QtWidgets.QApplication.instance())
+    app = _qt_app()
     actions = list(bar.actions())
     for i, name in enumerate(path):
         found = [a for a in actions if a.text().replace('&', '') == name]
@@ -136,7 +142,7 @@ def _menu_action(bar: Any, keep: list[Any], *path: str) -> Any:
         keep.append(action)
         if i == len(path) - 1:
             return action
-        menu = action.menu()
+        menu = cast(QtWidgets.QMenu | None, action.menu())  # a QMenu, or None: PySide's stubs say QObject
         if menu is None:
             raise RuntimeError("the 3D view's %r is no menu" % ' > '.join(path[: i + 1]))
         keep.append(menu)
@@ -146,16 +152,16 @@ def _menu_action(bar: Any, keep: list[Any], *path: str) -> Any:
     raise RuntimeError('no menu path given')
 
 
-def _material(bar: Any, keep: list[Any]) -> str:
+def _material(bar: QtWidgets.QMenuBar, keep: list[Kept]) -> str:
     """The name of the material the mesh uses in the 3D view's Materials menu ('Default (overridden)'), one Designer
     lists as unused not counted; refused for a mesh using several, as tiling= would set one of them."""
-    menu = _menu_action(bar, keep, 'Materials').menu()
+    menu = _menu(_menu_action(bar, keep, 'Materials'))
     keep.append(menu)
     menu.aboutToShow.emit()
     _process_events()
     materials = [a for a in menu.actions() if a.menu() is not None and a.text() and '(unused)' not in a.text()]
     keep += materials
-    names = [cast(str, a.text().replace('&', '')) for a in materials]
+    names = [a.text().replace('&', '') for a in materials]
     if len(names) != 1:
         raise RuntimeError(
             "the 3D view's mesh has %d materials%s; tiling= sets the material of a mesh with one"
@@ -164,7 +170,7 @@ def _material(bar: Any, keep: list[Any]) -> str:
     return names[0]
 
 
-def _row_point(tree: Any, row: Any, graph: str) -> Any:
+def _row_point(tree: QtWidgets.QTreeView, row: QtCore.QModelIndex, graph: str) -> QtCore.QPoint:
     """The middle of the graph's `row` in the Explorer's tree, scrolled into view. Refused unless the row is there under
     that point: the context menu opens for whatever row lies there, and would apply another graph."""
     tree.scrollTo(row)
@@ -179,7 +185,7 @@ class _MenuPick:
     """What _menu_once's look does in one try, while the Explorer's context menu runs, and what went wrong, said
     after. `before` is the popup open before the menu, maybe the user's: never taken for it."""
 
-    def __init__(self, action: str, before: Any) -> None:  # Any: a Qt widget, or None (screenshots.py)
+    def __init__(self, action: str, before: QtWidgets.QWidget | None) -> None:
         self.action = action
         self.before = before
         self.menus = 0  # menus pick found open
@@ -190,7 +196,7 @@ class _MenuPick:
         self.fade_error: str | None = None  # why fade raised, the menu closed then (REVIEW.md HLP-153)
         self.held: tuple[_MacWindow, int] | None = None  # on macOS, that menu's window, held till unfade
 
-    def pick(self, menu: Any) -> bool:  # Any: a Qt widget (screenshots.py: Qt widgets are Any in signatures)
+    def pick(self, menu: QtWidgets.QMenu | None) -> bool:
         """In the menu opened since, trigger the action if enabled and close the menu, even when the trigger raises
         (an abort: the module docstring): True. A menu closed already by something else is left: True too. No such
         menu yet (None, or `before`): False, so its timer looks again."""
@@ -213,7 +219,7 @@ class _MenuPick:
             menu.close()
         return True
 
-    def fade(self, menu: Any) -> bool:  # Any: a Qt widget (screenshots.py: Qt widgets are Any in signatures)
+    def fade(self, menu: QtWidgets.QMenu | None) -> bool:
         """Makes the menu opened since transparent, so it doesn't show over the user's windows while the 3D shot keeps
         Designer's own transparent (the module docstring), and on macOS click-through: True. No such menu yet (None,
         or `before`): False, so its timer looks again. Raising, it says why in fade_error first (REVIEW.md HLP-153)."""
@@ -223,9 +229,7 @@ class _MenuPick:
             self.fade_error = '%s: %s' % (type(e).__name__, e)
             raise
 
-    def _fade(self, menu: Any) -> bool:  # Any: a Qt widget (screenshots.py)
-        from PySide6 import QtCore
-
+    def _fade(self, menu: QtWidgets.QMenu | None) -> bool:
         if menu is None or menu is self.before:
             return False
         if sys.platform == 'darwin':  # held first: the Explorer deletes the menu as it closes, not its window
@@ -294,7 +298,9 @@ class _MenuPick:
         return None
 
 
-def _popup_closer(active: Any, before: Any) -> Any:
+def _popup_closer(
+    active: Callable[[], QtWidgets.QWidget | None], before: QtWidgets.QWidget | None
+) -> Callable[[], None]:
     """Closes the popups open above `before` (None: any), at most 5. Made of C callables only, so no Python frame runs
     for an abort to land in (the module docstring). `active` is QApplication.activePopupWidget; it can run once."""
     import collections
@@ -308,10 +314,8 @@ def _popup_closer(active: Any, before: Any) -> Any:
     )
 
 
-def _explorer_tree(mw: Any, keep: list[Any]) -> Any:
+def _explorer_tree(mw: QtWidgets.QMainWindow, keep: list[Kept]) -> QtWidgets.QTreeView:
     """The Explorer's tree, which graph= goes through; refused when the Explorer isn't visible."""
-    from PySide6 import QtWidgets
-
     explorer = _visible_dock(mw, _PANEL_AREAS['explorer'])
     if explorer is None:
         raise RuntimeError("graph= goes through the Explorer panel, which isn't visible (Windows > Explorer)")
@@ -322,11 +326,11 @@ def _explorer_tree(mw: Any, keep: list[Any]) -> Any:
     return trees[0]
 
 
-def _apply_outputs(tree: Any, graph: SDSBSCompGraph, keep: list[object]) -> None:  # Any: a Qt widget (screenshots.py)
+def _apply_outputs(tree: QtWidgets.QTreeView, graph: SDSBSCompGraph, keep: list[Kept]) -> None:
     """The Explorer's "View Outputs In 3D View" for `graph`, from its context menu on the Explorer's `tree` (the module
     docstring). A menu closed before its action was picked, by something else, is opened again, MENU_TRIES times at
     most (REVIEW.md HLP-147)."""
-    cast(SDUIMgr, _APP.getUIMgr()).setExplorerSelection(graph)  # Designer runs with its UI
+    _ui_mgr().setExplorerSelection(graph)
     _process_events()
     rows = tree.selectionModel().selectedRows()
     if len(rows) != 1:
@@ -346,13 +350,11 @@ def _apply_outputs(tree: Any, graph: SDSBSCompGraph, keep: list[object]) -> None
         raise RuntimeError(failure)
 
 
-def _menu_once(tree: Any, at: Any, keep: list[object]) -> tuple[_MenuPick, bool]:  # Any: Qt (screenshots.py)
+def _menu_once(tree: QtWidgets.QTreeView, at: QtCore.QPoint, keep: list[Kept]) -> tuple[_MenuPick, bool]:
     """The Explorer's context menu opened once at `at` on `tree`, and its action picked while it runs: what the pick
     found, and whether the guard had to close a menu. An abort raised at the look's call, or at its first line, comes
     before any of the look runs: the menu then stays as it opened until the guard closes it, MENU_GUARD at most
     (REVIEW.md HLP-177)."""
-    from PySide6 import QtCore, QtGui, QtWidgets
-
     app = QtWidgets.QApplication
     before = app.activePopupWidget()  # a popup already open, maybe the user's: left alone
     keep.append(before)
@@ -413,10 +415,8 @@ def _menu_once(tree: Any, at: Any, keep: list[object]) -> tuple[_MenuPick, bool]
     return state, held
 
 
-def _tiling_spin(params: Any, keep: list[Any]) -> Any:
+def _tiling_spin(params: QtWidgets.QDockWidget, keep: list[Kept]) -> QtWidgets.QDoubleSpinBox:
     """The 3D material's Tiling spin box in the Parameters panel `params`, once Edit properties has shown it there."""
-    from PySide6 import QtWidgets
-
     for _ in range(30):  # the panel builds its fields over a few event loops
         _settle(0.1)
         fields = [w for w in params.findChildren(QtWidgets.QWidget) if w.objectName() == '$tiling']
@@ -432,12 +432,12 @@ def _parameters_back() -> str:
     current = _current_graph()
     if current is None:
         return "the Parameters panel shows the 3D material's properties"
-    cast(SDUIMgr, _APP.getUIMgr()).openResourceInEditor(current)
+    _ui_mgr().openResourceInEditor(current)
     _process_events()
     return 'the Parameters panel back on %s' % current.getIdentifier()
 
 
-def _switched(params: Any, shown: str) -> None:
+def _switched(params: QtWidgets.QDockWidget, shown: str) -> None:
     """Waits, up to 1 s, for the Parameters panel `params` to show something else than `shown`, its title before
     Edit properties: Designer switches it to the 3D material over a few event loops, so turned back before that (an
     abort landing early), it showed the material all the same."""
@@ -447,11 +447,9 @@ def _switched(params: Any, shown: str) -> None:
         _settle(0.1)
 
 
-def _set_tiling(params: Any, bar: Any, value: float, keep: list[Any]) -> str:
+def _set_tiling(params: QtWidgets.QDockWidget, bar: QtWidgets.QMenuBar, value: float, keep: list[Kept]) -> str:
     """The 3D material's tiling, through the Parameters panel `params`, which is turned back to the graph in the editor
     once it shows the material, even when setting the tiling fails (the module docstring); what was set."""
-    from PySide6 import QtCore
-
     shown = params.windowTitle()
     try:  # Edit properties included: an abort landing as it is triggered, or right after
         _menu_action(bar, keep, 'Materials', _material(bar, keep), 'Edit properties').trigger()
@@ -473,11 +471,9 @@ def _set_tiling(params: Any, bar: Any, value: float, keep: list[Any]) -> str:
     return 'tiling %g (%s)' % (tiling, panel)
 
 
-def _navigation_tools(dock: Any, keep: list[object]) -> tuple[Any, Any]:  # Any: a Qt dock and actions (screenshots.py)
+def _navigation_tools(dock: QtWidgets.QDockWidget, keep: list[Kept]) -> tuple[QtGui.QAction, QtGui.QAction]:
     """The 3D view's toolbar's Camera and Light tools: drags and the wheel move the camera under the Camera tool alone
     (the module docstring)."""
-    from PySide6 import QtWidgets
-
     found = {a.text(): a for bar in dock.findChildren(QtWidgets.QToolBar) for a in bar.actions() if a.text() in TOOLS}
     for name in TOOLS:
         if name not in found:
@@ -486,7 +482,7 @@ def _navigation_tools(dock: Any, keep: list[object]) -> tuple[Any, Any]:  # Any:
     return found['Camera'], found['Light']
 
 
-def _tool_back(light: Any, switched: bool) -> None:  # Any: a Qt action (screenshots.py)
+def _tool_back(light: QtGui.QAction, switched: bool) -> None:
     """The Light tool selected again if it was before the Camera tool was (`switched`) and isn't now."""
     if switched and not light.isChecked():
         light.trigger()
@@ -536,13 +532,16 @@ def _pan_drags(pan: list[float], width: int, height: int) -> tuple[list[tuple[in
     return _drags('pan', pan, (1 / PAN_WIDTH, -width / (height * PAN_WIDTH)), ' of the view')
 
 
-def _mouse(  # Any: a Qt widget, an event type, a mouse button and buttons (screenshots.py)
-    viewport: Any, kind: Any, x: float, y: float, button: Any, buttons: Any
+def _mouse(
+    viewport: QtWidgets.QWidget,
+    kind: QtCore.QEvent.Type,
+    x: float,
+    y: float,
+    button: QtCore.Qt.MouseButton,
+    buttons: QtCore.Qt.MouseButton,
 ) -> None:
     """One mouse event at (x, y) in `viewport`, as Designer takes them from the mouse, marked as sent here while it is
     (_OWN_MOUSE), so the guard of a drag lets it through (_mouse_guard)."""
-    from PySide6 import QtCore, QtGui, QtWidgets
-
     at = QtCore.QPointF(x, y)
     held = QtCore.Qt.KeyboardModifier.NoModifier
     event = QtGui.QMouseEvent(kind, at, QtCore.QPointF(viewport.mapToGlobal(at.toPoint())), button, buttons, held)
@@ -554,12 +553,10 @@ def _mouse(  # Any: a Qt widget, an event type, a mouse button and buttons (scre
     _process_events(2)
 
 
-def _mouse_guard() -> Any:  # Any: a Qt event filter, made here (screenshots.py)
+def _mouse_guard() -> QtCore.QObject:
     """An event filter, for a viewport while a drag runs, dropping every mouse event (MOUSE_EVENTS) _mouse isn't
     sending: the user's mouse moving over it would end the drag (the module docstring)."""
-    from PySide6 import QtCore
-
-    kinds = {getattr(QtCore.QEvent.Type, name) for name in MOUSE_EVENTS}
+    kinds: set[QtCore.QEvent.Type] = {getattr(QtCore.QEvent.Type, name) for name in MOUSE_EVENTS}
 
     class MouseGuard(QtCore.QObject):
         def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:
@@ -568,22 +565,18 @@ def _mouse_guard() -> Any:  # Any: a Qt event filter, made here (screenshots.py)
     return MouseGuard()
 
 
-def _release(
-    viewport: Any, button: Any, x: float, y: float
-) -> None:  # Any: a Qt widget and mouse button (screenshots.py)
+def _release(viewport: QtWidgets.QWidget, button: QtCore.Qt.MouseButton, x: float, y: float) -> None:
     """`button` released at (x, y) in `viewport`."""
-    from PySide6 import QtCore
-
     _mouse(viewport, QtCore.QEvent.Type.MouseButtonRelease, x, y, button, QtCore.Qt.MouseButton.NoButton)
 
 
-def _drag(  # Any: a Qt widget, and a Qt mouse button, in `pressed` too (screenshots.py)
-    viewport: Any,
-    button: Any,
+def _drag(
+    viewport: QtWidgets.QWidget,
+    button: QtCore.Qt.MouseButton,
     dx: int,
     dy: int,
-    pressed: list[tuple[Any, float, float]],
-    taking: Callable[[], Callable[[], object]] | None = None,
+    pressed: Pressed,
+    taking: Callable[[], Callable[[], bool]] | None = None,
 ) -> None:
     """A drag with `button` from the middle of `viewport`, dx and dy pixels (right, down), in DRAG_MOVES moves, then
     released, even when a move fails. `taking`, when given, runs before the press and returns the wait for Designer to
@@ -592,8 +585,6 @@ def _drag(  # Any: a Qt widget, and a Qt mouse button, in `pressed` too (screens
     (_mouse_guard). `pressed` holds (button, x, y), where it is
     released, from before the press to after the release: an abort skipping the release finds it there (set_3d_view's
     handler). The guard, held by this frame alone, goes with it after an abort that skips its removal."""
-    from PySide6 import QtCore
-
     x, y = viewport.width() / 2.0, viewport.height() / 2.0
     end = (button, x + dx, y + dy)
     guard = _mouse_guard()
@@ -655,11 +646,9 @@ def _3d_set_up(
     and passes its look as `between`: the shot, or set_3d_view with a move (REVIEW.md HLP-168, HLP-174). The same look
     runs after the turn, before Frame (REVIEW.md HLP-163). Each step waits for the 3D view to take it on the watch of
     its frames they are given, or on one of their own (frames3d.py; REVIEW.md HLP-148)."""
-    from PySide6 import QtCore, QtGui, QtWidgets
-
     g = _set_up_checked(graph, mesh, view)
-    mw = _APP.getQtForPythonUIMgr().getMainWindow()  # type: ignore[no-untyped-call]  # sd: no annotations
-    keep: list[object] = [mw]
+    mw = _main_window()
+    keep: list[Kept] = [mw]
     dock = _3d_dock(mw)
     bars = dock.findChildren(QtWidgets.QMenuBar)
     if not bars:
@@ -698,7 +687,7 @@ def _3d_set_up(
         done: list[str] = []
         tiling_begun = False  # an abort's handler then turns the Parameters panel back
         switched = False  # the Light tool was selected, the Camera tool selected for the drags and the wheel
-        pressed: list[tuple[QtCore.Qt.MouseButton, float, float]] = []  # a drag's button down: _drag's own record
+        pressed: Pressed = []  # a drag's button down: _drag's own record
 
         def begin(step: str) -> str:
             """Says the step before its change: no abort can land between a change and its record (REVIEW.md
@@ -720,7 +709,8 @@ def _3d_set_up(
                     step = begin("graph %s's outputs on the mesh" % g.getIdentifier())
                     since = watched.mark()
                     g.compute()  # its outputs ready for the mesh
-                    _apply_outputs(tree, g, keep)
+                    # the Explorer's tree was found above, as g was given
+                    _apply_outputs(cast(QtWidgets.QTreeView, tree), g, keep)
                     watched.settled(since)
                     done.append(step)
                 if view is not None:
@@ -780,7 +770,8 @@ def _3d_set_up(
                     begin('tiling %g' % tiling)
                     tiling_begun = True
                     since = watched.mark()
-                    done.append(_set_tiling(params, bar, tiling, keep))
+                    # the Parameters panel was found above, as tiling was given
+                    done.append(_set_tiling(cast(QtWidgets.QDockWidget, params), bar, tiling, keep))
                     watched.settled(since)
                 print('3D view: ' + ', '.join(done))
             except (Exception, APIException) as e:  # the sd API's error is a BaseException too
@@ -829,7 +820,7 @@ def set_3d_view(
     if not (orbit or pan or zoom):
         set_up(None, None)
         return
-    mw = _APP.getQtForPythonUIMgr().getMainWindow()  # type: ignore[no-untyped-call]  # sd: no annotations
+    mw = _main_window()
     dock = _3d_dock(mw)  # held: without, the viewport's wrapper went stale (as in shoot_3d)
     frames = _Frames(_viewport(dock), lambda: _3d_render(mw))
     try:

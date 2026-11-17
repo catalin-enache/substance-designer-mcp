@@ -46,7 +46,9 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable, Collection, Mapping, Sequence
-from typing import Any, Protocol, TypedDict, cast
+from typing import IO, Protocol, TypedDict, cast
+
+from typing_extensions import Unpack  # typing's from Python 3.11; mcp requires typing_extensions
 
 import designer_preferences
 from test_all_tools import common
@@ -146,7 +148,16 @@ def worker_env(port: int, folder: str, gate: Gate | None = None) -> dict[str, st
     return env
 
 
-def spawn(command: list[str], **kwargs: Any) -> 'subprocess.Popen[bytes]':
+class _Start(TypedDict, total=False):
+    """The keywords spawn passes on to subprocess.Popen: those its callers give."""
+
+    cwd: str
+    env: dict[str, str]
+    stdout: IO[bytes]
+    stderr: int  # subprocess.STDOUT
+
+
+def spawn(command: list[str], **kwargs: Unpack[_Start]) -> 'subprocess.Popen[bytes]':
     """The pool's one way to start a process (a worker, the unit suite). Refused under pytest unless the test replaced
     Popen: a unit test reaching it would start Designers, and the unit suite inside that run the same test again."""
     if os.environ.get('PYTEST_CURRENT_TEST') and getattr(subprocess.Popen, '__module__', '') == 'subprocess':
@@ -223,16 +234,21 @@ def schedule(
     return codes
 
 
-class WorkerResults(TypedDict):
+class WorkerEnd(TypedDict):
+    """How a worker's Designer ended, the part of its results __main__.py's _ended() gives."""
+
+    quit: str | None  # what its quit_designer said
+    quit_at: float | None  # when it quit (time.time())
+    forced_in_shutdown: list[str]  # its normal closes forced during their shutdown
+
+
+class WorkerResults(WorkerEnd):
     """What a worker writes for the pool (__main__.py's results file), as JSON gives it back (REVIEW.md TST-443)."""
 
     tools: list[str]
     results: dict[str, list[bool]]
     skipped: list[list[str]]  # [tool, check] pairs
     times: dict[str, float]
-    quit: str | None  # what its quit_designer said
-    quit_at: float | None  # when it quit (time.time())
-    forced_in_shutdown: list[str]  # its normal closes forced during their shutdown
 
 
 def merge(
@@ -337,7 +353,7 @@ def check_the_quits(parts: Mapping[str, WorkerResults | None], port_of: Mapping[
 
 PREFERENCES = "Designer's preferences are as before the run, once its Designers ended"
 # when they were read, and the file's keys or why they couldn't be read
-Preferences = tuple[float, dict[str, object] | str]
+Preferences = tuple[float, dict[str, designer_preferences.Plist] | str]
 
 
 def preferences_before() -> Preferences | None:

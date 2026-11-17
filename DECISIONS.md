@@ -49,6 +49,15 @@ entry, takes the user (the `address-review` skill, **Recording decisions**).
   manifest asks for 16.0.0, so code needn't work on an older Designer or its older Python.
   Reopen if: the user wants older versions supported. (The user's decision, 2026-11-03.)
 
+- **The standalone scripts, and the modules they import, need Python 3.9 at the oldest.** `install.py`,
+  `uninstall.py`, `client/sd_run.py`, `scripts/` and the modules they import (`project_constants.py`,
+  `designer_preferences.py`) may evaluate what Python 3.9 has, such as `list['Json']` in a module-level alias, so on
+  Python 3.8 they fail at import. Python 3.8 is past its end of life, `/usr/bin/python3` was 3.9.6 on the Mac this
+  was decided on, and `uninstall.py` already needed 3.9. `tests/unit/test_old_python.py` runs them on a Python 3.9
+  when one is installed.
+  Reopen if: a system this project supports ships an older `python3`, or the user wants 3.8 supported. (The user's
+  decision, 2026-11-17.)
+
 - **Linux is not a target: nothing is fixed, tested or reviewed for it.** The project will never run on Linux, so a
   review raises nothing about it: no finding about code paths, platform guards, tests or docs that would only matter
   there. Where the code or docs name Linux, it is no promise that anything works there.
@@ -62,13 +71,6 @@ entry, takes the user (the `address-review` skill, **Recording decisions**).
   defect in the tools' code, anything that can touch the user's work, and a doc that says something false.
   Reopen if: such a finding turns out to have hidden a real break, or the user changes the rule. (The user's decision,
   2026-11-07.)
-
-- **Vague types are reported only in the functions a branch's diff adds or changes.** AGENTS.md asks for the most
-  specific type, `Any` the last resort, and has a change narrow the ones in the functions it changes; reviewers report
-  what is left there, the lines the diff leaves as they were included, so authors and reviewers go by one line. The
-  `Any` elsewhere (about a thousand) is ROADMAP item 98's work, so a whole-project review reports none while that item
-  is open, rather than filling REVIEW.md with it (the `project-code-review` skill). Reopen if: item 98 is done, or the
-  user changes the rule. (The user's decisions, 2026-11-13: the diff's code, then its whole functions.)
 
 - **A category's preparation opens its graph in the editor only where its checks read the editor.** Each category of
   the self-test starts from its own preparation in a Designer just started, and most never open their graph, where in

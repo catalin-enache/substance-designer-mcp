@@ -4,13 +4,20 @@ handles differ; leaves the files for reload_uid. ARGS: folder."""
 import os
 import re
 import shutil
-from typing import Any
+from typing import TypedDict
 
 import sd
 from sd.api.sbs.sdsbscompgraph import SDSBSCompGraph
+from sd.api.sdpackage import SDPackage
+from sd.api.sdpackagemgr import SDPackageMgr
 
-ARGS: dict[str, Any] = globals()['ARGS']
-pm = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
+
+class Args(TypedDict):
+    folder: str
+
+
+ARGS: Args = globals()['ARGS']
+pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
 
 
 def file_uid(name: str) -> str:
@@ -23,10 +30,10 @@ def file_uid(name: str) -> str:
 
 d = ARGS['folder']
 os.makedirs(d, exist_ok=True)
-pkg: Any = pm.newUserPackage()
-g: Any = SDSBSCompGraph.sNew(pkg)
+pkg = pm.newUserPackage()
+g = SDSBSCompGraph.sNew(pkg)
 g.setIdentifier('mcp_selftest_uid')
-loaded: list[Any] = []
+loaded: list[SDPackage] = []
 try:
     u0 = pkg.getUID()
     pm.savePackageAs(pkg, os.path.join(d, 'A.sbs'))
@@ -41,9 +48,9 @@ try:
     # a snapshot copy keeps it too (SRV-42); and a package using this one's graph, for reload_uid
     pm.saveCopyOfPackageAs(pkg, os.path.join(d, 'S.sbs'))
     print('COPY_KEEPS_UID=%s' % (file_uid('S.sbs') == u0))
-    user: Any = pm.newUserPackage()
+    user = pm.newUserPackage()
     loaded.append(user)
-    ug: Any = SDSBSCompGraph.sNew(user)
+    ug = SDSBSCompGraph.sNew(user)
     ug.setIdentifier('mcp_selftest_uid_user')
     ug.newInstanceNode(g)
     pm.savePackageAs(user, os.path.join(d, 'D.sbs'))

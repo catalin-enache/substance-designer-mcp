@@ -7,29 +7,105 @@ import hmac
 import importlib.util
 import json
 import os
+import queue
 import socket
 import stat
 import sys
 import threading
 import time
 import types
-from collections.abc import Callable, Iterator
+import typing
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from textwrap import dedent
-from typing import Any, cast
+from typing import Protocol, TypedDict, cast
 
 import pytest
+from aborts import Tracer
+from typing_extensions import Unpack  # typing's from Python 3.11; mcp requires typing_extensions
 
 import project_constants
-from conftest import ROOT, patch_server, server
-from project_constants import NONCE, PLUGIN_PACKAGE_DIR
+from conftest import ROOT, DumpOptions, LoadOptions, patch_server, server
+from project_constants import NONCE, PLUGIN_PACKAGE_DIR, Greeting, Json, JsonSent, Reply
 
 PLUGIN = os.path.join(PLUGIN_PACKAGE_DIR, '__init__.py')
-Bridge = tuple[types.ModuleType, Any, dict[str, bool]]  # the bridge fixture: the plugin, its _Server, the drain switch
+
+
+class _Box(TypedDict, total=False):
+    """A queued job's state, the plugin's _Box. The plugin can't be imported here: its module's name may not be written
+    out (test_constants.py)."""
+
+    result: Reply
+    started: bool
+    abandoned: bool
+    after: list[Callable[[], object]]
+
+
+# The plugin's _Job, a queued script: (code, path, timeout, box, done); the path is the client's, unchecked.
+_Job = tuple[str, Json, float | None, _Box, threading.Event]
+
+
+class _PluginWaker(Protocol):
+    """The plugin's _Waker as the tests run it: its signals and its timer are this file's fakes."""
+
+    wake: '_FakeSignal'
+    after: '_FakeSignal'
+    delay: '_FakeTimer'
+    pending: queue.Queue[Callable[[], object]]  # what jobs handed _after_reply; their results are dropped
+
+    def _on_after(self) -> None: ...
+
+    def _on_wake(self) -> None: ...
+
+
+class _Authorised(Protocol):
+    """The plugin's _Server._authorised, which a test replaces."""
+
+    def __call__(
+        self,
+        data: bytes,
+        nonce: str,
+        release: Callable[[], None] = ...,
+        after: list[Callable[[], object]] | None = None,
+    ) -> Reply: ...
+
+
+class _PluginServer(Protocol):
+    """The members of the plugin's _Server that the tests use. In the tests, its Qt parts are this file's fakes. The
+    plugin can't be imported here for its own type: _Box says why."""
+
+    token: str
+    jobs: queue.Queue[_Job]
+    busy_since: float | None
+    ended: float | None
+    sock: socket.socket
+    waker: _PluginWaker
+    timer: '_FakeTimer'
+    thread: threading.Thread
+    _authorised: _Authorised  # a method, which a test replaces
+
+    def _drain(self) -> None: ...
+
+    def stop(self) -> None: ...
+
+    def _handle(self, conn: socket.socket, release: Callable[[], None] = ...) -> None: ...
+
+    def _control(self, cmd: Json) -> Reply: ...
+
+
+# the bridge fixture: the plugin, its _Server, the drain switch
+Bridge = tuple[types.ModuleType, _PluginServer, dict[str, bool]]
+
+
+class _ClientSend(Protocol):
+    """The send function of a client (_client): a request and the seconds to wait for its reply. The tests send
+    requests the clients' own types refuse (no path, a stray key): each client sends any JSON object."""
+
+    def __call__(self, request: Mapping[str, JsonSent], wait: float) -> Reply: ...
 
 
 class _FakeTimer:
-    def __init__(self, parent: Any = None) -> None:
+    def __init__(self, parent: '_FakeQObject | None' = None) -> None:
         self.timeout = _FakeSignal()  # connected to, never emitted: the tests call _drain themselves
         self.single_shot, self.interval_ms, self.active = False, 0, False
 
@@ -52,10 +128,10 @@ class _FakeSignal:
     """A Qt signal: what was connected, how, and how often it was emitted."""
 
     def __init__(self) -> None:
-        self.slots: list[tuple[Any, Any]] = []
+        self.slots: list[tuple[Callable[[], object], str | None]] = []  # kind: the fake Qt's QueuedConnection, a str
         self.emitted = 0
 
-    def connect(self, slot: Any, kind: Any = None) -> None:
+    def connect(self, slot: Callable[[], object], kind: str | None = None) -> None:
         self.slots.append((slot, kind))
 
     def disconnect(self) -> None:
@@ -141,18 +217,19 @@ def _signed(token: str, nonce: str, port: int, body: bytes) -> bytes:
 
 def _call(
     plugin: types.ModuleType,
-    request: dict[str, Any] | None,
+    request: Mapping[str, JsonSent] | None,
     token: str | None = None,
     raw: bytes | None = None,
     sign_empty: bool = False,
     sign_raw: bool = False,
-) -> Any:
+) -> Reply:
     """One request; token=None uses the real token, raw sends these bytes instead of JSON (signed with the real
     token when sign_raw); sign_empty signs with an empty token over the nonce sent (a client guessing one). Without
     a token the request goes as JSON alone, as clients of the older protocols sent it."""
     with socket.create_connection(('127.0.0.1', plugin.PORT), timeout=10) as s:
         hello = read_greeting(s)
-        nonce = json.loads(hello)['nonce']
+        greeting: Greeting = json.loads(hello)
+        nonce = greeting['nonce']
         secret = token if token is not None else Path(plugin.TOKEN_FILE).read_text().strip()
         if raw is None:
             raw = json.dumps(request).encode()
@@ -165,7 +242,8 @@ def _call(
         data = b''
         while chunk := s.recv(65536):
             data += chunk
-    return json.loads(data)
+    reply: Reply = json.loads(data)
+    return reply
 
 
 # ---- token file
@@ -203,7 +281,7 @@ def test_runs_code_with_the_right_answer(bridge: Bridge) -> None:
 CODE = {'code': "print('RAN')"}
 # a wrong answer on its own line, and one made with another key, in the protocol's framing (REVIEW.md TST-175: none of
 # these sent one); and none, as clients of the older protocols sent requests
-NO_RIGHT_ANSWER: dict[str, Callable[[types.ModuleType], Any]] = {
+NO_RIGHT_ANSWER: dict[str, Callable[[types.ModuleType], Reply]] = {
     'a wrong answer': lambda plugin: _call(plugin, None, raw=b'0' * 64 + b'\n' + json.dumps(CODE).encode()),
     'an answer made with another key': lambda plugin: _call(plugin, CODE, token='x' * 64),
     'no answer': lambda plugin: _call(plugin, CODE, token=''),
@@ -225,13 +303,15 @@ def test_nothing_is_parsed_before_the_signature_checks_out(bridge: Bridge, monke
     seen: list[str] = []
     real_loads, real_dumps = json.loads, json.dumps
 
-    def loads(text: Any, *args: Any, **kwargs: Any) -> Any:
+    def loads(
+        text: str | bytes | bytearray, **kwargs: Unpack[LoadOptions]
+    ) -> object:  # object: a hook can return any value
         if b'UNSIGNED' in (text if isinstance(text, (bytes, bytearray)) else str(text).encode()):
             seen.append('loads')
-        return real_loads(text, *args, **kwargs)
+        return real_loads(text, **kwargs)
 
-    def dumps(obj: Any, *args: Any, **kwargs: Any) -> str:
-        out = real_dumps(obj, *args, **kwargs)
+    def dumps(obj: object, **kwargs: Unpack[DumpOptions]) -> str:
+        out = real_dumps(obj, **kwargs)
         if 'UNSIGNED' in out:
             seen.append('dumps')
         return out
@@ -251,7 +331,8 @@ def test_a_request_changed_after_signing_is_refused(bridge: Bridge) -> None:
     token = Path(plugin.TOKEN_FILE).read_text().strip()
     with socket.create_connection(('127.0.0.1', plugin.PORT), timeout=10) as s:
         hello = read_greeting(s)
-        nonce = json.loads(hello)['nonce']
+        greeting: Greeting = json.loads(hello)
+        nonce = greeting['nonce']
         answer = _sign(token, nonce, plugin.PORT, json.dumps({'code': "print('MINE')"}).encode())
         s.sendall(answer.encode() + b'\n' + json.dumps({'code': "print('THEIRS')"}).encode())
         s.shutdown(socket.SHUT_WR)
@@ -273,7 +354,8 @@ def test_the_answer_of_the_older_protocol_is_refused(bridge: Bridge) -> None:
     token = Path(plugin.TOKEN_FILE).read_text().strip()
     with socket.create_connection(('127.0.0.1', plugin.PORT), timeout=10) as s:
         hello = read_greeting(s)
-        old = hmac.new(token.encode(), json.loads(hello)['nonce'].encode(), hashlib.sha256).hexdigest()
+        greeting: Greeting = json.loads(hello)
+        old = hmac.new(token.encode(), greeting['nonce'].encode(), hashlib.sha256).hexdigest()
         s.sendall(json.dumps({'code': "print('RAN')", 'auth': old}).encode())
         s.shutdown(socket.SHUT_WR)
         data = b''
@@ -324,7 +406,7 @@ def test_clients_never_send_the_token(monkeypatch: pytest.MonkeyPatch, tmp_path:
     assert auth.decode() == _sign('s' * 64, 'ab' * 16, server.PORT, body) and json.loads(body) == {'cmd': 'status'}
 
 
-def _client(monkeypatch: pytest.MonkeyPatch, client: str, token_file: str, port: int) -> Callable[..., Any]:
+def _client(monkeypatch: pytest.MonkeyPatch, client: str, token_file: str, port: int) -> _ClientSend:
     """The send function of one of the clients (the server, client/sd_run.py, the self-test's raw_request), set to
     use this token file and port."""
     if client == 'sd_run':
@@ -333,7 +415,7 @@ def _client(monkeypatch: pytest.MonkeyPatch, client: str, token_file: str, port:
 
         monkeypatch.setitem(vars(sd_run), 'TOKEN_FILE', token_file)
         monkeypatch.setitem(vars(sd_run), 'PORT', port)
-        return cast(Callable[..., Any], sd_run.send)
+        return cast(_ClientSend, sd_run.send)
     if client == 'raw_request':
         monkeypatch.syspath_prepend(os.path.join(ROOT, 'tests'))
         from test_all_tools import common
@@ -343,7 +425,7 @@ def _client(monkeypatch: pytest.MonkeyPatch, client: str, token_file: str, port:
         return lambda request, wait: common.raw_request(request, token)
     patch_server(monkeypatch, 'TOKEN_FILE', token_file)
     patch_server(monkeypatch, 'PORT', port)
-    return cast(Callable[..., Any], server._send)
+    return cast(_ClientSend, server._send)
 
 
 @pytest.mark.parametrize('client', ['sd_run', 'server', 'raw_request'])
@@ -375,12 +457,12 @@ def test_the_greeting_names_the_protocol(bridge: Bridge) -> None:
     plugin, _, _ = bridge
     with socket.create_connection(('127.0.0.1', plugin.PORT), timeout=10) as s:
         hello = read_greeting(s)
-    greeting = json.loads(hello)
+    greeting: Greeting = json.loads(hello)
     # the form the clients accept, and nothing else (REVIEW.md SRV-94)
     assert greeting['protocol'] == PROTOCOL and NONCE.fullmatch(greeting['nonce'])
 
 
-def _relay(plugin_port: int, swap: bool) -> tuple[int, list[Any], Callable[[], None]]:
+def _relay(plugin_port: int, swap: bool) -> tuple[int, list[Reply], Callable[[], None]]:
     """A listener on a port of its own that passes every connection on to the plugin (REVIEW.md SRV-82): the
     plugin's greeting to the client, the client's request to the plugin (with "code" swapped for its own when swap),
     and the plugin's reply back. Returns its port, the plugin's replies and a stop function."""
@@ -388,7 +470,7 @@ def _relay(plugin_port: int, swap: bool) -> tuple[int, list[Any], Callable[[], N
     listener.bind(('127.0.0.1', 0))
     listener.listen(4)
     listener.settimeout(0.2)
-    replies: list[Any] = []
+    replies: list[Reply] = []
     stopped = threading.Event()
 
     def pass_on(conn: socket.socket) -> None:
@@ -523,7 +605,7 @@ def test_the_servers_port_check_agrees_with_the_plugins_bind(
     holder.listen(1)
     port = holder.getsockname()[1]
     vars(plugin)['PORT'] = port
-    greeting: Any = None
+    greeting: Json = None
     try:
         taken = REAL_BIND_ERROR(port) is not None
         try:
@@ -575,7 +657,7 @@ def test_stalled_client_is_dropped(bridge: Bridge) -> None:
 
 
 @pytest.mark.parametrize('timeout', ['5', -1, True, [1]])
-def test_bad_timeout_rejected_not_queued(bridge: Bridge, timeout: Any) -> None:
+def test_bad_timeout_rejected_not_queued(bridge: Bridge, timeout: str | int | list[int]) -> None:
     plugin, srv, _ = bridge
     reply = _call(plugin, {'code': "print('RAN')", 'timeout': timeout})
     assert not reply['ok'] and 'timeout must be a number' in reply['error']
@@ -604,7 +686,7 @@ def test_cancel_drops_queued_jobs(bridge: Bridge) -> None:
     plugin, srv, draining = bridge
     draining['on'] = False
     time.sleep(0.05)
-    replies: list[Any] = []
+    replies: list[Reply] = []
     t = threading.Thread(target=lambda: replies.append(_call(plugin, {'code': "print('RAN')"})))
     t.start()
     for _ in range(100):
@@ -624,8 +706,8 @@ def test_a_job_never_starts_inside_the_running_one(plugin: types.ModuleType, mon
 
     srv = plugin._Server()
     seen: dict[str, bool] = {}
-    box_a: dict[str, Any] = {}
-    box_b: dict[str, Any] = {}
+    box_a: _Box = {}
+    box_b: _Box = {}
     done_a, done_b = threading.Event(), threading.Event()
 
     def timer_fires_meanwhile() -> None:  # what processEvents() does inside job A
@@ -666,6 +748,68 @@ def test_an_abort_lets_cleanup_code_finish(plugin: types.ModuleType) -> None:
     result = plugin._run(code, None, None, cancel)
     assert not result['ok'] and 'ScriptAborted: cancelled by client' in result['error']
     assert 'cleanup finished 199990000' in result['output']
+
+
+# What typing keeps of a job, and with it the job's scope: the globals of the job's functions and methods
+_KEEPS_THE_SCOPE = {
+    # REVIEW.md PLG-44: typing.overload keeps each stub it decorates, under its module's name: __main__ for every job
+    'overload': dedent("""\
+        @overload
+        def pick(x: int) -> int: ...
+        @overload
+        def pick(x: str) -> str: ...
+        def pick(x):
+            return x
+    """),
+    # REVIEW.md PLG-45: typing's subscription caches keep the classes a job subscripts with
+    'Optional': 'def take(x: typing.Optional[Kept]) -> None: ...\n',
+    'List': 'listed = typing.List[Kept]\n',
+    'Generic': dedent("""\
+        class Box(typing.Generic[T]):
+            def get(self) -> None: ...
+
+
+        boxed = Box[int]
+    """),
+}
+
+
+@pytest.mark.parametrize('kept_by', _KEEPS_THE_SCOPE.values(), ids=_KEEPS_THE_SCOPE.keys())
+def test_what_typing_keeps_of_a_job_leaves_its_scope_to_be_freed(plugin: types.ModuleType, kept_by: str) -> None:
+    code = (
+        dedent("""\
+            import typing
+            import weakref
+            from typing import overload
+
+            T = typing.TypeVar('T')
+
+
+            class Kept:
+                def method(self) -> None:  # its globals: the job's scope
+                    pass
+
+
+            kept = Kept()
+            _after_reply(weakref.ref(kept))  # the job's one way out to the test, which never calls it
+
+
+        """)
+        + kept_by
+    )
+    handed: list[Callable[[], object]] = []
+    try:
+        result = plugin._run(code, None, None, threading.Event(), handed)
+        assert result['ok'], result['error']
+        [kept] = handed
+        gc.collect()
+        assert kept() is None, 'the job ended, its scope still held'
+    finally:  # what the job left in typing, if the plugin left it
+        registry = getattr(typing, '_overload_registry', None)
+        if isinstance(registry, dict):
+            registry.pop('__main__', None)
+        for clear in getattr(typing, '_cleanups', ()):
+            clear()
 
 
 # REVIEW.md PLG-25: the abort is raised in whatever frame runs at a check; raised in a finalizer
@@ -769,7 +913,7 @@ def test_an_abort_survives_a_python_unraisable_hook(plugin: types.ModuleType, mo
     # plugin calls it for every other "Exception ignored", untraced, or the abort could land in it
     reported: list[str] = []
 
-    def python_hook(info: Any) -> None:
+    def python_hook(info: 'sys.UnraisableHookArgs') -> None:  # quoted: typeshed's only, not in sys at run time
         for _ in range(50):  # some Python work for the tracer to land in
             reported.append(str(info.exc_value))
 
@@ -792,7 +936,7 @@ def test_an_abort_landing_in_a_slot_reported_through_excepthook_still_stops_the_
     # a slot was dropped there. emit() below does what PySide's does, in Python
     import builtins
 
-    def emit(slot: Any) -> None:
+    def emit(slot: Callable[[], object]) -> None:
         try:
             slot()
         except BaseException:
@@ -973,7 +1117,7 @@ def test_stop_answers_queued_clients_and_frees_the_port(bridge: Bridge) -> None:
     plugin, srv, draining = bridge
     draining['on'] = False
     time.sleep(0.05)
-    replies: list[Any] = []
+    replies: list[Reply] = []
     waiter = threading.Thread(target=lambda: replies.append(_call(plugin, {'code': "print('never')"})))
     waiter.start()
     deadline = time.monotonic() + 5
@@ -1072,7 +1216,7 @@ def test_one_job_per_timer_tick(bridge: Bridge) -> None:
     plugin, srv, draining = bridge
     draining['on'] = False
     time.sleep(0.05)
-    replies: list[Any] = []
+    replies: list[Reply] = []
     for i in range(2):
         threading.Thread(
             target=lambda i=i: replies.append(_call(plugin, {'code': 'print(%d)' % i})), daemon=True
@@ -1088,7 +1232,7 @@ def test_one_job_per_timer_tick(bridge: Bridge) -> None:
     assert len(replies) == 2
 
 
-def _soon(condition: Any, seconds: float = 5) -> bool:
+def _soon(condition: Callable[[], bool], seconds: float = 5) -> bool:
     """Whether condition() holds within seconds: the plugin emits the wake after the job is queued, from the client's
     thread (REVIEW.md TST-273)."""
     deadline = time.monotonic() + seconds
@@ -1097,7 +1241,7 @@ def _soon(condition: Any, seconds: float = 5) -> bool:
     return bool(condition())
 
 
-def _queue(plugin: types.ModuleType, srv: Any, code: str, replies: list[Any]) -> None:
+def _queue(plugin: types.ModuleType, srv: _PluginServer, code: str, replies: list[Reply]) -> None:
     """A job sent from a client thread, returning once it is queued."""
     queued = srv.jobs.qsize()
     threading.Thread(target=lambda: replies.append(_call(plugin, {'code': code})), daemon=True).start()
@@ -1117,7 +1261,7 @@ def test_a_job_reaching_an_idle_bridge_wakes_the_main_thread(bridge: Bridge) -> 
     assert wake.slots == [
         (srv.waker._on_wake, 'queued')
     ]  # the wait after the job before is _drain's (REVIEW.md PLG-42)
-    replies: list[Any] = []
+    replies: list[Reply] = []
     _queue(plugin, srv, 'print(1)', replies)
     assert _soon(lambda: wake.emitted == 1)
     srv.waker._on_wake()  # the main thread, delivering it
@@ -1134,7 +1278,7 @@ def test_a_job_queued_behind_another_waits_for_the_timer(bridge: Bridge) -> None
     draining['on'] = False
     time.sleep(0.05)
     wake = srv.waker.wake
-    replies: list[Any] = []
+    replies: list[Reply] = []
     _queue(plugin, srv, 'print(1)', replies)
     _queue(plugin, srv, 'print(2)', replies)  # behind the first
     assert _soon(lambda: wake.emitted >= 1)
@@ -1161,7 +1305,7 @@ def test_no_job_starts_sooner_than_the_wait_after_the_one_before(plugin: types.M
     try:
         delay = srv.waker.delay
         assert delay.single_shot and delay.timeout.slots == [(srv.waker._on_wake, None)]
-        box: dict[str, Any] = {}
+        box: _Box = {}
         done = threading.Event()
         srv.jobs.put(('print(1)', None, None, box, done))
         srv.ended = time.monotonic()  # a job has just ended
@@ -1185,7 +1329,7 @@ def test_a_wake_after_a_pause_starts_the_job_at_once(plugin: types.ModuleType, b
         assert srv.waker.wake.slots == [(srv.waker._on_wake, 'queued')]
         if before is not None:
             srv.ended = time.monotonic() - before
-        box: dict[str, Any] = {}
+        box: _Box = {}
         done = threading.Event()
         srv.jobs.put(('print(1)', None, None, box, done))
         srv.waker._on_wake()  # the wake, delivered
@@ -1199,7 +1343,7 @@ def test_a_job_queued_as_the_drain_looks_still_waits(plugin: types.ModuleType) -
     # started at once, however soon after the one before
     srv = plugin._Server()
     try:
-        box: dict[str, Any] = {}
+        box: _Box = {}
         done = threading.Event()
         real = srv.lock
 
@@ -1212,8 +1356,10 @@ def test_a_job_queued_as_the_drain_looks_still_waits(plugin: types.ModuleType) -
                     srv.jobs.put(('print(1)', None, None, box, done))
                 real.__enter__()
 
-            def __exit__(self, *exc: object) -> None:
-                real.__exit__(*exc)
+            def __exit__(
+                self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: types.TracebackType | None
+            ) -> None:
+                real.__exit__(exc_type, exc, tb)
 
         srv.lock = ClientFirst()
         srv.ended = time.monotonic()  # a job has just ended
@@ -1241,7 +1387,7 @@ def test_the_accept_thread_starts_once_the_waker_and_the_timer_exist(
     seen: list[tuple[bool, bool]] = []
 
     class Thread:
-        def __init__(self, target: Any, args: tuple[Any, ...] = (), daemon: bool = False) -> None:
+        def __init__(self, target: Callable[[], object], args: tuple[()] = (), daemon: bool = False) -> None:
             self.target = target
 
         def start(self) -> None:
@@ -1329,21 +1475,21 @@ def test_one_failed_accept_does_not_stop_the_bridge(bridge: Bridge) -> None:
     # REVIEW.md PLG-15: any OSError from accept() ended the accept loop for good (a momentary
     # EMFILE or ECONNABORTED), so every later connection waited unanswered
     plugin, srv, _ = bridge
-    real = srv.sock
+    real: socket.socket = srv.sock
 
     class FailsOnce:
         failed = False
 
-        def accept(self) -> Any:
+        def accept(self) -> tuple[socket.socket, tuple[str, int]]:
             if not FailsOnce.failed:
                 FailsOnce.failed = True
                 raise ConnectionAbortedError('aborted before accept')
             return real.accept()
 
-        def __getattr__(self, name: str) -> Any:
+        def __getattr__(self, name: str) -> object:
             return getattr(real, name)
 
-    srv.sock = FailsOnce()
+    vars(srv)['sock'] = FailsOnce()  # a stand-in its type doesn't describe
     assert _call(plugin, {'code': "print('first')"})['output'] == 'first\n'  # served by the pending accept
     assert _call(plugin, {'code': "print('after')"})['output'] == 'after\n'  # the loop went on
     assert FailsOnce.failed
@@ -1355,7 +1501,7 @@ def test_a_lasting_accept_error_backs_off_and_is_logged_once(
     # REVIEW.md PLG-20: since PLG-15 the loop retried every 0.1 s and printed every time, so an
     # error that lasts (EMFILE) wrote ten lines a second into Designer's log
     plugin, srv, _ = bridge
-    real = srv.sock
+    real: socket.socket = srv.sock
     sleeps: list[float] = []
     real_sleep = plugin.time.sleep
 
@@ -1373,16 +1519,16 @@ def test_a_lasting_accept_error_backs_off_and_is_logged_once(
     script = [emfile] * 8 + [reset, None, emfile, None]
 
     class Scripted:
-        def accept(self) -> Any:
+        def accept(self) -> tuple[socket.socket, tuple[str, int]]:
             step = script.pop(0) if script else None
             if step is not None:
                 raise step
             return real.accept()
 
-        def __getattr__(self, name: str) -> Any:
+        def __getattr__(self, name: str) -> object:
             return getattr(real, name)
 
-    srv.sock = Scripted()
+    vars(srv)['sock'] = Scripted()  # a stand-in its type doesn't describe
     assert _call(plugin, {'code': "print('first')"})['output'] == 'first\n'  # served by the pending accept
     assert _call(plugin, {'code': "print('second')"})['output'] == 'second\n'  # after nine failures
     assert _call(plugin, {'code': "print('third')"})['output'] == 'third\n'  # after one more
@@ -1395,11 +1541,15 @@ def test_a_job_whose_run_fails_still_answers_its_client(bridge: Bridge, monkeypa
     # REVIEW.md PLG-22: done.set() came after the try/finally and buf.getvalue() was outside _run's
     # try, so a MemoryError there left the client waiting with no timeout and no reply
     plugin, _, _ = bridge
-    real_run = plugin._run
+    real_run: Callable[[str, Json, float | None, threading.Event], Reply] = plugin._run
 
     def run(
-        code: str, path: str | None, timeout: float | None, cancel: threading.Event, after: object = None
-    ) -> object:
+        code: str,
+        path: Json,
+        timeout: float | None,
+        cancel: threading.Event,
+        after: list[Callable[[], object]] | None = None,
+    ) -> Reply:
         if 'boom' in code:
             raise MemoryError('reading the output')
         return real_run(code, path, timeout, cancel)
@@ -1443,12 +1593,12 @@ def test_an_abort_anywhere_in_a_write_keeps_the_output_written_before(
         buf = plugin._TailBuffer()
         buf.write('a' * 150 + 'KEEP')  # below 2 x MAX_OUTPUT: nothing trimmed yet
 
-        def tracer(frame: types.FrameType, event: str, arg: Any, line: int = line) -> Any:
+        def tracer(frame: types.FrameType, event: str, arg: object, line: int = line) -> Tracer:
             if frame.f_code is plugin._TailBuffer.write.__code__ and event == 'line' and frame.f_lineno == line:
                 raise Abort()
             return tracer
 
-        def start(frame: types.FrameType, event: str, arg: Any) -> Any:
+        def start(frame: types.FrameType, event: str, arg: object) -> Tracer | None:
             return tracer if frame.f_code is plugin._TailBuffer.write.__code__ else None
 
         before = sys.gettrace()
@@ -1509,7 +1659,9 @@ def test_a_jobs_after_reply_callbacks_are_handed_over_once_its_reply_is_sent_and
         def __enter__(self) -> 'Connection':
             return self
 
-        def __exit__(self, *exc: object) -> None:
+        def __exit__(
+            self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: types.TracebackType | None
+        ) -> None:
             log.append('closed')
 
         def sendall(self, data: bytes) -> None:
@@ -1522,15 +1674,19 @@ def test_a_jobs_after_reply_callbacks_are_handed_over_once_its_reply_is_sent_and
             return b''  # the request, read whole: its answer isn't what is tested
 
     def authorised(
-        data: bytes, nonce: str, release: object = None, after: list[Callable[[], object]] | None = None
-    ) -> dict[str, object]:
+        data: bytes,
+        nonce: str,
+        release: Callable[[], None] = lambda: None,
+        after: list[Callable[[], object]] | None = None,
+    ) -> Reply:
         assert after is not None
         after.append(lambda: log.append('ran'))
         return {'ok': True, 'output': 'JOB', 'error': ''}
 
     srv._authorised = authorised  # the request's answer isn't what is tested
-    srv.waker.after = types.SimpleNamespace(emit=lambda: log.append('emitted'))  # the reply's signal, its emit logged
-    srv._handle(Connection())
+    # the reply's signal, its emit logged; a stand-in its type doesn't describe
+    vars(srv.waker)['after'] = types.SimpleNamespace(emit=lambda: log.append('emitted'))
+    srv._handle(cast(socket.socket, Connection()))  # a stand-in for the client's socket
     assert log == ['sent the greeting', 'sent the reply', 'closed', 'emitted'], log
     srv.waker._on_after()
     assert log[-1] == 'ran'

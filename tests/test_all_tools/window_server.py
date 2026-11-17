@@ -67,13 +67,13 @@ def libraries() -> tuple[ctypes.CDLL, ctypes.CDLL]:
 def on_screen(cg: ctypes.CDLL, cf: ctypes.CDLL, keys: Sequence[int]) -> tuple[Window, ...]:
     """The windows on screen, front to back; none when the window server returned no list. `keys`: the dictionary
     keys KEYS names, created by the caller."""
-    listed = cg.CGWindowListCopyWindowInfo(CG_ON_SCREEN, 0)
+    listed: int | None = cg.CGWindowListCopyWindowInfo(CG_ON_SCREEN, 0)  # a CFArrayRef, None for NULL
     if not listed:
         return ()
     try:
-        seen = []
+        seen: list[Window] = []
         for i in range(cf.CFArrayGetCount(listed)):
-            info = cf.CFArrayGetValueAtIndex(listed, i)
+            info: int | None = cf.CFArrayGetValueAtIndex(listed, i)  # a CFDictionaryRef
             layer, alpha, owner = ctypes.c_int64(), ctypes.c_double(), ctypes.c_int64()
             cf.CFNumberGetValue(cf.CFDictionaryGetValue(info, keys[0]), CF_SINT64, ctypes.byref(layer))
             cf.CFNumberGetValue(cf.CFDictionaryGetValue(info, keys[1]), CF_DOUBLE, ctypes.byref(alpha))

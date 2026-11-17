@@ -3,10 +3,13 @@ dialog, on its main thread, which a timer calling reject() didn't close (measure
 With sd and PySide6 faked; the live self-test uses real packages, and calls the tools only once this refusal works."""
 
 import types
-from typing import Any
+from collections.abc import Callable
+from pathlib import Path
 from unittest import mock
 
 import pytest
+
+from conftest import FakeGraph
 
 
 @pytest.fixture
@@ -17,18 +20,7 @@ def helpers(faked_helpers: types.ModuleType) -> types.ModuleType:
     return module
 
 
-class FakeGraph:
-    def __init__(self, identifier: str, package: Any) -> None:
-        self.identifier, self.package = identifier, package
-
-    def getIdentifier(self) -> str:
-        return self.identifier
-
-    def getPackage(self) -> Any:
-        return self.package
-
-
-def _package(file: str, graph: str, *uses: Any) -> Any:
+def _package(file: str, graph: str, *uses: mock.MagicMock) -> mock.MagicMock:
     p = mock.MagicMock()
     p.getFilePath.return_value = file
     p.getUID.return_value = '{%s}' % graph
@@ -39,7 +31,7 @@ def _package(file: str, graph: str, *uses: Any) -> Any:
     return p
 
 
-def _wired(helpers: types.ModuleType, host: Any) -> types.ModuleType:
+def _wired(helpers: types.ModuleType, host: mock.MagicMock) -> types.ModuleType:
     vars(helpers)['SDSBSCompGraph'] = FakeGraph
     real_find = helpers.find_graph
     vars(helpers)['find_graph'] = lambda identifier=None: (
@@ -67,7 +59,7 @@ SAVES = [
 
 @pytest.mark.parametrize(('why', 'call'), SAVES, ids=[s[0] for s in SAVES])
 def test_every_save_refuses_a_never_saved_dependency_before_saving(
-    helpers: types.ModuleType, why: str, call: Any
+    helpers: types.ModuleType, why: str, call: Callable[[types.ModuleType], None]
 ) -> None:
     _wired(helpers, _package('/p/host.sbs', 'host', UNSAVED))
     with pytest.raises(RuntimeError) as raised:
@@ -79,7 +71,7 @@ def test_every_save_refuses_a_never_saved_dependency_before_saving(
         save.assert_not_called()
 
 
-def test_a_saved_dependency_saves(helpers: types.ModuleType, tmp_path: Any) -> None:
+def test_a_saved_dependency_saves(helpers: types.ModuleType, tmp_path: Path) -> None:
     _wired(helpers, _package('/p/host.sbs', 'host', SAVED))
     helpers.save_package('host')
     helpers._PM.savePackage.assert_called_once()
@@ -121,7 +113,7 @@ def test_every_dependency_is_named(helpers: types.ModuleType) -> None:
 
 
 # REVIEW.md HLP-67: what the refusal says to do has to be doable, and it depends on whether a name reaches the package
-def _message(helpers: types.ModuleType, host: Any, in_editor: Any = None) -> str:
+def _message(helpers: types.ModuleType, host: mock.MagicMock, in_editor: FakeGraph | None = None) -> str:
     _wired(helpers, host)
     vars(helpers)['_current_graph'] = lambda: in_editor
     with pytest.raises(RuntimeError) as raised:

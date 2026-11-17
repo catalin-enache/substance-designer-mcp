@@ -121,7 +121,7 @@ async def run(ctx: Ctx) -> None:
     check(
         'screenshot_designer',
         'graph is the node view, without toolbars',
-        is_image(full) and sizes and image_size(full) == view_size and int(sizes.group(4)) > view_size[1],
+        is_image(full) and sizes is not None and image_size(full) == view_size and int(sizes.group(4)) > view_size[1],
         '%s vs %s' % (image_size(full) if is_image(full) else text(full), t.strip()[-120:]),
     )
     part = await c('screenshot_designer', {'panel': 'graph', 'max_size': 4000, 'crop': [0, 0, 0.5, 0.25]})

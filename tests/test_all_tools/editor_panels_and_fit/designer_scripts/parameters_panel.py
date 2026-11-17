@@ -1,13 +1,15 @@
 """Runs inside Designer: the visible Parameters panel's title (the graph or node it shows) and the graph in the editor,
 printed as PANEL=...|EDITOR=...."""
 
-from typing import Any
+from typing import cast
 
 import sd
 from PySide6 import QtWidgets
+from sd.api.qtforpythonuimgrwrapper import QtForPythonUIMgrWrapper
 
-ui: Any = sd.getContext().getSDApplication().getQtForPythonUIMgr()  # type: ignore[no-untyped-call]
-mw = ui.getMainWindow()
+# sd's getQtForPythonUIMgr() has no annotations. It and getMainWindow() give None only without Designer's UI.
+ui: QtForPythonUIMgrWrapper = sd.getContext().getSDApplication().getQtForPythonUIMgr()  # type: ignore[no-untyped-call]
+mw = cast(QtWidgets.QMainWindow, ui.getMainWindow())
 panels = [d for d in mw.findChildren(QtWidgets.QDockWidget) if d.objectName().startswith('areaC_') and d.isVisible()]
 editor = ui.getCurrentGraph()
 print(

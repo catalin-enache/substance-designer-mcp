@@ -14,9 +14,9 @@ import socket
 import subprocess
 import sys
 import time
-from collections.abc import Awaitable, Callable, Coroutine, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from textwrap import dedent
-from typing import Any, Protocol, TypedDict
+from typing import Protocol
 
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
@@ -32,8 +32,14 @@ from project_constants import (  # noqa: E402 (after the sys.path entry; `X as X
     QUIT_SAMPLED as QUIT_SAMPLED,
     SHORT_TEMP as SHORT_TEMP,  # where launch_designer makes the folders of a Designer it starts
     TOKEN_FILE as TOKEN_FILE,
+    Greeting,
+    Json as Json,  # a tool's arguments, a bridge request
+    JsonSent as JsonSent,  # the same, sent: a list[str] is one
+    Reply as Reply,
+    ToolArgs as ToolArgs,  # a tool's arguments, sent
     agent_designer_file,
     agent_folder_name,
+    read_agent_record,
 )
 
 sys.path.insert(0, os.path.join(BUNDLE, 'mcp_server'))
@@ -58,8 +64,10 @@ skipped: list[tuple[str, str]] = []
 times: dict[str, float] = {}  # seconds each category took: __main__.py's run_steps
 
 
-def check(tool: str, name: str, ok: object, detail: str = '') -> None:
-    ok = bool(ok)  # a condition like `refs and not missing` may be [] or None (REVIEW.md TST-29)
+def check(tool: str, name: str, ok: bool, detail: str = '') -> None:
+    # a condition built from a value mypy can't type may still be [] or None, like `refs and not missing` once was
+    # (REVIEW.md TST-29)
+    ok = bool(ok)
     results.setdefault(tool, []).append(ok)
     print('%s  %-22s %s | %s' % ('PASS' if ok else 'FAIL', tool, name, detail.strip()[:150].replace('\n', ' / ')))
 
@@ -131,15 +139,9 @@ def read_greeting(sock: socket.socket) -> bytes:
     return hello
 
 
-class Reply(TypedDict, total=False):
-    """The plugin's reply to a request, as raw_request returns it (the plugin's docstring)."""
-
-    ok: bool
-    output: str
-    error: str
-
-
-def raw_request(request: dict[str, Any] | bytes, token: str | None = None, signed: bytes | None = None) -> Any:
+def raw_request(
+    request: Mapping[str, JsonSent] | bytes, token: str | None = None, signed: bytes | None = None
+) -> Reply:
     """One request straight to the bridge, bypassing the MCP server: a dict as JSON, bytes as they are. With token,
     it answers the plugin's challenge properly (the plugin's docstring: an HMAC of the nonce, the port and the bytes
     sent, on a line before them), over `signed` instead of the bytes sent when given (a request changed after
@@ -147,7 +149,8 @@ def raw_request(request: dict[str, Any] | bytes, token: str | None = None, signe
     body = request if isinstance(request, bytes) else json.dumps(request).encode('utf-8')
     with socket.create_connection(('127.0.0.1', PORT), timeout=10) as sock:
         hello = read_greeting(sock)
-        nonce = json.loads(hello)['nonce']
+        greeting: Greeting = json.loads(hello)
+        nonce = greeting['nonce']
         if token:
             message = b'%s\n%d\n' % (nonce.encode(), PORT) + (body if signed is None else signed)
             body = hmac.new(token.encode(), message, hashlib.sha256).hexdigest().encode() + b'\n' + body
@@ -156,7 +159,8 @@ def raw_request(request: dict[str, Any] | bytes, token: str | None = None, signe
         data = b''
         while chunk := sock.recv(65536):
             data += chunk
-    return json.loads(data.decode('utf-8'))
+    reply: Reply = json.loads(data.decode('utf-8'))
+    return reply
 
 
 def lan_address() -> str | None:
@@ -417,8 +421,7 @@ def new_crash_dumps(before: set[str], wait_s: float = 10, ports: Sequence[int] =
 def end_own_designer() -> None:
     """After a run that failed before its quit checks: the Designer the self-test started is disposable."""
     try:
-        with open(agent_designer_file(PORT), encoding='utf-8') as f:
-            record = json.load(f)
+        record = read_agent_record(agent_designer_file(PORT))
         pid, start = int(record['pid']), record['start']
         # the server's: its reading wrote the record (REVIEW.md SRV-92); its wait, woken by the exit (TST-421)
         from server_tools.lifecycle import _exited, _process_start
@@ -509,7 +512,12 @@ STATE: dict[str, bool] = {'was_running': False}  # set by run(): the run used th
 class Call(Protocol):
     """ctx.c: one tool call over the run's MCP session, `c(name, args)`."""
 
-    def __call__(self, name: str, args: dict[str, Any] | None = None, /) -> Coroutine[Any, Any, CallToolResult]: ...
+    # A Coroutine, which asyncio.create_task takes. It yields object: what it yields goes to the event loop, never read
+    # here.
+    def __call__(self, name: str, args: ToolArgs | None = None, /) -> Coroutine[object, None, CallToolResult]: ...
+
+
+Ops = list[dict[str, Json]]  # apply_edits' ops, as the checks build them
 
 
 # a Designer the self-test started, hidden once it answers, so nothing of it shows on the user's screen (DECISIONS.md,
@@ -544,7 +552,7 @@ async def hide_designer(c: Call, helper_source: str) -> None:
 Step = Callable[['Ctx'], Awaitable[None]]  # a category's run(ctx), one of its checks, or its prepare(ctx)
 
 
-async def designer_script(c: Call, name: str, /, **args: Any) -> CallToolResult:
+async def designer_script(c: Call, name: str, /, **args: JsonSent) -> CallToolResult:
     """Run a Designer script, name being '<category>/<script>' for <category>/designer_scripts/<script>.py, the folder
     of the category that runs it, or 'shared/<script>' for designer_scripts/shared/<script>.py, one that several run:
     Python with real logic lives in real files, which ruff and mypy check (the live-check skill).
@@ -606,7 +614,7 @@ class Unprepared(Exception):
     """A category's preparation couldn't build its environment: its checks don't run (category_run.py)."""
 
 
-async def prepared_call(c: Call, name: str, args: dict[str, Any] | None = None) -> str:
+async def prepared_call(c: Call, name: str, args: ToolArgs | None = None) -> str:
     """A tool call of a preparation: its text, or Unprepared if it failed (an error result, or a Designer script's
     traceback), so a preparation records no check of its own."""
     result = await c(name, args or {})

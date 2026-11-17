@@ -7,7 +7,7 @@ Usage:
 Exit status: 0 when it printed what was asked, 1 when it can't (it says why), 2 for a bad argument.
 """
 
-# Annotations stay unevaluated: this script runs on the system Python, which can be older than 3.10
+# Annotations stay unevaluated: this script runs on the system Python, 3.9 or later, which can be older than 3.10
 from __future__ import annotations
 
 import argparse
@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Protocol
 
 REVIEW = 'REVIEW.md'
 AN_ID = re.compile(r'[A-Z]+-\d+')
@@ -87,7 +88,7 @@ def last_used(root: Path) -> str | None:
     if _is_shallow(root):
         raise CannotAnswer('a shallow clone may not have the numbers: git fetch --unshallow')
     history = _git(root, 'log', '-p', '-U0', '--format=', '--no-color', '--no-ext-diff', '--', REVIEW).stdout
-    found = HISTORY_ENTRY.findall(history)
+    found: list[tuple[str, str]] = HISTORY_ENTRY.findall(history)  # (prefix, number) each
     for line in HISTORY_COUNTERS.findall(history):
         found.extend(COUNTER.findall(line))
     highest: dict[str, int] = {}
@@ -110,15 +111,23 @@ def _print(text: str) -> None:
     sys.stdout.flush()
 
 
+class _Args(Protocol):
+    """The command line: a finding ID or --last-used. The group requires one of them and refuses both, so `finding` is
+    None exactly when `last_used` is set."""
+
+    finding: str | None
+    last_used: bool
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     what = parser.add_mutually_exclusive_group(required=True)
     what.add_argument('finding', nargs='?', type=_finding_id, help='a finding ID, such as HLP-56')
     what.add_argument('--last-used', action='store_true', help='print a **Last used** line from git history')
-    args = parser.parse_args()
+    args: _Args = parser.parse_args()
     try:
         root = _repo_root()
-        if not args.last_used:
+        if args.finding is not None:
             _print(lookup(root, args.finding))
             return 0
         line = last_used(root)

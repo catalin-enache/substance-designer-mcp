@@ -2,9 +2,8 @@
 
 import json
 import os
-from typing import Any
 
-from .core import _bridge, _control, _tool, _with_undo
+from .core import JsonObject, _bridge, _control, _tool, _with_undo
 
 
 @_tool(gated=False)  # stopping a runaway script must never wait for the guide
@@ -26,10 +25,11 @@ def execute_designer_code(code: str, undo_label: str = 'Claude: code', timeout_s
 
 
 @_tool(scripting=True, finite=False)  # its args reach Designer as JSON, which keeps inf and nan
-def run_designer_script(path: str, timeout_s: int = 600, args: dict[str, Any] | None = None) -> str:
+def run_designer_script(path: str, timeout_s: int = 600, args: JsonObject | None = None) -> str:
     """Run a Python file inside Substance Designer; `__file__` is set to its absolute path.
     `args` (JSON values) reach the script as the global dict `ARGS`, empty without any; a script
-    checked by mypy reads it with `ARGS: dict[str, Any] = globals()['ARGS']`. Only this tool sets it.
+    checked by mypy reads it with `ARGS: Args = globals()['ARGS']`, Args a TypedDict of its keys.
+    Only this tool sets it.
     All changes form one undo step named after the file. Aborted after `timeout_s` seconds
     (0 = no limit in Designer). A script queued behind another can wait up to 15 minutes before it
     starts; this call stops waiting 15 minutes + `timeout_s` (15 minutes if 0) + 1 minute after it

@@ -5,12 +5,25 @@ tests: tests/unit/test_selftest_crash_dumps.py."""
 import contextlib
 import os
 import time
-import types
 from collections.abc import Callable, Iterator, Sequence
-from typing import Any
+from typing import Protocol
 
 
-def _common() -> types.ModuleType:
+class _Common(Protocol):
+    """What CrashWatch uses of common.py."""
+
+    POLL_S: float
+
+    def check(self, tool: str, name: str, ok: bool, detail: str = '') -> None: ...
+
+    def crash_dumps(self, ports: Sequence[int] = (), run_port: bool = True) -> set[str]: ...
+
+    def dumps_may_come(self, ports: Sequence[int], before: set[str], run_port: bool = True) -> bool: ...
+
+    def new_dumps(self, after: set[str], before: set[str]) -> set[str]: ...
+
+
+def _common() -> _Common:
     """common.py, imported when a check or a dump is looked up, not here: common imports this module (Ctx), and tests
     replace common's check and crash_dumps."""
     from test_all_tools import common
@@ -50,7 +63,7 @@ class CrashWatch:
         self.steps.append(step)
         return step
 
-    def check(self, step: '_WatchedStep', tool: str, name: str, ok: object, detail: str = '') -> None:
+    def check(self, step: '_WatchedStep', tool: str, name: str, ok: bool, detail: str = '') -> None:
         step.checks.append((tool, name, bool(ok), detail))
 
     def later(self, clean_up: Callable[[], None]) -> None:
@@ -97,12 +110,19 @@ class _WatchedStep:
         self.dumps: set[str] = set()
 
 
+class _HoldsCrashWatch(Protocol):
+    """What watching_crashes uses of a ctx (common.Ctx): the category's CrashWatch, or None outside one."""
+
+    crash_watch: CrashWatch | None
+
+
 @contextlib.contextmanager
-def watching_crashes(ctx: Any) -> Iterator[CrashWatch]:
+def watching_crashes(ctx: _HoldsCrashWatch) -> Iterator[CrashWatch]:
     """The CrashWatch of the category running (lifecycle.run), or, for a check run alone (a scratch run), one of its
     own, settled when the check ends: one wait either way, at the end of the outermost user."""
-    if getattr(ctx, 'crash_watch', None) is not None:
-        yield ctx.crash_watch
+    running: CrashWatch | None = getattr(ctx, 'crash_watch', None)
+    if running is not None:
+        yield running
         return
     ctx.crash_watch = watch = CrashWatch()
     try:

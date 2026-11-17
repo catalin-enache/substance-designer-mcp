@@ -5,7 +5,7 @@ import os
 import sys
 import time
 from types import ModuleType
-from typing import Any, cast
+from typing import Protocol, cast
 
 import pytest
 from selftest_fakes import fresh
@@ -13,7 +13,7 @@ from selftest_fakes import fresh
 
 @pytest.fixture
 def popups() -> ModuleType:
-    return cast(ModuleType, fresh('editor_panels_and_fit.popups'))
+    return fresh('editor_panels_and_fit.popups')
 
 
 def test_popups_are_seen_from_the_first_sample_showing_one_to_the_last(popups: ModuleType) -> None:
@@ -44,6 +44,16 @@ POPUP, NORMAL = 101, 0  # window layers
 FakeWindow = tuple[int, float, int] | tuple[int, float, int, tuple[float, float, float, float]]
 
 
+class _Number(Protocol):
+    value: int | float  # a ctypes number's value: a c_int64's or a c_double's here
+
+
+class _ByRef(Protocol):
+    """ctypes.byref()'s result, as CFNumberGetValue writes through it. Typeshed's _CArgObject names no attribute."""
+
+    _obj: _Number  # the ctypes number it points at
+
+
 class Server:
     """CoreGraphics and CoreFoundation as _seen calls them, faked: the window server's list of windows, each a
     (layer, alpha, pid) read by its index (the keys 0, 1 and 2); no list at all when `listed` is False."""
@@ -51,25 +61,26 @@ class Server:
     def __init__(self, *windows: FakeWindow, listed: bool = True) -> None:
         self.windows = windows
         self.listed = listed
-        self.released: list[object] = []
+        self.released: list[str] = []
 
-    def CGWindowListCopyWindowInfo(self, option: int, relative: int) -> object:
+    # the list's reference is a string here, 'the list'
+    def CGWindowListCopyWindowInfo(self, option: int, relative: int) -> str | None:
         return 'the list' if self.listed else None
 
-    def CFArrayGetCount(self, listed: object) -> int:
+    def CFArrayGetCount(self, listed: str) -> int:
         return len(self.windows)
 
-    def CFArrayGetValueAtIndex(self, listed: object, i: int) -> FakeWindow:
+    def CFArrayGetValueAtIndex(self, listed: str, i: int) -> FakeWindow:
         return self.windows[i]
 
-    def CFDictionaryGetValue(self, info: FakeWindow, key: int) -> object:
+    def CFDictionaryGetValue(self, info: FakeWindow, key: int) -> int | float | tuple[float, float, float, float]:
         return info[key]
 
-    def CFNumberGetValue(self, number: object, kind: int, out: Any) -> bool:  # Any: byref()'s result, untyped
+    def CFNumberGetValue(self, number: int | float, kind: int, out: _ByRef) -> bool:
         out._obj.value = number  # the ctypes value byref() points at
         return True
 
-    def CFRelease(self, ref: object) -> None:
+    def CFRelease(self, ref: str) -> None:
         self.released.append(ref)
 
 

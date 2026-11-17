@@ -66,13 +66,13 @@ macOS nothing was measured: the window is left as it is, and the shot taken as b
 import contextlib
 from collections.abc import Iterator
 
-from .core import _APP, Any, Callable, cast
+from .core import Callable, Kept, QtCore, QtGui, QtWidgets, _main_window, _menu, cast
 from .editor import _process_events
 from .frames3d import _Frames, _viewport
 from .mac_window import _mac_window, _MacWindow, _wait_unhidden
 from .screenshots import _3d_dock, _3d_render
 from .view3d import MESHES, _3d_set_up, _menu_action
-from .waits import _event_signal, _until
+from .waits import _event_signal, _until, _unwatch
 
 ON_SCREEN_WAIT = 3.0  # s at most for Designer's window to be on screen once shown, a safety net: about 0.3 s measured
 RETAKES = 3  # renders taken again while identical to the one before a set-up that moved the camera or switched the mesh
@@ -109,7 +109,7 @@ QT_RESTORED = (
 
 
 def _wait_on_screen(
-    mw: Any,  # Any: a Qt widget (screenshots.py)
+    mw: QtWidgets.QMainWindow,
     show: Callable[[], None],
     frames: _Frames,
     since: tuple[int, int],
@@ -131,7 +131,7 @@ def _wait_on_screen(
                     'the user to show it' % ON_SCREEN_WAIT
                 )
     finally:
-        handle.removeEventFilter(spy)
+        _unwatch(handle, spy)
     frames.shown(since)
 
 
@@ -163,7 +163,7 @@ class _Screen:
     look before a step or render saw them gone (REVIEW.md HLP-138). Refused when the window still isn't on screen once
     _wait_on_screen gives up, or goes off screen again as its view draws each of BRINGS times it is put there."""
 
-    def __init__(self, mw: Any, mac: _MacWindow | None, frames: _Frames) -> None:  # Any: a Qt widget (screenshots.py)
+    def __init__(self, mw: QtWidgets.QMainWindow, mac: _MacWindow | None, frames: _Frames) -> None:
         self._mw = mw
         self._mac = mac
         self._frames = frames  # the 3D view's, watched: its waits once the window is on screen
@@ -229,8 +229,6 @@ class _Screen:
         """Puts the window on screen, transparent, if it isn't, saying so: the first time, or `again` during the
         shot. Off screen again as the view draws what changed (the user covered, minimized or hid it), it is put on
         screen again, `brings` times in all, then refused (REVIEW.md HLP-163)."""
-        from PySide6 import QtCore
-
         mac = self._mac
         if mac is None:
             return
@@ -292,7 +290,7 @@ class _Screen:
         try:
             _until(lambda: not mac.on_screen(number), ON_SCREEN_WAIT, [spy.fired])
         finally:
-            handle.removeEventFilter(spy)
+            _unwatch(handle, spy)
 
     def put_back(self) -> None:
         """Puts the window back as it was found off screen: minimized again, behind the windows that were in front of
@@ -339,7 +337,7 @@ class _Screen:
 
 
 @contextlib.contextmanager
-def _on_screen(mw: Any, frames: _Frames) -> Iterator[_Screen]:  # Any: a Qt widget (screenshots.py)
+def _on_screen(mw: QtWidgets.QMainWindow, frames: _Frames) -> Iterator[_Screen]:
     """Designer's main window on screen while the 3D view is set up and rendered (_Screen): put there now, and again
     before each set-up step and render (_Screen.again), each time waited for on `frames`, the 3D view's. Off screen, the render is the
     view's last frame (the module docstring). The window is put back when the shot fails or is aborted too."""
@@ -362,17 +360,15 @@ def _on_screen(mw: Any, frames: _Frames) -> Iterator[_Screen]:  # Any: a Qt widg
         raise
 
 
-def _mesh_shown(mw: Any, keep: list[object]) -> str | None:  # Any: a Qt widget (screenshots.py)
+def _mesh_shown(mw: QtWidgets.QMainWindow, keep: list[Kept]) -> str | None:
     """The mesh the 3D view shows: the one checked in its Scene menu (MESHES); None if none is."""
-    from PySide6 import QtWidgets
-
     bar = _3d_dock(mw).findChildren(QtWidgets.QMenuBar)[0]
     keep.append(bar)
-    menu = _menu_action(bar, keep, 'Scene').menu()
+    menu = _menu(_menu_action(bar, keep, 'Scene'))
     keep.append(menu)
     menu.aboutToShow.emit()
     _process_events()
-    names = [cast(str, a.text().replace('&', '')) for a in menu.actions() if a.isChecked()]
+    names = [a.text().replace('&', '') for a in menu.actions() if a.isChecked()]
     shown = [name for name in names if name in MESHES]
     return shown[0] if shown else None
 
@@ -397,21 +393,19 @@ def shoot_3d(
     NO_RESTART (_Frames.next_frame; off screen, at once). A view or a graph may already be what is shown, so they are
     no sign. Each wait is on the view's frames, watched from before the window is put on screen until the render
     (frames3d.py; REVIEW.md HLP-148)."""
-    from PySide6 import QtGui
-
     given = bool(graph or mesh or view or zoom or tiling is not None or orbit or pan)
     set_up = _3d_set_up(graph, mesh, view, zoom, tiling, orbit, pan) if given else None
-    mw = _APP.getQtForPythonUIMgr().getMainWindow()  # type: ignore[no-untyped-call]  # sd: no annotations
-    keep: list[object] = [mw, _3d_dock(mw)]
+    mw = _main_window()
+    dock = _3d_dock(mw)
+    keep: list[Kept] = [mw, dock]
     moving = bool(orbit or pan or zoom) or (mesh is not None and mesh != _mesh_shown(mw, keep))
-    frames = _Frames(_viewport(keep[1]), lambda: _3d_render(mw))
+    frames = _Frames(_viewport(dock), lambda: _3d_render(mw))
     try:
         with _on_screen(mw, frames) as screen:
 
             def render() -> QtGui.QImage:
                 screen.again()
-                shot: QtGui.QImage = _3d_render(mw)
-                return shot
+                return _3d_render(mw)
 
             before = render() if moving else None
             if set_up is not None:

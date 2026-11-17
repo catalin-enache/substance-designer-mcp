@@ -111,6 +111,8 @@ from project_constants import (  # on sys.path: the package's __init__ imports .
     QUIT_SAMPLED,
     SHORT_TEMP,
     STARTUP_LIMIT,
+    AgentRecord,
+    Json,
     agent_designer_file,
     agent_designer_ports,
     agent_folder_name,
@@ -560,7 +562,7 @@ def _started(app: str, env: dict[str, str], quiet: int) -> 'subprocess.Popen[byt
             raise ToolError('Designer could not be started from %r: %s; set SD_DESIGNER_APP' % (app, e)) from e
     try:
         if sys.platform == 'win32':
-            detached = getattr(subprocess, 'DETACHED_PROCESS', 0x8) | getattr(
+            detached: int = getattr(subprocess, 'DETACHED_PROCESS', 0x8) | getattr(
                 subprocess, 'CREATE_NEW_PROCESS_GROUP', 0x200
             )
             proc = subprocess.Popen([app], env=env, stdin=quiet, stdout=quiet, stderr=quiet, creationflags=detached)
@@ -622,7 +624,8 @@ def _remember_started(port: int, pid: int, home: str | None) -> None:
     fd, written = tempfile.mkstemp(dir=os.path.dirname(path), prefix=os.path.basename(path) + '.')
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            json.dump({'pid': pid, 'start': start, 'home': home}, f)
+            record: AgentRecord = {'pid': pid, 'start': start, 'home': home}
+            json.dump(record, f)
         os.replace(written, path)
     except OSError:
         with contextlib.suppress(OSError):
@@ -708,7 +711,7 @@ def _agent_record(port: int) -> tuple[int, bytes] | None:
     if seen is None:
         return None
     try:
-        record = json.loads(seen)
+        record: dict[str, Json] = json.loads(seen)  # not a dict, or no pid or start: TypeError or KeyError here
         pid, start = record['pid'], record['start']
         if not isinstance(pid, int):
             raise TypeError
@@ -739,14 +742,8 @@ def _agent_designer(port: int) -> int | None:
 def _agent_home(port: int) -> str | None:
     """The home the Designer an agent started on `port` got, if it still runs: None for the user's (no home of its own,
     a record without one: older code started it, or not macOS) or when no agent's runs there."""
-    if _agent_designer(port) is None:
-        return None
-    try:
-        with open(agent_designer_file(port), encoding='utf-8') as f:
-            home = json.load(f).get('home')
-    except (OSError, ValueError, AttributeError):
-        return None
-    return home if isinstance(home, str) else None
+    found = _agent_record(port)  # the home from the record whose Designer was checked (REVIEW.md SRV-172)
+    return _home_in(found[1]) if found else None
 
 
 def _agents() -> dict[int, int]:
@@ -806,9 +803,10 @@ FORCE_WAIT_S = 5  # s a forced end waits for the process to exit after each sign
 
 class _Queue(Protocol):
     """A kqueue, as _ExitWatch uses it: select.kqueue exists only on BSD and macOS (REVIEW.md SRV-153: its name in an
-    annotation failed mypy for the other platforms)."""
+    annotation failed mypy for the other platforms). control returns the events, select.kevent objects: only their
+    count is read."""
 
-    def control(self, changelist: None, max_events: int, timeout: float | None = None, /) -> object: ...
+    def control(self, changelist: None, max_events: int, timeout: float | None = None, /) -> Sequence[object]: ...
 
     def close(self) -> None: ...
 
@@ -920,9 +918,10 @@ def _end_if_past_startup(port: int) -> str | None:
 
 
 def _home_in(seen: bytes) -> str | None:
-    """The home a record of a Designer an agent started gives (_agent_record's), None without one."""
+    """The home a record of a Designer an agent started gives, read from its bytes as _record_bytes returns them. None
+    without one."""
     try:
-        home = json.loads(seen).get('home')
+        home: Json = json.loads(seen).get('home')  # checked below, and AttributeError when not a dict
     except (ValueError, AttributeError):
         return None
     return home if isinstance(home, str) else None

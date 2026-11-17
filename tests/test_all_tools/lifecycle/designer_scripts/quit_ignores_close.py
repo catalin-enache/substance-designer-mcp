@@ -2,12 +2,17 @@
 (checks.py). ARGS: marker, a file written if the application emits aboutToQuit."""
 
 import sys
-from typing import Any, cast
+from typing import TypedDict, cast
 
 from PySide6.QtCore import QEvent, QObject
 from PySide6.QtWidgets import QApplication
 
-ARGS: dict[str, Any] = globals()['ARGS']
+
+class Args(TypedDict):
+    marker: str
+
+
+ARGS: Args = globals()['ARGS']
 
 
 class _KeepOpen(QObject):

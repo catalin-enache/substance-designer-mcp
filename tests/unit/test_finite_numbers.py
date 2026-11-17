@@ -5,13 +5,14 @@ go to Designer as JSON, which keeps them, so they pass."""
 
 import asyncio
 import json
-from typing import Any
+from pathlib import Path
 
 import pydantic
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
-from conftest import patch_server, server
+from conftest import fake_bridge, server
+from project_constants import Json
 
 INF, NAN = float('inf'), float('nan')
 
@@ -38,16 +39,18 @@ REFUSED = [
 def sent(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     calls: list[str] = []
 
-    def bridge(code: str, *args: Any, **kwargs: Any) -> str:
+    def bridge(code: str) -> str:
         calls.append(code)
         return ''
 
-    patch_server(monkeypatch, '_bridge', bridge)
+    fake_bridge(monkeypatch, bridge)
     return calls
 
 
 @pytest.mark.parametrize('tool, arguments, where', REFUSED, ids=[t for t, _, _ in REFUSED])
-def test_a_number_that_isnt_finite_is_refused_by_name(sent: list[str], tool: str, arguments: Any, where: str) -> None:
+def test_a_number_that_isnt_finite_is_refused_by_name(
+    sent: list[str], tool: str, arguments: dict[str, Json], where: str
+) -> None:
     with pytest.raises(ToolError) as raised:  # the client gets it as an error result
         asyncio.run(server.server.call_tool(tool, arguments))
     said = str(raised.value)
@@ -62,7 +65,7 @@ def test_json_gives_numbers_that_arent_finite(written: str) -> None:
     assert value != value or abs(value) == INF
 
 
-def test_the_args_of_a_designer_script_keep_them(sent: list[str], tmp_path: Any) -> None:
+def test_the_args_of_a_designer_script_keep_them(sent: list[str], tmp_path: Path) -> None:
     script = tmp_path / 's.py'
     script.write_text('print(ARGS)\n')
     asyncio.run(server.server.call_tool('run_designer_script', {'path': str(script), 'args': {'x': INF}}))

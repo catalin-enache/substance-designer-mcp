@@ -2,14 +2,28 @@
 sbsar_info, preview_maps."""
 
 import os
+import subprocess
+import types
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal, TypedDict
 
 import numpy as np
 import pytest
 from PIL import Image
+from typing_extensions import Unpack  # typing's from Python 3.11; mcp requires typing_extensions
 
 from conftest import patch_server, server
+from server_tools.output import _Value
+
+
+class _RenderOptions(TypedDict, total=False):
+    """render_sbs's parameters after its two paths."""
+
+    size_log2: int | None
+    graph: str | None
+    outputs: list[str] | None
+    params: dict[str, _Value] | None
+    output_format: str
 
 
 def test_cooking_never_writes_next_to_the_users_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -18,11 +32,11 @@ def test_cooking_never_writes_next_to_the_users_file(monkeypatch: pytest.MonkeyP
     (tmp_path / 'mine.sbsar').write_text('MY OWN SBSAR')
     calls: list[str] = []
 
-    def fake_cooker(cmd: list[str], timeout: float) -> object:
+    def fake_cooker(cmd: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
         out = cmd[cmd.index('--output-path') + 1]
         calls.append(out)
         Path(out, 'mine.sbsar').write_text('cooked')
-        return type('R', (), {'returncode': 0, 'stdout': '', 'stderr': ''})()
+        return subprocess.CompletedProcess(cmd, 0, '', '')
 
     patch_server(monkeypatch, '_run_tool', fake_cooker)
     with server._cooked(str(sbs)) as sbsar:
@@ -53,7 +67,11 @@ def test_dark_16bit_map_is_not_brightened(tmp_path: Path) -> None:
 
 
 def _render_with(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, exposed: set[str], sbs_name: str = 'two_graphs.sbs', **kw: Any
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    exposed: set[str],
+    sbs_name: str = 'two_graphs.sbs',
+    **kw: Unpack[_RenderOptions],
 ) -> tuple[str, list[str]]:
     import shutil
 
@@ -73,16 +91,18 @@ def _render_with(
         def __enter__(self) -> str:
             return str(self.path) + 'ar' if str(self.path).endswith('.sbs') else str(self.path)
 
-        def __exit__(self, *a: object) -> Literal[False]:
+        def __exit__(
+            self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: types.TracebackType | None
+        ) -> Literal[False]:
             return False
 
     patch_server(monkeypatch, '_cooked', _Cooked)
 
-    def fake_render(cmd: list[str], timeout: float) -> object:
+    def fake_render(cmd: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
         seen['cmd'] = cmd
         out = cmd[cmd.index('--output-path') + 1]
         Image.new('L', (8, 8)).save(os.path.join(out, 'height.png'))
-        return type('R', (), {'returncode': 0, 'stdout': '', 'stderr': ''})()
+        return subprocess.CompletedProcess(cmd, 0, '', '')
 
     patch_server(monkeypatch, '_run_tool', fake_render)
     text = server.render_sbs(str(sbs), str(tmp_path / 'out'), **kw)

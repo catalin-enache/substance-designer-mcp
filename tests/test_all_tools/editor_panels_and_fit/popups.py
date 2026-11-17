@@ -89,11 +89,11 @@ def _seen(cg: ctypes.CDLL, cf: ctypes.CDLL, keys: list[int], pid: int, layer: in
     """Whether the list of the windows on screen holds a window of process `pid`, and whether one of them is at `layer`
     or above with an opacity above 0. `keys`: the dictionary keys kCGWindowLayer, kCGWindowAlpha and
     kCGWindowOwnerPID."""
-    listed = cg.CGWindowListCopyWindowInfo(CG_ON_SCREEN, 0)
+    listed: int | None = cg.CGWindowListCopyWindowInfo(CG_ON_SCREEN, 0)  # a CFArrayRef, None for NULL
     there = shown = False
     try:
         for i in range(cf.CFArrayGetCount(listed) if listed else 0):
-            info = cf.CFArrayGetValueAtIndex(listed, i)
+            info: int | None = cf.CFArrayGetValueAtIndex(listed, i)  # a CFDictionaryRef
             at, owner, alpha = ctypes.c_int64(), ctypes.c_int64(), ctypes.c_double()
             cf.CFNumberGetValue(cf.CFDictionaryGetValue(info, keys[0]), CF_SINT64, ctypes.byref(at))
             cf.CFNumberGetValue(cf.CFDictionaryGetValue(info, keys[1]), CF_DOUBLE, ctypes.byref(alpha))

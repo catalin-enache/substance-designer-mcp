@@ -4,7 +4,7 @@ import os
 import re
 from textwrap import dedent
 
-from test_all_tools.common import TEST_GRAPH, Ctx, check, text
+from test_all_tools.common import TEST_GRAPH, Ctx, Ops, check, text
 
 
 async def run(ctx: Ctx) -> None:
@@ -67,7 +67,7 @@ async def run(ctx: Ctx) -> None:
     check('apply_edits', 'set: the name it already has, no warning', 'Tell the user' not in t, t)
 
     nodes_before = len(re.findall(r'^\d+ ', described, re.M))
-    for what, ops, said in [
+    refused: list[tuple[str, Ops, str]] = [
         (
             "add: another output's identifier",
             [{'op': 'add', 'definition': 'output', 'identifier': 'BASE'}],
@@ -80,7 +80,8 @@ async def run(ctx: Ctx) -> None:
             [{'op': 'add', 'definition': 'levels', 'identifier': 'x'}],
             'only an output',
         ),
-    ]:
+    ]
+    for what, ops, said in refused:
         r_ = await c('apply_edits', {'ops': ops, **G})
         after = text(await c('describe_graph', G))
         check(

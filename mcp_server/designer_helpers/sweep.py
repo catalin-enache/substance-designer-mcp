@@ -1,13 +1,14 @@
 """sweep_param."""
 
 from .core import (
+    Json,
     SDNode,
     SDProperty,
     SDPropertyCategory,
     SDSBSCompGraph,
     SDTexture,
-    SDValue,
     _graph_to_edit,
+    _value,
     cast,
     fmt,
     os,
@@ -27,7 +28,7 @@ def sweep_param(
     identifier: str | SDSBSCompGraph | None,
     node_id: str | None,
     param: str,
-    values: list[object],  # parsed JSON, checked by _make_value
+    values: list[Json],  # checked by _make_value
     out_dir: str,
     view_node: str | None = None,
     output: str | None = None,
@@ -56,7 +57,7 @@ def sweep_param(
     if view is None:
         raise RuntimeError('sweeping a graph input needs view_node (the node to look at)')
     made = [_make_value(prop, value) for value in values]  # all of them before anything changes
-    original = cast(SDValue, target.getPropertyValue(prop))  # a parameter always has a value
+    original = _value(target, prop)
     original_text = fmt(original)
     from sd.api.sdproperty import SDPropertyInheritanceMethod
 
@@ -85,7 +86,7 @@ def sweep_param(
             for i, (value, new_value) in enumerate(zip(values, made, strict=True)):
                 target.setPropertyValue(prop, new_value)
 
-                def use(texture: SDTexture, out_prop: SDProperty, i: int = i, value: object = value) -> None:
+                def use(texture: SDTexture, out_prop: SDProperty, i: int = i, value: Json = value) -> None:
                     size = texture.getSize()
                     pitch = texture.getRowPitch()
                     with open(os.path.join(out_dir, '%d.raw' % i), 'wb') as f:

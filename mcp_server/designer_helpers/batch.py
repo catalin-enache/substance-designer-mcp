@@ -2,11 +2,12 @@
 
 import re
 
-from .core import Any, APIException, SDNode, SDSBSCompGraph, _graph_to_edit, _position, cast
+from .core import APIException, Json, SDSBSCompGraph, TypedDict, _find_node, _graph_to_edit, _position, cast
 from .editor import move_nodes
 from .edits import (
     _OUTPUT_DEFINITION,
     _check_output_name,
+    _node,
     add_node,
     connect,
     delete_nodes,
@@ -41,9 +42,47 @@ _OP_FIELDS: dict[str, tuple[str, ...]] = {
     'delete': ('node',),
     'expose': ('node', 'param', 'input_id', 'label', 'default', 'min', 'max', 'step', 'group'),
 }
+# An apply_edits op as the tool's docstring documents it (server_tools/edits.py): every field an op may have, with
+# its type. The ops arrive as parsed JSON, so these are the types the agent was told to send, not checked ones:
+# - _check_batch checks the fields' names, the nodes, the refs, the positions and an output's tags before any op runs.
+# - A value of another type is converted when its op runs, and fails if it can't be: a node id, a position's numbers,
+#   a parameter's value (_make_value).
+# - An exposed input's label, min, max, step and group are set as SDValues built from them: a bool as a bool, a
+#   number as a float, anything else as text (_set_annotation; REVIEW.md HLP-183). An empty, zero, false or null
+#   label takes the default made from the input id (expose_param; REVIEW.md HLP-185).
+# The functional form, since one key ('from') is a Python keyword.
+EditOp = TypedDict(
+    'EditOp',
+    {
+        'op': str,
+        'definition': str,
+        'ref': str,
+        'position': list[float],
+        'params': dict[str, Json],
+        'identifier': str,
+        'label': str,
+        'usage': str,
+        'path': str,
+        'embed': str,
+        'name': str,
+        'node': str,
+        'from': str,
+        'to': str,
+        'input': str,
+        'output': str,
+        'param': str,
+        'input_id': str,
+        'default': Json,
+        'min': float,
+        'max': float,
+        'step': float,
+        'group': str,
+    },
+    total=False,
+)
 
 
-def _check_output_fields(i: int, kind: str, op: dict[str, Any], is_output: bool) -> None:
+def _check_output_fields(i: int, kind: str, op: dict[str, Json], is_output: bool) -> None:
     """An op's identifier, label and usage: on an output node, and values Designer would otherwise rewrite or take
     as they are."""
     given = [field for field in ('identifier', 'label', 'usage') if op.get(field) is not None]
@@ -65,7 +104,7 @@ def _check_output_fields(i: int, kind: str, op: dict[str, Any], is_output: bool)
         raise RuntimeError('op %d (%s): %s; nothing was applied' % (i, kind, problem))
 
 
-def _check_batch(g: SDSBSCompGraph, ops: list[dict[str, Any]]) -> None:
+def _check_batch(g: SDSBSCompGraph, ops: list[dict[str, Json]]) -> None:
     """Refuse the batch before any op runs when an op's kind or a field is unknown, a ref isn't text, or a node
     it names is neither a ref defined by an earlier add/bitmap op, 'graph' (set only), nor a node of
     g; a node an earlier delete op removes counts as gone; or an output's fields are wrong (_check_output_fields)."""
@@ -88,7 +127,7 @@ def _check_batch(g: SDSBSCompGraph, ops: list[dict[str, Any]]) -> None:
                 continue
             if isinstance(value, str) and value in refs:
                 key = refs[value]
-            elif value not in (None, '') and g.getNodeFromId(str(value)) is not None:
+            elif value not in (None, '') and _find_node(g, str(value)) is not None:
                 key = str(value)
             else:
                 raise RuntimeError(
@@ -114,7 +153,7 @@ def _check_batch(g: SDSBSCompGraph, ops: list[dict[str, Any]]) -> None:
             elif target == 'graph':
                 is_output = False
             else:
-                found = g.getNodeFromId(str(target))
+                found = _find_node(g, str(target))
                 definition = found.getDefinition() if found is not None else None
                 is_output = definition is not None and definition.getId() == _OUTPUT_DEFINITION
             _check_output_fields(i, kind, op, is_output)
@@ -131,7 +170,7 @@ def _check_batch(g: SDSBSCompGraph, ops: list[dict[str, Any]]) -> None:
                 output_refs.add(refs[ref])
 
 
-def apply_edits(identifier: str | SDSBSCompGraph | None, ops: list[dict[str, Any]]) -> None:
+def apply_edits(identifier: str | SDSBSCompGraph | None, ops: list[dict[str, Json]]) -> None:
     """Run a list of edit operations in order. 'ref' names a node added earlier in the batch;
     node fields accept a ref, a node id, or 'graph' (set only). Every node the batch names is
     checked before any op runs (_check_batch); after that, stops at the first failing op."""
@@ -141,10 +180,11 @@ def apply_edits(identifier: str | SDSBSCompGraph | None, ops: list[dict[str, Any
     refs: dict[str, str] = {}
     made: list[str] = []  # every node an add or bitmap op made, with its ref if any (REVIEW.md HLP-49)
 
-    def node(value: Any) -> Any:
+    def node(value: str) -> str:
         return refs.get(value, value)
 
-    for i, op in enumerate(ops):
+    # the cast: EditOp gives the ops' documented types, which _check_batch checked in part (EditOp's comment)
+    for i, op in enumerate(cast(list[EditOp], ops)):
         kind = op.get('op')
         nodes_before = g.getNodes().getSize()
         try:
@@ -158,7 +198,7 @@ def apply_edits(identifier: str | SDSBSCompGraph | None, ops: list[dict[str, Any
                     refs[op['ref']] = new_id
                     print('  ref %r = %s' % (op['ref'], new_id))
                 if any(tag is not None for tag in tags):
-                    set_output_tags(g, cast(SDNode, g.getNodeFromId(new_id)), *tags)
+                    set_output_tags(g, _node(g, new_id), *tags)
             elif kind == 'bitmap':
                 new_id = import_bitmap(gid, op['path'], op.get('embed', 'link'), op.get('position'), op.get('name'))
                 made.append(new_id + (' (ref %r)' % op['ref'] if op.get('ref') else ''))
@@ -170,9 +210,7 @@ def apply_edits(identifier: str | SDSBSCompGraph | None, ops: list[dict[str, Any
                 if any(tag is not None for tag in tags):
                     target = str(node(op['node']))
                     added_here = {m.split()[0] for m in made}  # nothing can be using an output this batch made
-                    set_output_tags(
-                        g, cast(SDNode, g.getNodeFromId(target)), *tags, warn_rename=target not in added_here
-                    )
+                    set_output_tags(g, _node(g, target), *tags, warn_rename=target not in added_here)
                 else:
                     set_params(gid, node(op['node']), op['params'])
             elif kind == 'connect':

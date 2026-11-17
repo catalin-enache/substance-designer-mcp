@@ -14,7 +14,7 @@ from .measure import Pixels, _crop, _labelled, _node_pixels, _sheet, _to_display
 
 Values = npt.NDArray[np.float64]  # one channel, (H, W) or flattened
 
-_LUMA = np.array([0.2126, 0.7152, 0.0722])
+_LUMA: npt.NDArray[np.float64] = np.array([0.2126, 0.7152, 0.0722])
 
 
 def _load_reference(path: str, region: list[int] | None = None) -> tuple[Pixels, str]:
@@ -167,13 +167,13 @@ def _histogram_tile(node_luma: Values, ref_luma: Values, width: int, height: int
     hn = np.histogram(node_luma, bins=bins, range=(0, 1))[0].astype(float)
     hr = np.histogram(ref_luma, bins=bins, range=(0, 1))[0].astype(float)
     hn, hr = hn / max(hn.sum(), 1), hr / max(hr.sum(), 1)
-    top = max(hn.max(), hr.max(), 1e-9)
+    top: float = max(hn.max(), hr.max(), 1e-9)
     im = PILImage.new('RGB', (width, height), (24, 24, 24))
     d = ImageDraw.Draw(im)
     bw = width / bins
 
     def y(v: float) -> float:
-        return cast(float, height - 1 - v / top * (height - 20))
+        return height - 1 - v / top * (height - 20)
 
     for i, v in enumerate(hn):
         d.rectangle([i * bw, y(v), (i + 1) * bw - 1, height - 1], fill=(90, 150, 220))

@@ -3,7 +3,6 @@
 import os
 import re
 from textwrap import dedent
-from typing import Any
 
 from mcp.types import CallToolResult
 
@@ -12,6 +11,7 @@ from test_all_tools.common import (
     PLUGIN,
     TEST_GRAPH,
     Ctx,
+    Json,
     added_id,
     check,
     designer_script,
@@ -22,7 +22,7 @@ from test_all_tools.common import (
 )
 
 
-def _a_feeding_pair(G: dict[str, str]) -> dict[str, Any]:
+def _a_feeding_pair(G: dict[str, str]) -> dict[str, Json]:
     """apply_edits' arguments: a fresh gradient feeding a fresh normal."""
     return {
         'ops': [
@@ -346,7 +346,7 @@ async def run(ctx: Ctx) -> None:
     check(
         'designer facts',
         "changing a parameter's inheritance doesn't keep its value, either way, node or graph (GUIDE.md)",
-        default_back and not kept_any,
+        default_back is not None and kept_any is None,
         fact.strip(),
     )
     await designer_script(c, 'measure/relative_size', graph=TEST_GRAPH, node=lv)

@@ -7,8 +7,8 @@ Usage:
     python sd_run.py --cancel
 """
 
-# Annotations stay unevaluated: this script must run, or refuse with a message, on the system Python,
-# which can be older than 3.10 (REVIEW.md INS-25)
+# Annotations stay unevaluated: this script must run, or refuse with a message, on the system Python, 3.9 or
+# later, which can be older than 3.10 (REVIEW.md INS-25; 3.9 at the oldest: DECISIONS.md, Project rules)
 from __future__ import annotations
 
 import argparse
@@ -19,19 +19,21 @@ import json
 import os
 import socket
 import sys
-from typing import Any, TypedDict, cast
+from typing import Protocol, cast
 
 PORT = int(os.environ.get('SD_BRIDGE_PORT', '9877'))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from project_constants import BRIDGE_PROTOCOL, NONCE, PLUGIN, QUEUE_WAIT, TOKEN_FILE  # noqa: E402  (the plugin's name lives there)
-
-
-class Reply(TypedDict, total=False):
-    """The plugin's reply to a request (plugin docstring)."""
-
-    ok: bool
-    output: str
-    error: str
+from project_constants import (  # noqa: E402  (the plugin's name and the bridge's messages live there)
+    BRIDGE_PROTOCOL,
+    NONCE,
+    PLUGIN,
+    QUEUE_WAIT,
+    TOKEN_FILE,
+    Json,
+    Reply,
+    Request,
+    ScriptRequest,
+)
 
 
 class OtherProtocol(Exception):
@@ -44,7 +46,7 @@ def answer(token: str, nonce: str, port: int, body: bytes) -> bytes:
     return hmac.new(token.encode('utf-8'), message, hashlib.sha256).hexdigest().encode('ascii')
 
 
-def send(request: dict[str, Any], wait: float) -> Reply:
+def send(request: Request, wait: float) -> Reply:
     """One request over the bridge protocol (see the plugin's docstring): the token never
     crosses the socket, only an HMAC of the nonce, the port and the request's bytes, on a line before them."""
     with open(TOKEN_FILE) as f:
@@ -56,7 +58,7 @@ def send(request: dict[str, Any], wait: float) -> Reply:
             if not chunk:
                 raise ConnectionError('the bridge closed the connection')
             hello += chunk
-        greeting = json.loads(hello.decode('utf-8'))
+        greeting: Json = json.loads(hello.decode('utf-8'))  # checked next
         if not isinstance(greeting, dict):
             raise ValueError("not the bridge's greeting")
         # the protocol first: another one's greeting may hold no nonce (REVIEW.md SRV-88)
@@ -82,7 +84,7 @@ def send(request: dict[str, Any], wait: float) -> Reply:
     return cast(Reply, json.loads(data.decode('utf-8')))
 
 
-def _send_or_explain(request: dict[str, Any], wait: float) -> Reply:
+def _send_or_explain(request: Request, wait: float) -> Reply:
     """send(), with a one-line explanation instead of a traceback when Designer can't be reached
     (REVIEW.md PLG-16)."""
     try:
@@ -116,6 +118,16 @@ def _send_or_explain(request: dict[str, Any], wait: float) -> Reply:
         sys.exit(1)
 
 
+class _Args(Protocol):
+    """The command line, as main's parser reads it."""
+
+    script: str | None
+    code: str | None
+    timeout: float
+    status: bool
+    cancel: bool
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument('script', nargs='?')
@@ -123,7 +135,7 @@ def main() -> None:
     ap.add_argument('--timeout', type=float, default=0, help='abort the script after N seconds')
     ap.add_argument('--status', action='store_true')
     ap.add_argument('--cancel', action='store_true')
-    args = ap.parse_args()
+    args: _Args = ap.parse_args()
 
     if args.status or args.cancel:
         reply = _send_or_explain({'cmd': 'status' if args.status else 'cancel'}, 10)
@@ -137,7 +149,7 @@ def main() -> None:
                 code = f.read()
         else:
             ap.error('give a script, -c CODE, --status or --cancel')
-        request: dict[str, Any] = {'code': code, 'path': path}
+        request: ScriptRequest = {'code': code, 'path': path}
         if args.timeout:
             request['timeout'] = args.timeout
         # wait for the plugin's queue and the script itself, or a job we gave up on could start later

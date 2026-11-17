@@ -4,20 +4,32 @@ graph, node."""
 
 import array
 import ctypes
-from typing import Any
+from typing import TypedDict, cast
 
 import sd
-from sd.api.sdproperty import SDPropertyCategory
+from sd.api.sbs.sdsbscompgraph import SDSBSCompGraph
+from sd.api.sdnode import SDNode
+from sd.api.sdpackagemgr import SDPackageMgr
+from sd.api.sdproperty import SDProperty, SDPropertyCategory
+from sd.api.sdtexture import SDTexture
 from sd.api.sdvalueint import SDValueInt
+from sd.api.sdvaluetexture import SDValueTexture
 
-ARGS: dict[str, Any] = globals()['ARGS']
-pm = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
-g: Any = next(
-    r for p in pm.getUserPackages() for r in p.getChildrenResources(False) if r.getIdentifier() == ARGS['graph']
+
+class Args(TypedDict):
+    graph: str
+    node: str
+
+
+ARGS: Args = globals()['ARGS']
+pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
+g = cast(
+    SDSBSCompGraph,
+    next(r for p in pm.getUserPackages() for r in p.getChildrenResources(False) if r.getIdentifier() == ARGS['graph']),
 )
 
 
-def pixels(t: Any) -> array.array[int]:
+def pixels(t: SDTexture) -> array.array[int]:
     """Only 8- and 16-bit integer formats, where a tolerance in steps means something (REVIEW.md TST-54, TST-56)."""
     fmt = str(t.getPixelFormat()).split('.')[-1]
     if not fmt.endswith(('8', '16')):
@@ -32,18 +44,18 @@ def apart(a: array.array[int], b: array.array[int]) -> int:
     return max(abs(x - y) for x, y in zip(a, b, strict=False))
 
 
-p = g.getPropertyFromId('$randomseed', SDPropertyCategory.Input)
-n = g.getNodeFromId(ARGS['node'])
+p = cast(SDProperty, g.getPropertyFromId('$randomseed', SDPropertyCategory.Input))
+n = cast(SDNode, g.getNodeFromId(ARGS['node']))
 out = n.getProperties(SDPropertyCategory.Output)[0]
 
 
 def look(seed: int) -> array.array[int]:
     g.setPropertyValue(p, SDValueInt.sNew(seed))
     g.compute()
-    return pixels(n.getPropertyValue(out).get())
+    return pixels(cast(SDTexture, cast(SDValueTexture, n.getPropertyValue(out)).get()))
 
 
-o = None
+o: SDNode | None = None
 try:
     o = g.newNode('sbs::compositing::output')
     n.newPropertyConnectionFromId(out.getId(), o, 'inputNodeOutput')

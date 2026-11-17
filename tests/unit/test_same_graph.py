@@ -2,7 +2,6 @@
 packages. Packages are told apart by file; only two never saved by UID (REVIEW.md HLP-53, HLP-54)."""
 
 import types
-from typing import Any
 
 import pytest
 
@@ -13,7 +12,7 @@ def helpers(faked_helpers: types.ModuleType) -> types.ModuleType:
     return faked_helpers
 
 
-def graph(identifier: str, file: str, uid: str) -> Any:
+def graph(identifier: str, file: str, uid: str) -> types.SimpleNamespace:
     package = types.SimpleNamespace(getFilePath=lambda: file, getUID=lambda: uid)
     return types.SimpleNamespace(getIdentifier=lambda: identifier, getPackage=lambda: package)
 

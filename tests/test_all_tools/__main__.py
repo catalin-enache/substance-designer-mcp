@@ -36,7 +36,7 @@ import sys
 import tempfile
 import time
 import traceback
-from typing import Any
+from typing import Protocol, TypedDict
 
 # importable as the package test_all_tools, also when run as `python tests/test_all_tools`, where
 # Python puts this folder first on sys.path: its module names (save, render...) mustn't shadow others
@@ -84,8 +84,15 @@ from test_all_tools.common import (  # noqa: E402
 )
 from test_all_tools.lifecycle import checks as lifecycle  # noqa: E402
 
-# what a worker's end left for the pool: its quit_designer answer, and when (workers.check_the_quits)
-ENDED: dict[str, Any] = {}
+
+class _Ended(TypedDict, total=False):
+    """What a worker's end left for the pool (workers.check_the_quits), set by finish()."""
+
+    quit: str  # its quit_designer answer
+    quit_at: float  # when it quit (time.time())
+
+
+ENDED: _Ended = {}
 
 
 async def run(
@@ -250,6 +257,17 @@ async def run_steps(ctx: Ctx, steps: list[Step], isolated: bool = True) -> None:
         check('self-test', 'the run reaches its end', False, traceback.format_exc().strip().splitlines()[-1])
 
 
+class _Options(Protocol):
+    """The options main() parses, as argparse's Namespace holds them."""
+
+    workers: int | None
+    no_unit: bool
+    only: list[str] | None
+    worker: str | None
+    results: str | None
+    first: bool
+
+
 def main(argv: list[str] | None = None) -> None:
     """A pool of `--workers N` (workers.choose), of the categories `--only` names, one run off macOS, or one worker of a
     pool (--worker, from workers.py)."""
@@ -274,7 +292,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument('--worker', choices=workers.names(), help=argparse.SUPPRESS)
     parser.add_argument('--results', help=argparse.SUPPRESS)
     parser.add_argument('--first', action='store_true', help=argparse.SUPPRESS)
-    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    args: _Options = parser.parse_args(sys.argv[1:] if argv is None else argv)
     if args.workers is not None and args.workers < 1:
         parser.error('--workers takes 1 or more')
     unknown = [name for name in args.only or [] if name not in workers.names()]
@@ -344,7 +362,7 @@ def one_run(worker: str | None = None, results_file: str | None = None, first: b
     sys.exit(0 if ok else 1)
 
 
-def _ended() -> dict[str, Any]:
+def _ended() -> workers.WorkerEnd:
     return {'quit': ENDED.get('quit'), 'quit_at': ENDED.get('quit_at'), 'forced_in_shutdown': common.forced_in_shutdown}
 
 

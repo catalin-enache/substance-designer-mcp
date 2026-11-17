@@ -6,7 +6,7 @@ import os
 import re
 import shutil
 import tempfile
-from typing import Any
+from typing import TypedDict
 
 import numpy as np
 import numpy.typing as npt
@@ -14,14 +14,16 @@ from mcp.server.mcpserver import Image
 from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image as PILImage
 
-from .core import _bridge, _helpers_call, _output_note_in, _tool, _with_undo
+from .core import AnyJson, _bridge, _helpers_call, _output_note_in, _tool, _with_undo
 
 # decoded pixels: (H, W, C) floats
 Pixels = npt.NDArray[np.float64]
+# the type of one channel of a raw pixel, by Designer's pixel format (_PIXEL_TYPES)
+PixelType = type[np.uint8 | np.uint16 | np.float16 | np.float32]
 # numpy 2.5's stubs declare ndarray.min()/max() without arguments in a way mypy doesn't match
 # ("All overload variants ... require at least one argument"), hence the ignores on those calls.
 
-_PIXEL_TYPES: dict[str, tuple[type[np.generic], float]] = {
+_PIXEL_TYPES: dict[str, tuple[PixelType, float]] = {
     '8': (np.uint8, 255.0),
     '16': (np.uint16, 65535.0),
     '16F': (np.float16, 1.0),
@@ -41,7 +43,35 @@ _PIXEL_LAYOUTS: list[tuple[str, int, list[int]]] = [
 ]
 
 
-def _decode_pixels(raw: bytes, meta: dict[str, Any]) -> tuple[Pixels, str]:
+class _Layout(TypedDict):
+    """A raw pixel buffer's layout, as the helpers print it in JSON (describe.py's dump_node_pixels, sweep.py's
+    sweep_param): its size in pixels, bytes per row and per pixel, and Designer's pixel format (e.g. RGBA16)."""
+
+    width: int
+    height: int
+    pitch: int
+    bpp: int
+    format: str
+
+
+class _NodePixels(_Layout):
+    """dump_node_pixels' PIXELS= line: the layout and the node read ('<id> <kind>.<output>'). _node_pixels adds the
+    note: the helpers' line saying which output was taken (_output_note_in), or None without one."""
+
+    node: str
+    note: str | None
+
+
+class _SweepTile(_Layout):
+    """sweep_param's SWEEP= line, one per value tried: the layout, the value's index (its file is <index>.raw) and the
+    value as the parameter holds it, only printed here: the helpers' fmt() form, a vector's or colour's components read
+    back as a list."""
+
+    index: int
+    value: bool | int | float | str | list[bool | int | float] | None
+
+
+def _decode_pixels(raw: bytes, meta: _Layout) -> tuple[Pixels, str]:
     """Raw Designer pixel buffer -> (float array (H, W, C), values normalised to 0..1 for ints;
     'RGBA' for colour (3 or 4 channels, B and R swapped back for BGR formats) or 'L' for
     grayscale (1 channel, or 2 with alpha))."""
@@ -81,7 +111,7 @@ def _crop(data: Pixels, region: list[int], what: str) -> Pixels:
     return data[y0:y1, x0:x1]
 
 
-def _node_pixels(node_id: str, graph: str | None, output: str | None, tool: str) -> tuple[Pixels, str, dict[str, Any]]:
+def _node_pixels(node_id: str, graph: str | None, output: str | None, tool: str) -> tuple[Pixels, str, _NodePixels]:
     """A node's output computed in Designer: (pixels 0..1 as (H, W, C) floats, 'RGBA' or 'L', meta);
     see _decode_pixels."""
     tmp_dir = tempfile.mkdtemp(prefix='sd_px_')
@@ -98,7 +128,7 @@ def _node_pixels(node_id: str, graph: str | None, output: str | None, tool: str)
         found = re.search(r'PIXELS=(\{.*\})', text)
         if not found or not os.path.exists(raw_path):
             raise ToolError(text.strip().splitlines()[-1] if text.strip() else 'no pixel data')
-        meta: dict[str, Any] = json.loads(found.group(1))
+        meta: _NodePixels = json.loads(found.group(1))
         meta['note'] = _output_note_in(text)
         with open(raw_path, 'rb') as f:
             data, layout = _decode_pixels(f.read(), meta)
@@ -192,7 +222,7 @@ def _channel_summary(data: Pixels, layout: str) -> str:
 def sweep_param(
     node_id: str,
     param: str,
-    values: list[Any],
+    values: list[AnyJson],
     graph: str | None = None,
     view_node: str | None = None,
     output: str | None = None,
@@ -221,7 +251,7 @@ def sweep_param(
             '<sweep_param>',
             600,
         )
-        metas: list[dict[str, Any]] = [json.loads(m) for m in re.findall(r'SWEEP=(\{.*\})', text)]
+        metas: list[_SweepTile] = [json.loads(m) for m in re.findall(r'SWEEP=(\{.*\})', text)]
         if not metas:
             raise ToolError(text.strip().splitlines()[-1] if text.strip() else 'sweep produced nothing')
         tiles: list[PILImage.Image] = []

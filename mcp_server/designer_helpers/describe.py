@@ -4,7 +4,6 @@ pixels)."""
 from .core import (
     _APP,
     _PM,
-    Any,
     APIException,
     Callable,
     SDApplicationPath,
@@ -12,15 +11,23 @@ from .core import (
     SDPackage,
     SDProperty,
     SDPropertyCategory,
+    SDResource,
     SDResourceFolder,
     SDSBSCompGraph,
     SDTexture,
-    SDType,
     SDTypeEnum,
-    SDValueTexture,
+    Shown,
+    _annotation_text,
     _default_output,
+    _new_instance,
+    _new_node,
+    _nodes,
     _other_end,
     _output_note,
+    _texture,
+    _type,
+    _usage_names,
+    _xy,
     cast,
     find_graph,
     fmt,
@@ -35,14 +42,13 @@ from .layout import graph_objects_summary
 def _output_tags_text(node: SDNode) -> str:
     """What names an output node and what it is for, as the add and set ops set them."""
     try:
-        identifier: Any = node.getAnnotationPropertyValueFromId('identifier')  # SDValueStrings
-        label: Any = node.getAnnotationPropertyValueFromId('label')
-        tags: Any = node.getAnnotationPropertyValueFromId('usages')
-        array = tags.get() if tags is not None else None  # an SDValueArray of SDValueUsage
-        names = [array.getItem(i).get().getName() for i in range(array.getSize())] if array is not None else []
-        text = ' identifier=%r' % (identifier.get() if identifier is not None else '')
-        if label is not None and label.get():
-            text += ' label=%r' % label.get()
+        identifier = _annotation_text(node, 'identifier')
+        label = _annotation_text(node, 'label')
+        # a usage that reads as None fails into the except below
+        names = _usage_names(node.getAnnotationPropertyValueFromId('usages'))
+        text = ' identifier=%r' % (identifier or '')
+        if label:
+            text += ' label=%r' % label
         return text + ' usage=%s' % (','.join(names) or 'none')
     except (Exception, APIException):  # one node's annotations mustn't cost the whole description
         return ''
@@ -54,12 +60,14 @@ def describe_graph(
     include_params: bool = False,
     limit: int = 400,
 ) -> None:
+    from sd.api.sdvalueint2 import SDValueInt2
+
     g = find_graph(identifier)
-    nodes = list(g.getNodes())
+    nodes = _nodes(g)
     print('graph %s: %d nodes' % (g.getIdentifier(), len(nodes)))
     try:
-        # an SDValueInt2; a None fails into the except below
-        size = g.getInputPropertyValueFromId('$outputsize').get()  # type: ignore[union-attr]
+        # a None fails into the except below
+        size = cast(SDValueInt2 | None, g.getInputPropertyValueFromId('$outputsize')).get()  # type: ignore[union-attr]
         print('$outputsize (log2): %d x %d' % (size.x, size.y))
     except (Exception, APIException):
         pass
@@ -77,8 +85,8 @@ def describe_graph(
             print('not found: %s' % ', '.join(unknown))
         nodes = [n for n in nodes if n.getIdentifier() in wanted]
     for n in nodes[:limit]:
-        pos = n.getPosition()
-        line = '%s %s @(%d,%d)' % (n.getIdentifier(), node_kind(n), pos.x, pos.y)
+        x, y = _xy(n.getPosition())
+        line = '%s %s @(%d,%d)' % (n.getIdentifier(), node_kind(n), x, y)
         if node_kind(n) == 'output':
             line += _output_tags_text(n)
         links = []
@@ -163,7 +171,7 @@ def _load_library(path: str) -> SDPackage:
     return _PM.loadUserPackage(path)
 
 
-def _library_graph(definition: str) -> Any:
+def _library_graph(definition: str) -> SDResource:
     """The library graph a definition names, for newInstanceNode. findResourceFromUrl finds a group too, and
     newInstanceNode then says only NotSupported (measured; REVIEW.md HLP-63)."""
     path, graph_id = _library_path(definition)
@@ -187,7 +195,7 @@ def _slider_range(node: SDNode, prop_id: str) -> str:
         rprop = ref.getPropertyFromId(prop_id, SDPropertyCategory.Input)
         if rprop is None:
             return ''
-        values: dict[str, Any] = {}
+        values: dict[str, Shown] = {}
         for key in ('min', 'max', 'step', 'clamp'):
             v = ref.getPropertyAnnotationValueFromId(rprop, key)
             values[key] = fmt(v) if v is not None else None
@@ -223,10 +231,10 @@ def describe_node(definition: str) -> None:
             tmp = _PM.newUserPackage()
             g = SDSBSCompGraph.sNew(tmp)
             atomic_id = definition if definition.startswith('sbs::') else 'sbs::compositing::' + definition
-            node = g.newNode(atomic_id) if atomic_id in atomic_definition_ids(g) else None
+            node = _new_node(g, atomic_id) if atomic_id in atomic_definition_ids(g) else None
             if node is None:
                 res = _library_graph(definition)
-                node = cast(SDNode, g.newInstanceNode(res))  # the resource was found just above
+                node = _new_instance(g, res)  # the resource was found just above
                 path, graph_id = _library_path(definition)
                 print('library node %s (%s)' % (graph_id, os.path.basename(path)))
             else:
@@ -234,7 +242,7 @@ def describe_node(definition: str) -> None:
             print('output connector ids:', [p.getId() for p in node.getProperties(SDPropertyCategory.Output)])
             print('inputs:')
             for prop in node.getProperties(SDPropertyCategory.Input):
-                ptype = cast(SDType, prop.getType())  # a parameter always has a type
+                ptype = _type(prop)
                 kind = 'CONNECTOR' if prop.isConnectable() else ptype.getId()
                 line = '  %-28s %-26s' % (prop.getId(), kind)
                 label = prop.getLabel()
@@ -287,20 +295,18 @@ def _with_node_texture(
         print(_output_note(how))
         outs = [p for p in outs if p.getId() == chosen]
     g.compute()
-    value = cast(SDValueTexture | None, node.getPropertyValue(outs[0]))
-    texture = value.get() if value is not None else None
+    texture = _texture(node, outs[0])
     if texture is not None:
         use(texture, outs[0])
         return
-    before = {n.getIdentifier() for n in g.getNodes()}
+    before = {n.getIdentifier() for n in _nodes(g)}
     try:
         try:
-            temp_output = g.newNode('sbs::compositing::output')
+            temp_output = _new_node(g, 'sbs::compositing::output')
             node.newPropertyConnectionFromId(outs[0].getId(), temp_output, 'inputNodeOutput')
             for _ in range(2):  # the second only when the first gave none (the docstring)
                 g.compute()
-                value = cast(SDValueTexture | None, node.getPropertyValue(outs[0]))
-                texture = value.get() if value is not None else None
+                texture = _texture(node, outs[0])
                 if texture is not None:
                     break
             if texture is None:
@@ -319,7 +325,7 @@ def _with_node_texture(
 def _delete_new_nodes(g: SDSBSCompGraph, before: set[str]) -> None:
     """Deletes the nodes of `g` whose identifier isn't in `before`: the ones a call added. Listed again each time, so a
     second run deletes none twice."""
-    for n in list(g.getNodes()):
+    for n in _nodes(g):
         if n.getIdentifier() not in before:
             g.deleteNode(n)
 

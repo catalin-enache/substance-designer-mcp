@@ -3,20 +3,23 @@
 from .core import (
     _APP,
     _PM,
-    Any,
     APIException,
     Callable,
+    QtWidgets,
     SDApplicationPath,
-    SDProperty,
-    SDPropertyCategory,
     SDSBSCompGraph,
-    SDUIMgr,
     Sequence,
     _current_graph,
     _graph_to_edit,
+    _main_window,
+    _nodes,
     _position,
+    _qt_app,
     _refuse_bad_size,
     _same_graph,
+    _size_property,
+    _ui_mgr,
+    _xy,
     cast,
     find_graph,
     node_kind,
@@ -29,19 +32,15 @@ from .screenshots import _PANEL_AREAS, _graph_view, _visible_dock
 
 
 def _process_events(n: int = 10) -> None:
-    from PySide6 import QtWidgets
-
     for _ in range(n):
-        cast(QtWidgets.QApplication, QtWidgets.QApplication.instance()).processEvents()
+        _qt_app().processEvents()
 
 
 def _fit_graph_view() -> bool:
     """Trigger the graph view's own 'Fit in view (selection)' (F): it fits the user's selection, or
     the whole graph when nothing is selected. Returns False if the action can't be found. Not used
     by open_graph, which fits all nodes by wheel zoom (REVIEW.md HLP-32); the self-test measures it."""
-    from PySide6 import QtWidgets
-
-    mw = _APP.getQtForPythonUIMgr().getMainWindow()  # type: ignore[no-untyped-call]  # sd: no annotations
+    mw = _main_window()
     dock = _visible_dock(mw, _PANEL_AREAS['graph'])
     if dock is None:
         return False
@@ -54,14 +53,12 @@ def _fit_graph_view() -> bool:
     return False
 
 
-def _home_screen() -> tuple[Any, Any, Any] | None:  # Qt widgets: Any, see screenshots._visible_dock
+def _home_screen() -> tuple[QtWidgets.QStackedWidget, QtWidgets.QWidget, QtWidgets.QAbstractButton] | None:
     """Designer's window is a stack: the main window (panels) and the Home screen. While Home
     is showing, every panel counts as invisible. Returns (stack, home page, its 'Close home
     screen' button), or None. Keep all three referenced while using the button, or PySide
     reports it as already deleted."""
-    from PySide6 import QtWidgets
-
-    for top in cast(QtWidgets.QApplication, QtWidgets.QApplication.instance()).topLevelWidgets():
+    for top in _qt_app().topLevelWidgets():
         if isinstance(top, QtWidgets.QStackedWidget) and top.isVisible():
             page = top.currentWidget()
             for button in page.findChildren(QtWidgets.QAbstractButton) if page is not None else []:
@@ -71,10 +68,8 @@ def _home_screen() -> tuple[Any, Any, Any] | None:  # Qt widgets: Any, see scree
 
 
 def _visible_panels() -> int:
-    from PySide6 import QtWidgets
-
     count = 0
-    for d in cast(QtWidgets.QApplication, QtWidgets.QApplication.instance()).allWidgets():
+    for d in _qt_app().allWidgets():
         try:
             count += isinstance(d, QtWidgets.QDockWidget) and d.objectName().startswith('area') and d.isVisible()
         except RuntimeError:  # a wrapper whose widget is gone (GUIDE.md, Designer UI)
@@ -111,8 +106,8 @@ def _fit_area(
                 '%s frame titled %r; frames: %s'
                 % ('more than one' if found else 'no', frame, ', '.join(repr(f.getTitle()) for f in frames) or 'none')
             )
-        pos, size = found[0].getPosition(), found[0].getSize()
-        return pos.x, pos.y, size.x, size.y, 'frame %r' % found[0].getTitle()
+        (x, y), (w, h) = _xy(found[0].getPosition()), _xy(found[0].getSize())
+        return x, y, w, h, 'frame %r' % found[0].getTitle()
     if node_ids:
         nodes, (left, top, right, bottom) = _nodes_bbox(g, node_ids)
         return left, top, right - left, bottom - top, '%d node(s)' % len(nodes)
@@ -126,7 +121,7 @@ FIT_MAX_ZOOM = 1.0  # 100 %: a node at its normal size, never larger
 FIT_PADDING = 0.05  # of the fitted area, on every side
 
 
-def _wheel_zoom(view: Any, notches: int) -> None:
+def _wheel_zoom(view: QtWidgets.QGraphicsView, notches: int) -> None:
     """Zoom the graph view by mouse-wheel notches (positive: in), through Designer's own wheel
     handling. Designer keeps its own zoom level besides the view's transform: setting the
     transform directly (fitInView, scale) leaves that level stale, and the user's next wheel
@@ -134,9 +129,7 @@ def _wheel_zoom(view: Any, notches: int) -> None:
     _wheel(view.viewport(), notches)
 
 
-def _wheel(  # Any: a Qt widget
-    viewport: Any, notches: int, taking: Callable[[], Callable[[], object]] | None = None
-) -> None:
+def _wheel(viewport: QtWidgets.QWidget, notches: int, taking: Callable[[], Callable[[], bool]] | None = None) -> None:
     """Mouse-wheel notches (positive: in) at the middle of a widget, as Designer takes them from the mouse. `taking`,
     when given, runs before each notch and returns the wait run after it, for a view that drops some sent back to
     back: the 3D view's _Frames.taking, a frame drawn once the notch's event ran, or off screen an UpdateRequest since
@@ -170,17 +163,15 @@ def _whole_graph_rect(g: SDSBSCompGraph) -> tuple[float, float, float, float, st
     from sd.api.sdgraphobjectcomment import SDGraphObjectComment
     from sd.api.sdgraphobjectframe import SDGraphObjectFrame
 
-    nodes = list(g.getNodes())
+    nodes = _nodes(g)
     frames = [o for o in g.getGraphObjects() if isinstance(o, SDGraphObjectFrame)]
     comments = [o for o in g.getGraphObjects() if isinstance(o, SDGraphObjectComment) and o.getParent() is None]
-    boxes = [
-        (o.getPosition().x, o.getPosition().y, o.getPosition().x + 1, o.getPosition().y + 1) for o in comments
-    ]  # REVIEW.md HLP-39
+    boxes = [(x, y, x + 1, y + 1) for x, y in (_xy(o.getPosition()) for o in comments)]  # REVIEW.md HLP-39
     if nodes:
         boxes.append(_nodes_bbox(g, [n.getIdentifier() for n in nodes])[1])
     for f in frames:
-        pos, size = f.getPosition(), f.getSize()
-        boxes.append((pos.x, pos.y, pos.x + size.x, pos.y + size.y))
+        (x, y), (w, h) = _xy(f.getPosition()), _xy(f.getSize())
+        boxes.append((x, y, x + w, y + h))
     if not boxes:
         return None
     left, top = min(b[0] for b in boxes), min(b[1] for b in boxes)
@@ -217,7 +208,7 @@ def _fit_view_to(
     x, y, w, h, area_name = _fit_area(g, node_ids, frame, rect)
     what = what or area_name
     # keeps the view's wrappers alive
-    mw = _APP.getQtForPythonUIMgr().getMainWindow()  # type: ignore[no-untyped-call]  # sd: no annotations
+    mw = _main_window()
     view = _graph_view(mw)
     if view is None:
         raise RuntimeError('the graph view is not visible in Designer')
@@ -227,7 +218,7 @@ def _fit_view_to(
     target = min(FIT_MAX_ZOOM, viewport.width() / area.width(), viewport.height() / area.height())
 
     def zoom() -> float:
-        return cast(float, view.transform().m11())
+        return view.transform().m11()
 
     for _ in range(80):  # out until it fits (a stuck zoom ends the loop)
         before = zoom()
@@ -277,7 +268,7 @@ def open_graph(
     or centre it on one node; by default fit the whole graph."""
     g = find_graph(identifier)
     leave_home_screen()  # otherwise the graph opens behind it
-    ui = cast(SDUIMgr, _APP.getUIMgr())  # Designer runs with its UI
+    ui = _ui_mgr()
     ui.openResourceInEditor(g)
     _process_events()
     print('opened', g.getIdentifier())
@@ -323,7 +314,7 @@ def create_graph(name: str, save_path: str | None = None, size_log2: int = 11) -
     pkg = _PM.newUserPackage()
     g = SDSBSCompGraph.sNew(pkg)
     g.setIdentifier(name)
-    prop = cast(SDProperty, g.getPropertyFromId('$outputsize', SDPropertyCategory.Input))  # every graph has it
+    prop = _size_property(g)
     g.setPropertyInheritanceMethod(prop, SDPropertyInheritanceMethod.Absolute)
     g.setPropertyValue(prop, SDValueInt2.sNew(int2(size_log2, size_log2)))
     print('created graph %s (%d px)' % (name, 2**size_log2))

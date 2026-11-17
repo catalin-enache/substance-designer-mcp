@@ -2,13 +2,16 @@
 server sends to Designer: every part must be in it, once, with core first."""
 
 import ast
+import gc
 import os
+import types
+import weakref
 from typing import TypeGuard, cast
 
 import pytest
 
 import designer_helpers
-from conftest import patch_server, server
+from conftest import fake_bridge, server
 
 
 def _part_files() -> list[str]:
@@ -257,11 +260,11 @@ def _sent_by_tools(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     the helpers + call wrapped in an undo group, as the argument of compile())."""
     sent: list[str] = []
 
-    def bridge(code: str, path: str | None = None, timeout: float | None = None) -> str:
+    def bridge(code: str) -> str:
         sent.append(code)
         return 'ok'
 
-    patch_server(monkeypatch, '_bridge', bridge)
+    fake_bridge(monkeypatch, bridge)
     server.describe_graph('g')
     server.apply_edits([{'op': 'add', 'definition': 'levels'}], graph='g')
     wrapped = next(
@@ -277,3 +280,19 @@ def test_tools_send_the_joined_parts_ahead_of_their_call(monkeypatch: pytest.Mon
     for code in _sent_by_tools(monkeypatch):
         assert code.startswith(expected) and code[len(expected) :].split('(')[0] in ('describe_graph', 'apply_edits')
     compile(designer_helpers.source(), 'designer_helpers', 'exec')
+
+
+def test_a_job_running_the_helpers_leaves_its_scope_to_be_freed(faked_helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-182: typing.overload keeps each stub it decorates, by module, name and line; the helpers run as
+    # __main__ in the plugin's job scope, so a stub kept the last job's scope, the stub's globals, alive after the job
+    scope: dict[str, object] = {'__name__': '__main__', '__file__': '<plugin>'}  # the plugin's _run makes it so
+    exec(compile(designer_helpers.source(), '<plugin>', 'exec'), scope)
+
+    class Kept:
+        """An object only the job's scope holds."""
+
+    scope['kept'] = Kept()
+    kept = weakref.ref(cast(Kept, scope['kept']))
+    del scope
+    gc.collect()
+    assert kept() is None, 'the job ended, its scope still held'

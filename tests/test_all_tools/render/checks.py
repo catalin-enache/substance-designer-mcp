@@ -5,7 +5,6 @@ import re
 import subprocess
 import sys
 from textwrap import dedent
-from typing import Any
 
 from test_all_tools.common import (
     BUNDLE,
@@ -87,7 +86,8 @@ async def run(ctx: Ctx) -> None:
 
     # both count: the stored value (5 vs 0 at render seed 0) and the render seed (0 vs 5 for the
     # copy storing 0), so neither replaces the other (REVIEW.md TST-40)
-    seed_maps: dict[str, Any] = {}  # numpy arrays, or None where a render made no file
+    # the height maps' pixels, or None where a render made no file
+    seed_maps: dict[str, np.ndarray[tuple[int, ...], np.dtype[np.int_]] | None] = {}
     render_said: dict[str, str] = {}
     for name, path, seed in (
         ('stored5_seed0', sbs, 0),

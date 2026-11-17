@@ -1,18 +1,27 @@
 """Runs inside Designer: bitmaps can't be embedded, and setDefaultParentSize takes pixels (checks.py).
 ARGS: graph, png."""
 
-from typing import Any
+from typing import TypedDict, cast
 
 import sd
 from sd.api.apiexception import APIException
+from sd.api.sbs.sdsbscompgraph import SDSBSCompGraph
 from sd.api.sdbasetypes import int2
+from sd.api.sdpackagemgr import SDPackageMgr
 from sd.api.sdresource import EmbedMethod
 from sd.api.sdresourcebitmap import SDResourceBitmap
 
-ARGS: dict[str, Any] = globals()['ARGS']
-pm = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
-g: Any = next(
-    r for p in pm.getUserPackages() for r in p.getChildrenResources(False) if r.getIdentifier() == ARGS['graph']
+
+class Args(TypedDict):
+    graph: str
+    png: str
+
+
+ARGS: Args = globals()['ARGS']
+pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
+g = cast(
+    SDSBSCompGraph,
+    next(r for p in pm.getUserPackages() for r in p.getChildrenResources(False) if r.getIdentifier() == ARGS['graph']),
 )
 try:
     SDResourceBitmap.sNewFromFile(g.getPackage(), ARGS['png'], EmbedMethod.BinaryEmbedded)

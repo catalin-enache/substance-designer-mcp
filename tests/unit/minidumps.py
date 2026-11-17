@@ -8,7 +8,9 @@ import struct
 import uuid as uuids
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TypedDict
+
+from typing_extensions import Unpack  # typing's from Python 3.11; mcp requires typing_extensions
 
 ARM64, AMD64 = 12, 9  # MINIDUMP_SYSTEM_INFO's ProcessorArchitecture
 MACOS, WINDOWS = 0x8101, 2  # its PlatformId
@@ -47,6 +49,26 @@ class Crash:
     memory: Sequence[tuple[int, bytes]] = ()  # the memory list's ranges, (start, bytes), beside the thread's stack
 
 
+class CrashFields(TypedDict, total=False):
+    """Crash's fields, any of them: what an_abort changes. dataclasses.replace refuses a key that isn't one."""
+
+    modules: Sequence[Module]
+    pc: int
+    lr: int
+    fp: int
+    sp: int
+    stack_start: int
+    stack: bytes
+    params: Sequence[int]
+    code: int
+    messages: Sequence[tuple[int, str]]
+    arch: int
+    platform: int
+    thread: int
+    other_threads: Sequence[int]
+    memory: Sequence[tuple[int, bytes]]
+
+
 class _Writer:
     def __init__(self) -> None:
         self.data = bytearray(32)  # the header, written last
@@ -80,7 +102,7 @@ DESIGNER = Module(
 PAC = 0x0012000000000000  # a return address's pointer-authentication bits, which the walk drops
 
 
-def an_abort(**kw: Any) -> Crash:  # Any: Crash's fields, of several types, which dataclasses.replace checks
+def an_abort(**kw: Unpack[CrashFields]) -> Crash:
     """An abort in the kernel (pc), called from libc (lr), with two frame records above it on the stack: QtCore's
     return address (signed), then Designer's, then the end of the chain; Crashpad kept libc's "abort() called"."""
     stack = frames(

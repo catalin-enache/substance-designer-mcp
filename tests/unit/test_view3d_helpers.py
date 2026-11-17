@@ -8,10 +8,19 @@ import sys
 import types
 from collections.abc import Callable, Iterator
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import TYPE_CHECKING, NoReturn, cast
 from unittest import mock
 
 import pytest
+
+from conftest import View3dOptions
+
+if TYPE_CHECKING:  # for the checker only: the types the faked helpers take; sd and PySide6 are faked at run time
+    from PySide6 import QtCore, QtGui, QtWidgets
+    from sd.api.sbs.sdsbscompgraph import SDSBSCompGraph
+
+    from designer_helpers.core import Kept
+    from designer_helpers.view3d import Pressed
 
 
 class MenuWindow:
@@ -66,7 +75,7 @@ class Index:
 Index.ROOT = Index()
 
 
-def _tree(row: Index, under: Any = None, inside: bool = True) -> Any:
+def _tree(row: Index, under: Index | None = None, inside: bool = True) -> SimpleNamespace:
     """The Explorer's tree: `under` is the row its point falls on (row by default), `inside` whether that point is in
     view. The row's point is only in view once scrolled to."""
     point = SimpleNamespace(name='the middle of the row')
@@ -88,7 +97,9 @@ def test_a_graphs_row_is_scrolled_into_view_before_its_point_is_read(helpers: ty
 
 
 @pytest.mark.parametrize('under, inside', [(Index(), True), (None, False)], ids=['another row there', 'out of view'])
-def test_a_point_that_isnt_on_the_graphs_row_is_refused(helpers: types.ModuleType, under: Any, inside: bool) -> None:
+def test_a_point_that_isnt_on_the_graphs_row_is_refused(
+    helpers: types.ModuleType, under: Index | None, inside: bool
+) -> None:
     # the menu opens for the row under the point: another graph's outputs would go on the mesh
     row = Index(Index())
     with pytest.raises(RuntimeError, match="graph g's row isn't showing in the Explorer"):
@@ -109,7 +120,7 @@ class Menu:
         self.opacity: float | None = None  # what setWindowOpacity set last
         self.opacities: list[float] = []  # each opacity setWindowOpacity set, in order
         self.native: list[str] = []  # what was done to its own window through _MacWindow (MenuWindow)
-        self.flags: list[tuple[object, bool]] = []  # what its window's setFlag set
+        self.flags: list[tuple[QtCore.Qt.WindowType, bool]] = []  # what its window's setFlag set
 
         def trigger(t: str) -> None:
             if raising:
@@ -122,7 +133,7 @@ class Menu:
             for t in texts
         ]
 
-    def actions(self) -> list[Any]:
+    def actions(self) -> list[SimpleNamespace]:
         return self._actions
 
     def close(self) -> None:
@@ -284,7 +295,7 @@ class Timer:
     """A QTimer: started, stopped, never firing by itself; `run` is what its timeout was connected to. `aborted`: its
     start raises, as an abort landing there would."""
 
-    def __init__(self, aborted: bool = False, parent: object = None) -> None:
+    def __init__(self, aborted: bool = False, parent: 'QtCore.QObject | None' = None) -> None:
         self.active = False
         self.aborted = aborted
         self.parent = parent
@@ -309,14 +320,17 @@ class Timer:
 
 
 def _outputs_applied(
-    helpers: types.ModuleType, send_event: Any, aborted_start: int | None = None, timers: list[Timer] | None = None
+    helpers: types.ModuleType,
+    send_event: Callable[[list[Timer]], None],
+    aborted_start: int | None = None,
+    timers: list[Timer] | None = None,
 ) -> None:
     """_apply_outputs on a faked Explorer, each menu's run being `send_event(timers)`; the timers it makes go in
     `timers`, two a try (the look, the guard), the one numbered `aborted_start` raising as it starts."""
     made: list[Timer] = [] if timers is None else timers
 
-    def new_timer(*args: Any) -> Timer:
-        made.append(Timer(aborted=len(made) == aborted_start, parent=args[0] if args else None))
+    def new_timer(parent: 'QtCore.QObject | None' = None) -> Timer:
+        made.append(Timer(aborted=len(made) == aborted_start, parent=parent))
         return made[-1]
 
     qt('QtCore').QTimer.side_effect = new_timer
@@ -563,11 +577,11 @@ class Designer:
         dock = SimpleNamespace(findChildren=lambda cls: children[cls])
         areas = {helpers._PANEL_AREAS[name] for name in hidden}
 
-        def visible_dock(mw: Any, area: str) -> Any:
+        def visible_dock(mw: 'QtWidgets.QMainWindow', area: str) -> SimpleNamespace | None:
             self.order.append(area)
             return None if area in areas else dock
 
-        def menu_action(bar: Any, keep: Any, *path: str) -> Any:
+        def menu_action(bar: 'QtWidgets.QMenuBar', keep: list['Kept'], *path: str) -> SimpleNamespace:
             self.events.append(('lookup', path))
             return SimpleNamespace(trigger=lambda: self.events.append(('trigger', path)))
 
@@ -576,7 +590,7 @@ class Designer:
         vars(helpers)['_material'] = lambda bar, keep: 'Default (overridden)'
         vars(helpers)['_home_screen'] = lambda: None
 
-        def wheel(viewport: object, steps: int, taking: Callable[[], Callable[[], object]]) -> None:
+        def wheel(viewport: 'QtWidgets.QWidget', steps: int, taking: Callable[[], Callable[[], bool]]) -> None:
             self.events.append(('trigger', ('wheel', str(steps))))
             for _ in range(abs(steps)):
                 taking()()
@@ -584,12 +598,12 @@ class Designer:
         vars(helpers)['_wheel'] = wheel
 
         def drag(
-            viewport: object,
-            button: object,
+            viewport: 'QtWidgets.QWidget',
+            button: 'QtCore.Qt.MouseButton',
             dx: int,
             dy: int,
-            pressed: list[object],
-            taking: Callable[[], Callable[[], object]],
+            pressed: 'Pressed',
+            taking: Callable[[], Callable[[], bool]],
         ) -> None:
             which = 'left' if button is qt('QtCore').Qt.MouseButton.LeftButton else 'middle'
             taken = taking()
@@ -601,7 +615,9 @@ class Designer:
             ('trigger', ('outputs', g.getIdentifier()))
         )
 
-        def set_tiling(params: Any, bar: Any, value: float, keep: Any) -> str:
+        def set_tiling(
+            params: 'QtWidgets.QDockWidget', bar: 'QtWidgets.QMenuBar', value: float, keep: list['Kept']
+        ) -> str:
             self.events.append(('trigger', ('tiling', str(value))))
             return 'tiling %g' % value
 
@@ -610,7 +626,9 @@ class Designer:
         frames = self.frames
 
         class Watching:  # a class, as _Frames is: the set-up's own annotation names it (frames: _Frames | None)
-            def __new__(cls, viewport: object, render: object) -> Frames:  # type: ignore[misc]  # a fake made by its class
+            def __new__(  # type: ignore[misc]  # a fake made by its class
+                cls, viewport: 'QtWidgets.QWidget', render: 'Callable[[], QtGui.QImage]'
+            ) -> Frames:
                 return frames
 
         vars(helpers)['_Frames'] = Watching
@@ -656,7 +674,7 @@ def test_a_graph_with_fewer_than_two_outputs_is_refused_before_the_panels_are_lo
     ids=['tiling', 'graph'],
 )
 def test_a_panel_it_needs_is_checked_before_anything_changes(
-    helpers: types.ModuleType, hidden: tuple[str, ...], options: dict[str, Any], said: str
+    helpers: types.ModuleType, hidden: tuple[str, ...], options: View3dOptions, said: str
 ) -> None:
     # REVIEW.md HLP-107: the mesh changed, then the panel's error
     designer = Designer(helpers, hidden=hidden)
@@ -685,7 +703,7 @@ def test_tiling_with_a_mesh_doesnt_count_the_materials_of_the_mesh_it_replaces(h
     # REVIEW.md HLP-114: the mesh shown had two; the Plane has one
     designer = Designer(helpers)
 
-    def two(bar: Any, keep: Any) -> str:
+    def two(bar: 'QtWidgets.QMenuBar', keep: list['Kept']) -> str:
         raise RuntimeError("the 3D view's mesh has 2 materials: A, B; tiling= sets the material of a mesh with one")
 
     vars(helpers)['_material'] = two
@@ -701,7 +719,7 @@ def test_an_abort_after_a_change_says_what_was_set_and_goes_on(
     # REVIEW.md HLP-113: the plugin's abort is a BaseException, raised again unchanged so the plugin reports it
     Designer(helpers)
 
-    def aborted(tree: Any, g: Any, keep: Any) -> None:
+    def aborted(tree: 'QtWidgets.QTreeView', g: 'SDSBSCompGraph', keep: list['Kept']) -> None:
         raise KeyboardInterrupt('an abort as the outputs are applied')
 
     vars(helpers)['_apply_outputs'] = aborted
@@ -745,7 +763,7 @@ def test_the_cameras_turn_is_watched_with_designers_window_on_screen(helpers: ty
         designer.events.append(('screen', ('again',)))
 
     @contextlib.contextmanager
-    def on_screen(mw: object, frames: object) -> Iterator[SimpleNamespace]:
+    def on_screen(mw: 'QtWidgets.QMainWindow', frames: Frames) -> Iterator[SimpleNamespace]:
         assert frames is designer.frames
         designer.events.append(('screen', ('on screen',)))
         try:
@@ -780,7 +798,7 @@ def test_the_cameras_turn_is_watched_with_designers_window_on_screen(helpers: ty
     ids=['orbit', 'pan', 'zoom', 'a mesh and an orbit', 'no move'],
 )
 def test_a_set_up_that_moves_the_camera_runs_with_designers_window_on_screen(
-    helpers: types.ModuleType, options: dict[str, object], moves: bool
+    helpers: types.ModuleType, options: View3dOptions, moves: bool
 ) -> None:
     # REVIEW.md HLP-168 (the user's choice, 2026-11-16): off screen, the same moves from the same start came out
     # differently between runs (a pan 68.5 grey levels apart in 1 of 2); on screen, as a 3D shot sets up, they repeated
@@ -792,7 +810,7 @@ def test_a_set_up_that_moves_the_camera_runs_with_designers_window_on_screen(
         designer.events.append(('screen', ('again',)))
 
     @contextlib.contextmanager
-    def on_screen(mw: object, frames: object) -> Iterator[SimpleNamespace]:
+    def on_screen(mw: 'QtWidgets.QMainWindow', frames: Frames) -> Iterator[SimpleNamespace]:
         assert frames is designer.frames
         designer.events.append(('screen', ('on screen',)))
         try:
@@ -827,7 +845,7 @@ def test_a_set_up_that_moves_the_camera_runs_with_designers_window_on_screen(
     ids=['mesh', 'graph', 'view', 'orbit', 'zoom', 'tiling'],
 )
 def test_each_step_waits_for_the_3d_view_to_take_it(
-    helpers: types.ModuleType, options: dict[str, object], waits: list[object]
+    helpers: types.ModuleType, options: View3dOptions, waits: list[tuple[str, ...] | str]
 ) -> None:
     # REVIEW.md HLP-148: on the view's frames, never a fixed time (frames3d.py); a set-up of its own stops watching
     designer = Designer(helpers)
@@ -848,7 +866,7 @@ def test_an_api_error_after_a_change_says_what_was_set(helpers: types.ModuleType
     # REVIEW.md HLP-117: the sd API's error is a BaseException, not an abort
     Designer(helpers)
 
-    def refused(tree: Any, g: Any, keep: Any) -> None:
+    def refused(tree: 'QtWidgets.QTreeView', g: 'SDSBSCompGraph', keep: list['Kept']) -> None:
         raise helpers.APIException('the API refused')
 
     vars(helpers)['_apply_outputs'] = refused
@@ -863,7 +881,7 @@ def test_an_abort_escaping_the_tiling_turns_the_panel_back(helpers: types.Module
     Designer(helpers)
     back: list[str] = []
 
-    def aborted(params: Any, bar: Any, value: float, keep: Any) -> str:
+    def aborted(params: 'QtWidgets.QDockWidget', bar: 'QtWidgets.QMenuBar', value: float, keep: list['Kept']) -> str:
         raise KeyboardInterrupt('an abort as the tiling ends')
 
     def parameters_back() -> str:
@@ -882,7 +900,7 @@ def test_an_abort_while_the_menus_are_looked_up_says_nothing(
 ) -> None:
     designer = Designer(helpers)
 
-    def aborted(bar: Any, keep: Any, *path: str) -> Any:
+    def aborted(bar: 'QtWidgets.QMenuBar', keep: list['Kept'], *path: str) -> NoReturn:
         raise KeyboardInterrupt('an abort as the menus are looked up')
 
     vars(helpers)['_menu_action'] = aborted
@@ -902,7 +920,7 @@ def test_an_error_after_a_change_says_what_was_set(helpers: types.ModuleType) ->
     # REVIEW.md HLP-107
     Designer(helpers)
 
-    def failing(tree: Any, g: Any, keep: Any) -> None:
+    def failing(tree: 'QtWidgets.QTreeView', g: 'SDSBSCompGraph', keep: list['Kept']) -> None:
         raise RuntimeError("the Explorer's menu for graph g didn't open")
 
     vars(helpers)['_apply_outputs'] = failing
@@ -971,7 +989,7 @@ def test_the_set_up_runs_the_shots_look_at_the_active_app_before_each_step(helpe
     ids=['orbit then pan', 'orbit then zoom', 'pan alone'],
 )
 def test_the_moves_wait_from_a_mark_taken_after_the_look_before_the_last_of_them(
-    helpers: types.ModuleType, options: dict[str, object]
+    helpers: types.ModuleType, options: View3dOptions
 ) -> None:
     # REVIEW.md HLP-161: the look before a step (`between`) brings the window back on screen if it went off, and waits
     # for the view to restart and settle; from a mark taken before it, that restart ended the moves' wait
@@ -1020,7 +1038,7 @@ def test_a_turn_or_pan_of_zero_is_no_drag(helpers: types.ModuleType, capsys: pyt
     ids=['across', 'across with a turn up', 'down', 'right', 'up with a pan right'],
 )
 def test_a_turn_or_pan_under_a_pixel_is_refused_before_anything_changes(
-    helpers: types.ModuleType, options: dict[str, object]
+    helpers: types.ModuleType, options: View3dOptions
 ) -> None:
     # REVIEW.md HLP-121: rounded to no pixel, it was dropped and said as set ('3D view: ' alone for orbit=[0.2, 0])
     designer = Designer(helpers)
@@ -1045,7 +1063,7 @@ def test_the_turn_and_pan_said_are_what_the_drags_carry(
     'options', [{'orbit': [90.0, 0.0]}, {'pan': [0.25, 0.0]}, {'zoom': 2}], ids=['orbit', 'pan', 'zoom']
 )
 def test_under_the_light_tool_the_camera_tool_moves_the_camera_then_the_light_tool_comes_back(
-    helpers: types.ModuleType, options: dict[str, object]
+    helpers: types.ModuleType, options: View3dOptions
 ) -> None:
     # REVIEW.md HLP-120: under the Light tool, drags and the wheel don't move the camera; zoom= said it zoomed
     designer = Designer(helpers, tool='Light')
@@ -1080,7 +1098,12 @@ def test_the_light_tool_comes_back_when_a_drag_fails(helpers: types.ModuleType) 
     designer = Designer(helpers, tool='Light')
 
     def failing(
-        viewport: object, button: object, dx: int, dy: int, pressed: list[object], taken: Callable[[], object]
+        viewport: 'QtWidgets.QWidget',
+        button: 'QtCore.Qt.MouseButton',
+        dx: int,
+        dy: int,
+        pressed: 'Pressed',
+        taken: Callable[[], Callable[[], bool]] | None,
     ) -> None:
         raise RuntimeError('a drag failed')
 
@@ -1098,7 +1121,7 @@ def test_an_abort_landing_as_the_light_tool_comes_back_brings_it_back(helpers: t
     real = helpers._tool_back
     calls: list[int] = []
 
-    def tool_back(light: object, switched: bool) -> None:
+    def tool_back(light: 'QtGui.QAction', switched: bool) -> None:
         calls.append(1)
         if len(calls) == 1:
             raise KeyboardInterrupt('an abort as the Light tool comes back')
@@ -1112,10 +1135,15 @@ def test_an_abort_landing_as_the_light_tool_comes_back_brings_it_back(helpers: t
 
 def test_an_abort_that_skipped_a_drags_release_releases_its_button(helpers: types.ModuleType) -> None:
     Designer(helpers)
-    released: list[tuple[object, float, float]] = []
+    released: Pressed = []
 
     def aborted(
-        viewport: object, button: object, dx: int, dy: int, pressed: list[object], taken: Callable[[], object]
+        viewport: 'QtWidgets.QWidget',
+        button: 'QtCore.Qt.MouseButton',
+        dx: int,
+        dy: int,
+        pressed: 'Pressed',
+        taken: Callable[[], Callable[[], bool]] | None,
     ) -> None:
         pressed.append((button, 0.0, 57.0))  # pressed, then the abort landing before its release
         raise KeyboardInterrupt('an abort in a drag')
@@ -1141,8 +1169,8 @@ class Mouse:
             id(core.QEvent.Type.MouseButtonRelease): 'release',
         }
         self.fail_at_move = fail_at_move
-        self.pressed: list[object] = []  # the `pressed` handed to _drag
-        self.held: list[list[object]] = []  # what it held at each mouse event
+        self.pressed: Pressed = []  # the `pressed` handed to _drag
+        self.held: list[Pressed] = []  # what it held at each mouse event
         self.viewport = SimpleNamespace(
             width=lambda: 400,
             height=lambda: 300,
@@ -1151,7 +1179,15 @@ class Mouse:
             removeEventFilter=lambda guard: self.sent.append(('guard off', 0.0, 0.0)),
         )
 
-    def mouse(self, viewport: object, kind: object, x: float, y: float, button: object, buttons: object) -> None:
+    def mouse(
+        self,
+        viewport: 'QtWidgets.QWidget',
+        kind: 'QtCore.QEvent.Type',
+        x: float,
+        y: float,
+        button: 'QtCore.Qt.MouseButton',
+        buttons: 'QtCore.Qt.MouseButton',
+    ) -> None:
         self.sent.append((self.kinds[id(kind)], x, y))
         self.held.append(list(self.pressed))
         if self.kinds[id(kind)] == 'move' and sum(what == 'move' for what, _, _ in self.sent) == self.fail_at_move:
@@ -1169,13 +1205,18 @@ def test_a_drag_is_a_press_moves_and_a_release_from_the_middle_then_the_wait_for
     # (designer_helpers/view3d.py)
     mouse = Mouse()
     vars(helpers)['_mouse'] = mouse.mouse
-    pressed: list[object] = []
+    pressed: Pressed = []
 
     # the mark before the press, then the wait for the view to take the drag: its next frame, or off screen its next
     # UpdateRequest, which can come while the drag's own events run (REVIEW.md HLP-148, HLP-164)
-    def taking() -> Callable[[], object]:
+    def taking() -> Callable[[], bool]:
         mouse.sent.append(('mark', 0.0, 0.0))
-        return lambda: mouse.sent.append(('taken', 0.0, 0.0))
+
+        def taken() -> bool:  # the wait _Frames.taking returns: whether the view took the drag
+            mouse.sent.append(('taken', 0.0, 0.0))
+            return True
+
+        return taken
 
     helpers._drag(mouse.viewport, qt('QtCore').Qt.MouseButton.LeftButton, -200, 50, pressed, taking)
     moves = ['move'] * helpers.DRAG_MOVES
@@ -1190,7 +1231,7 @@ def test_a_drag_is_a_press_moves_and_a_release_from_the_middle_then_the_wait_for
 def test_a_drag_whose_move_fails_still_releases_its_button_and_removes_its_guard(helpers: types.ModuleType) -> None:
     mouse = Mouse(fail_at_move=3)
     vars(helpers)['_mouse'] = mouse.mouse
-    pressed: list[object] = []
+    pressed: Pressed = []
     with pytest.raises(RuntimeError, match='a move failed'):
         helpers._drag(mouse.viewport, qt('QtCore').Qt.MouseButton.MiddleButton, 100, 0, pressed)
     assert mouse.what()[-2:] == ['release', 'guard off'] and mouse.sent[-2] == ('release', 300.0, 150.0)
@@ -1214,7 +1255,7 @@ def test_the_mouse_events_the_helpers_send_are_marked_for_the_guard_while_sent(
     # REVIEW.md HLP-122: the drag's guard lets through only the events _mouse is sending
     marked: list[bool] = []
 
-    def send(viewport: object, event: object) -> None:
+    def send(viewport: 'QtCore.QObject', event: 'QtCore.QEvent') -> None:
         marked.append(helpers._OWN_MOUSE[0])
         if fails:
             raise RuntimeError('sendEvent failed')
@@ -1241,7 +1282,7 @@ class Spin:
         return 2.5  # what the spin box holds, maybe not what was asked
 
 
-def _tiling(helpers: types.ModuleType, spin: Any) -> list[str]:
+def _tiling(helpers: types.ModuleType, spin: 'Callable[[QtWidgets.QDockWidget, list[Kept]], Spin]') -> list[str]:
     """_set_tiling's Designer, faked; the panel's turns back, recorded."""
     back: list[str] = []
     vars(helpers)['_menu_action'] = lambda bar, keep, *path: SimpleNamespace(trigger=lambda: None)
@@ -1256,14 +1297,14 @@ def _tiling(helpers: types.ModuleType, spin: Any) -> list[str]:
     return back
 
 
-def panel(title: str = 'Material "Default" - Rasterizer') -> Any:
+def panel(title: str = 'Material "Default" - Rasterizer') -> SimpleNamespace:
     """The Parameters panel, by its title."""
     return SimpleNamespace(windowTitle=lambda: title)
 
 
 def test_the_parameters_panel_is_turned_back_when_the_tiling_fails(helpers: types.ModuleType) -> None:
     # REVIEW.md HLP-107: after Edit properties, the panel showed the 3D material
-    def missing(params: Any, keep: Any) -> Any:
+    def missing(params: 'QtWidgets.QDockWidget', keep: list['Kept']) -> NoReturn:
         raise RuntimeError("the 3D material's Tiling wasn't found in the Parameters panel")
 
     back = _tiling(helpers, missing)
@@ -1292,7 +1333,7 @@ def test_the_parameters_panel_is_turned_back_once_it_shows_the_material(helpers:
     vars(helpers)['_settle'] = lambda seconds: waited.__setitem__(0, waited[0] + 1)
     params = SimpleNamespace(windowTitle=lambda: 'g' if waited[0] < 3 else 'Material "Default" - Rasterizer')
 
-    def aborted(params: Any, keep: Any) -> Any:
+    def aborted(params: 'QtWidgets.QDockWidget', keep: list['Kept']) -> NoReturn:
         raise KeyboardInterrupt('an abort in its first poll')
 
     _tiling(helpers, aborted)
@@ -1390,9 +1431,14 @@ def test_each_wheel_notch_waits_from_a_mark_taken_before_it_is_sent(helpers: typ
     sys.modules['PySide6.QtWidgets'].QApplication.sendEvent = lambda viewport, event: done.append('notch')
     vars(helpers)['_process_events'] = lambda times=1: done.append('events')
 
-    def taking() -> Callable[[], object]:
+    def taking() -> Callable[[], bool]:
         done.append('mark')
-        return lambda: done.append('taken')
+
+        def taken() -> bool:  # the wait _Frames.taking returns: whether the view took the notch
+            done.append('taken')
+            return True
+
+        return taken
 
     viewport = SimpleNamespace(width=lambda: 400, height=lambda: 300, mapToGlobal=lambda point: point)
     helpers._wheel(viewport, -2, taking)

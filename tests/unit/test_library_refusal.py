@@ -5,14 +5,15 @@ what the message suggests (tests/test_all_tools/safeguards/checks.py)."""
 import ast
 import os
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 from unittest import mock
 
 import pytest
 
 import designer_helpers  # conftest puts mcp_server on sys.path
+from conftest import FakeGraph
 
 LIBRARY = '/app/packages/bevel.sbs'
 WAY = (
@@ -25,18 +26,7 @@ BY_NAME = (
 )
 
 
-class FakeGraph:
-    def __init__(self, identifier: str, package: Any) -> None:
-        self.identifier, self.package = identifier, package
-
-    def getIdentifier(self) -> str:
-        return self.identifier
-
-    def getPackage(self) -> Any:
-        return self.package
-
-
-def package(file: str, *graphs: str) -> Any:
+def package(file: str, *graphs: str) -> mock.MagicMock:
     p = mock.MagicMock()
     p.getFilePath.return_value = file
     p.getChildrenResources.return_value = [FakeGraph(g, p) for g in graphs]
@@ -56,16 +46,16 @@ def helpers(faked_helpers: types.ModuleType) -> types.ModuleType:
     return module
 
 
-def real_check(helpers: types.ModuleType) -> Callable[[Any], bool]:
+def real_check(helpers: types.ModuleType) -> Callable[[mock.MagicMock], bool]:
     """_is_library_package as sent to Designer (the fixture replaces it for the other tests)."""
-    namespace: dict[str, Any] = {'os': os, '_APP': helpers._APP, 'SDApplicationPath': mock.MagicMock()}
+    namespace: dict[str, object] = {'os': os, '_APP': helpers._APP, 'SDApplicationPath': mock.MagicMock()}
     tree = ast.parse(designer_helpers.source())
     found = next(f for f in tree.body if isinstance(f, ast.FunctionDef) and f.name == '_is_library_package')
     found.returns = None
     for arg in found.args.args:
         arg.annotation = None
     exec(compile(ast.Module([found], []), 'designer_helpers', 'exec'), namespace)
-    return cast(Callable[[Any], bool], namespace['_is_library_package'])
+    return cast(Callable[[mock.MagicMock], bool], namespace['_is_library_package'])
 
 
 REFUSALS = [
@@ -88,7 +78,7 @@ REFUSALS = [
 
 @pytest.mark.parametrize(('why', 'refused', 'start'), REFUSALS, ids=[r[0] for r in REFUSALS])
 def test_every_path_refuses_with_one_way_to_keep_a_copy(
-    helpers: types.ModuleType, why: str, refused: Any, start: str
+    helpers: types.ModuleType, why: str, refused: Callable[[types.ModuleType], object], start: str
 ) -> None:
     with pytest.raises(RuntimeError) as raised:
         refused(helpers)
@@ -136,7 +126,9 @@ EDITS = [
 
 
 @pytest.mark.parametrize(('name', 'edit'), EDITS, ids=[e[0] for e in EDITS])
-def test_no_edit_reaches_a_library_graph_in_the_editor(helpers: types.ModuleType, name: str, edit: Any) -> None:
+def test_no_edit_reaches_a_library_graph_in_the_editor(
+    helpers: types.ModuleType, name: str, edit: Callable[[types.ModuleType], object]
+) -> None:
     with pytest.raises(RuntimeError) as raised:
         edit(helpers)
     assert str(raised.value) == "Graph 'bevel' belongs to Designer's library, and tools don't edit it. " + WAY, name
@@ -218,7 +210,7 @@ def test_an_unsaved_package_or_another_drive_isnt_a_library_package(
     helpers._APP.getPath.return_value = str(tmp_path)
     assert real_check(helpers)(package('')) is False
 
-    def other_drive(paths: Any) -> str:  # what Windows does for two drives
+    def other_drive(paths: Iterable[str]) -> str:  # what Windows does for two drives
         raise ValueError('Paths do not have the same drive')
 
     monkeypatch.setattr(os.path, 'commonpath', other_drive)

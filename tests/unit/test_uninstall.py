@@ -9,15 +9,16 @@ import subprocess
 import sys
 import time
 import types
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
 
 import pytest
 from fake_defaults import FakeDefaults
+from typing_extensions import Unpack  # typing's from Python 3.11; mcp requires typing_extensions
 
 import designer_preferences
-from conftest import ROOT
-from project_constants import PLUGIN, PLUGIN_DIR
+from conftest import ROOT, RunOptions
+from project_constants import PLUGIN, PLUGIN_DIR, JsonSent
 
 SERVER = os.path.join(ROOT, 'mcp_server', 'server.py')
 
@@ -52,8 +53,8 @@ def env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> types.SimpleNamespac
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(home.config))
     monkeypatch.setattr(shutil, 'which', lambda name: '/usr/local/bin/claude')
 
-    def run(cmd: list[str], cwd: str | None = None, **kw: object) -> subprocess.CompletedProcess[str]:
-        home.calls.append((cmd, cwd))
+    def run(cmd: list[str], **kw: Unpack[RunOptions]) -> subprocess.CompletedProcess[str]:
+        home.calls.append((cmd, kw.get('cwd')))
         return subprocess.CompletedProcess(cmd, 0, '', '')
 
     monkeypatch.setattr(subprocess, 'run', run)
@@ -82,7 +83,7 @@ def env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> types.SimpleNamespac
     return home
 
 
-def write_config(home: types.SimpleNamespace, config: dict[str, Any]) -> None:
+def write_config(home: types.SimpleNamespace, config: Mapping[str, JsonSent]) -> None:
     home.config.mkdir(exist_ok=True)
     (home.config / '.claude.json').write_text(json.dumps(config))
 
@@ -233,10 +234,10 @@ def test_one_failure_does_not_stop_the_rest(
     real_rmtree = shutil.rmtree
     locked = str(env.plugins / PLUGIN)
 
-    def rmtree(path: str, *a: Any, **kw: Any) -> None:
+    def rmtree(path: str, ignore_errors: bool = False) -> None:  # the parameters uninstall.py and install.py pass
         if str(path) == locked:
             raise PermissionError(13, 'Access is denied', locked)
-        return real_rmtree(path, *a, **kw)
+        return real_rmtree(path, ignore_errors)
 
     monkeypatch.setattr(shutil, 'rmtree', rmtree)
     run(env, monkeypatch, '--yes')
@@ -424,7 +425,7 @@ def _pgrep(monkeypatch: pytest.MonkeyPatch, outcome: int | Exception) -> None:
     """subprocess.run as the fixture's, but pgrep exits with `outcome`, or raises it."""
     real = subprocess.run
 
-    def run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+    def run(cmd: list[str], **kw: Unpack[RunOptions]) -> subprocess.CompletedProcess[str]:
         if cmd[0] != 'pgrep':
             return real(cmd, **kw)
         if isinstance(outcome, Exception):
@@ -713,3 +714,63 @@ def test_a_lock_that_cant_be_removed_after_a_put_back_is_no_failure(
     run(env, monkeypatch, '--yes')
     out = capsys.readouterr().out
     assert defaults.domain == {'session.mainWindow.state': b'the user'} and 'Could not remove' not in out, out
+
+
+@pytest.mark.parametrize(
+    'config',
+    [
+        '[]',
+        '{"mcpServers": [1]}',
+        '{"mcpServers": {"substance-designer": "x"}}',
+        '{"projects": ["x"]}',
+        '{"projects": {"/a": []}}',
+        '{"projects": {"/a": {"mcpServers": [1]}}}',
+        '{"projects": {"/a": {"mcpServers": {"substance-designer": 1}}}}',
+        '{"mcpServers": ',
+    ],
+    ids=[
+        'a list',
+        'servers a list',
+        'a server a string',
+        'projects a list',
+        'a project a list',
+        "a project's servers a list",
+        "a project's server a number",
+        'not JSON',
+    ],
+)
+def test_a_config_holding_no_json_object_where_one_belongs_finds_no_registration(
+    env: types.SimpleNamespace, config: str
+) -> None:
+    # REVIEW.md SRV-173: ~/.claude.json was taken for the dicts it is read as, so JSON that isn't an object at any
+    # level raised AttributeError past except (OSError, ValueError), which takes a file that isn't JSON as none
+    env.config.mkdir(exist_ok=True)
+    (env.config / '.claude.json').write_text(config)
+    assert env.module.find_registrations(str(env.config / '.claude.json')) == ([], [])
+
+
+@pytest.mark.parametrize(
+    ('config', 'note'),
+    [
+        (
+            {'mcpServers': {'substance-designer': {'command': 5}}},
+            'a user-scope "substance-designer" that runs something else',
+        ),
+        (
+            {'mcpServers': {'substance-designer': {'args': 5}}},
+            'a user-scope "substance-designer" that runs something else',
+        ),
+        (
+            {'projects': {'/a': {'mcpServers': {'substance-designer': {'args': 5}}}}},
+            '"substance-designer" in /a runs something else',
+        ),
+    ],
+    ids=['a command a number', 'args a number', "a project's args a number"],
+)
+def test_a_registration_whose_command_or_args_have_another_type_runs_something_else(
+    env: types.SimpleNamespace, config: dict[str, JsonSent], note: str
+) -> None:
+    # REVIEW.md TST-490, SRV-173: a command was taken for a string and args for a list, so a number in either raised
+    # TypeError past except (OSError, ValueError)
+    write_config(env, config)
+    assert env.module.find_registrations() == ([], [note])

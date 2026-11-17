@@ -40,6 +40,6 @@ def _set_uploads(home: str, on: bool) -> None:
 
     with open(_settings(home), 'r+b') as f:
         fcntl.flock(f, fcntl.LOCK_EX)  # Crashpad's own lock
-        options = struct.unpack_from('<I', f.read(12), 8)[0]
+        options: int = struct.unpack_from('<I', f.read(12), 8)[0]
         f.seek(8)
         f.write(struct.pack('<I', (options | 1) if on else (options & ~1)))

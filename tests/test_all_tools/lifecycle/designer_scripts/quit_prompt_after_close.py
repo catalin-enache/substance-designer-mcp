@@ -4,12 +4,19 @@ prompt_marker, a file that gets whether the window shows; normal_quit, a file wr
 aboutToQuit; refuse, whether the prompt ignores Close."""
 
 import sys
-from typing import Any, cast
+from typing import TypedDict, cast
 
 from PySide6.QtCore import QEvent, QObject
 from PySide6.QtWidgets import QApplication, QLabel
 
-ARGS: dict[str, Any] = globals()['ARGS']
+
+class Args(TypedDict):
+    prompt_marker: str
+    normal_quit: str
+    refuse: bool
+
+
+ARGS: Args = globals()['ARGS']
 
 
 class _Refuse(QObject):

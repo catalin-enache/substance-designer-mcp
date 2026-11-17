@@ -1,11 +1,12 @@
 import os
-from typing import Any
 
 import numpy as np
 import numpy.typing as npt
 import pytest
 
-from conftest import patch_server, server
+from conftest import fake_bridge, server
+from server_tools import measure
+from server_tools.measure import Pixels, PixelType
 
 
 def _buffer(
@@ -21,7 +22,7 @@ def _buffer(
     'fmt, dtype, scale',
     [('RGBA8', np.uint8, 255), ('RGBA16', np.uint16, 65535), ('RGBA16F', np.float16, 1), ('RGBA32F', np.float32, 1)],
 )
-def test_decode_rgba_skips_row_padding(fmt: str, dtype: type[np.generic], scale: int) -> None:
+def test_decode_rgba_skips_row_padding(fmt: str, dtype: PixelType, scale: int) -> None:
     w, h = 3, 2
     values = (np.arange(w * h * 4) * (scale // 30 if scale > 1 else 0.03)).astype(dtype)
     raw, pitch = _buffer(values, dtype, w, h, 4, padding=8)
@@ -43,8 +44,8 @@ def test_decode_unknown_format() -> None:
         server._decode_pixels(b'\0' * 16, {'format': 'RGBA12', 'width': 1, 'height': 1, 'pitch': 16, 'bpp': 6})
 
 
-def _seam(data: npt.NDArray[Any], axis_name: str) -> str:
-    report: str = server._seam_report(data, axis_name, 1 if axis_name == 'horizontal' else 0)
+def _seam(data: Pixels, axis_name: str) -> str:
+    report = measure._seam_report(data, axis_name, 1 if axis_name == 'horizontal' else 0)
     return report
 
 
@@ -92,7 +93,12 @@ def test_seam_flat_image() -> None:
     ],
 )
 def test_decode_other_channel_layouts(
-    fmt: str, dtype: type[np.generic], scale: int, channels: int, names: str, order: list[int]
+    fmt: str,
+    dtype: PixelType,
+    scale: int,
+    channels: int,
+    names: str,
+    order: list[int],
 ) -> None:
     w, h = 3, 2
     stored = (np.arange(w * h * channels) * (scale // 20 if scale > 1 else 0.04)).astype(dtype)
@@ -119,7 +125,7 @@ def test_region_is_clamped_not_wrapped() -> None:
 
 def test_sweep_reports_a_value_that_failed(monkeypatch: pytest.MonkeyPatch, temp_folders: list[str]) -> None:
     # REVIEW.md SRV-2: tiles for the first values, then "restored" from the put-back, then the error (HLP-179)
-    def fake_bridge(code: str, path: str | None = None, timeout: float | None = None) -> str:
+    def bridge(code: str) -> str:
         with open(os.path.join(temp_folders[-1], '0.raw'), 'wb') as f:  # the folder the server made
             f.write(bytes([128]))
         return (
@@ -127,6 +133,6 @@ def test_sweep_reports_a_value_that_failed(monkeypatch: pytest.MonkeyPatch, temp
             'restored n.p to 0.5\n--- ERROR ---\nTraceback ...\nRuntimeError: bad value for p'
         )
 
-    patch_server(monkeypatch, '_bridge', fake_bridge)
+    fake_bridge(monkeypatch, bridge)
     text = server.sweep_param('n', 'p', [0.1, 'bogus', 0.9])[0]
     assert 'RuntimeError: bad value for p' in text and 'stopped' in text

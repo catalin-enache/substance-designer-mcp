@@ -4,6 +4,7 @@ call's reply, with sd and PySide6 faked (REVIEW.md SRV-151)."""
 import os
 import sys
 import types
+from collections.abc import Callable
 from typing import cast
 from unittest import mock
 
@@ -22,7 +23,7 @@ def _timer() -> mock.MagicMock:
 
 def test_the_windows_are_closed_once_the_reply_is_sent_not_after_a_time(helpers: types.ModuleType) -> None:
     # it closed them 300 ms after the call returned, so the bridge could still reply: a time (AGENTS.md)
-    handed: list[object] = []
+    handed: list[Callable[[], object]] = []  # what the helper handed _after_reply; its result is dropped
     vars(helpers)['_after_reply'] = handed.append  # the plugin's, in the job's scope
     _timer().singleShot.reset_mock()
     helpers.quit_designer(os.getpid(), 'closed')

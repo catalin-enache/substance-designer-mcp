@@ -10,24 +10,19 @@ import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, cast
 
 import pytest
+from selftest_fakes import code_of, fresh, tool_result
 
 from conftest import REAL_SNAPSHOT_DIR, SELFTEST_DIR
+from project_constants import ToolArgs
+
+if TYPE_CHECKING:  # for the checker only: each test imports the self-test's modules afresh (fresh())
+    from test_all_tools.common import Call, Ctx, Step
 
 # what every category gets from the run itself, not from a preparation (common.Ctx)
 SHARED = {'c', 's', 'scratch', 'helper_source', 'was_running', 'crash_watch', 'fresh'}
-
-
-def _module(name: str) -> Any:  # a module imported by name: PyCharm can't see its names
-    """A module of the self-test, imported afresh with the others, so each test starts with an empty check record."""
-    tests_dir = os.path.dirname(SELFTEST_DIR)
-    if tests_dir not in sys.path:
-        sys.path.insert(0, tests_dir)
-    for loaded in [m for m in sys.modules if m == 'test_all_tools' or m.startswith('test_all_tools.')]:
-        del sys.modules[loaded]
-    return importlib.import_module('test_all_tools.' + name)
 
 
 def _folders() -> list[str]:
@@ -35,32 +30,28 @@ def _folders() -> list[str]:
     return sorted(name for name in os.listdir(SELFTEST_DIR) if Path(SELFTEST_DIR, name, 'checks.py').is_file())
 
 
-def _result(t: str, error: bool = False) -> Any:
-    return SimpleNamespace(content=[SimpleNamespace(type='text', text=t)], is_error=error)
-
-
 class FakeDesigner:
     """c(name, args): the library packages listed as none, the clean-up answered, any other tool 'ok'."""
 
     def __init__(self) -> None:
-        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.calls: list[tuple[str, ToolArgs]] = []
 
-    async def __call__(self, name: str, args: dict[str, Any] | None = None) -> Any:
+    async def __call__(self, name: str, args: ToolArgs | None = None) -> SimpleNamespace:
         self.calls.append((name, args or {}))
         if name == 'execute_designer_code':
-            return _result('removed 0' if 'unloadUserPackage' in (args or {}).get('code', '') else 'LIBS=')
-        return _result('ok')
+            return tool_result('removed 0' if 'unloadUserPackage' in code_of(args) else 'LIBS=')
+        return tool_result('ok')
 
 
-def _ctx(c: Any, scratch: str = 'scratch') -> Any:
+def _ctx(c: FakeDesigner, scratch: str = 'scratch') -> 'Ctx':
     common = sys.modules['test_all_tools.common']
-    return common.Ctx(c=c, s=None, scratch=scratch, helper_source='def helper(): pass', was_running=False)
+    return cast('Ctx', common.Ctx(c=c, s=None, scratch=scratch, helper_source='def helper(): pass', was_running=False))
 
 
-def _step(module: str, name: str, body: Any = None) -> Any:
+def _step(module: str, name: str, body: 'Step | None' = None) -> 'Step':
     """A step of the category <module> (test_all_tools.<module>.checks), running body(ctx) if given."""
 
-    async def step(ctx: Any) -> None:
+    async def step(ctx: 'Ctx') -> None:
         if body is not None:
             await body(ctx)
 
@@ -69,7 +60,7 @@ def _step(module: str, name: str, body: Any = None) -> Any:
 
 
 def test_a_categorys_preparation_is_the_prepare_of_its_own_folder() -> None:
-    run = _module('category_run')
+    run = fresh('category_run')
     params = importlib.import_module('test_all_tools.params.checks')
     preparations = importlib.import_module('test_all_tools.params.preparations')
     assert run.preparation(params.run) is preparations.prepare
@@ -77,26 +68,26 @@ def test_a_categorys_preparation_is_the_prepare_of_its_own_folder() -> None:
 
 
 def test_a_category_with_no_preparations_module_has_none() -> None:
-    run = _module('category_run')
+    run = fresh('category_run')
     bridge = importlib.import_module('test_all_tools.bridge.checks')
     assert not Path(SELFTEST_DIR, 'bridge', 'preparations.py').exists()
     assert run.preparation(bridge.run) is None
 
-    async def not_a_category(ctx: Any) -> None:
+    async def not_a_category(ctx: 'Ctx') -> None:
         pass
 
     assert run.preparation(not_a_category) is None
 
 
 def test_the_preparation_runs_first_on_the_ctx_the_checks_get(monkeypatch: pytest.MonkeyPatch) -> None:
-    run = _module('category_run')
-    seen: list[tuple[str, Any]] = []
+    run = fresh('category_run')
+    seen: list[tuple[str, Ctx | dict[str, str]]] = []  # ('prepare', its ctx), then ('check', the ctx's G)
 
-    async def prepare(ctx: Any) -> None:
+    async def prepare(ctx: 'Ctx') -> None:
         ctx.G = {'graph': 'mcp_selftest'}
         seen.append(('prepare', ctx))
 
-    async def check(ctx: Any) -> None:
+    async def check(ctx: 'Ctx') -> None:
         seen.append(('check', ctx.G))
 
     monkeypatch.setitem(vars(run), 'preparation', lambda step: prepare)
@@ -109,13 +100,13 @@ def test_the_preparation_runs_first_on_the_ctx_the_checks_get(monkeypatch: pytes
 def test_a_preparation_that_raises_is_the_environment_failing_and_runs_no_check(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    run = _module('category_run')
+    run = fresh('category_run')
     ran_checks: list[str] = []
 
-    async def prepare(ctx: Any) -> None:
+    async def prepare(ctx: 'Ctx') -> None:
         raise run.common.Unprepared('create_graph: Designer is not reachable')
 
-    async def check(ctx: Any) -> None:
+    async def check(ctx: 'Ctx') -> None:
         ran_checks.append('check')
 
     monkeypatch.setitem(vars(run), 'preparation', lambda step: prepare)
@@ -128,13 +119,13 @@ def test_a_preparation_that_raises_is_the_environment_failing_and_runs_no_check(
 
 def test_a_setup_with_a_failed_check_is_the_environment_failing_too(monkeypatch: pytest.MonkeyPatch) -> None:
     # alone.run's setup(ctx) runs after the preparation, as part of the environment
-    run = _module('category_run')
+    run = fresh('category_run')
     ran_checks: list[str] = []
 
-    async def setup(ctx: Any) -> None:
+    async def setup(ctx: 'Ctx') -> None:
         run.common.check('tool', 'the environment', False)
 
-    async def check(ctx: Any) -> None:
+    async def check(ctx: 'Ctx') -> None:
         ran_checks.append('check')
 
     monkeypatch.setitem(vars(run), 'preparation', lambda step: None)
@@ -145,13 +136,13 @@ def test_a_setup_with_a_failed_check_is_the_environment_failing_too(monkeypatch:
 def test_a_check_that_raises_fails_and_the_next_one_still_runs(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    run = _module('category_run')
+    run = fresh('category_run')
     ran_checks: list[str] = []
 
-    async def raises(ctx: Any) -> None:
+    async def raises(ctx: 'Ctx') -> None:
         raise ValueError('a parse that found nothing')
 
-    async def after(ctx: Any) -> None:
+    async def after(ctx: 'Ctx') -> None:
         ran_checks.append('after')
 
     monkeypatch.setitem(vars(run), 'preparation', lambda step: None)
@@ -164,11 +155,11 @@ def test_a_check_that_raises_fails_and_the_next_one_still_runs(
 
 def test_the_category_is_cleaned_up_after_its_checks(monkeypatch: pytest.MonkeyPatch) -> None:
     # its graphs, then the library packages it loaded: the next category sees nothing it left (category_run.py)
-    run = _module('category_run')
+    run = fresh('category_run')
     monkeypatch.setitem(vars(run), 'preparation', lambda step: None)
     c = FakeDesigner()
 
-    async def check(ctx: Any) -> None:
+    async def check(ctx: 'Ctx') -> None:
         c.calls.append(('the check', {}))
 
     asyncio.run(run.run_category(_ctx(c), [_step('facts', 'run', check)]))
@@ -178,7 +169,7 @@ def test_the_category_is_cleaned_up_after_its_checks(monkeypatch: pytest.MonkeyP
 
 def test_the_clean_up_removes_the_self_test_graphs_snapshots(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # layout and save snapshot the self-test graph: the next category would find them (list_snapshots, diff_graph)
-    run = _module('category_run')
+    run = fresh('category_run')
     monkeypatch.setitem(vars(run), 'preparation', lambda step: None)
     monkeypatch.setenv('SD_SNAPSHOT_DIR', str(tmp_path))
     (tmp_path / 'mcp_selftest').mkdir()
@@ -194,7 +185,7 @@ def test_no_unit_test_cleans_up_the_real_snapshot_folder(monkeypatch: pytest.Mon
     import shutil
 
     real = os.path.realpath(REAL_SNAPSHOT_DIR)
-    run = _module('category_run')
+    run = fresh('category_run')
     removed: list[str] = []
     monkeypatch.setattr(shutil, 'rmtree', lambda path, **kw: removed.append(os.path.realpath(path)))
     monkeypatch.setitem(vars(run), 'preparation', lambda step: None)
@@ -204,13 +195,13 @@ def test_no_unit_test_cleans_up_the_real_snapshot_folder(monkeypatch: pytest.Mon
 
 
 def test_a_fresh_ctx_shares_only_the_run_and_has_a_folder_of_its_own(tmp_path: Path) -> None:
-    common = _module('common')
+    common = fresh('common')
     ctx = common.Ctx(c=print, s=None, scratch=str(tmp_path), helper_source='h', was_running=True)
     ctx.G = {'graph': 'mcp_selftest'}
-    fresh = ctx.fresh('params')
-    assert (fresh.c, fresh.s, fresh.helper_source, fresh.was_running) == (print, None, 'h', True)
-    assert fresh.scratch == str(tmp_path / 'params') and os.path.isdir(fresh.scratch)
-    assert not hasattr(fresh, 'G'), 'what another category prepared'
+    fresh_ctx = ctx.fresh('params')
+    assert (fresh_ctx.c, fresh_ctx.s, fresh_ctx.helper_source, fresh_ctx.was_running) == (print, None, 'h', True)
+    assert fresh_ctx.scratch == str(tmp_path / 'params') and os.path.isdir(fresh_ctx.scratch)
+    assert not hasattr(fresh_ctx, 'G'), 'what another category prepared'
 
 
 def _category_sources(folder: str) -> dict[str, str]:
@@ -289,14 +280,14 @@ def test_a_preparation_records_no_check() -> None:
 
 
 def test_a_prepared_call_returns_the_text_and_raises_on_an_error() -> None:
-    common = _module('common')
+    common = fresh('common')
 
-    async def c(name: str, args: dict[str, Any] | None = None) -> Any:
+    async def c(name: str, args: ToolArgs | None = None) -> SimpleNamespace:
         if name == 'create_graph':
-            return _result('Created mcp_selftest (512 px)')
+            return tool_result('Created mcp_selftest (512 px)')
         if name == 'run_designer_script':
-            return _result('ok\n--- ERROR ---\nTraceback ...\nValueError: no node', False)
-        return _result('Designer is not reachable', True)
+            return tool_result('ok\n--- ERROR ---\nTraceback ...\nValueError: no node', False)
+        return tool_result('Designer is not reachable', True)
 
     assert asyncio.run(common.prepared_call(c, 'create_graph', {'name': 'x'})) == 'Created mcp_selftest (512 px)'
     with pytest.raises(common.Unprepared, match='apply_edits: Designer is not reachable'):
@@ -306,17 +297,17 @@ def test_a_prepared_call_returns_the_text_and_raises_on_an_error() -> None:
 
 
 def test_the_refs_of_an_apply_edits_result_are_read_by_name() -> None:
-    common = _module('common')
+    common = fresh('common')
     t = "add clouds_2 -> 1201\n  ref 'clouds' = 1201\nadd levels -> 1202\n  ref 'lv' = 1202\napplied 2 op(s); refs: ..."
     assert common.refs(t) == {'clouds': '1201', 'lv': '1202'}
 
 
 def test_a_category_whose_clean_up_fails_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
     # REVIEW.md TST-238: _cleaned always returning True passed every test
-    run = _module('category_run')
+    run = fresh('category_run')
     monkeypatch.setitem(vars(run), 'preparation', lambda step: None)
 
-    async def restore(c: Any, libs_before: Any) -> None:
+    async def restore(c: 'Call', libs_before: list[str] | None) -> None:
         run.common.check('self-test', 'leaves the library packages loaded as it found them', False, '1 more')
 
     monkeypatch.setitem(vars(run), 'restore_library_packages', restore)

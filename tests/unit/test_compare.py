@@ -1,6 +1,5 @@
 import re
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -8,6 +7,8 @@ import pytest
 from PIL import Image
 
 from conftest import server
+from server_tools.compare import Values, _compare_report
+from server_tools.measure import Pixels
 
 
 def _rgba(color: list[float], w: int = 8, h: int = 8) -> npt.NDArray[np.float64]:
@@ -16,8 +17,10 @@ def _rgba(color: list[float], w: int = 8, h: int = 8) -> npt.NDArray[np.float64]
     return a
 
 
-def _report(*args: Any, **kw: Any) -> tuple[str, npt.NDArray[Any] | None]:
-    lines, diff = server._compare_report(*args, **kw)
+def _report(
+    node: Pixels, node_layout: str, ref: Pixels, ref_layout: str, aligned: bool = False
+) -> tuple[str, Values | None]:
+    lines, diff = _compare_report(node, node_layout, ref, ref_layout, aligned)
     return '\n'.join(lines), diff
 
 
@@ -54,7 +57,7 @@ def test_identical_images() -> None:
     text, diff = _report(a, 'RGBA', a.copy(), 'RGBA', aligned=True)
     assert 'luma distributions: close (EMD 0.000' in text
     assert diff is not None
-    assert 'mean abs diff 0.0000' in text and diff.max() == 0
+    assert 'mean abs diff 0.0000' in text and np.max(diff) == 0
     assert 'x*1.000 +0.000' in text
 
 

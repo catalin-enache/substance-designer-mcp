@@ -103,7 +103,7 @@ async def run(ctx: Ctx) -> None:
     check(
         'set_link_display',
         'output unchanged',
-        nums(stats_before)
+        bool(nums(stats_before))
         and len(nums(stats_after)) == len(nums(stats_before))
         and max(abs(a - b) for a, b in zip(nums(stats_after), nums(stats_before), strict=False)) < 0.002,
         stats_after,
@@ -124,7 +124,7 @@ async def run(ctx: Ctx) -> None:
     check(
         'set_link_display',
         "the saved file's copy keeps its bitmaps reachable",
-        refs and not missing,
+        bool(refs) and not missing,
         'refs %s, missing %s' % (refs, missing),
     )
     t = text(await c('set_link_display', {'mode': 'wire', 'from_nodes': [clouds], **G}))

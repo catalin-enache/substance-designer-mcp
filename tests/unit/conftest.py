@@ -1,12 +1,16 @@
 """Unit tests that run without Designer: import server.py and test its pure-Python parts."""
 
+import builtins
+import errno
+import json
 import os
 import re
 import sys
 import tempfile
 import types
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import IO, TypedDict, cast
 from unittest import mock
 
 import pytest
@@ -44,13 +48,112 @@ REAL_USERS_DATA_DIR = designer_preferences.users_data_dir  # the user's Designer
 REAL_SNAPSHOT_DIR = os.environ.get('SD_SNAPSHOT_DIR') or os.path.join(os.path.expanduser('~'), '.sd_mcp', 'snapshots')
 
 
-def patch_server(monkeypatch: pytest.MonkeyPatch, name: str, value: Any) -> None:
+def patch_server(monkeypatch: pytest.MonkeyPatch, name: str, value: object) -> None:
     """monkeypatch.setattr for a server name: in server.py's re-exports and in every module of
     server_tools/ that defines or imports it, since a function looks names up in its own module."""
     modules = [m for m in (server, *server_tools.MODULES) if name in vars(m)]
     assert len(modules) > 1, 'no server module binds %r' % name
     for m in modules:
         monkeypatch.setattr(m, name, value)
+
+
+class RunOptions(TypedDict, total=False):
+    """The keyword arguments this repository's code passes to subprocess.run. A fake of subprocess.run takes them."""
+
+    capture_output: bool
+    text: bool
+    check: bool
+    timeout: float
+    env: dict[str, str]
+    cwd: str | None
+    input: bytes
+    encoding: str
+    errors: str
+
+
+class DumpOptions(TypedDict, total=False):
+    """The keyword arguments of json.dump and json.dumps, as typeshed lists them, without their **kwds. A fake of
+    either passes them on."""
+
+    skipkeys: bool
+    ensure_ascii: bool
+    check_circular: bool
+    allow_nan: bool
+    cls: type[json.JSONEncoder] | None
+    indent: int | str | None
+    separators: tuple[str, str] | None
+    default: Callable[[object], object] | None  # called with what JSON can't hold; returns what it can
+    sort_keys: bool
+
+
+class LoadOptions(TypedDict, total=False):
+    """The keyword arguments of json.loads, as typeshed lists them, and JSONDecoder's `strict`, which json.loads passes
+    on to it. A fake of json.loads passes them on."""
+
+    cls: type[json.JSONDecoder] | None
+    object_hook: Callable[[dict[str, object]], object] | None
+    parse_float: Callable[[str], object] | None
+    parse_int: Callable[[str], object] | None
+    parse_constant: Callable[[str], object] | None
+    object_pairs_hook: Callable[[list[tuple[str, object]]], object] | None
+    strict: bool
+
+
+class View3dOptions(TypedDict, total=False):
+    """The keyword arguments of the 3D view's set-up: set_3d_view's, and shoot_3d's after its path
+    (designer_helpers/view3d.py, shot3d.py)."""
+
+    graph: str | None
+    mesh: str | None
+    view: str | None
+    zoom: int
+    tiling: float | None
+    orbit: list[float] | None
+    pan: list[float] | None
+
+
+# What builtins.open takes as its file: typeshed's FileDescriptorOrPath, which exists for the checker only.
+OpenedFile = int | str | bytes | os.PathLike[str] | os.PathLike[bytes]
+
+
+def full_disk(monkeypatch: pytest.MonkeyPatch, full: Callable[[str, str], bool], opened_first: bool = False) -> None:
+    """Fakes builtins.open: opening a file for which full(file, mode) is true fails as on a full disk. With
+    `opened_first`, the file is opened first, and so created or emptied, then the write fails."""
+    real_open = builtins.open
+
+    def fake_open(
+        file: OpenedFile,
+        mode: str = 'r',
+        buffering: int = -1,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+        closefd: bool = True,
+        opener: Callable[[str, int], int] | None = None,
+    ) -> IO[str] | IO[bytes]:
+        if full(str(file), mode):
+            if opened_first:
+                real_open(file, mode, buffering, encoding, errors, newline, closefd, opener).close()
+            raise OSError(errno.ENOSPC, 'No space left on device')
+        return real_open(file, mode, buffering, encoding, errors, newline, closefd, opener)
+
+    monkeypatch.setattr(builtins, 'open', fake_open)
+
+
+def fake_bridge(monkeypatch: pytest.MonkeyPatch, answer: Callable[[str], str]) -> None:
+    """Fakes server._bridge with a function of its signature. Each call returns answer(code), for the code it was given.
+    A fake that reads the other arguments is written out in its test instead."""
+
+    def bridge(
+        code: str,
+        path: str | None = None,
+        timeout: float | None = None,
+        wait: float | None = None,
+        port: int | None = None,
+    ) -> str:
+        return answer(code)
+
+    patch_server(monkeypatch, '_bridge', bridge)
 
 
 def server_source() -> str:
@@ -100,6 +203,20 @@ def faked_helpers(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
     exec(compile(designer_helpers.source(), 'designer_helpers', 'exec'), module.__dict__)
     vars(module)['APIException'] = type('APIException', (BaseException,), {})
     return module
+
+
+class FakeGraph:
+    """Stands for a compositing graph, with its identifier and its package. A test sets the helpers' SDSBSCompGraph to
+    this class, so that their isinstance checks take a FakeGraph for a compositing graph."""
+
+    def __init__(self, identifier: str, package: mock.MagicMock) -> None:
+        self.identifier, self.package = identifier, package
+
+    def getIdentifier(self) -> str:
+        return self.identifier
+
+    def getPackage(self) -> mock.MagicMock:
+        return self.package
 
 
 @pytest.fixture

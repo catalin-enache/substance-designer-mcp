@@ -3,7 +3,7 @@
 
 import sys
 import types
-from typing import Any, cast
+from typing import cast
 from unittest import mock
 
 import pytest
@@ -54,7 +54,7 @@ def fit(
     view.viewport.return_value.height.return_value = 500
     view.mapToScene.return_value.boundingRect.return_value = Rect(*seen)
 
-    def wheel(_: Any, notches: int) -> None:
+    def wheel(_: mock.MagicMock, notches: int) -> None:  # the view
         state['zoom'] *= step**notches
 
     vars(module)['_wheel_zoom'] = wheel

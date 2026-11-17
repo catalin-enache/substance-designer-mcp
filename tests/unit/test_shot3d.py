@@ -7,11 +7,20 @@ the camera or switched the mesh taken again, then said. The live self-test check
 import contextlib
 import sys
 import types
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from types import FrameType, SimpleNamespace
-from typing import Protocol
+from typing import TYPE_CHECKING, NoReturn
 
 import pytest
+from aborts import Tracer
+from typing_extensions import Unpack  # typing's from Python 3.11; mcp requires typing_extensions
+
+from conftest import View3dOptions
+
+if TYPE_CHECKING:  # for the checker only: the types the faked helpers take; PySide6 is faked at run time
+    from PySide6 import QtCore, QtWidgets
+
+    from designer_helpers.shot3d import _Screen
 
 MAIN = 1  # Designer's main window
 OTHERS = (2, 3)  # its other windows: a floating panel, a dialog
@@ -142,7 +151,7 @@ class Window:
     def windowState(self) -> int:
         return 1
 
-    def setWindowState(self, state: object) -> None:
+    def setWindowState(self, state: 'QtCore.Qt.WindowState') -> None:
         self.mac.done.append('qt restore')
         self.qt_minimized = False
 
@@ -187,19 +196,11 @@ class Frames:
         self._did('closed')
 
 
-class Screen(Protocol):
-    """_on_screen's _Screen, as these tests call it."""
-
-    def again(self) -> None: ...
-
-    def between(self) -> None: ...
-
-
 def on_screen(
     helpers: types.ModuleType, window: Window, frames: Frames | None = None
-) -> contextlib.AbstractContextManager[Screen]:
+) -> contextlib.AbstractContextManager['_Screen']:
     """_on_screen for `window`, watching `frames` (a fake of its own when not given)."""
-    made: contextlib.AbstractContextManager[Screen] = helpers._on_screen(
+    made: contextlib.AbstractContextManager[_Screen] = helpers._on_screen(
         window, frames if frames is not None else Frames()
     )
     return made
@@ -217,7 +218,7 @@ def helpers(faked_helpers: types.ModuleType) -> types.ModuleType:
 def waits_recorded(helpers: types.ModuleType, done: list[str]) -> None:
     """_until looking up to 10 times, each wait recorded in `done` with its limit."""
 
-    def until(state: Callable[[], bool], limit: float, signals: object = ()) -> bool:
+    def until(state: Callable[[], bool], limit: float, signals: Sequence[str] = ()) -> bool:
         done.append('wait %g' % limit)
         return any(state() for _ in range(10))
 
@@ -568,7 +569,7 @@ def test_a_hidden_designer_is_brought_in_front_once_macos_says_its_unhide_took(h
     mac = LateUnhide(runs=3)
     _on(helpers, mac)
 
-    def until(state: Callable[[], bool], limit: float, signals: object = ()) -> bool:  # Designer's events run
+    def until(state: Callable[[], bool], limit: float, signals: Sequence[str] = ()) -> bool:  # Designer's events run
         mac.done.append('wait %g' % limit)
         for _ in range(10):
             mac.events_run()
@@ -888,27 +889,32 @@ class Shot:
         renders_left = [Render(name, self.saved) for name in renders]
         checked = vars(helpers)['_set_up_checked']
 
-        def render(mw: object) -> Render:
+        def render(mw: 'QtWidgets.QMainWindow') -> Render:
             r = renders_left.pop(0) if len(renders_left) > 1 else renders_left[0]
             self.events.append('render ' + r.name)
             return r
 
         self.screen = SimpleNamespace(again=lambda: self.events.append('again'), between=lambda: None)
-        self.given: object = None  # what the set-up was given to run before each step
+        # what the set-up was given to run before each step, and the frames to wait on
+        self.given: tuple[Callable[[], None] | None, Frames | None] | None = None
 
         @contextlib.contextmanager
-        def on_screen(mw: object, frames: object) -> Iterator[SimpleNamespace]:
+        def on_screen(mw: 'QtWidgets.QMainWindow', frames: Frames) -> Iterator[SimpleNamespace]:
             assert frames is self.frames
             self.events.append('on screen')
             yield self.screen
             self.events.append('put back')
 
-        def set_up(*args: object) -> Callable[[object, object], None]:
+        def set_up(  # shoot_3d passes every argument, in order: graph, mesh, view, zoom, tiling, orbit, pan
+            *args: Unpack[
+                tuple[str | None, str | None, str | None, int, float | None, list[float] | None, list[float] | None]
+            ],
+        ) -> Callable[[Callable[[], None] | None, Frames | None], None]:
             checked(*args[:3])
             if refused:
                 raise RuntimeError(refused)
 
-            def run(between: object, frames: object) -> None:
+            def run(between: Callable[[], None] | None, frames: Frames | None) -> None:
                 self.given = (between, frames)
                 self.events.append('set up %r' % (args,))
 
@@ -995,7 +1001,7 @@ def test_a_render_identical_while_the_view_draws_no_frame_isnt_taken_again(
     ids=['zoom', 'pan', 'orbit', 'another mesh'],
 )
 def test_a_set_up_that_moves_the_camera_or_switches_the_mesh_is_compared(
-    helpers: types.ModuleType, options: dict[str, object]
+    helpers: types.ModuleType, options: View3dOptions
 ) -> None:
     shot = Shot(helpers, 'A', 'B')
     helpers.shoot_3d('out.png', **options)
@@ -1008,7 +1014,7 @@ def test_a_set_up_that_moves_the_camera_or_switches_the_mesh_is_compared(
     ids=['graph', 'view', 'tiling', 'the mesh shown', 'nothing'],
 )
 def test_a_shot_that_needs_no_comparison_takes_one_render(
-    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str], options: dict[str, object]
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str], options: View3dOptions
 ) -> None:
     # a view or a graph may be what is shown already: an identical render is no sign of a stale one
     shot = Shot(helpers, 'A')
@@ -1031,9 +1037,7 @@ def test_without_options_nothing_is_set_up(helpers: types.ModuleType) -> None:
         ({'graph': 'one'}, 'graph one has one output'),
     ],
 )
-def test_a_set_up_refused_doesnt_touch_the_window(
-    helpers: types.ModuleType, options: dict[str, object], said: str
-) -> None:
+def test_a_set_up_refused_doesnt_touch_the_window(helpers: types.ModuleType, options: View3dOptions, said: str) -> None:
     # refused before anything changes, the user's window included
     shot = Shot(helpers, 'A')
     with pytest.raises(RuntimeError, match=said):
@@ -1054,7 +1058,7 @@ def test_a_3d_view_not_shown_is_refused_before_the_window_changes(helpers: types
     # REVIEW.md TST-393: the docstring's promise
     shot = Shot(helpers, 'A')
 
-    def not_shown(mw: object) -> object:
+    def not_shown(mw: 'QtWidgets.QMainWindow') -> NoReturn:
         raise RuntimeError('the 3D View panel is not visible')
 
     vars(helpers)['_3d_dock'] = not_shown
@@ -1066,10 +1070,12 @@ def test_a_3d_view_not_shown_is_refused_before_the_window_changes(helpers: types
 @pytest.mark.parametrize('way', ['minimized', 'covered', 'hidden'])
 def test_each_spy_on_the_windows_expose_events_is_removed(helpers: types.ModuleType, way: str) -> None:
     # REVIEW.md TST-428: the Expose spies of _wait_on_screen and _wait_off_screen were installed and never seen removed
-    installed: list[object] = []
-    removed: list[object] = []
+    installed: list[SimpleNamespace] = []
+    removed: list[SimpleNamespace] = []
 
-    def event_signal(watched: object, kinds: object, seen: object = None) -> SimpleNamespace:
+    def event_signal(
+        watched: SimpleNamespace, kinds: Sequence[str], seen: Callable[[str], None] | None = None
+    ) -> SimpleNamespace:
         spy = SimpleNamespace(fired='its signal')
         installed.append(spy)
         return spy
@@ -1141,10 +1147,7 @@ def test_a_window_covered_again_each_time_the_view_drew_is_refused_and_put_back(
     assert mac.done[-2:] == ['put below 7', 'unfade'], mac.done
 
 
-Tracer = Callable[[FrameType, str, object], 'Tracer | None']  # a function sys.settrace takes
-
-
-def _render_fakes(helpers: types.ModuleType, put: list[object]) -> None:
+def _render_fakes(helpers: types.ModuleType, put: 'list[QtCore.QMimeData | str]') -> None:
     """_3d_render's Qt faked: a clipboard holding the user's text, whose setMimeData appends to `put`, and the 3D view's
     Camera menu with Copy Render to Clipboard."""
     qt = sys.modules['PySide6']
@@ -1174,7 +1177,7 @@ def test_the_users_text_put_back_after_a_render_is_handed_to_the_pasteboard_at_o
     # REVIEW.md HLP-181: on macOS Qt only promises what setMimeData puts there, and Designer hands it over when another
     # app asks: a paste waited while Designer was busy, and the text was gone once Designer was killed
     helpers = faked_helpers
-    done: list[object] = []
+    done: list[QtCore.QMimeData | str] = []  # the mime data put back, then 'handed over'
     _render_fakes(helpers, done)
     vars(helpers)['_mac_window'] = lambda mw: SimpleNamespace(hand_over_clipboard=lambda: done.append('handed over'))
     helpers._3d_render('the main window')
@@ -1191,7 +1194,7 @@ def test_an_abort_landing_on_the_renders_put_back_of_the_clipboard_still_puts_th
     import designer_helpers
 
     helpers = faked_helpers
-    put: list[object] = []
+    put: list[QtCore.QMimeData | str] = []
     _render_fakes(helpers, put)
     tree = ast.parse(designer_helpers.source())
     render = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == '_3d_render')

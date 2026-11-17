@@ -13,7 +13,7 @@ from project_constants import (
 )  # on sys.path: the package's __init__ imports .core, which puts it there
 
 from .core import _designer_data_dir, _tool
-from .lifecycle import _agent_designer, _agent_home, _checked_folder, _own_home_path, _port, _running_on
+from .lifecycle import _agent_home, _agent_record, _checked_folder, _home_in, _own_home_path, _port, _running_on
 
 NEW_SESSION = '===== New Session ====='  # the first line Designer logs at each start
 ENDED = 'Application uninitialized'  # its last, in a session that ends
@@ -53,8 +53,9 @@ def _log_for(port: int) -> str | None:
     the user's is there. With none running, its own, what it wrote before it ended, unless the user's Designer last
     started was on this port too: then the newer of the two (REVIEW.md SRV-84)."""
     shared = _designer_log_path()
-    if _agent_designer(port) is not None:  # its record says where it writes
-        home = _agent_home(port)
+    found = _agent_record(port)  # one read: the home from the record whose Designer was checked (REVIEW.md SRV-174)
+    if found is not None:  # its record says where it writes
+        home = _home_in(found[1])
         if not home:  # older code started it, or not macOS: it writes the shared log
             return shared
         return _agent_log(port, home)

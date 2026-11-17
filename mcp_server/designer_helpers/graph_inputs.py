@@ -3,19 +3,26 @@
 import xml.etree.ElementTree as ET
 
 from .core import (
-    Any,
     APIException,
-    SDDefinition,
+    Json,
     SDGraph,
     SDNode,
     SDProperty,
     SDPropertyCategory,
     SDSBSCompGraph,
-    SDType,
+    SDSBSCompNode,
     SDTypeEnum,
     SDValue,
+    Sequence,
+    _definition_id,
     _graph_to_edit,
+    _new_node,
+    _nodes,
+    _output_nodes,
     _refuse_bad_size,
+    _size_property,
+    _type,
+    _value,
     cast,
     find_graph,
     fmt,
@@ -41,7 +48,7 @@ def _graph_inputs(g: SDSBSCompGraph) -> list[SDProperty]:
     return [p for p in g.getProperties(SDPropertyCategory.Input) if not p.getId().startswith('$')]
 
 
-def _set_annotation(g: SDSBSCompGraph, prop: SDProperty, key: str, value: Any) -> None:
+def _set_annotation(g: SDSBSCompGraph, prop: SDProperty, key: str, value: bool | float | str) -> None:
     from sd.api.sdvaluebool import SDValueBool
     from sd.api.sdvaluefloat import SDValueFloat
     from sd.api.sdvaluestring import SDValueString
@@ -62,10 +69,10 @@ def expose_param(
     param: str,
     input_id: str | None = None,
     label: str | None = None,
-    default: Any = None,
-    minimum: Any = None,
-    maximum: Any = None,
-    step: Any = None,
+    default: Json = None,
+    minimum: float | None = None,
+    maximum: float | None = None,
+    step: float | None = None,
     group: str | None = None,
 ) -> None:
     """Create a graph input with the parameter's own type and drive the parameter from it."""
@@ -77,7 +84,7 @@ def expose_param(
     prop = node.getPropertyFromId(param, SDPropertyCategory.Input)
     if prop is None or prop.isConnectable():
         raise RuntimeError('%r is not a parameter of node %s; see describe_node' % (param, node_id))
-    ptype = cast(SDType, prop.getType())  # a parameter always has a type
+    ptype = _type(prop)
     is_enum = isinstance(ptype, SDTypeEnum)
     type_id = 'int' if is_enum else ptype.getId()
     getter = _GETTERS.get(type_id)
@@ -105,13 +112,13 @@ def expose_param(
     inherited = prop.getId() == '$outputsize' and _inherits_size(node, prop)
     if default is not None:
         _refuse_bad_size_on_input(node, prop, [default])
-    value = _make_value(prop, default, inherited) if default is not None else cast(SDValue, node.getPropertyValue(prop))
+    value = _make_value(prop, default, inherited) if default is not None else _value(node, prop)
     if is_enum:
         value = SDValueInt.sNew(int(cast(SDValueEnum, value).get()))
     inp = cast(SDProperty, g.newProperty(input_id, SDTypeInt.sNew() if is_enum else ptype, SDPropertyCategory.Input))
     created_graph = existing is None
-    get = None
-    old_value = cast(SDValue, node.getPropertyValue(prop))  # adding a function graph resets it to the default
+    get: SDNode | None = None
+    old_value = _value(node, prop)  # adding a function graph resets it to the default
     try:
         g.setPropertyValue(inp, value)
         _set_annotation(g, inp, 'label', label or input_id.replace('_', ' ').capitalize())
@@ -119,7 +126,7 @@ def expose_param(
             if val is not None:
                 _set_annotation(g, inp, key, val)
         fg = cast(SDGraph, existing or node.newPropertyGraph(prop, 'SDSBSFunctionGraph'))
-        get = fg.newNode('sbs::function::' + getter)
+        get = _new_node(fg, 'sbs::function::' + getter)
         get.setInputPropertyValueFromId('__constant__', SDValueString.sNew(input_id))
         fg.setOutputNode(get, True)
     except (Exception, APIException):
@@ -210,19 +217,26 @@ def _refuse_no_input(g: SDSBSCompGraph, fg: SDGraph, node_id: str | None, param:
         )
 
 
-def _plain_binding(fg: SDGraph) -> Any:
+def _input_read(get: SDNode) -> str | None:
+    """The input id a get node reads: its __constant__, a string, as fmt() shows it (its text, or '<...>' when it can't
+    be read), or None when it has none (REVIEW.md HLP-184)."""
+    shown = fmt(get.getInputPropertyValueFromId('__constant__'))
+    return shown if isinstance(shown, str) else None
+
+
+def _plain_binding(fg: SDGraph) -> str | None:
     """The input id if this function graph is exactly what expose_param builds (one get_* node, its
     output), else None: a hand-written expression, a Pixel Processor function, an unfinished one."""
-    nodes = list(fg.getNodes())
-    if _has_output(fg) and len(nodes) == 1 and '::get_' in cast(SDDefinition, nodes[0].getDefinition()).getId():
-        return fmt(nodes[0].getInputPropertyValueFromId('__constant__'))
+    nodes = _nodes(fg)
+    if _has_output(fg) and len(nodes) == 1 and '::get_' in _definition_id(nodes[0]):
+        return _input_read(nodes[0])
     return None
 
 
 def _connected_nodes(fg: SDGraph) -> list[SDNode]:
     """The nodes of this function graph that feed its output node (none without one)."""
     seen: dict[str, SDNode] = {}
-    todo = list(fg.getOutputNodes())
+    todo = _output_nodes(fg)
     while todo:
         node = todo.pop()
         if node.getIdentifier() in seen:
@@ -235,28 +249,27 @@ def _connected_nodes(fg: SDGraph) -> list[SDNode]:
     return list(seen.values())
 
 
-def _delete_function(node: SDNode, prop: SDProperty) -> None:
+def _delete_function(node: SDSBSCompNode, prop: SDProperty) -> None:
     """Delete a parameter's function graph. On a $ parameter that also switches its inheritance
     back to the node's default (measured on all six on a levels node and `$outputsize` on an instance node, tests/test_all_tools/facts/designer_scripts/function_states.py), so the inheritance is put back; the caller sets the value after it."""
-    compositing_node: Any = node  # the inheritance methods are on the compositing node's class
-    method = compositing_node.getPropertyInheritanceMethod(prop) if prop.getId().startswith('$') else None
+    method = node.getPropertyInheritanceMethod(prop) if prop.getId().startswith('$') else None
     node.deletePropertyGraph(prop)
     if method is not None:
-        compositing_node.setPropertyInheritanceMethod(prop, method)
+        node.setPropertyInheritanceMethod(prop, method)
 
 
 def _fx_map_functions(node: SDNode) -> list[tuple[str, SDProperty, SDGraph]]:
     """An FX-Map node's inner functions, which read its graph's inputs: (the inner node's id, parameter, function)."""
-    if cast(SDDefinition, node.getDefinition()).getId() != 'sbs::compositing::fxmaps':
+    if _definition_id(node) != 'sbs::compositing::fxmaps':
         return []
-    fx_graph = cast(SDGraph, node.getReferencedResource())
-    inner_nodes = fx_graph.getNodes() if fx_graph is not None else []
+    fx_graph = cast(SDGraph | None, node.getReferencedResource())
+    inner_nodes = _nodes(fx_graph) if fx_graph is not None else []
     return [(inner.getIdentifier(), prop, fg) for inner in inner_nodes for prop, fg in _functions_of(inner)]
 
 
 def _is_processor_program(node: SDNode, prop: SDProperty) -> bool:
     """A Value or Pixel Processor's function, which is what the node computes: never a plain binding, whatever its size."""
-    definition = cast(SDDefinition, node.getDefinition()).getId()
+    definition = _definition_id(node)
     return definition in ('sbs::compositing::valueprocessor', 'sbs::compositing::pixelprocessor') and prop.getId() in (
         'function',
         'perpixel',
@@ -284,7 +297,7 @@ def _graph_parameter_reads(g: SDSBSCompGraph, connected_only: bool, plain_only: 
                 continue
             nodes = {cast(ET.Element, n.find('uid')).get('v'): n for n in function.iter('paramNode')}
             if connected_only:
-                wired: dict[Any, ET.Element] = {}
+                wired: dict[str | None, ET.Element] = {}
                 rootnode = function.find('rootnode')
                 todo = [rootnode.get('v')] if rootnode is not None else []
                 while todo:
@@ -318,21 +331,23 @@ def _functions_of(node: SDNode) -> list[tuple[SDProperty, SDGraph]]:
     return found
 
 
-def _input_users(g: SDSBSCompGraph, plain_only: bool = False, connected_only: bool = False) -> dict[Any, list[str]]:
+def _input_users(
+    g: SDSBSCompGraph, plain_only: bool = False, connected_only: bool = False
+) -> dict[str | None, list[str]]:
     """input id -> ['node.param', ...] for parameters whose function has a get node naming it. With
     plain_only, only those that are nothing but that read; with connected_only, only get nodes that
     feed the function's output, which are the ones that affect the value. An FX-Map's functions count,
     as refs with its node's id and "(FX-Map)", never plain."""
-    users: dict[Any, list[str]] = {}
+    users: dict[str | None, list[str]] = {}
 
     def read(fg: SDGraph, ref: str) -> None:
-        for fnode in _connected_nodes(fg) if connected_only else fg.getNodes():
-            if '::get_' in cast(SDDefinition, fnode.getDefinition()).getId():
-                refs = users.setdefault(fmt(fnode.getInputPropertyValueFromId('__constant__')), [])
+        for fnode in _connected_nodes(fg) if connected_only else _nodes(fg):
+            if '::get_' in _definition_id(fnode):
+                refs = users.setdefault(_input_read(fnode), [])
                 if ref not in refs:  # one function can read an input twice
                     refs.append(ref)
 
-    for node in g.getNodes():
+    for node in _nodes(g):
         for prop, fg in _functions_of(node):
             ref = '%s.%s' % (node.getIdentifier(), prop.getId())
             if plain_only:
@@ -350,33 +365,33 @@ def _input_users(g: SDSBSCompGraph, plain_only: bool = False, connected_only: bo
     return users
 
 
-def _inherits_size(owner: Any, prop: SDProperty) -> bool:
+def _inherits_size(owner: SDSBSCompNode | SDSBSCompGraph, prop: SDProperty) -> bool:
     """Whether a node's or the graph's $outputsize isn't Absolute, so that its value is an offset."""
     from sd.api.sdproperty import SDPropertyInheritanceMethod
 
     return bool(owner.getPropertyInheritanceMethod(prop) != SDPropertyInheritanceMethod.Absolute)
 
 
-def _offset_note(node: Any, prop: SDProperty) -> str:
+def _offset_note(node: SDSBSCompNode | SDSBSCompGraph, prop: SDProperty) -> str:
     """For a refusal sending the agent to the graph input that drives a node's $outputsize."""
     if prop.getId() == '$outputsize' and _inherits_size(node, prop):
         return '; while this node inherits its size, a graph input bound to it is a log2 offset (0 keeps the size, 1 doubles it)'
     return ''
 
 
-def _refuse_bad_size_on_input(target: Any, prop: SDProperty, values: list[Any]) -> None:
+def _refuse_bad_size_on_input(target: SDSBSCompNode | SDSBSCompGraph, prop: SDProperty, values: Sequence[Json]) -> None:
     """Values for what only binds a $outputsize: an input of the graph `target`, or a parameter of the instance node
     `target`, which is an input of the graph it references (that one level). What it binds is a node's size or the
     graph's own, read as last saved since the API can't. An input read through other function nodes isn't a size, so it
     isn't checked; nor is an input of `target` bound to an instance's parameter, which only that instance's graph
     shows to be a size."""
     input_id = prop.getId()
-    if input_id.startswith('$') or cast(SDType, prop.getType()).getId() != 'int2':
+    if input_id.startswith('$') or _type(prop).getId() != 'int2':
         return
     graph = target if isinstance(target, SDSBSCompGraph) else target.getReferencedResource()
     if not isinstance(graph, SDSBSCompGraph):
         return
-    owners: list[tuple[Any, str]] = [
+    owners: list[tuple[SDSBSCompNode | SDSBSCompGraph, str]] = [
         (_node(graph, ref.split('.', 1)[0]), 'it drives $outputsize')
         for ref in _input_users(graph, plain_only=True).get(input_id, [])
         if ref.endswith('.$outputsize')
@@ -390,15 +405,18 @@ def _refuse_bad_size_on_input(target: Any, prop: SDProperty, values: list[Any]) 
             )
         )
     for owner, how in owners:
-        inherited = _inherits_size(owner, owner.getPropertyFromId('$outputsize', SDPropertyCategory.Input))
+        inherited = _inherits_size(owner, _size_property(owner))
         for value in values:
             _make_value(prop, value)  # the length and the numbers are checked here
-            _refuse_bad_size('%s (%s)' % (input_id, how), [int(v) for v in value], value, inherited)
+            # the cast: an int2's two numbers, as _make_value took them
+            _refuse_bad_size(
+                '%s (%s)' % (input_id, how), [int(v) for v in cast(Sequence[str | float], value)], value, inherited
+            )
 
 
 def list_graph_inputs(identifier: str | SDSBSCompGraph | None = None) -> None:
     g = find_graph(identifier)
-    size_prop = cast(SDProperty, g.getPropertyFromId('$outputsize', SDPropertyCategory.Input))  # every graph has it
+    size_prop = _size_property(g)
     method = g.getPropertyInheritanceMethod(size_prop)
     if method == method.__class__.RelativeToParent:
         print('size: overridable, default %d px' % g.getDefaultParentSize().x)
@@ -421,7 +439,7 @@ def list_graph_inputs(identifier: str | SDSBSCompGraph | None = None) -> None:
             '%s (%s) = %r  %s  drives: %s'
             % (
                 inp.getId(),
-                cast(SDType, inp.getType()).getId(),
+                _type(inp).getId(),
                 fmt(g.getPropertyValue(inp)),
                 ' '.join(notes),
                 ', '.join(users.get(inp.getId(), [])) or '-',
@@ -452,16 +470,15 @@ def remove_graph_input(identifier: str | SDSBSCompGraph | None, input_id: str) -
                 else '',
             )
         )
-    value = cast(SDValue, g.getPropertyValue(inp))  # an input always has a value
+    value = _value(g, inp)
     # every value built before anything is deleted: an int set on an enum parameter is accepted whatever it is, and
     # leaves a value that can't be read back
     kept = []
     for ref in plain:
         nid, pid = ref.split('.', 1)
-        # both found by _input_users just above
-        node = cast(SDNode, g.getNodeFromId(nid))
-        prop = cast(SDProperty, node.getPropertyFromId(pid, SDPropertyCategory.Input))
-        same_type = cast(SDType, prop.getType()).getId() == cast(SDType, inp.getType()).getId()
+        node = _node(g, nid)  # found by _input_users just above
+        prop = cast(SDProperty, node.getPropertyFromId(pid, SDPropertyCategory.Input))  # found there too
+        same_type = _type(prop).getId() == _type(inp).getId()
         try:
             kept.append((ref, node, prop, value if same_type else _make_value(prop, fmt(value))))
         except (Exception, APIException) as e:
@@ -489,7 +506,7 @@ def set_graph_size(identifier: str | SDSBSCompGraph | None, size_log2: int, over
 
     _refuse_bad_size('size_log2', [size_log2], size_log2)
     g = _graph_to_edit(identifier)
-    prop = cast(SDProperty, g.getPropertyFromId('$outputsize', SDPropertyCategory.Input))  # every graph has it
+    prop = _size_property(g)
     if overridable:
         g.setPropertyInheritanceMethod(prop, SDPropertyInheritanceMethod.RelativeToParent)
         g.setDefaultParentSize(int2(2**size_log2, 2**size_log2))

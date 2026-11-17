@@ -5,12 +5,12 @@ import os
 import sys
 import traceback
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
 from conftest import SELFTEST_DIR
+from project_constants import Json
 
 
 def script_path(name: str) -> str:
@@ -23,7 +23,7 @@ def script_path(name: str) -> str:
     return path_of(name)
 
 
-def _run(name: str, args: dict[str, Any]) -> tuple[str, str]:
+def _run(name: str, args: dict[str, Json]) -> tuple[str, str]:
     """(what it printed, the traceback or ''), run as the plugin runs it: compiled with its own path, so a traceback
     shows its source lines."""
     path = script_path(name)  # the self-test's own (REVIEW.md TST-238: this built the path itself)
@@ -56,7 +56,7 @@ def _stand_in(monkeypatch: pytest.MonkeyPatch, *names: str) -> dict[str, MagicMo
 def test_a_failing_3d_grab_does_not_read_as_no_3d_view(monkeypatch: pytest.MonkeyPatch) -> None:
     """facts/checks.py reads NO_3D_VIEW in the result as no 3D view, and a traceback shows the failing source line
     (REVIEW.md TST-117): the token can't be on a line that can fail."""
-    made = _stand_in(monkeypatch, 'sd', 'PySide6.QtWidgets')
+    made = _stand_in(monkeypatch, 'sd', 'PySide6.QtWidgets', 'sd.api.qtforpythonuimgrwrapper')
     viewport = MagicMock()
     viewport.metaObject.return_value.className.return_value = 'Alg::Gui3D::ViewportWidget'
     viewport.grab.side_effect = RuntimeError('Internal C++ object already deleted')
@@ -71,7 +71,7 @@ def test_a_failing_3d_grab_does_not_read_as_no_3d_view(monkeypatch: pytest.Monke
 
 
 def test_no_3d_view_is_still_reported(monkeypatch: pytest.MonkeyPatch) -> None:
-    made = _stand_in(monkeypatch, 'sd', 'PySide6.QtWidgets')
+    made = _stand_in(monkeypatch, 'sd', 'PySide6.QtWidgets', 'sd.api.qtforpythonuimgrwrapper')
     ui = made['sd'].getContext.return_value.getSDApplication.return_value.getQtForPythonUIMgr.return_value
     ui.getMainWindow.return_value.findChildren.return_value = []
     printed, error = _run('facts/grab_3d_view', {'path': 'unused.png'})
@@ -79,12 +79,12 @@ def test_no_3d_view_is_still_reported(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _package_uid_stand_in(monkeypatch: pytest.MonkeyPatch, file_text: str, uid: str) -> None:
-    made = _stand_in(monkeypatch, 'sd', 'sd.api.sbs.sdsbscompgraph')
+    made = _stand_in(monkeypatch, 'sd', 'sd.api.sbs.sdsbscompgraph', 'sd.api.sdpackage', 'sd.api.sdpackagemgr')
     pm = made['sd'].getContext.return_value.getSDApplication.return_value.getPackageMgr.return_value
     pm.newUserPackage.return_value.getUID.return_value = uid
     pm.loadUserPackage.return_value.getUID.return_value = uid
 
-    def save(_pkg: Any, path: str) -> None:
+    def save(_pkg: MagicMock, path: str) -> None:
         Path(path).write_text(file_text)
 
     pm.savePackageAs.side_effect = save

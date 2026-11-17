@@ -1,9 +1,7 @@
 """Editing graphs: apply_edits (every node and connection edit), create_graph, and exposed inputs
 (list_graph_inputs, remove_graph_input, set_graph_size)."""
 
-from typing import Any
-
-from .core import _bridge, _checked, _edit, _helpers_call, _local_path, _tool
+from .core import JsonObject, _bridge, _checked, _edit, _helpers_call, _local_path, _tool
 
 
 @_tool()
@@ -43,7 +41,7 @@ def set_graph_size(size_log2: int, graph: str | None = None, overridable: bool =
 
 
 @_tool()
-def apply_edits(ops: list[dict[str, Any]], graph: str | None = None) -> str:
+def apply_edits(ops: list[JsonObject], graph: str | None = None) -> str:
     """Edit a graph: one or more ops in one call and one undo step. Each op is a dict:
     {"op": "add", "definition": "levels", "ref": "lv", "position"?: [x, y], "identifier"?: "...", "label"?: "...",
      "usage"?: "...", "params"?: {...}}
@@ -100,8 +98,5 @@ def apply_edits(ops: list[dict[str, Any]], graph: str | None = None) -> str:
       unless default is given; min/max/step/group set the slider. The input then shows up in
       sbsar_info and can be set with render_sbs(params=...). Refuses a parameter that already has a
       function with nodes (replacing it would lose that logic)."""
-    ops = [
-        {**op, 'path': _local_path(op['path'])} if isinstance(op, dict) and isinstance(op.get('path'), str) else op
-        for op in ops
-    ]
+    ops = [{**op, 'path': _local_path(path)} if isinstance(path := op.get('path'), str) else op for op in ops]
     return _edit('apply_edits(%r, %r)' % (graph, ops), 'Claude: apply %d edits' % len(ops))

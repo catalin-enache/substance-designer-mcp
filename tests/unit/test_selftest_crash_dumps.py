@@ -8,24 +8,28 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, NoReturn, cast
 
 import pytest
+from typing_extensions import Unpack  # typing's from Python 3.11; mcp requires typing_extensions
 
-from conftest import SELFTEST_DIR
+from conftest import SELFTEST_DIR, RunOptions
+
+if TYPE_CHECKING:  # for the checker only: each test imports crash_watch.py afresh (_crash_watch())
+    from test_all_tools.crash_watch import CrashWatch
 
 DUMPS = 'Library/Application Support/Adobe/Adobe Substance 3D Designer/Sentry-Crashpad/completed'
 PENDING = DUMPS.replace('/completed', '/pending')  # Crashpad's reports waiting for their upload
 
 
-def _common() -> Any:  # a module imported by name: PyCharm can't see its names
+def _common() -> ModuleType:  # a module imported by name: PyCharm can't see its names
     tests_dir = os.path.dirname(SELFTEST_DIR)
     if tests_dir not in sys.path:
         sys.path.insert(0, tests_dir)
     return importlib.import_module('test_all_tools.common')
 
 
-def _crash_watch() -> Any:
+def _crash_watch() -> ModuleType:
     """crash_watch.py, which looks common's check and crash_dumps up when it calls them."""
     _common()
     return importlib.import_module('test_all_tools.crash_watch')
@@ -124,17 +128,20 @@ class _Dumps:
         homes = {d for d, (_, port) in self.written.items() if port is not None and port in (_common().PORT, *ports)}
         return running and not (homes - before)
 
-    def watch(self, common: object) -> Any:  # Any: crash_watch's CrashWatch, loaded fresh by each test
-        return _crash_watch().CrashWatch(
-            find=self.find,
-            clock=lambda: self.now,
-            sleep=self.sleep,
-            mtime=lambda d: self.written[d][0],
-            coming=self.may_come,
+    def watch(self, common: ModuleType) -> 'CrashWatch':
+        return cast(
+            'CrashWatch',
+            _crash_watch().CrashWatch(
+                find=self.find,
+                clock=lambda: self.now,
+                sleep=self.sleep,
+                mtime=lambda d: self.written[d][0],
+                coming=self.may_come,
+            ),
         )
 
 
-def _results(common: Any, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, bool, str]]:
+def _results(common: ModuleType, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, bool, str]]:
     seen: list[tuple[str, str, bool, str]] = []
     monkeypatch.setitem(vars(common), 'check', lambda tool, name, ok, detail='': seen.append((tool, name, ok, detail)))
     return seen
@@ -309,7 +316,7 @@ def test_watching_crashes_shares_the_categorys_watch_and_settles_once(monkeypatc
     """A check run alone (a scratch run) settles its own watch at its end; inside lifecycle.run it uses the category's,
     settled once at the category's end."""
     common = _common()
-    settled: list[object] = []
+    settled: list[CrashWatch] = []  # each watch settled
     monkeypatch.setattr(_crash_watch().CrashWatch, 'settle', lambda self: settled.append(self))
     ctx = common.Ctx(c=None, s=None, scratch='', helper_source='', was_running=False)
     with _crash_watch().watching_crashes(ctx) as outer:
@@ -325,7 +332,7 @@ def test_watching_crashes_shares_the_categorys_watch_and_settles_once(monkeypatc
 
 def test_watching_crashes_settles_when_a_check_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     common = _common()
-    settled: list[object] = []
+    settled: list[CrashWatch] = []  # each watch settled
     monkeypatch.setattr(_crash_watch().CrashWatch, 'settle', lambda self: settled.append(self))
     ctx = common.Ctx(c=None, s=None, scratch='', helper_source='', was_running=False)
     with pytest.raises(RuntimeError), _crash_watch().watching_crashes(ctx):
@@ -421,7 +428,7 @@ def test_a_pgrep_that_cant_run_reads_as_handlers_unknown(monkeypatch: pytest.Mon
     common = _common()
     monkeypatch.setattr(sys, 'platform', 'darwin')
 
-    def cant(cmd: object, **kw: object) -> NoReturn:
+    def cant(cmd: list[str], **kw: Unpack[RunOptions]) -> NoReturn:
         raise OSError('no pgrep')
 
     monkeypatch.setattr(subprocess, 'run', cant)

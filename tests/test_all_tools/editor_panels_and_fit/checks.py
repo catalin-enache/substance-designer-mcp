@@ -32,6 +32,14 @@ from test_all_tools.editor_panels_and_fit.preparations import (
     VIEW3D_GRAPH,
     VIEW3D_PLAIN,
 )
+from test_all_tools.editor_panels_and_fit.printed import (
+    Printed,
+    is_asks_hidden,
+    is_counts,
+    is_events,
+    is_pairs,
+    read_value,
+)
 from test_all_tools.editor_panels_and_fit.renders import (
     difference,
     grey,
@@ -55,7 +63,7 @@ from test_all_tools.editor_panels_and_fit.window_owner import WHO
 from test_all_tools.editor_panels_and_fit.window_states import at_rest
 
 TEXT = b'mcp_selftest: the text a 3D capture puts back'
-THREE_D = {'panel': '3d', 'max_size': 700}
+THREE_D: dict[str, str | int] = {'panel': '3d', 'max_size': 700}
 # a plane seen from the top, framed; what a call sets stays, so the calls after pass only what they change
 TOP = {'mesh': 'Plane', 'view': 'Top'}
 USERS_3D_VIEW = "it would change the 3D view of the user's Designer"
@@ -351,12 +359,12 @@ async def check_the_camera_moves_under_the_light_tool_too(ctx: Ctx) -> None:
         'the plane from column %d to %d, then %d to %d after 3 wheel steps, a pan and a turn | %s'
         % (*edges, *after, light.strip()),
     )
-    waits = _read(sent, 'WAITS')
+    waits = read_value(sent, 'WAITS')
     check(
         'self-test',
         'the moves under the Light tool wait only for a frame the view asks for, none to its limit',
         isinstance(waits, list) and bool(waits) and all(ended is True for ended in waits),
-        'how each wait ended (True: the view asked for a frame; False: its limit): %s' % (waits,),
+        'how each wait ended (True: the view asked for a frame; False: its limit): %s' % str(waits),
     )
     if 'SENT=wheel,pan,turn' not in sent:  # a check's detail is cut at 150 characters (REVIEW.md TST-341)
         print(
@@ -842,21 +850,13 @@ FRAMES = dedent("""
         frames.close()""")
 
 
-def _read(said: str, name: str) -> object:
-    """The value a snippet printed as NAME=<repr>, or None."""
-    import ast
-
-    found = re.search(r'^%s=(.*)$' % name, said, re.M)
-    return ast.literal_eval(found.group(1)) if found else None
-
-
-def _shown(events: object, changed: bool) -> bool:
+def _shown(events: Printed, changed: bool) -> bool:
     """FRAMES' events as the window came on screen from hidden: after a change, the first paint reading 8, then an
     UpdateRequest, then a paint reading a restart; with nothing changed, two paints or more, each reading 8, and no
     UpdateRequest."""
-    if not (isinstance(events, tuple) and events[0] is True and isinstance(events[1], list)):
+    if not (isinstance(events, tuple) and events[0] is True and is_events(events[1])):
         return False
-    seen: list[tuple[str, int | None]] = events[1]
+    seen = events[1]
     paints = [n for kind, n in seen if kind == 'Paint']
     if not changed:
         return len(paints) >= 2 and all(n == 8 for n in paints) and all(kind == 'Paint' for kind, _ in seen)
@@ -865,12 +865,12 @@ def _shown(events: object, changed: bool) -> bool:
     return paints[:1] == [8] and bool(asked) and bool(restart) and asked[0] < restart[0]
 
 
-def _changed_by_its_second_paint(events: object) -> bool:
+def _changed_by_its_second_paint(events: Printed) -> bool:
     """FRAMES' events as the window came on screen: by the second paint, an UpdateRequest came or that paint read a
     restart (below 8); with nothing changed, neither (_shown)."""
-    if not (isinstance(events, tuple) and isinstance(events[1], list)):
+    if not (isinstance(events, tuple) and is_events(events[1])):
         return False
-    seen: list[tuple[str, int | None]] = events[1]
+    seen = events[1]
     paints = [i for i, (kind, _) in enumerate(seen) if kind == 'Paint']
     if len(paints) < 2:
         return False
@@ -878,10 +878,10 @@ def _changed_by_its_second_paint(events: object) -> bool:
     return any(kind == 'UpdateRequest' for kind, _ in seen[: paints[1]]) or (second is not None and second < 8)
 
 
-def _restarted(seen: object, rest: object) -> bool:
+def _restarted(seen: Printed, rest: Printed) -> bool:
     """FRAMES' counts read after a change: `rest`, the count at rest, then a restart (below 8), then back to it."""
     return (
-        isinstance(seen, list)
+        is_counts(seen)
         and len(seen) >= 3
         and seen[0] == rest
         and any(n is not None and n < 8 for n in seen[1:])
@@ -889,10 +889,11 @@ def _restarted(seen: object, rest: object) -> bool:
     )
 
 
-def _held(seen: object, rest: object) -> bool:
+def _held(seen: Printed, rest: Printed) -> bool:
     """FRAMES' counts read after a viewpoint: restarted (_restarted), the lowest count read at two paints or more, held
     while the camera turns."""
-    return isinstance(seen, list) and _restarted(seen, rest) and seen.count(min(n for n in seen if n is not None)) >= 2
+    # _restarted is true only for a list. is_counts tells the checker so.
+    return _restarted(seen, rest) and is_counts(seen) and seen.count(min(n for n in seen if n is not None)) >= 2
 
 
 async def check_the_3d_views_frames_say_when_it_has_drawn(ctx: Ctx) -> None:
@@ -917,19 +918,19 @@ async def check_the_3d_views_frames_say_when_it_has_drawn(ctx: Ctx) -> None:
         for last in (False, True):
             await c('screenshot_designer', {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH})
             said = text(await c('execute_designer_code', {'code': ctx.helper_source + WHO + FRAMES}))
-            covers = _read(said, 'COVERS')
+            covers = read_value(said, 'COVERS')
             if not covers:
                 break
             # printed whole, as a check's detail is cut: (the stretch, macOS's covered, the windows in front of it)
             print('      covered while read on screen%s: %r' % ('' if last else ', read again', covers))
-    rest, pan, view = (_read(said, name) for name in ('REST', 'PAN', 'VIEW'))
+    rest, pan, view = (read_value(said, name) for name in ('REST', 'PAN', 'VIEW'))
     check(
         'designer facts',
         what,
         rest == 8 and _restarted(pan, rest) and _held(view, rest),
         'at rest %r; a pan %r; a viewpoint %r' % (rest, pan, view),
     )
-    states = _read(said, 'STATES')
+    states = read_value(said, 'STATES')
     if states:  # printed whole, as a check's detail is cut: the window's state where a wait ran out (REVIEW.md TST-444)
         shot = [line for line in said.splitlines() if line.startswith("Designer's window: ")]
         print('      where a wait on screen ran out: %r; the show: %s' % (states, ' / '.join(shot)))
@@ -937,9 +938,9 @@ async def check_the_3d_views_frames_say_when_it_has_drawn(ctx: Ctx) -> None:
         'designer facts',
         'with Display > Samples off, the overlay shows no count',
         'OFF=None' in said,
-        said.strip().splitlines()[-1] if 'OFF=' not in said else 'OFF=%r' % _read(said, 'OFF'),
+        said.strip().splitlines()[-1] if 'OFF=' not in said else 'OFF=%r' % read_value(said, 'OFF'),
     )
-    changed, unchanged = _read(said, 'SHOWN_CHANGED'), _read(said, 'SHOWN_UNCHANGED')
+    changed, unchanged = read_value(said, 'SHOWN_CHANGED'), read_value(said, 'SHOWN_UNCHANGED')
     check(
         'designer facts',
         'shown from hidden, the 3D view asks for a frame and restarts after a pan made meanwhile, and does neither '
@@ -947,7 +948,7 @@ async def check_the_3d_views_frames_say_when_it_has_drawn(ctx: Ctx) -> None:
         _shown(changed, True) and _shown(unchanged, False),
         '(hidden before, events) after a pan %r; with nothing changed %r' % (changed, unchanged),
     )
-    taken = _read(said, 'SHOWN_TAKEN')
+    taken = read_value(said, 'SHOWN_TAKEN')
     check(
         'designer facts',
         # whether Designer was hidden before the show, and the pan's UpdateRequest came before it, isn't judged
@@ -957,8 +958,8 @@ async def check_the_3d_views_frames_say_when_it_has_drawn(ctx: Ctx) -> None:
         _changed_by_its_second_paint(taken),
         '(hidden before, events) %r' % (taken,),
     )
-    hidden_asks = _read(said, 'HIDDEN_ASKS')
-    each = hidden_asks[1] if isinstance(hidden_asks, tuple) and hidden_asks[0] is True else []
+    hidden_asks = read_value(said, 'HIDDEN_ASKS')
+    each = hidden_asks[1] if is_asks_hidden(hidden_asks) else []
     check(
         'designer facts',
         "Designer hidden, the 3D view asks for a frame after each pan, and draws none up to the last one's ask",
@@ -966,7 +967,7 @@ async def check_the_3d_views_frames_say_when_it_has_drawn(ctx: Ctx) -> None:
         and all('UpdateRequest' in kinds and 'Paint' not in kinds for kinds in each)
         and 'HIDDEN_PAINTS=0' in said,  # REVIEW.md TST-429: a paint after a pan's ask fell in no slice
         '(hidden, the events after each pan) %r; paints over the stretch: %r'
-        % (hidden_asks, _read(said, 'HIDDEN_PAINTS')),
+        % (hidden_asks, read_value(said, 'HIDDEN_PAINTS')),
     )
 
 
@@ -2013,7 +2014,7 @@ async def check_a_hidden_designers_window_is_brought_in_front_for_a_3d_shot_once
         while tried < TRIES:
             tried += 1
             said = text(await ctx.c('execute_designer_code', {'code': ctx.helper_source + WHO + SHOWN_FROM_HIDDEN}))
-            before, read = _read(said, 'HIDDEN_BEFORE'), _read(said, 'SHOT')
+            before, read = read_value(said, 'HIDDEN_BEFORE'), read_value(said, 'SHOT')
             if not (isinstance(read, tuple) and read[1]):  # no window in front, or nothing read: judged at once
                 break
             retaken.append(
@@ -2103,7 +2104,7 @@ async def check_the_first_3d_shot_in_a_designer_opened_hidden_waits_on_the_views
     said = text(
         await ctx.c('execute_designer_code', {'code': ctx.helper_source + FIRST_SHOT.replace('PATH', repr(path))})
     )
-    read = _read(said, 'FIRST_SHOT')
+    read = read_value(said, 'FIRST_SHOT')
     if isinstance(read, tuple) and read[0] is not None:
         skip('screenshot_designer', what, 'the 3D view drew before: its overlay shows a count, %r' % (read[0],))
         return
@@ -2143,7 +2144,7 @@ async def check_a_watch_of_the_3d_views_frames_dropped_without_close_goes_at_onc
         skip('screenshot_designer', what, USERS_3D_VIEW)
         return
     said = text(await ctx.c('execute_designer_code', {'code': ctx.helper_source + FRAMES_DROPPED}))
-    read = _read(said, 'DROPPED')
+    read = read_value(said, 'DROPPED')
     check(
         'screenshot_designer',
         what,
@@ -2197,8 +2198,8 @@ async def check_a_3d_shots_window_shown_again_mid_accumulation_waits_for_the_cou
         return
     await ctx.c('screenshot_designer', {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH})  # the view drawn, at rest
     said = text(await ctx.c('execute_designer_code', {'code': ctx.helper_source + SHOWN_FROM_LOWER}))
-    read = _read(said, 'READ')
-    lower = [shown for hid, shown in read if isinstance(hid, int) and hid <= 3] if isinstance(read, list) else []
+    read = read_value(said, 'READ')
+    lower = [shown for hid, shown in read if isinstance(hid, int) and hid <= 3] if is_pairs(read) else []
     check(
         'screenshot_designer',
         what,

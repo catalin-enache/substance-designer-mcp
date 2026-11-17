@@ -5,8 +5,12 @@ import sys
 import types
 from collections.abc import Callable, Sequence
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:  # for the checker only: the type the faked helpers take; PySide6 is faked at run time
+    from PySide6 import QtCore
 
 GIVEN = 'gave the keyboard back to the app in front before it'
 
@@ -89,18 +93,21 @@ def test_the_hide_and_the_show_are_waited_for_on_qts_callbacks_not_a_fixed_time(
     def fixed(seconds: float) -> None:
         raise AssertionError('a fixed wait of %g s' % seconds)
 
-    waited: list[tuple[bool, float, list[object]]] = []
+    # each wait's signals: the faked app's applicationStateChanged, then the fake spy's `fired`
+    waited: list[tuple[bool, float, list[QtCore.SignalInstance | str]]] = []
 
-    def until(state: Callable[[], object], limit: float, signals: Sequence[object] = ()) -> bool:
+    def until(state: Callable[[], bool], limit: float, signals: Sequence['QtCore.SignalInstance | str'] = ()) -> bool:
         waited.append((bool(state()), limit, list(signals)))
         return bool(state())
 
-    watched: list[tuple[object, tuple[str, ...]]] = []
-    removed: list[object] = []
+    watched: list[tuple[SimpleNamespace, tuple[str, ...]]] = []  # the stand-ins watched: the window's handle
+    removed: list[SimpleNamespace] = []
     spy = SimpleNamespace(fired='the Expose signal')
     handle = SimpleNamespace(isExposed=lambda: True, removeEventFilter=removed.append)
 
-    def event_signal(window: object, kinds: Sequence[str], seen: object = None) -> SimpleNamespace:
+    def event_signal(
+        window: SimpleNamespace, kinds: Sequence[str], seen: Callable[[str], None] | None = None
+    ) -> SimpleNamespace:
         watched.append((window, tuple(kinds)))
         return spy
 
@@ -191,7 +198,7 @@ def test_the_show_is_waited_for_until_macos_says_designer_is_shown_not_until_its
     # exposes it (REVIEW.md HLP-160, measured): the wait for its exposure then ran ACTIVATION_WAIT, a limit as its time
     held: list[bool] = []
 
-    def until(state: Callable[[], object], limit: float, signals: Sequence[object] = ()) -> bool:
+    def until(state: Callable[[], bool], limit: float, signals: Sequence['QtCore.SignalInstance | str'] = ()) -> bool:
         held.append(bool(state()))
         return held[-1]
 

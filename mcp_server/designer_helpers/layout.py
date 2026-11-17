@@ -1,15 +1,16 @@
 """Readable graphs: arrange_graph, add_frame, add_comment."""
 
 from .core import (
-    SDDefinition,
     SDNode,
     SDPropertyCategory,
     SDSBSCompGraph,
     Sequence,
+    _definition_id,
     _graph_to_edit,
+    _nodes,
     _other_end,
     _position,
-    cast,
+    _xy,
 )
 from .edits import _node
 
@@ -19,17 +20,12 @@ _NODE_SIZE = 96.0  # graph-view size of a node; positions are node centres
 def _nodes_bbox(g: SDSBSCompGraph, node_ids: Sequence[str]) -> tuple[list[SDNode], tuple[float, float, float, float]]:
     """The nodes (never the graph itself, which _target allows for parameters) and their
     bounding box (left, top, right, bottom) in graph units."""
-    nodes = []
-    for i in node_ids:
-        node = g.getNodeFromId(str(i)) if i not in (None, '') else None
-        if node is None:
-            raise RuntimeError('node %r not found in graph %s' % (i, g.getIdentifier()))
-        nodes.append(node)
+    nodes: list[SDNode] = [_node(g, i) for i in node_ids]
     if not nodes:
         raise RuntimeError('no node ids given')
     half = _NODE_SIZE / 2.0
-    xs = [n.getPosition().x for n in nodes]
-    ys = [n.getPosition().y for n in nodes]
+    points = [_xy(n.getPosition()) for n in nodes]
+    xs, ys = [x for x, _ in points], [y for _, y in points]
     return nodes, (min(xs) - half, min(ys) - half, max(xs) + half, max(ys) + half)
 
 
@@ -58,7 +54,7 @@ def arrange_graph(
     from sd.api.sdbasetypes import float2
 
     g = _graph_to_edit(identifier)
-    nodes = list(g.getNodes())
+    nodes = _nodes(g)
     if node_ids:
         present = {n.getIdentifier() for n in nodes}
         for i in node_ids:  # all found before anything moves, as add_frame does (REVIEW.md HLP-47)
@@ -85,10 +81,14 @@ def arrange_graph(
     # outputs go to the last column
     last = max(layer.values())
     for i, n in by_id.items():
-        if cast(SDDefinition, n.getDefinition()).getId() == 'sbs::compositing::output':
+        if _definition_id(n) == 'sbs::compositing::output':
             layer[i] = last
     columns: dict[int, list[str]] = {}
-    for i in sorted(by_id, key=lambda i: (by_id[i].getPosition().y, by_id[i].getPosition().x)):
+
+    def y_then_x(i: str) -> tuple[float, float]:
+        return _xy(by_id[i].getPosition())[::-1]
+
+    for i in sorted(by_id, key=y_then_x):
         columns.setdefault(layer[i], []).append(i)
     # barycentre ordering to reduce crossings: a few sweeps in both directions
     order = {i: k for col in columns.values() for k, i in enumerate(col)}
@@ -104,9 +104,8 @@ def arrange_graph(
             columns[L].sort(key=bary)
             for k, i in enumerate(columns[L]):
                 order[i] = k
-    xs = [n.getPosition().x for n in nodes]
-    ys = [n.getPosition().y for n in nodes]
-    x0, y0 = min(xs), min(ys)
+    points = [_xy(n.getPosition()) for n in nodes]
+    x0, y0 = min(x for x, _ in points), min(y for _, y in points)
     dx, dy = spacing
     tallest = max(len(c) for c in columns.values())
     for L, col in columns.items():

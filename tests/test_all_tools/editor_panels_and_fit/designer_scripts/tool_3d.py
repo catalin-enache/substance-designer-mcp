@@ -2,10 +2,12 @@
 tool as it is) and, if ARGS has 'selection', sets its Selection toggle on (True) or off (False); then prints the one
 selected and the toggle, TOOL=<its name> SELECTION=<True or False>."""
 
-from typing import TypedDict
+from typing import TypedDict, cast
 
 import sd
 from PySide6 import QtWidgets
+from sd.api.qtforpythonuimgrwrapper import QtForPythonUIMgrWrapper
+from sd.api.sdapplication import SDApplication
 
 
 class _Tool(TypedDict):
@@ -20,8 +22,10 @@ class Args(_Tool, total=False):
 
 
 ARGS: Args = globals()['ARGS']
-app = sd.getContext().getSDApplication()  # type: ignore[no-untyped-call]
-mw: QtWidgets.QMainWindow = app.getQtForPythonUIMgr().getMainWindow()  # sd's wrapper: Optional[QMainWindow]
+app: SDApplication = sd.getContext().getSDApplication()  # type: ignore[no-untyped-call]
+# sd's getQtForPythonUIMgr() has no annotations. It and getMainWindow() give None only without Designer's UI.
+ui: QtForPythonUIMgrWrapper = app.getQtForPythonUIMgr()  # type: ignore[no-untyped-call]
+mw = cast(QtWidgets.QMainWindow, ui.getMainWindow())
 dock = next(d for d in mw.findChildren(QtWidgets.QDockWidget) if d.objectName().startswith('areaD_') and d.isVisible())
 tools = {
     a.text(): a

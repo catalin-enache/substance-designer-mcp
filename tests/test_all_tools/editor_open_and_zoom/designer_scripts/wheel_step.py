@@ -1,14 +1,16 @@
 """Runs inside Designer: one wheel step on the graph view, for the zoom it continues from (checks.py)."""
 
-from typing import Any, cast
+from typing import cast
 
 import sd
 from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtGui import QWheelEvent
-from PySide6.QtWidgets import QApplication, QDockWidget, QGraphicsView
+from PySide6.QtWidgets import QApplication, QDockWidget, QGraphicsView, QMainWindow
+from sd.api.qtforpythonuimgrwrapper import QtForPythonUIMgrWrapper
 
-ui: Any = sd.getContext().getSDApplication().getQtForPythonUIMgr()  # type: ignore[no-untyped-call]
-mw = ui.getMainWindow()
+# sd's getQtForPythonUIMgr() has no annotations. It and getMainWindow() give None only without Designer's UI.
+ui: QtForPythonUIMgrWrapper = sd.getContext().getSDApplication().getQtForPythonUIMgr()  # type: ignore[no-untyped-call]
+mw = cast(QMainWindow, ui.getMainWindow())
 d = next(w for w in mw.findChildren(QDockWidget) if w.objectName().startswith('areaB_') and w.isVisible())
 
 

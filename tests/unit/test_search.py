@@ -1,13 +1,12 @@
-from typing import Any
-
 import pytest
 
 from conftest import patch_server, server
+from server_tools.discovery import _LibraryEntry, _LibraryIndex
 
 
 def _entry(
     file: str, graph: str, label: str = '', category: str = '', description: str = '', hidden: bool = False
-) -> dict[str, Any]:
+) -> _LibraryEntry:
     return {
         'file': file,
         'graph': graph,
@@ -22,7 +21,7 @@ def _entry(
 @pytest.fixture(autouse=True)
 def library(monkeypatch: pytest.MonkeyPatch) -> None:
     """A fake library index, so search_nodes never asks Designer."""
-    cache = {
+    cache: _LibraryIndex = {
         'atomic': ['sbs::compositing::levels', 'sbs::compositing::blend', 'sbs::compositing::blur'],
         'entries': [
             _entry('levels_plus.sbs', 'levels_plus', 'Levels plus', 'Filter', 'More levels'),

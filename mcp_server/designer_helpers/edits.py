@@ -1,23 +1,32 @@
 """One-off edits: set_params, add_node, connect, disconnect, delete_nodes, import_bitmap."""
 
 from .core import (
-    Any,
     APIException,
     Callable,
+    Json,
     SDNode,
     SDProperty,
     SDPropertyCategory,
     SDSBSCompGraph,
     SDSBSCompNode,
-    SDType,
     SDTypeEnum,
     SDValue,
     Sequence,
+    Shown,
+    _annotation_text,
     _default_output,
+    _find_node,
     _graph_to_edit,
+    _new_instance,
+    _new_node,
+    _nodes,
+    _output_nodes,
     _output_note,
     _position,
     _refuse_bad_size,
+    _size_property,
+    _type,
+    _xy,
     cast,
     fmt,
     node_kind,
@@ -37,28 +46,27 @@ from .graph_inputs import (
 def _target(g: SDSBSCompGraph, node_id: str | None) -> SDSBSCompNode | SDSBSCompGraph:
     """'graph' addresses the graph's own parameters, e.g. $outputsize (only that name: an empty id is
     no node, as in apply_edits' pre-check; REVIEW.md HLP-45)."""
-    if node_id == 'graph':
-        return g
-    node = g.getNodeFromId(str(node_id))
+    return g if node_id == 'graph' else _node(g, node_id)
+
+
+def _node(g: SDSBSCompGraph, node_id: str | None) -> SDSBSCompNode:
+    """A node of g, never the graph itself, for every tool that needs a node: 'graph' is no node, and
+    taking it for one failed halfway (delete_nodes, move_nodes: REVIEW.md HLP-31), with an unclear
+    error, or crashed Designer (open_graph's focusGraphNode: HLP-41). _target is for parameters."""
+    node = _find_node(g, str(node_id)) if node_id not in (None, '') else None
     if node is None:
         raise RuntimeError('node %r not found in graph %s' % (node_id, g.getIdentifier()))
     return cast(SDSBSCompNode, node)  # the nodes of a compositing graph
 
 
-def _node(g: SDSBSCompGraph, node_id: str | None) -> SDNode:
-    """A node of g, never the graph itself, for every tool that needs a node: 'graph' is no node, and
-    taking it for one failed halfway (delete_nodes, move_nodes: REVIEW.md HLP-31), with an unclear
-    error, or crashed Designer (open_graph's focusGraphNode: HLP-41). _target is for parameters."""
-    # annotated: sd's star imports in import cycles can leave its return types Any for mypy
-    node: SDNode | None = g.getNodeFromId(str(node_id)) if node_id not in (None, '') else None
-    if node is None:
-        raise RuntimeError('node %r not found in graph %s' % (node_id, g.getIdentifier()))
-    return node
-
-
-def _make_value(prop: SDProperty, value: Any, inherited: bool = False) -> SDValue:
+def _make_value(prop: SDProperty, value: Json | Shown, inherited: bool = False) -> SDValue:
     """Build the SDValue matching the property's type from a plain Python value. inherited: for a $outputsize, whether
-    it stays inherited, which makes the value an offset (_refuse_bad_size)."""
+    it stays inherited, which makes the value an offset (_refuse_bad_size).
+
+    value is parsed JSON, or a value as fmt() shows it. A builder refuses a value it can't convert: as_bool and
+    as_int with RuntimeError, float() and int() with TypeError or ValueError. A string parameter takes any value, as
+    str() gives it (REVIEW.md HLP-183). A bool parameter takes a value that isn't a string by its truth: [false] gives
+    True (REVIEW.md HLP-185)."""
     from sd.api.sdbasetypes import ColorRGBA, float2, float3, float4, int2, int3, int4
     from sd.api.sdvaluebool import SDValueBool
     from sd.api.sdvaluecolorrgba import SDValueColorRGBA
@@ -73,7 +81,7 @@ def _make_value(prop: SDProperty, value: Any, inherited: bool = False) -> SDValu
     from sd.api.sdvalueint4 import SDValueInt4
     from sd.api.sdvaluestring import SDValueString
 
-    ptype = cast(SDType, prop.getType())  # a parameter always has a type
+    ptype = _type(prop)
     if isinstance(ptype, SDTypeEnum):
         options = [(e.getId(), cast(SDValueEnum, e.getDefaultValue())) for e in ptype.getEnumerators()]
         for eid, ev in options:
@@ -88,25 +96,26 @@ def _make_value(prop: SDProperty, value: Any, inherited: bool = False) -> SDValu
             % (prop.getId(), value, ', '.join('%s=%s' % (eid, ev.get()) for eid, ev in options))
         )
     tid = ptype.getId()
-    # a list or None; the builders below run only after the length checks
-    seq: Any = list(value) if isinstance(value, (list, tuple)) else None
+    # the items of a list, none for another value. The cast: their type is what the builders convert (the docstring)
+    seq = cast(list[str | float], list(value)) if isinstance(value, (list, tuple)) else []
 
-    def as_bool(v: Any) -> bool:
+    def as_bool(v: Json | Shown) -> bool:
         if isinstance(v, str):
             if v.strip().lower() not in ('true', 'false', '1', '0', 'yes', 'no', 'on', 'off'):
                 raise RuntimeError('%s expects true or false, got %r' % (prop.getId(), v))
             return v.strip().lower() in ('true', '1', 'yes', 'on')
         return bool(v)
 
-    def as_int(v: Any) -> int:
+    def as_int(v: str | float) -> int:
         if isinstance(v, float) and not v.is_integer():
             raise RuntimeError('%s is an integer parameter; %r is not a whole number' % (prop.getId(), v))
         return int(v)
 
+    # the casts: these conversions take a number, a bool or a string (the docstring)
     builders: dict[str, Callable[[], SDValue]] = {
         'bool': lambda: SDValueBool.sNew(as_bool(value)),
-        'int': lambda: SDValueInt.sNew(as_int(value)),
-        'float': lambda: SDValueFloat.sNew(float(value)),
+        'int': lambda: SDValueInt.sNew(as_int(cast(str | float, value))),
+        'float': lambda: SDValueFloat.sNew(float(cast(str | float, value))),
         'string': lambda: SDValueString.sNew(str(value)),
         'float2': lambda: SDValueFloat2.sNew(float2(*map(float, seq))),
         'float3': lambda: SDValueFloat3.sNew(float3(*map(float, seq))),
@@ -118,16 +127,16 @@ def _make_value(prop: SDProperty, value: Any, inherited: bool = False) -> SDValu
     }
     if tid not in builders:
         raise RuntimeError('%s: unsupported parameter type %s' % (prop.getId(), tid))
-    if tid[-1].isdigit() and (seq is None or len(seq) != int(tid[-1])):
+    if tid[-1].isdigit() and len(seq) != int(tid[-1]):
         raise RuntimeError('%s expects %s values' % (prop.getId(), tid[-1]))
-    if tid == 'ColorRGBA' and (seq is None or len(seq) not in (3, 4)):
+    if tid == 'ColorRGBA' and len(seq) not in (3, 4):
         raise RuntimeError('%s expects a colour [r, g, b] or [r, g, b, a]' % prop.getId())
     if prop.getId() == '$outputsize' and seq:  # as the builder converts them, so numbers sent as strings count
         _refuse_bad_size('$outputsize', [as_int(v) for v in seq], value, inherited)
     return builders[tid]()
 
 
-def set_params(graph_id: str | SDSBSCompGraph | None, node_id: str | None, params: dict[str, Any]) -> None:
+def set_params(graph_id: str | SDSBSCompGraph | None, node_id: str | None, params: dict[str, Json]) -> None:
     from sd.api.sdproperty import SDPropertyInheritanceMethod
 
     g = _graph_to_edit(graph_id)
@@ -185,10 +194,9 @@ def _resolve_definition(g: SDSBSCompGraph, definition: str) -> SDNode:
     atomic_id = definition if definition.startswith('sbs::') else 'sbs::compositing::' + definition
     # Validate first: newNode() with an unknown id can hang Designer 15
     if atomic_id in atomic_definition_ids(g):
-        node: SDNode = g.newNode(atomic_id)
-        return node
+        return _new_node(g, atomic_id)
     res = _library_graph(definition)
-    return cast(SDNode, g.newInstanceNode(res))  # the resource was found just above
+    return _new_instance(g, res)  # the resource was found just above
 
 
 def _place(node: SDNode, position: Sequence[float] | None, existing: list[SDNode]) -> Sequence[float]:
@@ -196,8 +204,8 @@ def _place(node: SDNode, position: Sequence[float] | None, existing: list[SDNode
 
     if position is None:
         # to the right of everything, so it doesn't land on top of existing nodes
-        xs = [n.getPosition().x for n in existing] or [0.0]
-        ys = [n.getPosition().y for n in existing] or [0.0]
+        points = [_xy(n.getPosition()) for n in existing] or [(0.0, 0.0)]
+        xs, ys = [x for x, _ in points], [y for _, y in points]
         position = (max(xs) + 200.0, sum(ys) / len(ys))
     node.setPosition(float2(float(position[0]), float(position[1])))
     return position
@@ -232,10 +240,10 @@ _SRGB_USAGES = {'baseColor', 'diffuse', 'emissive', 'specular'}  # colour maps; 
 def _check_output_name(g: SDSBSCompGraph, node_id: str | None, identifier: str) -> None:
     """Designer lets two outputs share an identifier (measured), and export_outputs then refuses them. By case too:
     those file names are one file on a Mac or on Windows."""
-    for other in g.getOutputNodes():
-        name: Any = other.getAnnotationPropertyValueFromId('identifier')  # an SDValueString
-        if other.getIdentifier() != node_id and name is not None and name.get().lower() == identifier.lower():
-            raise RuntimeError('output node %s already has the identifier %r' % (other.getIdentifier(), name.get()))
+    for other in _output_nodes(g):
+        name = _annotation_text(other, 'identifier')
+        if other.getIdentifier() != node_id and name is not None and name.lower() == identifier.lower():
+            raise RuntimeError('output node %s already has the identifier %r' % (other.getIdentifier(), name))
 
 
 def set_output_tags(
@@ -258,8 +266,7 @@ def set_output_tags(
     said = []
     if identifier is not None:
         _check_output_name(g, node.getIdentifier(), identifier)
-        before: Any = node.getAnnotationPropertyValueFromId('identifier')  # an SDValueString
-        old = before.get() if before is not None else None
+        old = _annotation_text(node, 'identifier')
         node.setAnnotationPropertyValueFromId('identifier', SDValueString.sNew(identifier))
         said.append('identifier %r' % identifier)
     if label is not None:
@@ -267,9 +274,15 @@ def set_output_tags(
         said.append('label %r' % label)
     if usage is not None:
         name = _USAGES.get(usage.lower(), usage)
-        tags: Any = SDValueArray.sNew(SDTypeUsage.sNew(), 0)
+        # the casts: sNew's type allows None, and the calls below need a value
+        tags = cast(SDValueArray, SDValueArray.sNew(SDTypeUsage.sNew(), 0))
         # RGBA as in nearly every tag of Designer's own graphs, whatever the map holds
-        tags.pushBack(SDValueUsage.sNew(SDUsage.sNew(name, 'RGBA', 'sRGB' if name in _SRGB_USAGES else 'Linear')))
+        tags.pushBack(
+            cast(
+                SDValueUsage,
+                SDValueUsage.sNew(SDUsage.sNew(name, 'RGBA', 'sRGB' if name in _SRGB_USAGES else 'Linear')),
+            )
+        )
         node.setAnnotationPropertyValueFromId('usages', tags)
         said.append('usage %s' % name)
     print('output %s: %s' % (node.getIdentifier(), ', '.join(said)))
@@ -285,12 +298,12 @@ def add_node(
     graph_id: str | SDSBSCompGraph | None,
     definition: str,
     position: Sequence[float] | None = None,
-    params: dict[str, Any] | None = None,
+    params: dict[str, Json] | None = None,
 ) -> str:
     if position is not None:
         position = _position(position)
     g = _graph_to_edit(graph_id)
-    existing = list(g.getNodes())
+    existing = _nodes(g)
     node = _resolve_definition(g, definition)
     position = _place(node, position, existing)
     print('added %s %s @(%d,%d)' % (node.getIdentifier(), node_kind(node), position[0], position[1]))
@@ -378,7 +391,7 @@ def import_bitmap(
         raise RuntimeError('no such file: %s' % path)
     g = _graph_to_edit(graph_id)
     pkg = g.getPackage()
-    existing = list(g.getNodes())
+    existing = _nodes(g)
     res = None
     if embed == 'link' and not name:
         # reuse a resource that already links this file instead of adding probe_1, probe_2...
@@ -398,10 +411,9 @@ def import_bitmap(
         if name:
             res.setIdentifier(name)
         print('bitmap resource %s (%s): %s' % (res.getIdentifier(), embed, res.getFilePath()))
-    node = cast(SDNode, g.newInstanceNode(res))  # of the resource made or found just above
+    node = _new_instance(g, res)  # of the resource made or found just above
     position = _place(node, position, existing)
-    # a bitmap node always has $outputsize
-    size = fmt(node.getPropertyValue(cast(SDProperty, node.getPropertyFromId('$outputsize', SDPropertyCategory.Input))))
+    size = fmt(node.getPropertyValue(_size_property(node)))
     print(
         "added %s bitmap @(%d,%d), size %s (log2, the image's own; set $outputsize to change)"
         % (node.getIdentifier(), position[0], position[1], size)

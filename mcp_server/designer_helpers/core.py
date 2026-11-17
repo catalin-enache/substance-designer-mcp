@@ -7,36 +7,56 @@ import math
 import os as os
 import sys as sys
 from collections.abc import Callable as Callable, Sequence as Sequence
-from typing import Any as Any, cast as cast
+from typing import Protocol as Protocol, TypeAlias, TypedDict as TypedDict, cast as cast
 
 import sd
+from PySide6 import QtCore as QtCore, QtGui as QtGui, QtWidgets as QtWidgets
 from sd.api.apiexception import APIException as APIException
+from sd.api.qtforpythonuimgrwrapper import QtForPythonUIMgrWrapper
 from sd.api.sbs.sdsbscompgraph import SDSBSCompGraph as SDSBSCompGraph
 from sd.api.sbs.sdsbscompnode import SDSBSCompNode as SDSBSCompNode
 from sd.api.sdapplication import SDApplication, SDApplicationPath as SDApplicationPath
+from sd.api.sdbasetypes import float2
 from sd.api.sdconnection import SDConnection
-from sd.api.sddefinition import SDDefinition as SDDefinition
+from sd.api.sddefinition import SDDefinition
 from sd.api.sdgraph import SDGraph as SDGraph
 from sd.api.sdnode import SDNode as SDNode
 from sd.api.sdpackage import SDPackage as SDPackage
 from sd.api.sdpackagemgr import SDPackageMgr
 from sd.api.sdproperty import SDProperty as SDProperty, SDPropertyCategory as SDPropertyCategory
+from sd.api.sdresource import SDResource as SDResource
 from sd.api.sdresourcefolder import SDResourceFolder as SDResourceFolder
 from sd.api.sdtexture import SDTexture as SDTexture
-from sd.api.sdtype import SDType as SDType
+from sd.api.sdtype import SDType
 from sd.api.sdtypeenum import SDTypeEnum as SDTypeEnum
-from sd.api.sduimgr import SDUIMgr as SDUIMgr
+from sd.api.sduimgr import SDUIMgr
 from sd.api.sdvalue import SDValue as SDValue
-from sd.api.sdvaluetexture import SDValueTexture as SDValueTexture
+from sd.api.sdvaluetexture import SDValueTexture
 
 _APP: SDApplication = sd.getContext().getSDApplication()  # type: ignore[no-untyped-call]  # sd: no annotations
 _PM: SDPackageMgr = _APP.getPackageMgr()
 
 
+def _ui() -> QtForPythonUIMgrWrapper:
+    """Designer's Qt UI manager. sd's getQtForPythonUIMgr() has no annotations, and returns None only without Designer's
+    UI, which the helpers always run with."""
+    return cast(QtForPythonUIMgrWrapper, _APP.getQtForPythonUIMgr())  # type: ignore[no-untyped-call]  # sd: no annotations
+
+
+def _ui_mgr() -> SDUIMgr:
+    """Designer's UI manager. sd types getUIMgr() as optional. It is there, as Designer runs with its UI."""
+    return cast(SDUIMgr, _APP.getUIMgr())
+
+
+def _main_window() -> QtWidgets.QMainWindow:
+    """Designer's main window: a hidden QMainWindow, a page of the top-level window the user sees (GUIDE.md, Designer
+    UI). sd says it can be None, which it isn't while Designer's UI runs."""
+    return cast(QtWidgets.QMainWindow, _ui().getMainWindow())
+
+
 def _current_graph() -> SDGraph | None:
     try:
-        ui = _APP.getQtForPythonUIMgr()  # type: ignore[no-untyped-call]  # sd: no annotations
-        return cast(SDGraph | None, ui.getCurrentGraph())
+        return _ui().getCurrentGraph()
     except (Exception, APIException):
         return None
 
@@ -198,13 +218,11 @@ def _default_output(node: SDNode, outputs: list[str]) -> tuple[str, str]:
     listed = ', '.join(outputs)
     try:
         for out in node.getReferencedResource().getOutputNodes():  # type: ignore[union-attr]  # caught below
-            ident = out.getAnnotationPropertyValueFromId('identifier')
+            name = _annotation_text(out, 'identifier')
             tags = out.getAnnotationPropertyValueFromId('usages')
-            if ident is None or tags is None:
+            if name is None or tags is None:
                 continue
-            array = tags.get()  # an SDValueArray of SDValueUsage
-            names = [array.getItem(i).get().getName().lower() for i in range(array.getSize())]
-            name = ident.get()  # an SDValueString
+            names = [usage.lower() for usage in _usage_names(tags)]
             if 'basecolor' in names and name in outputs:
                 return name, "'%s', tagged base colour, of %d (%s)" % (name, len(outputs), listed)
     except (Exception, APIException):
@@ -217,6 +235,12 @@ def _output_note(how: str) -> str:
     return 'no output given: %s; pass output to pick another' % how
 
 
+# A JSON value, as the tools' arguments reach the helpers (the server writes them into the call as Python literals)
+Json: TypeAlias = bool | int | float | str | list['Json'] | dict[str, 'Json'] | None
+# fmt()'s forms of a value: None, a bool, number or string, a vector's or colour's components, or '<its type>'
+Shown = bool | int | float | str | tuple[bool | int | float, ...] | None
+
+
 MAX_SIZE_LOG2 = 13  # 8192 px; 14 and 15 compute 8192 px too ("designer facts")
 _SIZE_UNIT = 'log2 of the size in pixels (0 is 1 px, 11 is 2048 px, 13 is 8192 px, the largest)'
 _OFFSET_UNIT = (
@@ -225,19 +249,20 @@ _OFFSET_UNIT = (
 )
 
 
-def _refuse_bad_size(name: str, sizes: Sequence[int], shown: Any, inherited: bool = False) -> None:
+def _refuse_bad_size(name: str, sizes: Sequence[int], shown: Json | Shown, inherited: bool = False) -> None:
     """A size in log2: Designer takes a pixel count silently and computes 8192 px, and a negative size computes 1 px.
     inherited: the value is an offset instead, so it can be negative."""
     if any(size > MAX_SIZE_LOG2 or (size < 0 and not inherited) for size in sizes):
         raise RuntimeError('%s is %s, not %r' % (name, _OFFSET_UNIT if inherited else _SIZE_UNIT, shown))
 
 
-def _position(value: Any, what: str = 'position') -> tuple[float, float]:
+def _position(value: Json | Sequence[float], what: str = 'position') -> tuple[float, float]:
     """[x, y] as two numbers, checked before anything is created or moved: read after, a bad one
-    left the new node (or comment) behind (REVIEW.md HLP-46)."""
+    left the new node (or comment) behind (REVIEW.md HLP-46). `value` is an op's JSON, or a tool's position."""
     if isinstance(value, (list, tuple)) and len(value) == 2 and not any(isinstance(v, bool) for v in value):
+        pair = cast(Sequence[str | float], value)  # float() refuses another item: TypeError, caught below
         try:  # numbers, or numeric strings as float() reads them (REVIEW.md HLP-50)
-            xy = float(value[0]), float(value[1])
+            xy = float(pair[0]), float(pair[1])
         except (TypeError, ValueError):
             pass
         else:  # not 'nan', 'inf', '1e400': Designer would take them, the print after wouldn't (HLP-51)
@@ -246,7 +271,7 @@ def _position(value: Any, what: str = 'position') -> tuple[float, float]:
     raise RuntimeError('%s must be [x, y], two numbers, not %r' % (what, value))
 
 
-def fmt(value: SDValue | None) -> Any:
+def fmt(value: SDValue | None) -> Shown:
     """Compact, printable form of an SDValue."""
     if value is None:
         return None
@@ -270,10 +295,111 @@ def node_kind(node: SDNode) -> str:
     # an FX-Map also refers to a resource, its own graph, which has no identifier
     if ref is not None and ref.getIdentifier():
         return 'instance:' + ref.getIdentifier()
-    return cast(SDDefinition, node.getDefinition()).getId().replace('sbs::compositing::', '')
+    return _definition_id(node).replace('sbs::compositing::', '')
 
 
 def _other_end(connection: SDConnection) -> tuple[SDNode, SDProperty]:
     # getPropertyConnections(prop) reports the queried side as "Output" and the
     # other node as "Input", whatever the data-flow direction. A connection always has both ends.
     return cast(SDNode, connection.getInputPropertyNode()), cast(SDProperty, connection.getInputProperty())
+
+
+# _nodes, _output_nodes, _find_node and _new_node: a graph's nodes, typed. sd's stubs type them, but its star imports in
+# import cycles leave them Any for mypy.
+
+
+def _nodes(g: SDGraph) -> list[SDNode]:
+    """Every node of `g`."""
+    return list(g.getNodes())
+
+
+def _output_nodes(g: SDGraph) -> list[SDNode]:
+    """The output nodes of `g`."""
+    return list(g.getOutputNodes())
+
+
+def _find_node(g: SDGraph, node_id: str) -> SDNode | None:
+    """The node of `g` with this identifier, or None. edits.py's _node refuses a missing one instead."""
+    node: SDNode | None = g.getNodeFromId(node_id)
+    return node
+
+
+def _new_node(g: SDGraph, definition: str) -> SDNode:
+    """A new node of `g`, of the atomic definition `definition` ('sbs::compositing::levels')."""
+    node: SDNode = g.newNode(definition)
+    return node
+
+
+def _new_instance(g: SDGraph, res: SDResource) -> SDNode:
+    """A new node of `g`, an instance of `res`: a library graph, a bitmap. The callers pass a resource they found or
+    made, so the node sd types as optional is there."""
+    return cast(SDNode, g.newInstanceNode(res))
+
+
+def _definition_id(node: SDNode) -> str:
+    """The identifier of a node's definition ('sbs::compositing::output'). sd types the definition as optional. The
+    callers' nodes have one."""
+    return cast(SDDefinition, node.getDefinition()).getId()
+
+
+def _type(prop: SDProperty) -> SDType:
+    """A parameter's type. sd types it as optional. A parameter always has one."""
+    return cast(SDType, prop.getType())
+
+
+def _value(owner: SDNode | SDGraph, prop: SDProperty) -> SDValue:
+    """The value of `prop`, a parameter of a node or a graph. sd types it as optional. A parameter always has one."""
+    return cast(SDValue, owner.getPropertyValue(prop))
+
+
+def _xy(v: float2) -> tuple[float, float]:
+    """A float2's x and y: a position, a size. sd types neither, as they are ctypes c_float fields, read as float."""
+    return v.x, v.y
+
+
+def _size_property(owner: SDNode | SDGraph) -> SDProperty:
+    """The $outputsize parameter of a compositing node or graph, which every one has."""
+    return cast(SDProperty, owner.getPropertyFromId('$outputsize', SDPropertyCategory.Input))
+
+
+def _annotation_text(node: SDNode, key: str) -> str | None:
+    """A node's text annotation, such as an output's 'identifier' or 'label'; None without one."""
+    from sd.api.sdvaluestring import SDValueString
+
+    value = cast(SDValueString | None, node.getAnnotationPropertyValueFromId(key))
+    return value.get() if value is not None else None
+
+
+def _usage_names(tags: SDValue | None) -> list[str]:
+    """The names of the usage tags in a node's 'usages' annotation, an output's ('baseColor', 'normal'); none without
+    the annotation. `tags` is what getAnnotationPropertyValueFromId('usages') returns: an SDValueArray of SDValueUsage."""
+    from sd.api.sdarray import SDArray
+    from sd.api.sdvaluearray import SDValueArray
+    from sd.api.sdvalueusage import SDValueUsage
+
+    if tags is None:
+        return []
+    array = cast(SDArray[SDValueUsage], cast(SDValueArray, tags).get())
+    # SDValueUsage.get()'s type allows None, which raises AttributeError here
+    return [array.getItem(i).get().getName() for i in range(array.getSize())]  # type: ignore[union-attr]
+
+
+def _texture(node: SDNode, prop: SDProperty) -> SDTexture | None:
+    """The texture a node's output `prop` holds, computed; None when it holds none."""
+    value = cast(SDValueTexture | None, node.getPropertyValue(prop))
+    return value.get() if value is not None else None
+
+
+def _qt_app() -> QtWidgets.QApplication:
+    """Designer's QApplication, always there. PySide's stubs give instance() as a QCoreApplication or None."""
+    return cast(QtWidgets.QApplication, QtWidgets.QApplication.instance())
+
+
+def _menu(action: QtGui.QAction) -> QtWidgets.QMenu:
+    """The menu an action opens. PySide's stubs type menu() as a QObject. The callers' actions open a menu."""
+    return cast(QtWidgets.QMenu, action.menu())
+
+
+# What a function keeps referenced while it uses Designer's Qt objects, whose wrappers go stale once no Python reference
+# is left (GUIDE.md, Designer UI): widgets, menus' actions, and None for a popup that wasn't open
+Kept = QtWidgets.QWidget | QtGui.QAction | None

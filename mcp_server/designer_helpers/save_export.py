@@ -8,11 +8,12 @@ from .core import (
     SDPropertyCategory,
     SDSBSCompGraph,
     SDTexture,
-    SDValueTexture,
+    _annotation_text,
     _is_library_package,
     _library_refusal,
+    _output_nodes,
     _refuse_unsaved_dependencies,
-    cast,
+    _texture,
     find_graph,
     os,
 )
@@ -61,18 +62,17 @@ def save_package(identifier: str | None = None, path: str | None = None) -> None
 
 def _output_ident(node: SDNode, i: int) -> str:
     try:
-        # an SDValueString; a None fails into the except below
-        return cast(str, node.getAnnotationPropertyValueFromId('identifier').get())  # type: ignore[union-attr]
+        name = _annotation_text(node, 'identifier')
     except (Exception, APIException):
-        return 'output_%d' % i
+        name = None
+    return name if name is not None else 'output_%d' % i
 
 
 def _output_textures(outputs: list[tuple[str, SDNode]]) -> list[tuple[str, SDTexture | None]]:
     found: list[tuple[str, SDTexture | None]] = []
     for ident, node in outputs:
         for prop in node.getProperties(SDPropertyCategory.Output):
-            value = cast(SDValueTexture | None, node.getPropertyValue(prop))
-            found.append((ident, value.get() if value is not None else None))
+            found.append((ident, _texture(node, prop)))
     return found
 
 
@@ -86,7 +86,7 @@ def export_outputs(
     g = find_graph(identifier)
     out_dir = os.path.abspath(os.path.expanduser(out_dir))
     os.makedirs(out_dir, exist_ok=True)
-    every = [(_output_ident(node, i), node) for i, node in enumerate(g.getOutputNodes())]
+    every = [(_output_ident(node, i), node) for i, node in enumerate(_output_nodes(g))]
     outputs = [(ident, node) for ident, node in every if not names or ident in names]
     # two outputs with one name would write one file, and the first would be lost (REVIEW.md HLP-34);
     # names differing only in case too, on the usual macOS and Windows file systems (HLP-36)

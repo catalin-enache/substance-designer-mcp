@@ -6,15 +6,16 @@ import ast
 import re
 from collections.abc import Sequence
 from types import ModuleType
-from typing import cast
 
 import pytest
 from selftest_fakes import fresh
 
+from project_constants import ToolArgs
+
 
 @pytest.fixture
 def window_states() -> ModuleType:
-    return cast(ModuleType, fresh('editor_panels_and_fit.window_states'))
+    return fresh('editor_panels_and_fit.window_states')
 
 
 def test_focus_is_kept_while_designer_stays_not_the_active_app(window_states: ModuleType) -> None:
@@ -241,7 +242,7 @@ def test_the_ways_off_the_users_screen_are_set_up_behind_every_window() -> None:
     import ast
     import re
 
-    states = cast(ModuleType, fresh('editor_panels_and_fit.window_states'))
+    states = fresh('editor_panels_and_fit.window_states')
     off = [*states.WAYS, 'transparent in front', states.TWO]
     assert not set(off) & set(states.IN_FRONT)
     m = re.search(r'if way in (\(.*?\)):  # IN_FRONT', states._PUT)
@@ -262,7 +263,7 @@ def test_the_ways_off_the_users_screen_are_set_up_behind_every_window() -> None:
 
 
 def test_the_window_goes_back_to_rest_hidden_never_shown_on_the_way() -> None:
-    states = cast(ModuleType, fresh('editor_panels_and_fit.window_states'))
+    states = fresh('editor_panels_and_fit.window_states')
     clear = states._CLEAR
     assert 'mac.show()' not in clear and 'mac.unhide()' not in clear and 'mac.hide()' in clear
     assert clear.index('fade(True)') < clear.index('deminiaturize') < clear.index('mac.hide()')
@@ -345,7 +346,7 @@ def test_the_ways_wait_for_their_state_not_a_fixed_time() -> None:
     # REVIEW.md TST-420: each state was reported within 0.7 s (measured 2026-11-15), the snippets waited 4 to 7 s a way
     import re
 
-    states = cast(ModuleType, fresh('editor_panels_and_fit.window_states'))
+    states = fresh('editor_panels_and_fit.window_states')
     for name in ('_PUT', '_CLEAR', '_READ'):
         long = [float(n) for n in re.findall(r'_settle\(([0-9.]+)\)', getattr(states, name)) if float(n) > 0.5]
         assert long == [], (name, long)
@@ -385,7 +386,7 @@ def test_a_click_reading_that_reaches_neither_designers_window_nor_the_cover_nam
 def test_the_window_checks_drags_wait_for_the_view_to_take_each_move() -> None:
     # REVIEW.md TST-421, HLP-149: 0.2 s after each move, then 0.3 or 0.5 s; hidden or covered the view draws no frame,
     # but it asks for one (an UpdateRequest) once it took a move, and moves sent back to back were lost (measured)
-    states = cast(ModuleType, fresh('editor_panels_and_fit.window_states'))
+    states = fresh('editor_panels_and_fit.window_states')
     for name in ('_DRAG', '_PANNED'):
         snippet = getattr(states, name)
         assert '_settle(' not in snippet, name
@@ -394,14 +395,14 @@ def test_the_window_checks_drags_wait_for_the_view_to_take_each_move() -> None:
 
 def test_an_event_during_the_pan_is_waited_for_by_its_state_not_a_fixed_time() -> None:
     # REVIEW.md TST-421: 0.5 s, "macOS says a window is covered about 0.07 s later"
-    states = cast(ModuleType, fresh('editor_panels_and_fit.window_states'))
+    states = fresh('editor_panels_and_fit.window_states')
     assert '_settle(' not in states._DURING_PAN and 'until(' in states._DURING_PAN
     assert set(states.EVENT_DONE) == set(states.EVENTS)
 
 
 def test_a_reading_after_a_shot_waits_for_the_state_it_is_read_for() -> None:
     # REVIEW.md TST-421: half a second, as macOS said a window was sent behind another about 0.1 s later
-    states = cast(ModuleType, fresh('editor_panels_and_fit.window_states'))
+    states = fresh('editor_panels_and_fit.window_states')
     assert '_settle(' not in states._READ and '_settle(' not in states._PUT
     read = states.read(states.showing('covered=True'))
     assert 'until(' in read and "('covered=True',)" in read
@@ -423,12 +424,12 @@ def _check_source(module: str, name: str) -> str:
 )
 def test_in_orders_condition_holds_only_for_the_order_it_names(order: str, shown: bool) -> None:
     # REVIEW.md TST-428: the conditions were tested by their text only, an inverted comparison passing
-    states = cast(ModuleType, fresh('editor_panels_and_fit.window_states'))
+    states = fresh('editor_panels_and_fit.window_states')
     assert eval(states.in_order([('cover', 'main')]), {'order': lambda: order}) is shown
 
 
 def test_showings_condition_needs_every_field() -> None:
-    states = cast(ModuleType, fresh('editor_panels_and_fit.window_states'))
+    states = fresh('editor_panels_and_fit.window_states')
     condition = states.showing('covered=True', 'hidden=False')
     assert eval(condition, {'state': lambda: 'hidden=False covered=True exposed=False'}) is True
     assert eval(condition, {'state': lambda: 'hidden=True covered=True'}) is False
@@ -519,7 +520,7 @@ def test_a_clear_that_couldnt_hide_designer_stops_the_category(window_states: Mo
     window_states.stopped_if_shown('STATE hidden=True')  # hidden: nothing raised
     calls: list[str] = []
 
-    async def c(name: str, args: dict[str, object]) -> CallToolResult:
+    async def c(name: str, args: ToolArgs) -> CallToolResult:
         calls.append(str(args['code']))
         return CallToolResult(content=[TextContent(type='text', text=printed)])
 
@@ -586,7 +587,7 @@ def test_a_set_up_whose_wait_for_designers_window_runs_out_stops_before_it_place
 ):
     # REVIEW.md TST-460: until() returned nothing, so to_back, window() and the hidden way went on once its limit ran
     # out; Designer's windows, back near the front, were then made opaque in front of the user's
-    states = cast(ModuleType, fresh('editor_panels_and_fit.window_states'))
+    states = fresh('editor_panels_and_fit.window_states')
     defs = _defs(states)
     last = defs['until'].body[-1]
     assert isinstance(last, ast.Return) and last.value is not None and ast.unparse(last.value) == 'state()'
@@ -604,7 +605,7 @@ def test_a_window_the_checks_make_is_registered_for_the_clear_before_it_shows() 
     # transparent and taking the user's clicks
     import re
 
-    states = cast(ModuleType, fresh('editor_panels_and_fit.window_states'))
+    states = fresh('editor_panels_and_fit.window_states')
     window = ast.unparse(_defs(states)['window'])
     assert window.index("setattr(sys, 'mcp_selftest_' + name, made)") < window.index('made.show()')
     snippets = states._WINDOW + states._PUT + states._UNDER + ''.join(states.EVENTS.values())
@@ -613,7 +614,7 @@ def test_a_window_the_checks_make_is_registered_for_the_clear_before_it_shows() 
 
 def test_to_back_makes_designers_windows_transparent_before_it_shows_them_and_leaves_them_so() -> None:
     # REVIEW.md TST-470: shown first, Designer's windows came up near the front, opaque, until the orderBack:
-    states = cast(ModuleType, fresh('editor_panels_and_fit.window_states'))
+    states = fresh('editor_panels_and_fit.window_states')
     to_back = ast.unparse(_defs(states)['to_back'])
     shows = [to_back.index(step) for step in ('mac.unhide()', "'deminiaturize:'", 'mw.setWindowState(')]
     assert to_back.index('fade(True)') < min(shows)
@@ -624,7 +625,7 @@ def test_to_back_makes_designers_windows_transparent_before_it_shows_them_and_le
 def test_the_minimized_way_makes_designers_windows_opaque_only_once_the_window_is_off_screen() -> None:
     # REVIEW.md TST-472, measured: made opaque right after performMiniaturize:, the window flew to the Dock on screen,
     # at opacity 1, for about 0.55 s, 6 of 6
-    states = cast(ModuleType, fresh('editor_panels_and_fit.window_states'))
+    states = fresh('editor_panels_and_fit.window_states')
     put = states.put('minimized')
     minimized = _branch(put, "way == 'minimized'")
     waits = [

@@ -4,12 +4,11 @@
 import os
 import types
 from pathlib import Path
-from typing import Any
 from unittest import mock
 
 import pytest
 
-from conftest import patch_server, server
+from conftest import fake_bridge, patch_server, server
 
 
 def _graph(ident: str, label: str, hidden: bool = False) -> str:
@@ -57,11 +56,7 @@ def resources(tmp_path: Path) -> Path:
 @pytest.fixture
 def index(monkeypatch: pytest.MonkeyPatch, resources: Path) -> None:
     patch_server(monkeypatch, '_LIBRARY_CACHE', {})
-    patch_server(
-        monkeypatch,
-        '_bridge',
-        lambda code, path=None, timeout=None: 'RESOURCES_DIR=%s\nATOMIC=sbs::compositing::levels\n' % resources,
-    )
+    fake_bridge(monkeypatch, lambda code: 'RESOURCES_DIR=%s\nATOMIC=sbs::compositing::levels\n' % resources)
 
 
 @pytest.mark.usefixtures('index')
@@ -103,11 +98,7 @@ def test_the_hidden_count_only_comes_with_an_empty_result() -> None:
 
 def _index_with(monkeypatch: pytest.MonkeyPatch, resources: Path) -> None:
     patch_server(monkeypatch, '_LIBRARY_CACHE', {})
-    patch_server(
-        monkeypatch,
-        '_bridge',
-        lambda code, path=None, timeout=None: 'RESOURCES_DIR=%s\nATOMIC=sbs::compositing::levels\n' % resources,
-    )
+    fake_bridge(monkeypatch, lambda code: 'RESOURCES_DIR=%s\nATOMIC=sbs::compositing::levels\n' % resources)
 
 
 def test_a_missing_library_folder_is_an_error_and_not_remembered(
@@ -204,7 +195,7 @@ class FakeFolder:
     pass
 
 
-def _lookup_finding(helpers: types.ModuleType, found: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def _lookup_finding(helpers: types.ModuleType, found: object, monkeypatch: pytest.MonkeyPatch) -> None:
     vars(helpers)['SDResourceFolder'] = FakeFolder
     vars(helpers)['atomic_definition_ids'] = lambda g: set()
     vars(helpers)['_load_library'] = lambda path: types.SimpleNamespace(findResourceFromUrl=lambda url: found)

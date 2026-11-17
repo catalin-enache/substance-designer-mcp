@@ -11,23 +11,27 @@ import socket
 import sys
 import threading
 import time
+from collections.abc import Mapping
 from textwrap import dedent
-from typing import Any, cast
+from typing import cast
 
 from mcp.client.session import ClientSession
 from mcp.client.stdio import stdio_client
 from mcp.types import TextResourceContents
 
 from test_all_tools import common
+from test_all_tools.bridge.scope_jobs import scope_freed
 from test_all_tools.common import (
     PLUGIN,
     PLUGIN_PACKAGE_DIR,
     POLL_S,
     TOKEN_FILE,
     Ctx,
+    JsonSent,
     Reply,
     cancel_from_second_client,
     check,
+    helpers_source,
     job_running,
     lan_address,
     raw_request,
@@ -66,13 +70,16 @@ async def run(ctx: Ctx) -> None:
     await check_bridge_security(ctx)
     await check_a_relayed_answer_is_refused(ctx)
     await check_a_wait_cancelled_leaves_nothing_connected(ctx)
+    await check_a_helpers_job_leaves_its_scope_to_be_freed(ctx)
+    await check_a_jobs_own_overload_leaves_its_scope_to_be_freed(ctx)
+    await check_a_jobs_typing_subscripts_leave_its_scope_to_be_freed(ctx)
     with open(TOKEN_FILE) as f:
         token = f.read().strip()  # used, never printed
 
     # --- cancel aborts the running job and drops queued ones (two raw clients + sd_run.py --cancel)
     replies: dict[str, Reply] = {}
 
-    def job(name: str, req: dict[str, object]) -> None:
+    def job(name: str, req: Mapping[str, JsonSent]) -> None:
         replies[name] = raw_request(req, token)
 
     def bridge_status() -> str:
@@ -388,16 +395,16 @@ async def check_bridge_security(ctx: Ctx) -> None:
     )
     code = {'code': "print('SHOULD NOT RUN')"}
 
-    def wrong_answer() -> Any:
+    def wrong_answer() -> Reply:
         return raw_request(b'0' * 64 + b'\n' + json.dumps(code).encode())
 
-    def another_key() -> Any:
+    def another_key() -> Reply:
         return raw_request(code, 'x' * 64)
 
-    def no_answer() -> Any:
+    def no_answer() -> Reply:
         return raw_request({'cmd': 'status'})
 
-    def no_answer_an_auth_key() -> Any:
+    def no_answer_an_auth_key() -> Reply:
         return raw_request({'auth': 'nope', **code})
 
     # a wrong answer on its own line, and one made with another key, in the protocol's framing; and none, as clients
@@ -449,7 +456,7 @@ async def check_bridge_security(ctx: Ctx) -> None:
         check(B, 'token file owner-only', mode & 0o077 == 0, oct(mode))
 
 
-def _relay_to_the_plugin() -> tuple[int, list[Any], threading.Event, threading.Thread]:
+def _relay_to_the_plugin() -> tuple[int, list[Reply | str], threading.Event, threading.Thread]:
     """A listener on a free port passing each connection on to the plugin on common.PORT: the plugin's greeting to
     the client, then, with the client's answer, code of its own to the plugin. Returns its port, the plugin's
     replies, a stop event and its thread (REVIEW.md SRV-82)."""
@@ -457,7 +464,7 @@ def _relay_to_the_plugin() -> tuple[int, list[Any], threading.Event, threading.T
     listener.bind(('127.0.0.1', 0))
     listener.listen(4)
     listener.settimeout(0.2)
-    replies: list[Any] = []
+    replies: list[Reply | str] = []  # the plugin's replies, or why the relay failed
     stop = threading.Event()
 
     def serve() -> None:
@@ -481,14 +488,14 @@ def _relay_to_the_plugin() -> tuple[int, list[Any], threading.Event, threading.T
                         reply = b''
                         while chunk := up.recv(65536):
                             reply += chunk
-                        replies.append(json.loads(reply))
+                        replies.append(cast(Reply, json.loads(reply)))
                         conn.sendall(reply)
                 except (OSError, ValueError) as e:
                     replies.append('relay failed: %s' % e)
 
     thread = threading.Thread(target=serve, daemon=True)
     thread.start()
-    return listener.getsockname()[1], replies, stop, thread
+    return listener.getsockname()[1], replies, stop, thread  # getsockname(): (host, port) for an AF_INET socket
 
 
 async def check_a_relayed_answer_is_refused(ctx: Ctx) -> None:
@@ -506,3 +513,50 @@ async def check_a_relayed_answer_is_refused(ctx: Ctx) -> None:
         bool(replies) and all(isinstance(r, dict) and r.get('error') == 'invalid token' for r in replies),
         str(replies),
     )
+
+
+async def check_a_helpers_job_leaves_its_scope_to_be_freed(ctx: Ctx) -> None:
+    """A job that runs the helpers' text leaves nothing of its scope alive once it ends (REVIEW.md HLP-182:
+    typing.overload kept its stubs, whose globals are the job's scope, until the next helpers job replaced them)."""
+    await scope_freed(ctx, helpers_source(), 'a job running the helpers leaves its scope to be freed once it ends')
+
+
+async def check_a_jobs_own_overload_leaves_its_scope_to_be_freed(ctx: Ctx) -> None:
+    """A job that decorates its own functions with `@overload` leaves nothing of its scope alive once it ends
+    (REVIEW.md PLG-44: typing.overload kept the job's stubs until Designer quit or a later job's stubs took the same
+    names and lines)."""
+    stubs = dedent("""
+        from typing import overload
+
+
+        @overload
+        def _pick(x: int) -> int: ...
+        @overload
+        def _pick(x: str) -> str: ...
+        def _pick(x):
+            return x
+    """)
+    await scope_freed(ctx, stubs, "a job's own @overload leaves its scope to be freed once it ends")
+
+
+async def check_a_jobs_typing_subscripts_leave_its_scope_to_be_freed(ctx: Ctx) -> None:
+    """A job that subscripts typing's generics with its own classes leaves nothing of its scope alive once it ends
+    (REVIEW.md PLG-45: typing's subscription caches kept the classes, whose methods' globals are the job's scope)."""
+    subscripts = dedent("""
+        from typing import Generic, List, Optional, TypeVar
+
+        _T = TypeVar('_T')
+
+
+        def _take(x: Optional[_Kept]) -> List[_Kept]:
+            return [x] if x else []
+
+
+        class _Box(Generic[_T]):
+            def get(self):
+                pass
+
+
+        _boxed = _Box[int]
+    """)
+    await scope_freed(ctx, subscripts, "a job's typing subscripts leave its scope to be freed once it ends")

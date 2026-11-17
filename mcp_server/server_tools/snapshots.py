@@ -15,6 +15,8 @@ from typing import TypedDict, cast
 
 from mcp.server.mcpserver.exceptions import ToolError
 
+from project_constants import Json
+
 from .core import _bridge, _checked, _helpers_call, _tool
 
 SNAPSHOT_DIR = os.environ.get('SD_SNAPSHOT_DIR') or os.path.join(os.path.expanduser('~'), '.sd_mcp', 'snapshots')
@@ -26,7 +28,7 @@ def _safe_name(text: str) -> str:
 
 def _copy_package(graph: str | None, path: str) -> dict[str, str]:
     text = _bridge(_helpers_call('save_package_copy(%r, %r)' % (graph, path)), timeout=120)
-    found = dict(re.findall(r'^(COPY|PACKAGE|PACKAGE_UID|GRAPH)=(.*)$', text, re.M))
+    found: dict[str, str] = dict(re.findall(r'^(COPY|PACKAGE|PACKAGE_UID|GRAPH)=(.*)$', text, re.M))
     if 'COPY' not in found or not os.path.exists(path):
         raise ToolError(text.strip().splitlines()[-1] if text.strip() else 'could not copy package')
     return found
@@ -95,21 +97,40 @@ def _fresh_uid(snapshot: str) -> None:
     os.utime(snapshot, ns=(stat.st_atime_ns, stat.st_mtime_ns))
 
 
+class _Note(TypedDict, total=False):
+    """A snapshot's note (<snapshot>.json): the package's file ('' for an unsaved package) and UID ('' when not given),
+    and the snapshot's size and modification time as written. _note_package writes all four. The readers allow any of
+    them to be missing: a note taken before the size and time were kept has neither."""
+
+    package: str
+    uid: str
+    size: int
+    mtime_ns: int
+
+
 def _note_package(snapshot: str, file_path: str | None, uid: str | None = None) -> None:
     """Next to a snapshot, the package it came from: its file (when saved) and its UID (what tells
     two unsaved packages apart). Graphs are found by identifier, and every new graph is
     "New_Graph" (REVIEW.md SRV-34)."""
     st = os.stat(snapshot)  # as written: a snapshot saved over since no longer matches (REVIEW.md SRV-47)
     with open(snapshot + '.json', 'w', encoding='utf-8') as f:
-        json.dump(
-            {
-                'package': os.path.abspath(file_path) if file_path else '',
-                'uid': uid or '',
-                'size': st.st_size,
-                'mtime_ns': st.st_mtime_ns,
-            },
-            f,
-        )
+        note: _Note = {
+            'package': os.path.abspath(file_path) if file_path else '',
+            'uid': uid or '',
+            'size': st.st_size,
+            'mtime_ns': st.st_mtime_ns,
+        }
+        json.dump(note, f)
+
+
+def _read_note(snapshot: str) -> _Note:
+    """A snapshot's note (<snapshot>.json), its fields as they read, unchecked. OSError when it can't be read, ValueError
+    when it isn't JSON or isn't a JSON object (REVIEW.md SRV-173), so that the readers take it as no note."""
+    with open(snapshot + '.json', encoding='utf-8') as f:
+        note: Json = json.load(f)
+    if not isinstance(note, dict):
+        raise ValueError('a note holding no JSON object')
+    return cast(_Note, note)  # its fields as written by _note_package: unchecked
 
 
 def _changed_since(snapshot: str) -> bool:
@@ -117,8 +138,7 @@ def _changed_since(snapshot: str) -> bool:
     then it holds the user's edits, not the state it recorded (REVIEW.md SRV-47). A note without the size
     and time (taken before they were kept) can't tell: not changed."""
     try:
-        with open(snapshot + '.json', encoding='utf-8') as f:
-            note = json.load(f)
+        note = _read_note(snapshot)
         st = os.stat(snapshot)
     except (OSError, ValueError):
         return False
@@ -136,8 +156,7 @@ def _from_package(snapshot: str, file_path: str | None, uid: str | None) -> bool
     a copy of the file loaded again (measured; SRV-36). No note (taken before notes were kept): any
     package. Every case: tests/unit/test_snapshots.py, _NOTE_CASES."""
     try:
-        with open(snapshot + '.json', encoding='utf-8') as f:
-            note = json.load(f)
+        note = _read_note(snapshot)
     except (OSError, ValueError):
         return True
     noted = note.get('package') or ''
@@ -188,7 +207,11 @@ def _snapshots(graph_id: str, package: tuple[str | None, str | None] | None = No
     paths = [os.path.join(folder, f) for f in os.listdir(folder) if f.endswith('.sbs')]
     if package is not None:
         paths = [p for p in paths if _from_package(p, *package) and not _changed_since(p)]
-    return sorted(paths, key=lambda p: (os.stat(p).st_mtime_ns, p))
+
+    def written(path: str) -> tuple[int, str]:
+        return os.stat(path).st_mtime_ns, path
+
+    return sorted(paths, key=written)
 
 
 @_tool()
@@ -203,8 +226,7 @@ def list_snapshots(graph: str | None = None) -> str:
     for gid in graphs:
         for path in _snapshots(gid):
             try:
-                with open(path + '.json', encoding='utf-8') as f:
-                    note = json.load(f)
+                note = _read_note(path)
                 # unsaved packages told apart by their UID (REVIEW.md SRV-37)
                 package = note.get('package') or '(an unsaved package, UID %s)' % (note.get('uid') or '?')
             except (OSError, ValueError):

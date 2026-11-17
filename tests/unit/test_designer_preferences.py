@@ -18,10 +18,11 @@ from fake_defaults import FakeDefaults, lock_held
 
 import designer_preferences as prefs
 from conftest import REAL_RUN_DEFAULTS, REAL_USERS_DATA_DIR, server
+from designer_preferences import Plist
 
 MACOS = pytest.mark.skipif(sys.platform != 'darwin', reason='the preferences plist is macOS only')
 
-BEFORE: dict[str, object] = {
+BEFORE: dict[str, Plist] = {
     'session.mainWindow.state': b'\x00\x01layout',
     'session.modes.mixer.areas': {'left': [1, 2], 'size': 2.5},
     'session.lastSession.files': ['/Users/me/brick.sbs'],
@@ -59,9 +60,9 @@ def _copy_made(seconds_ago: float) -> None:
     os.utime(prefs.saved_file(), (at, at))
 
 
-def _copy() -> dict[str, object]:
+def _copy() -> dict[str, Plist]:
     with open(prefs.saved_file(), 'rb') as f:
-        read: dict[str, object] = plistlib.load(f)
+        read: dict[str, Plist] = plistlib.load(f)
     return read
 
 
@@ -329,7 +330,7 @@ def test_a_copy_that_cant_be_opened_now_is_kept(defaults: FakeDefaults, monkeypa
     _a_designer_changes(defaults)
     changed = dict(defaults.domain)
 
-    def opening(file: str, mode: str = 'r', encoding: str | None = None) -> object:
+    def opening(file: str, mode: str = 'r', encoding: str | None = None) -> IO[str] | IO[bytes]:
         if file == prefs.saved_file():
             raise OSError(errno.EMFILE, 'Too many open files')
         return open(file, mode, encoding=encoding)
@@ -511,7 +512,7 @@ def test_a_copy_removed_as_it_is_read_counts_as_none(defaults: FakeDefaults, mon
     defaults.domain = dict(BEFORE)
     _saved(defaults)
 
-    def opening(file: str, mode: str = 'r', encoding: str | None = None) -> object:
+    def opening(file: str, mode: str = 'r', encoding: str | None = None) -> IO[str] | IO[bytes]:
         if file == prefs.saved_file():
             raise FileNotFoundError(errno.ENOENT, 'No such file or directory')
         return open(file, mode, encoding=encoding)

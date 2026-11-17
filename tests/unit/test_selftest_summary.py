@@ -8,29 +8,22 @@ import re
 import sys
 import tempfile
 import time
-from collections.abc import Callable
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
+from types import FunctionType, ModuleType, SimpleNamespace
+from typing import TYPE_CHECKING
 
 import pytest
+from selftest_fakes import code_of, fresh, tool_result
 
 from conftest import SELFTEST_DIR, selftest_sources
+from project_constants import ToolArgs
 
-
-def _selftest() -> Any:  # a module imported by name: PyCharm can't see its names
-    """The self-test's index (tests/test_all_tools/__main__.py), imported afresh with all its modules,
-    so each test starts with an empty check record."""
-    tests_dir = os.path.dirname(SELFTEST_DIR)
-    if tests_dir not in sys.path:
-        sys.path.insert(0, tests_dir)
-    for name in [m for m in sys.modules if m == 'test_all_tools' or m.startswith('test_all_tools.')]:
-        del sys.modules[name]
-    return importlib.import_module('test_all_tools.__main__')
+if TYPE_CHECKING:  # for the checker only: each test imports the self-test's modules afresh (fresh())
+    from test_all_tools.common import Ctx, Step
 
 
 def test_skipped_only_tools_are_not_counted_as_covered() -> None:
-    summary, ok = _selftest().summarize(['a', 'b', 'c'], {'a': [True], 'b': []}, [('b', 'closes Designer')])
+    summary, ok = fresh('__main__').summarize(['a', 'b', 'c'], {'a': [True], 'b': []}, [('b', 'closes Designer')])
     assert '1/3 tools covered' in summary
     assert "only skipped: ['b']" in summary and "NOT covered: ['c']" in summary
     assert not ok  # c has no check at all
@@ -38,15 +31,15 @@ def test_skipped_only_tools_are_not_counted_as_covered() -> None:
 
 def test_skips_alone_do_not_fail_the_run() -> None:
     # quit_designer is always skipped while your own Designer runs; that is reported, not a failure
-    summary, ok = _selftest().summarize(['a', 'b'], {'a': [True, True], 'b': []}, [('b', 'x')])
+    summary, ok = fresh('__main__').summarize(['a', 'b'], {'a': [True, True], 'b': []}, [('b', 'x')])
     assert ok and '1/2 tools covered' in summary and "only skipped: ['b']" in summary
     assert 'checks passed: 2/2; skipped: 1; tools with failures: none' in summary
 
 
-def _step(module: str, name: str, raises: bool = False, body: Any = None) -> Any:
+def _step(module: str, name: str, raises: bool = False, body: 'Step | None' = None) -> 'Step':
     """A step as the index runs it: a coroutine function known by its module and name."""
 
-    async def step(ctx: Any) -> None:
+    async def step(ctx: 'Ctx') -> None:
         if raises:
             raise ValueError('it stopped here')
         if body is not None:
@@ -65,15 +58,11 @@ def _clock(monkeypatch: pytest.MonkeyPatch, *readings: float) -> None:
 def test_each_step_is_timed_under_its_category_name(monkeypatch: pytest.MonkeyPatch) -> None:
     # `run` is the whole category, named by its folder (<category>/checks.py); another function of it
     # (a check run on its own) keeps its name
-    selftest = _selftest()
+    selftest = fresh('__main__')
     _clock(monkeypatch, 10.0, 12.5, 20.0, 21.0)
     steps = [_step('params', 'run'), _step('lifecycle', 'check_x')]
     asyncio.run(selftest.run_steps(SimpleNamespace(), steps, isolated=False))
     assert selftest.times == {'params': 2.5, 'lifecycle.check_x': 1.0}
-
-
-def _result(t: str) -> Any:
-    return SimpleNamespace(content=[SimpleNamespace(type='text', text=t)], is_error=False)
 
 
 class FakeDesigner:
@@ -82,15 +71,19 @@ class FakeDesigner:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    async def __call__(self, name: str, args: dict[str, Any] | None = None) -> Any:
-        code = (args or {}).get('code', '')
+    async def __call__(self, name: str, args: ToolArgs | None = None) -> SimpleNamespace:
+        code = code_of(args)
         common = sys.modules['test_all_tools.common']
         self.calls.append('clean-up' if name == 'execute_designer_code' and code == common.CLEAN else name)
-        return _result('removed 0' if 'unloadUserPackage' in code else 'LIBS=')
+        return tool_result('removed 0' if 'unloadUserPackage' in code else 'LIBS=')
 
 
 def _isolated_run(
-    monkeypatch: pytest.MonkeyPatch, selftest: Any, tmp_path: Path, steps: list[Any], prepare: Any = None
+    monkeypatch: pytest.MonkeyPatch,
+    selftest: ModuleType,
+    tmp_path: Path,
+    steps: list['Step'],
+    prepare: 'Step | None' = None,
 ) -> FakeDesigner:
     """run_steps over a fake Designer, every category's preparation `prepare` (none when omitted); both put back after
     the test (REVIEW.md TST-244)."""
@@ -106,14 +99,14 @@ def test_each_category_runs_on_a_ctx_of_its_own_after_its_own_preparation(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # no category sees what another prepared or left (category_run.py); each is cleaned up after it
-    selftest = _selftest()
-    seen: list[tuple[str, Any]] = []
+    selftest = fresh('__main__')
+    seen: list[tuple[str, Ctx]] = []
 
-    async def prepare(ctx: Any) -> None:
+    async def prepare(ctx: 'Ctx') -> None:
         ctx.G = {'graph': 'mcp_selftest'}
         seen.append(('prepare', ctx))
 
-    async def body(ctx: Any) -> None:
+    async def body(ctx: 'Ctx') -> None:
         seen.append(('check', ctx))
 
     c = _isolated_run(
@@ -129,10 +122,10 @@ def test_a_category_that_raises_fails_and_the_next_one_still_runs(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # each prepares its own environment: one stopping early leaves the next one nothing to miss
-    selftest = _selftest()
+    selftest = fresh('__main__')
     ran: list[str] = []
 
-    async def body(ctx: Any) -> None:
+    async def body(ctx: 'Ctx') -> None:
         ran.append('params')
 
     _isolated_run(
@@ -143,15 +136,15 @@ def test_a_category_that_raises_fails_and_the_next_one_still_runs(
 
 
 def test_a_failed_preparation_stops_only_its_category(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    selftest = _selftest()
+    selftest = fresh('__main__')
     ran: list[str] = []
     common = sys.modules['test_all_tools.common']
 
-    async def prepare(ctx: Any) -> None:
+    async def prepare(ctx: 'Ctx') -> None:
         if os.path.basename(ctx.scratch) == 'facts':
             raise common.Unprepared('apply_edits: refused')
 
-    async def body(ctx: Any) -> None:
+    async def body(ctx: 'Ctx') -> None:
         ran.append(os.path.basename(ctx.scratch))
 
     steps = [_step('facts', 'run', body=body), _step('params', 'run', body=body)]
@@ -160,7 +153,7 @@ def test_a_failed_preparation_stops_only_its_category(monkeypatch: pytest.Monkey
 
 
 def test_the_summary_lists_the_times_slowest_first_with_their_total() -> None:
-    summary, ok = _selftest().summarize(['a'], {'a': [True]}, [], {'params': 2.5, 'facts': 96.04, 'bridge': 10.0})
+    summary, ok = fresh('__main__').summarize(['a'], {'a': [True]}, [], {'params': 2.5, 'facts': 96.04, 'bridge': 10.0})
     assert ok
     lines = summary.splitlines()
     start = lines.index('time per category, slowest first (total 108.5 s):')
@@ -172,7 +165,7 @@ def test_the_summary_lists_the_times_slowest_first_with_their_total() -> None:
 
 
 def test_a_run_with_no_times_prints_none() -> None:
-    summary, _ = _selftest().summarize(['a'], {'a': [True]}, [])
+    summary, _ = fresh('__main__').summarize(['a'], {'a': [True]}, [])
     assert 'time per category' not in summary
 
 
@@ -180,7 +173,7 @@ def test_the_run_prints_the_times_it_recorded(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # the record reaches the summary main() prints, not only run_steps' dictionary
-    selftest = _selftest()
+    selftest = fresh('__main__')
     selftest.times['facts'] = 96.0
     selftest.results['a'] = [True]
     selftest.STATE['was_running'] = False
@@ -193,7 +186,7 @@ def test_the_run_prints_the_times_it_recorded(
 
 
 def test_a_failed_check_fails_the_run() -> None:
-    summary, ok = _selftest().summarize(['a'], {'a': [True, False]}, [])
+    summary, ok = fresh('__main__').summarize(['a'], {'a': [True, False]}, [])
     assert not ok and 'tools with failures: a' in summary
 
 
@@ -205,31 +198,30 @@ def test_cleanup_covers_every_graph_the_self_test_creates() -> None:
     src = '\n'.join(selftest_sources().values())
     created = [n for n in re.findall(r"setIdentifier\('([^']*)'", src) if n != '%s']  # '%s' is DUP_GRAPH
     assert created and all(name.startswith('mcp_selftest') for name in created), created
-    assert ".startswith('mcp_selftest')" in _selftest().CLEAN
+    assert ".startswith('mcp_selftest')" in fresh('__main__').CLEAN
 
 
 def test_a_check_that_is_not_a_bool_is_counted() -> None:
     # REVIEW.md TST-29: check() stored the condition as given; `refs and not missing` with no refs is
     # [], and summarize()'s sum then raised TypeError, so no summary was printed
-    selftest = _selftest()  # imported afresh: no checks recorded yet
+    selftest = fresh('__main__')  # imported afresh: no checks recorded yet
     selftest.check('tool', 'empty list', [])
     selftest.check('tool', 'none', None)
     text, ok = selftest.summarize(['tool'], selftest.results, [])
     assert not ok and 'checks passed: 0/2' in text
 
 
+async def _bridge_error(name: str, args: ToolArgs | None = None) -> SimpleNamespace:
+    """A fake tool call whose answer is the bridge's error text."""
+    return SimpleNamespace(content=[SimpleNamespace(type='text', text='Error executing tool: bridge busy')])
+
+
 def test_a_bridge_error_in_the_library_clean_up_is_a_failed_check_not_a_crash() -> None:
     # REVIEW.md TST-33: an error answer there raised AttributeError in the self-test's finally,
     # skipping the rest of its clean-up (the snapshots, putting the user's graph back, the quit)
-    import asyncio
-    from types import SimpleNamespace
 
-    selftest = _selftest()
-
-    async def bridge_error(name: str, args: dict[str, Any] | None = None) -> SimpleNamespace:
-        return SimpleNamespace(content=[SimpleNamespace(type='text', text='Error executing tool: bridge busy')])
-
-    asyncio.run(selftest.restore_library_packages(bridge_error, []))
+    selftest = fresh('__main__')
+    asyncio.run(selftest.restore_library_packages(_bridge_error, []))
     assert selftest.results['self-test'] == [False]
 
 
@@ -239,13 +231,13 @@ def test_the_scratch_folder_is_only_deleted_once_designer_is_closed(
 ) -> None:
     # REVIEW.md PLG-18 (and PLG-9): deleting it while Designer ran crashed Designer twice, in its file
     # watcher; with a Designer still running it is left in the OS temp folder, and the path printed
-    selftest = _selftest()
+    selftest = fresh('__main__')
     scratch = tmp_path / 'sd_mcp_selftest_x'
     scratch.mkdir()
     (scratch / 'graph.sbs').write_text('x')
     monkeypatch.setattr(tempfile, 'mkdtemp', lambda prefix: str(scratch))
 
-    async def run(scratch: str, *args: Any) -> list[str]:
+    async def run(scratch: str, steps: 'list[Step]', worker: str | None, first: bool) -> list[str]:
         selftest.STATE['was_running'] = designer_running
         return []
 
@@ -261,38 +253,26 @@ def test_the_scratch_folder_is_only_deleted_once_designer_is_closed(
 def test_a_bridge_error_reading_the_library_packages_at_the_start_is_a_failed_check() -> None:
     # REVIEW.md TST-51: this ran before the try/finally, unguarded, so an error answer ended the run
     # with no summary and a Designer the self-test started was never quit
-    import asyncio
-    from types import SimpleNamespace
 
-    selftest = _selftest()
-
-    async def bridge_error(name: str, args: dict[str, Any] | None = None) -> SimpleNamespace:
-        return SimpleNamespace(content=[SimpleNamespace(type='text', text='Error executing tool: bridge busy')])
-
-    assert asyncio.run(selftest.library_packages(bridge_error)) is None
+    selftest = fresh('__main__')
+    assert asyncio.run(selftest.library_packages(_bridge_error)) is None
     assert selftest.results['self-test'] == [False]
-    asyncio.run(selftest.restore_library_packages(bridge_error, None))  # then skipped, not a crash
+    asyncio.run(selftest.restore_library_packages(_bridge_error, None))  # then skipped, not a crash
     assert selftest.skipped == [('self-test', 'leaves the library packages loaded as it found them')]
 
 
 def test_a_bridge_error_reading_the_editors_graph_at_the_start_is_a_failed_check() -> None:
     # REVIEW.md TST-59: this parse ran before the try/finally, unguarded, like TST-51's
-    import asyncio
-    from types import SimpleNamespace
 
-    selftest = _selftest()
-
-    async def bridge_error(name: str, args: dict[str, Any] | None = None) -> SimpleNamespace:
-        return SimpleNamespace(content=[SimpleNamespace(type='text', text='Error executing tool: bridge busy')])
-
-    assert asyncio.run(selftest.editor_graph(bridge_error)) == ''
+    selftest = fresh('__main__')
+    assert asyncio.run(selftest.editor_graph(_bridge_error)) == ''
     assert selftest.results['self-test'] == [False]
 
 
 def test_only_the_runs_start_records_the_users_graph() -> None:
     # REVIEW.md TST-271: editor_graph keeps the graph it reads, for the end of the run to put back in the user's editor;
     # link_display's check called it with the self-test's graph there, which the clean-up then unloaded
-    selftest = _selftest()
+    selftest = fresh('__main__')
     callers = sorted(
         name
         for name, source in selftest_sources().items()
@@ -308,10 +288,10 @@ def test_every_category_function_is_run() -> None:
     import inspect
     import pkgutil
 
-    selftest = _selftest()
+    selftest = fresh('__main__')
     package = sys.modules['test_all_tools']
     run = set(selftest.CATEGORIES) | {selftest.lifecycle.run}  # lifecycle: a worker of its own (workers.py)
-    defined: set[Callable[..., object]] = set()
+    defined: set[FunctionType] = set()  # the modules' own async def functions
     # every module of every category's folder (<category>/checks.py and its helpers), not the Designer scripts
     found = [
         info.name
@@ -344,12 +324,12 @@ def test_every_category_function_is_run() -> None:
 
 def _run_designer_script(reply: str, is_error: bool = False) -> list[bool]:
     """The checks recorded under run_designer_script by one designer_script call with this reply."""
-    _selftest()
+    fresh('__main__')
     common = importlib.import_module('test_all_tools.common')
     common.results.pop('run_designer_script', None)
-    result = SimpleNamespace(content=[SimpleNamespace(type='text', text=reply)], is_error=is_error)
+    result = tool_result(reply, error=is_error)
 
-    async def call(name: str, args: dict[str, Any] | None = None) -> Any:
+    async def call(name: str, args: ToolArgs | None = None) -> SimpleNamespace:
         return result
 
     assert asyncio.run(common.designer_script(call, 'facts/a_script', graph='g')) is result
@@ -383,12 +363,12 @@ def test_a_raising_lifecycle_check_is_a_failed_check_not_the_end_of_the_run(
     # REVIEW.md TST-152: lifecycle.run was awaited bare in run()'s finally, so an unexpected answer (one more line to
     # unpack, a record that isn't JSON) ended the run with a traceback and no summary; it goes through run_steps, as
     # the categories do
-    selftest = _selftest()
+    selftest = fresh('__main__')
     source = Path(SELFTEST_DIR, '__main__.py').read_text(encoding='utf-8')
     assert not re.search(r'await\s+lifecycle\.run\(', source), 'awaited outside run_steps'
     assert re.search(r'run_steps\(\s*ctx,\s*\[lifecycle\.run\],\s*isolated=False\s*\)', source)
 
-    async def raises(ctx: Any) -> None:
+    async def raises(ctx: 'Ctx') -> None:
         raise ValueError('too many values to unpack (expected 2)')
 
     asyncio.run(selftest.run_steps(SimpleNamespace(), [raises], isolated=False))
@@ -399,7 +379,7 @@ def test_a_raising_lifecycle_check_is_a_failed_check_not_the_end_of_the_run(
 def test_another_runs_designer_isnt_taken_for_the_users(monkeypatch: pytest.MonkeyPatch) -> None:
     # REVIEW.md TST-170: with another run's Designer open on its own port (any Designer on the machine counted), a run
     # took itself for one in the user's Designer
-    selftest = _selftest()
+    selftest = fresh('__main__')
     common = sys.modules['test_all_tools.common']
     monkeypatch.setattr(sys, 'platform', 'darwin')  # on Windows nothing is recorded (REVIEW.md TST-269)
     monkeypatch.setitem(vars(common), 'designer_pids', lambda: [12])
@@ -408,7 +388,7 @@ def test_another_runs_designer_isnt_taken_for_the_users(monkeypatch: pytest.Monk
     monkeypatch.setitem(vars(common), 'designer_alive', lambda: True)  # any Designer: another run's is up
     assert common.designer_here() is False and common.users_designer_running() is False
 
-    async def no_designer_here(name: str, args: dict[str, Any] | None = None) -> SimpleNamespace:
+    async def no_designer_here(name: str, args: ToolArgs | None = None) -> SimpleNamespace:
         return SimpleNamespace(is_error=True, content=[SimpleNamespace(type='text', text='Designer is not reachable')])
 
     assert asyncio.run(selftest.already_running(no_designer_here)) is False
@@ -421,14 +401,14 @@ def test_the_scratch_folder_goes_once_the_runs_own_designer_is_ended(
 ) -> None:
     # REVIEW.md TST-192: whether a Designer ran was asked before end_own_designer() ended the run's own, and that
     # answer kept the folder "since Designer is running"
-    selftest = _selftest()
+    selftest = fresh('__main__')
     monkeypatch.setattr(sys, 'platform', 'darwin')  # the pool's: on Windows there is no worker (REVIEW.md TST-269)
     scratch = tmp_path / 'sd_mcp_selftest_x'
     scratch.mkdir()
     monkeypatch.setattr(tempfile, 'mkdtemp', lambda prefix: str(scratch))
     up = [True]  # the worker's own, left open by a failed check
 
-    async def run(scratch: str, *args: Any) -> list[str]:
+    async def run(scratch: str, steps: 'list[Step]', worker: str | None, first: bool) -> list[str]:
         selftest.STATE['was_running'] = False
         return []
 
@@ -443,6 +423,6 @@ def test_the_scratch_folder_goes_once_the_runs_own_designer_is_ended(
 
 def test_a_workers_results_carry_its_quits_forced_during_their_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
     # REVIEW.md TST-293: what lifecycle's normal closes recorded (common.normal_close), for the pool to count
-    selftest = _selftest()
+    selftest = fresh('__main__')
     monkeypatch.setitem(vars(selftest.common), 'forced_in_shutdown', ['the modal close'])
     assert selftest._ended()['forced_in_shutdown'] == ['the modal close']

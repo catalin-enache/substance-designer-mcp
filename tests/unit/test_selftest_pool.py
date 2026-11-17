@@ -9,18 +9,23 @@ import json
 import os
 import sys
 import time
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Sequence
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
+from types import ModuleType, SimpleNamespace, TracebackType
+from typing import IO, TYPE_CHECKING, NoReturn, TypedDict, cast
 
 import pytest
 from fake_defaults import FakeDefaults
 from selftest_fakes import Designer, Done, FakeRun, OpenGate, fresh, part, pool, unit_log
+from typing_extensions import Unpack  # typing's from Python 3.11; mcp requires typing_extensions
 
 import designer_preferences
 import project_constants
 from conftest import SELFTEST_DIR
+
+if TYPE_CHECKING:  # for the checker only: each test imports the self-test's modules afresh (fresh())
+    from test_all_tools.common import Step
+    from test_all_tools.workers import WorkerResults
 
 REAL_POPEN = __import__('subprocess').Popen  # before any test replaces it
 
@@ -30,7 +35,7 @@ def no_real_run(monkeypatch: pytest.MonkeyPatch) -> None:
     """No test here starts a process: a real run would start Designers (and, from the unit suite inside it, this test
     again). A test faking the workers' processes replaces Popen itself."""
 
-    def refused(*args: Any, **kwargs: Any) -> Any:
+    def refused(*args: object, **kwargs: object) -> NoReturn:
         raise AssertionError('a unit test started a process: %s' % (args[0] if args else kwargs))
 
     import subprocess
@@ -153,16 +158,26 @@ def test_a_quit_waits_for_the_lock_no_longer_than_its_timeout(monkeypatch: pytes
 # --- the scheduler
 
 
-def _schedule(workers: Any, run: FakeRun, names: list[str], slots: int, gate: Any = None, **kw: Any) -> Any:
-    return workers.schedule(
-        names,
-        slots,
-        start=run.start,
-        answering=lambda name: name in run.answering,
-        gate=gate or OpenGate(),
-        exclusive=kw.get('exclusive', set()),
-        solo=kw.get('solo', set()),
-        sleep=run.sleep,
+def _schedule(
+    workers: ModuleType,
+    run: FakeRun,
+    names: list[str],
+    slots: int,
+    gate: OpenGate | None = None,
+    **kw: Collection[str],
+) -> dict[str, int]:
+    return cast(
+        dict[str, int],
+        workers.schedule(
+            names,
+            slots,
+            start=run.start,
+            answering=lambda name: name in run.answering,
+            gate=gate or OpenGate(),
+            exclusive=kw.get('exclusive', set()),
+            solo=kw.get('solo', set()),
+            sleep=run.sleep,
+        ),
     )
 
 
@@ -283,7 +298,7 @@ def test_lifecycle_starts_first_and_the_categories_follow_in_their_listed_order(
     ],
 )
 def test_a_pool_of_at_once_unless_asked_off_macos_or_with_the_users_designer(
-    monkeypatch: pytest.MonkeyPatch, asked: Any, platform: str, users: Any, expected: Any
+    monkeypatch: pytest.MonkeyPatch, asked: int | None, platform: str, users: bool | str, expected: int | str
 ) -> None:
     workers = fresh('workers')
     common = sys.modules['test_all_tools.common']
@@ -318,13 +333,29 @@ def test_at_once_alone_holds_the_default_number(
     assert inspect.signature(index.workers.run_pool).parameters['slots'].default is inspect.Parameter.empty
 
 
+class _OneRun(TypedDict, total=False):
+    """The keywords __main__.one_run is called with: what the command line chose."""
+
+    worker: str | None
+    results_file: str | None
+    first: bool
+
+
+class _Run(TypedDict):
+    """What __main__.run was given: the steps, the worker, and whether it runs the start checks."""
+
+    steps: list['Step'] | None
+    worker: str | None
+    first: bool
+
+
 def test_the_index_runs_a_pool_one_run_off_macos_and_nothing_next_to_the_users_designer(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     index = fresh('__main__')
-    ran: list[Any] = []
+    ran: list[tuple[int, bool] | tuple[str, _OneRun]] = []  # run_pool's, or one_run's keywords
 
-    def choose(asked: Any) -> int:
+    def choose(asked: int | None) -> int:
         if asked == 9:
             raise index.workers.Refused('Your Designer is open: close it, then run the self-test again.')
         return 0 if asked == 7 else asked or 4
@@ -336,7 +367,11 @@ def test_the_index_runs_a_pool_one_run_off_macos_and_nothing_next_to_the_users_d
         return 0
 
     monkeypatch.setitem(vars(index.workers), 'run_pool', run_pool)
-    monkeypatch.setitem(vars(index), 'one_run', lambda **kw: ran.append(('one', kw)))
+
+    def one_run(**kw: Unpack[_OneRun]) -> None:
+        ran.append(('one', kw))
+
+    monkeypatch.setitem(vars(index), 'one_run', one_run)
     for argv, expected in (([], (4, True)), (['--no-unit'], (4, False)), (['--workers', '2'], (2, True))):
         ran.clear()
         with pytest.raises(SystemExit) as ended:
@@ -376,10 +411,12 @@ def test_a_worker_runs_its_category_and_writes_its_results_with_its_quit(
 ) -> None:
     index = fresh('__main__')
     categories = sys.modules['test_all_tools.categories']
-    seen: dict[str, Any] = {}
+    seen: list[_Run] = []  # what each run was given
 
-    async def run(scratch: str, steps: Any = None, worker: Any = None, first: bool = False) -> list[str]:
-        seen.update(steps=steps, worker=worker, first=first)
+    async def run(
+        scratch: str, steps: list['Step'] | None = None, worker: str | None = None, first: bool = False
+    ) -> list[str]:
+        seen.append({'steps': steps, 'worker': worker, 'first': first})
         index.check('t', 'a check', True)
         index.times['render'] = 1.5
         index.ENDED.update(quit='Designer quit after 2s.', quit_at=12.5)
@@ -393,7 +430,7 @@ def test_a_worker_runs_its_category_and_writes_its_results_with_its_quit(
         index.main(['--worker', 'render', '--results', str(path), '--first'])
     assert ended.value.code == 0
     render = categories.CATEGORIES[[categories.category_name(s) for s in categories.CATEGORIES].index('render')]
-    assert seen == {'steps': [render], 'worker': 'render', 'first': True}
+    assert seen == [{'steps': [render], 'worker': 'render', 'first': True}]
     assert json.loads(path.read_text()) == {
         'tools': ['t', 'u'],
         'results': {'t': [True]},
@@ -421,7 +458,9 @@ def test_a_worker_closes_its_designer_when_no_lock_holds_and_leaves_the_crash_du
         def __enter__(self) -> None:
             pass
 
-        def __exit__(self, *exc: object) -> None:
+        def __exit__(
+            self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
+        ) -> None:
             order.append('done')
 
     monkeypatch.setitem(vars(lock), 'changing', Changing)
@@ -459,7 +498,7 @@ def test_the_pool_runs_every_category_once_and_prints_one_summary(
 def test_one_wait_for_crash_dumps_at_the_end_and_each_dump_fails_its_category_only(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
-    def write(name: str, folder: str, port: int) -> Mapping[str, object]:
+    def write(name: str, folder: str, port: int) -> 'WorkerResults':
         if name == 'render':  # its Designer crashed on its way out
             dumps = tmp_path / ('agent_%d' % port) / 'home' / 'Sentry-Crashpad' / 'completed'
             os.makedirs(dumps)
@@ -484,7 +523,7 @@ def test_a_dump_in_a_workers_folder_is_never_one_outside_the_run(
     # REVIEW.md TST-236: lifecycle's dumps and those of a worker without results were left out of `placed`, so they also
     # failed "no new crash dump outside the run"; lifecycle's own watch reports its dumps, and a worker without results
     # gets a check naming them
-    def write(worker: str, folder: str, port: int) -> Mapping[str, object] | None:
+    def write(worker: str, folder: str, port: int) -> 'WorkerResults | None':
         if worker == name:
             dumps = tmp_path / ('agent_%d' % port) / 'home' / 'Sentry-Crashpad' / 'completed'
             os.makedirs(dumps)
@@ -550,7 +589,7 @@ def test_a_forced_quits_designer_folder_is_kept_to_read_its_log(
     # REVIEW.md SRV-106: the log naming where its shutdown stopped is in that folder
     ports: dict[str, int] = {}
 
-    def write(name: str, folder: str, port: int) -> Mapping[str, object]:
+    def write(name: str, folder: str, port: int) -> 'WorkerResults':
         ports[name] = port
         return part(
             name, _forced(project_constants.QUIT_FORCED_IN_SHUTDOWN) if name == 'render' else 'Designer quit after 2s.'
@@ -572,7 +611,7 @@ def test_a_quit_ending_while_sampled_passes_and_keeps_its_folder(
     # sample a hang's evidence (ROADMAP item 70)
     ports: dict[str, int] = {}
 
-    def write(name: str, folder: str, port: int) -> Mapping[str, object]:
+    def write(name: str, folder: str, port: int) -> 'WorkerResults':
         ports[name] = port
         sampled = 'Designer quit after 32s. %s /tmp/sd_mcp_1_%d/threads_42.sample.txt' % (
             project_constants.QUIT_SAMPLED,
@@ -604,7 +643,7 @@ def test_lifecycles_quits_forced_during_their_shutdown_count_and_keep_its_folder
     # REVIEW.md TST-293: lifecycle's own normal closes pass on such a quit too, and item 69 was first seen in one
     ports: dict[str, int] = {}
 
-    def write(name: str, folder: str, port: int) -> Mapping[str, object]:
+    def write(name: str, folder: str, port: int) -> 'WorkerResults':
         ports[name] = port
         if name == 'lifecycle':
             return {**part(name), 'forced_in_shutdown': ['closes the Designer it started, with a modal dialog open']}
@@ -682,12 +721,14 @@ def test_lifecycle_holds_the_lock_from_its_launch_to_the_hand_over_and_with_its_
         def __enter__(self) -> None:
             events.append('lock')
 
-        def __exit__(self, *exc: object) -> None:
+        def __exit__(
+            self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
+        ) -> None:
             events.append('unlock')
 
     monkeypatch.setitem(vars(lock), 'held', lambda **kw: Held())
 
-    async def step(name: str, ok: Any = None) -> Any:
+    async def step(name: str, ok: bool | None = None) -> bool | None:
         events.append(name)
         return ok
 
@@ -742,7 +783,9 @@ def test_a_worker_that_closed_its_designer_ends_nothing_else_and_removes_its_scr
     scratch.mkdir()
     monkeypatch.setattr(index.tempfile, 'mkdtemp', lambda prefix: str(scratch))
 
-    async def run(scratch: str, steps: Any = None, worker: Any = None, first: bool = False) -> list[str]:
+    async def run(
+        scratch: str, steps: list['Step'] | None = None, worker: str | None = None, first: bool = False
+    ) -> list[str]:
         return []
 
     monkeypatch.setitem(vars(index), 'run', run)
@@ -834,7 +877,7 @@ def test_a_new_dump_outside_the_workers_folders_fails_a_check_of_its_own(
     workers = pool(monkeypatch, tmp_path, lambda name, folder, port: part(name))
     calls: list[int] = []
 
-    def dumps(ports: Any = (), run_port: bool = True) -> set[str]:
+    def dumps(ports: Sequence[int] = (), run_port: bool = True) -> set[str]:
         calls.append(1)
         return set() if len(calls) == 1 else {str(tmp_path / 'shared' / 'completed' / 'x.dmp')}  # after the start
 
@@ -903,10 +946,10 @@ def test_only_runs_the_named_categories_through_the_pool_without_the_unit_suite(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     index = fresh('__main__')
-    asked: list[tuple[int, bool, Any]] = []
+    asked: list[tuple[int, bool, Sequence[str] | None]] = []
     monkeypatch.setitem(vars(index.workers), 'choose', lambda workers: workers or 4)
 
-    def run_pool(slots: int, unit: bool = True, only: Any = None) -> int:
+    def run_pool(slots: int, unit: bool = True, only: Sequence[str] | None = None) -> int:
         asked.append((slots, unit, only))
         return 0
 
@@ -955,7 +998,7 @@ def test_a_pool_of_chosen_categories_judges_the_coverage_of_their_tools_only(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
     # every worker lists all the server's tools; the others' categories didn't run, so their tools aren't missing
-    def write(name: str, folder: str, port: int) -> Mapping[str, object]:
+    def write(name: str, folder: str, port: int) -> 'WorkerResults':
         return {**part(name), 'tools': ['t', 'u']}
 
     workers = pool(monkeypatch, tmp_path, write)
@@ -982,7 +1025,7 @@ def test_the_wait_for_crash_dumps_counts_from_the_last_quit(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
     # REVIEW.md TST-268: a dump comes seconds after its Designer quits, so the wait is from the last one to quit
-    def write(name: str, folder: str, port: int) -> Mapping[str, object]:
+    def write(name: str, folder: str, port: int) -> 'WorkerResults':
         return {**part(name), 'quit_at': time.time() - (100 if name == 'facts' else 0)}
 
     workers = pool(monkeypatch, tmp_path, write)
@@ -1000,7 +1043,7 @@ def test_the_wait_for_crash_dumps_compares_with_the_dumps_there_before_the_run(
     os.makedirs(old.parent)
     old.write_text('')
 
-    def write(name: str, folder: str, port: int) -> Mapping[str, object]:
+    def write(name: str, folder: str, port: int) -> 'WorkerResults':
         return {**part(name), 'quit_at': time.time()}
 
     workers = pool(monkeypatch, tmp_path, write)
@@ -1042,7 +1085,7 @@ def test_the_pool_checks_designers_preferences_are_as_before_it(
         'session.lastSession.files': [],
     }
 
-    def write(name: str, folder: str, port: int) -> dict[str, object]:
+    def write(name: str, folder: str, port: int) -> 'WorkerResults':
         if not put_back:  # as agents' Designers may leave it, nothing having put it back
             defaults.domain['session.instancePID'] = port
             defaults.domain['session.graph.thumbnail_mode.%s' % name] = 1
@@ -1086,14 +1129,14 @@ def test_the_preferences_check_fails_when_the_run_couldnt_read_them_as_it_starte
             pass
         outside.append(78)
 
-        def opening(file: str, mode: str = 'r', encoding: str | None = None) -> object:
+        def opening(file: str, mode: str = 'r', encoding: str | None = None) -> IO[str] | IO[bytes]:
             if file == designer_preferences.saved_file():
                 raise PermissionError(13, 'Permission denied')
             return open(file, mode, encoding=encoding)
 
         monkeypatch.setitem(vars(designer_preferences), 'open', opening)  # the module's own name, before the builtin
 
-    def write(name: str, folder: str, port: int) -> dict[str, object]:
+    def write(name: str, folder: str, port: int) -> 'WorkerResults':
         defaults.fail.clear()  # readable again once the run started
         monkeypatch.delitem(vars(designer_preferences), 'open', raising=False)
         outside.clear()
@@ -1112,7 +1155,7 @@ def test_the_preferences_check_skips_once_the_users_designer_ran_during_the_run(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path, defaults: FakeDefaults
 ) -> None:
     # the file may hold the user's own changes then, which quit_designer leaves (designer_preferences.py)
-    def write(name: str, folder: str, port: int) -> dict[str, object]:
+    def write(name: str, folder: str, port: int) -> 'WorkerResults':
         defaults.domain['changed by %s' % name] = 1
         _users_log(defaults, time.time() + 5)
         return part(name)
@@ -1130,7 +1173,7 @@ def test_the_preferences_check_still_fails_with_a_users_log_from_before_the_run(
     # REVIEW.md TST-358: the user's machine always has their log; only one written during the run skips the check
     _users_log(defaults, time.time() - 3600)
 
-    def write(name: str, folder: str, port: int) -> dict[str, object]:
+    def write(name: str, folder: str, port: int) -> 'WorkerResults':
         defaults.domain['changed by %s' % name] = 1
         return part(name)
 
@@ -1175,7 +1218,7 @@ def test_a_copy_left_from_before_the_run_is_put_back_before_the_pool_reads_the_f
         pass
     defaults.domain['session.mainWindow.state'] = b'a crashed agent'
 
-    def write(name: str, folder: str, port: int) -> dict[str, object]:
+    def write(name: str, folder: str, port: int) -> 'WorkerResults':
         designer_preferences.put_back(lambda: False, ended=True)  # as each worker's quit_designer does, once none runs
         return part(name)
 
@@ -1199,7 +1242,7 @@ def test_a_copy_too_old_to_put_back_is_dropped_before_the_pool_reads_the_file(
     os.utime(designer_preferences.saved_file(), (old, old))
     defaults.domain['session.mainWindow.state'] = b'a crashed agent, or the user since'
 
-    def write(name: str, folder: str, port: int) -> dict[str, object]:
+    def write(name: str, folder: str, port: int) -> 'WorkerResults':
         with designer_preferences.saved(lambda: False, ended=False):  # as each worker's launch_designer does
             pass
         designer_preferences.put_back(lambda: False, ended=True)  # and its quit_designer, once none runs
@@ -1230,7 +1273,7 @@ def test_the_check_compares_with_the_file_once_the_users_designer_ran_since_the_
     outside = [78]
     launches: list[str] = []
 
-    def write(name: str, folder: str, port: int) -> dict[str, object]:
+    def write(name: str, folder: str, port: int) -> 'WorkerResults':
         launches.append(name)
         with designer_preferences.saved(lambda: True, ended=False):  # each worker's launch: another Designer runs
             pass
@@ -1257,7 +1300,7 @@ def test_the_check_compares_with_the_copy_kept_for_a_designer_outside_the_run(
     defaults.domain['session.instancePID'] = 9500  # the outside Designer's
     outside = [78]
 
-    def write(name: str, folder: str, port: int) -> dict[str, object]:
+    def write(name: str, folder: str, port: int) -> 'WorkerResults':
         outside.clear()  # quit meanwhile; then, as each worker's quit_designer does once none runs
         designer_preferences.put_back(lambda: False, ended=True)
         return part(name)

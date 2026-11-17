@@ -21,10 +21,11 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from textwrap import dedent
 from types import SimpleNamespace
-from typing import IO, Any, NoReturn
+from typing import IO, NoReturn, Protocol, TypedDict
 
 import pytest
 from fake_defaults import FakeDefaults, lock_held
+from typing_extensions import Unpack  # typing's from Python 3.11; mcp requires typing_extensions
 
 import designer_preferences
 import project_constants
@@ -42,14 +43,23 @@ from conftest import (
     REAL_SAMPLE,
     REAL_SHORT_TEMP,
     ROOT,
+    DumpOptions,
+    RunOptions,
+    fake_bridge,
     patch_server,
     server,
 )
-from project_constants import PLUGIN, PLUGIN_PACKAGE_DIR
-from server_tools.core import Reply
+from designer_preferences import Plist
+from project_constants import PLUGIN, PLUGIN_PACKAGE_DIR, Reply, Request, read_agent_record
 
 
-def _no_bridge(request: dict[str, Any], wait: float, port: int | None = None) -> NoReturn:
+class _Send(Protocol):
+    """core._send's signature, which the fakes of _send below have."""
+
+    def __call__(self, request: Request, wait: float, port: int | None = None) -> Reply: ...
+
+
+def _no_bridge(request: Request, wait: float, port: int | None = None) -> NoReturn:
     raise server.ToolError('Designer is not reachable.')
 
 
@@ -63,20 +73,44 @@ class _FakeProcess:
         return 0
 
 
-def _popen(
-    started: list[Any], entry: Callable[[list[str]], Any] = lambda cmd: cmd, pid: int = 77
-) -> Callable[..., _FakeProcess]:
-    """A fake subprocess.Popen: each start appends entry(cmd) to started, its keyword arguments to started_with."""
+class _PopenArgs(TypedDict, total=False):
+    """The keyword arguments launch_designer passes to subprocess.Popen (lifecycle._opened and _started)."""
 
-    def popen(cmd: list[str], **kw: Any) -> _FakeProcess:
+    env: dict[str, str]
+    stdin: int
+    stdout: int
+    stderr: int | io.BufferedRandom  # DEVNULL, or the temporary file `open`'s errors go to
+    cwd: str
+    start_new_session: bool
+    creationflags: int
+
+
+class _Popen(Protocol):
+    """A fake subprocess.Popen, called as launch_designer calls it."""
+
+    def __call__(self, cmd: list[str], **kw: Unpack[_PopenArgs]) -> _FakeProcess: ...
+
+
+def _popen(
+    started: list[list[str]],
+    entry: Callable[[list[str]], list[str]] = lambda cmd: cmd,
+    pid: int = 77,
+    processes: '_Processes | None' = None,
+) -> _Popen:
+    """A fake subprocess.Popen: each start appends entry(cmd) to started, its keyword arguments to started_with, and
+    its process ID to processes.pids when `processes` is given."""
+
+    def popen(cmd: list[str], **kw: Unpack[_PopenArgs]) -> _FakeProcess:
         started.append(entry(cmd))
         _started_with.append(kw)
+        if processes is not None:
+            processes.pids.append(pid)
         return _FakeProcess(pid)
 
     return popen
 
 
-_started_with: list[dict[str, Any]] = []
+_started_with: list[_PopenArgs] = []
 
 
 @pytest.fixture(autouse=True)
@@ -105,7 +139,7 @@ def test_launch_reports_missing_app(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_launch_times_out_when_the_bridge_never_answers(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
 ) -> None:
-    started: list[Any] = []
+    started: list[list[str]] = []
     patch_server(monkeypatch, '_send', _no_bridge)
     patch_server(monkeypatch, '_designer_running', lambda: False)
     monkeypatch.setenv('SD_DESIGNER_APP', str(tmp_path))  # exists
@@ -124,24 +158,18 @@ def test_launch_waits_for_a_running_designer_instead_of_starting_another(
 ) -> None:
     # REVIEW.md SRV-10: a running Designer whose bridge doesn't answer (still starting, a dialog,
     # the plugin failed to load) was launched again: a second instance on Windows
-    started: list[Any] = []
+    started: list[list[str]] = []
     home: list[str] = []
     patch_server(monkeypatch, '_send', _no_bridge)
     patch_server(monkeypatch, '_designer_running', lambda: True)
     monkeypatch.setenv('SD_DESIGNER_APP', str(tmp_path))
     monkeypatch.setattr(subprocess, 'Popen', _popen(started))
 
-    def home_screen(
-        code: str,
-        path: str | None = None,
-        timeout: float | None = None,
-        wait: float | None = None,
-        port: int | None = None,
-    ) -> str:
+    def home_screen(code: str) -> str:
         home.append(code)
         return ''
 
-    patch_server(monkeypatch, '_bridge', home_screen)
+    fake_bridge(monkeypatch, home_screen)
     clock = iter(range(0, 1000, 10))
     monkeypatch.setattr(time, 'time', lambda: next(clock))
     with pytest.raises(server.ToolError) as error:
@@ -151,7 +179,7 @@ def test_launch_waits_for_a_running_designer_instead_of_starting_another(
     # once it answers: reported as already running, and its Home screen is left alone
     answers: Iterator[Exception | Reply] = iter([server.ToolError('not yet'), {'ok': True, 'output': 'idle'}])
 
-    def bridge_comes_up(request: dict[str, Any], wait: float, port: int | None = None) -> Reply:
+    def bridge_comes_up(request: Request, wait: float, port: int | None = None) -> Reply:
         a = next(answers)
         if isinstance(a, Exception):
             raise a
@@ -186,7 +214,7 @@ def test_quit_when_not_running(monkeypatch: pytest.MonkeyPatch) -> None:
     assert server.quit_designer() == 'Designer is not running.'
 
 
-def _refused(request: dict[str, Any], wait: float, port: int | None = None) -> Reply:
+def _refused(request: Request, wait: float, port: int | None = None) -> Reply:
     # what the plugin answers a client whose token it rejects (README Troubleshooting: a plugin and
     # server from different versions)
     return {'ok': False, 'output': '', 'error': 'invalid token'}
@@ -207,10 +235,10 @@ def test_a_refused_control_request_is_reported_as_an_error(
     # REVIEW.md SRV-33: the reply's output was read without checking ok, so a refusal read as an
     # answer (a running job, "already running: ", an empty cancel); launch_designer must not start
     # or wait for another Designer either
-    started: list[Any] = []
+    started: list[list[str]] = []
     patch_server(monkeypatch, '_send', _refused)
     patch_server(monkeypatch, '_designer_running', lambda: True)
-    patch_server(monkeypatch, '_bridge', lambda code, path=None, timeout=None, wait=None, port=None: 'closing Designer')
+    fake_bridge(monkeypatch, lambda code: 'closing Designer')
     monkeypatch.setenv('SD_DESIGNER_APP', str(tmp_path))
     monkeypatch.setattr(subprocess, 'Popen', _popen(started))
     with pytest.raises(server.ToolError, match='invalid token'):
@@ -284,9 +312,9 @@ def test_read_log_from_sd_designer_log(monkeypatch: pytest.MonkeyPatch, tmp_path
 
 def test_render_tools_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     patch_server(monkeypatch, 'SBSRENDER', None)
-    calls: tuple[Callable[[], object], ...] = (
-        lambda: server.render_sbs('x.sbs', '/tmp/out'),
-        lambda: server.sbsar_info('x.sbs'),
+    calls: tuple[Callable[[], str], ...] = (
+        lambda: server_tools.output.render_sbs('x.sbs', '/tmp/out'),
+        lambda: server_tools.output.sbsar_info('x.sbs'),
     )
     for call in calls:
         with pytest.raises(server.ToolError, match='SD_DESIGNER_BIN_DIR'):
@@ -332,19 +360,19 @@ def test_launch_starts_designer_when_the_running_one_exits_during_the_wait(
     # REVIEW.md SRV-15: the process was looked for once; when that Designer (shutting down, or hung
     # after a crash) went away during the wait, nothing was started and the error still said
     # "already running"
-    started: list[Any] = []
+    started: list[list[str]] = []
     processes = iter([True, True, False])  # there at first, then gone
     patch_server(monkeypatch, '_designer_running', lambda: next(processes, False))
     monkeypatch.setenv('SD_DESIGNER_APP', str(tmp_path))
     monkeypatch.setattr(subprocess, 'Popen', _popen(started))
 
-    def bridge(request: dict[str, Any], wait: float, port: int | None = None) -> Reply:
+    def bridge(request: Request, wait: float, port: int | None = None) -> Reply:
         if not started:
             raise server.ToolError('Designer is not reachable.')
         return {'ok': True, 'output': 'idle'}
 
     patch_server(monkeypatch, '_send', bridge)
-    patch_server(monkeypatch, '_bridge', lambda code, path=None, timeout=None, wait=None, port=None: '')
+    fake_bridge(monkeypatch, lambda code: '')
     clock = iter(range(0, 1000, 5))
     monkeypatch.setattr(time, 'time', lambda: next(clock))
     assert server.launch_designer(wait_s=60).startswith('Designer started in')
@@ -356,12 +384,18 @@ def test_a_restarted_designer_gets_the_whole_wait(
 ) -> None:
     # REVIEW.md SRV-19: after the old process went away late in the wait, the new Designer got
     # only what was left of wait_s, and "started in" counted the wait for the old one
-    started: list[int] = []
+    started: list[int] = []  # the clock's time at each start
     now = [0]
     processes = iter([True] + [True] * 33 + [False])  # the old one goes away at ~175 s of 180 (SRV-21)
     patch_server(monkeypatch, '_designer_running', lambda: next(processes, False))
     monkeypatch.setenv('SD_DESIGNER_APP', str(tmp_path))
-    monkeypatch.setattr(subprocess, 'Popen', _popen(started, lambda cmd: now[0]))
+
+    def stamped(cmd: list[str], **kw: Unpack[_PopenArgs]) -> _FakeProcess:
+        started.append(now[0])
+        _started_with.append(kw)
+        return _FakeProcess(77)
+
+    monkeypatch.setattr(subprocess, 'Popen', stamped)
 
     def clock() -> int:
         now[0] += 5
@@ -369,13 +403,13 @@ def test_a_restarted_designer_gets_the_whole_wait(
 
     monkeypatch.setattr(time, 'time', clock)
 
-    def bridge(request: dict[str, Any], wait: float, port: int | None = None) -> Reply:
+    def bridge(request: Request, wait: float, port: int | None = None) -> Reply:
         if not started or now[0] < started[0] + 60:  # the new one needs 60 s to come up
             raise server.ToolError('Designer is not reachable.')
         return {'ok': True, 'output': 'idle'}
 
     patch_server(monkeypatch, '_send', bridge)
-    patch_server(monkeypatch, '_bridge', lambda code, path=None, timeout=None, wait=None, port=None: '')
+    fake_bridge(monkeypatch, lambda code: '')
     text = server.launch_designer(wait_s=180)
     match = re.search(r'started in (\d+)s', text)
     assert match is not None, text
@@ -388,7 +422,7 @@ def test_designer_status_reports_the_servers_versions(monkeypatch: pytest.Monkey
     import platform
 
     patch_server(monkeypatch, '_send', lambda request, wait, port=None: {'ok': True, 'output': 'bridge idle'})
-    patch_server(monkeypatch, '_bridge', lambda code, path=None, timeout=None, wait=None, port=None: 'Designer 16.0.7')
+    fake_bridge(monkeypatch, lambda code: 'Designer 16.0.7')
     text = server.designer_status()
     assert 'MCP server: Python %s' % platform.python_version() in text
     assert 'mcp ' in text and 'pillow ' in text and 'numpy ' in text
@@ -404,17 +438,11 @@ def test_designer_status_answers_while_a_job_runs(monkeypatch: pytest.MonkeyPatc
     )
     queued: list[str] = []
 
-    def package_list(
-        code: str,
-        path: str | None = None,
-        timeout: float | None = None,
-        wait: float | None = None,
-        port: int | None = None,
-    ) -> str:
+    def package_list(code: str) -> str:
         queued.append(code)
         return 'packages'
 
-    patch_server(monkeypatch, '_bridge', package_list)
+    fake_bridge(monkeypatch, package_list)
     text = server.designer_status()
     assert 'running for 412.0s' in text and not queued and 'package list' in text
 
@@ -467,16 +495,16 @@ def _an_agent_started(
     os.utime(record, (time.time() - age, time.time() - age))
 
 
-def _launch_fakes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[Any]:
-    started: list[Any] = []
+def _launch_fakes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[list[str]]:
+    started: list[list[str]] = []
     monkeypatch.setenv('SD_DESIGNER_APP', str(tmp_path))
     monkeypatch.setattr(subprocess, 'Popen', _popen(started))
-    patch_server(monkeypatch, '_bridge', lambda code, path=None, timeout=None, wait=None, port=None: '')
+    fake_bridge(monkeypatch, lambda code: '')
     return started
 
 
-def _answers_once_started(started: list[Any]) -> Callable[[dict[str, Any], float], Reply]:
-    def bridge(request: dict[str, Any], wait: float, port: int | None = None) -> Reply:
+def _answers_once_started(started: list[list[str]]) -> _Send:
+    def bridge(request: Request, wait: float, port: int | None = None) -> Reply:
         if not started:
             raise server.ToolError('Designer is not reachable.')
         return {'ok': True, 'output': 'idle'}
@@ -489,24 +517,13 @@ def test_launch_state_not_running(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     home: list[str] = []
     processes = _Processes(monkeypatch)
 
-    def begin(cmd: list[str], **kw: Any) -> _FakeProcess:
-        started.append(cmd)
-        processes.pids.append(77)
-        return _FakeProcess(77)
-
-    def bridge(
-        code: str,
-        path: str | None = None,
-        timeout: float | None = None,
-        wait: float | None = None,
-        port: int | None = None,
-    ) -> str:
+    def bridge(code: str) -> str:
         home.append(code)
         return ''
 
-    monkeypatch.setattr(subprocess, 'Popen', begin)
+    monkeypatch.setattr(subprocess, 'Popen', _popen(started, processes=processes))
     patch_server(monkeypatch, '_send', _answers_once_started(started))
-    patch_server(monkeypatch, '_bridge', bridge)
+    fake_bridge(monkeypatch, bridge)
     assert server.launch_designer(wait_s=30).startswith('Designer started in')
     assert len(started) == 1 and home and 'leave_home_screen' in home[0]
     assert server._agent_designer(server.PORT) == 77, 'it remembers the one it started'
@@ -531,30 +548,19 @@ def test_a_designer_started_gives_the_keyboard_back_once_its_home_screen_is_clos
     calls: list[str] = []
     processes = _Processes(monkeypatch)
 
-    def begin(cmd: list[str], **kw: object) -> _FakeProcess:
-        started.append(cmd)
-        processes.pids.append(77)
-        return _FakeProcess(77)
-
     said = {
         'leave_home_screen()': 'closed the Home screen',
         give_back: 'gave the keyboard back to the app in front before it',
     }
 
-    def bridge(
-        code: str,
-        path: str | None = None,
-        timeout: float | None = None,
-        wait: float | None = None,
-        port: int | None = None,
-    ) -> str:
+    def bridge(code: str) -> str:
         call = code.strip().splitlines()[-1]  # the helpers' source comes first
         calls.append(call)
         return said[call] + '\n'
 
-    monkeypatch.setattr(subprocess, 'Popen', begin)
+    monkeypatch.setattr(subprocess, 'Popen', _popen(started, processes=processes))
     patch_server(monkeypatch, '_send', _answers_once_started(started))
-    patch_server(monkeypatch, '_bridge', bridge)
+    fake_bridge(monkeypatch, bridge)
     result = server.launch_designer(wait_s=30)
     assert calls == ['leave_home_screen()', give_back]
     assert '(closed the Home screen; gave the keyboard back to the app in front before it)' in result
@@ -567,7 +573,7 @@ def test_a_user_opening_one_at_the_same_moment_doesnt_confuse_the_record(
     started = _launch_fakes(monkeypatch, tmp_path)
     processes = _Processes(monkeypatch)
 
-    def begin(cmd: list[str], **kw: Any) -> _FakeProcess:
+    def begin(cmd: list[str], **kw: Unpack[_PopenArgs]) -> _FakeProcess:
         started.append(cmd)
         processes.pids.extend([78, 77])
         return _FakeProcess(77)
@@ -644,12 +650,7 @@ def test_launch_state_agents_not_answering(monkeypatch: pytest.MonkeyPatch, tmp_
     processes = _Processes(monkeypatch, 11)
     _an_agent_started(11, age=server.STARTUP_LIMIT + 1)
 
-    def begin(cmd: list[str], **kw: Any) -> _FakeProcess:
-        started.append(cmd)
-        processes.pids.append(77)
-        return _FakeProcess(77)
-
-    monkeypatch.setattr(subprocess, 'Popen', begin)
+    monkeypatch.setattr(subprocess, 'Popen', _popen(started, processes=processes))
     patch_server(monkeypatch, '_send', _answers_once_started(started))
     text = server.launch_designer(wait_s=30)
     assert processes.signals == [(11, signal.SIGTERM)] and len(started) == 1
@@ -663,7 +664,7 @@ def test_launch_state_agents_still_starting(monkeypatch: pytest.MonkeyPatch, tmp
     _an_agent_started(11)
     calls: list[int] = []
 
-    def answers_on_the_third(request: dict[str, Any], wait: float, port: int | None = None) -> Reply:
+    def answers_on_the_third(request: Request, wait: float, port: int | None = None) -> Reply:
         calls.append(1)
         if len(calls) < 3:
             raise server.ToolError('Designer is not reachable.')
@@ -699,12 +700,7 @@ def test_launch_ends_an_agents_passing_the_limit(
     processes = _Processes(monkeypatch, 11)
     _an_agent_started(11, age=server.STARTUP_LIMIT - 20)
 
-    def begin(cmd: list[str], **kw: Any) -> _FakeProcess:
-        started.append(cmd)
-        processes.pids.append(77)
-        return _FakeProcess(77)
-
-    monkeypatch.setattr(subprocess, 'Popen', begin)
+    monkeypatch.setattr(subprocess, 'Popen', _popen(started, processes=processes))
     patch_server(monkeypatch, '_send', _answers_once_started(started))
     now = time.time()
     clock = iter(range(0, 10000, 10))
@@ -778,19 +774,13 @@ def _launch_with_home(
     started = _launch_fakes(monkeypatch, tmp_path)
     if home_screen is not None:
 
-        def fails(
-            code: str,
-            path: str | None = None,
-            timeout: float | None = None,
-            wait: float | None = None,
-            port: int | None = None,
-        ) -> str:
+        def fails(code: str) -> str:
             raise home_screen
 
-        patch_server(monkeypatch, '_bridge', fails)
+        fake_bridge(monkeypatch, fails)
     processes = _Processes(monkeypatch)
 
-    def begin(cmd: list[str], **kw: object) -> _FakeProcess:
+    def begin(cmd: list[str], **kw: Unpack[_PopenArgs]) -> _FakeProcess:
         at_start()
         started.append(cmd)
         processes.pids.append(77)
@@ -800,14 +790,14 @@ def _launch_with_home(
     patch_server(monkeypatch, '_own_home', lambda port: None if home is None else str(home))
     answers = _answers_once_started(started)
     patch_server(monkeypatch, '_send', _refusing(answers) if refuses else answers)
-    said: str = server.launch_designer(wait_s=30)
+    said = server_tools.lifecycle.launch_designer(wait_s=30)
     return said
 
 
-def _refusing(answers: Callable[[dict[str, Any], float], Reply]) -> Callable[..., Reply]:
+def _refusing(answers: _Send) -> _Send:
     """A plugin that refuses once it answers, as with another token (core._control: _Refused)."""
 
-    def bridge(request: dict[str, Any], wait: float, port: int | None = None) -> Reply:
+    def bridge(request: Request, wait: float, port: int | None = None) -> Reply:
         answers(request, wait)  # not reachable until then
         return {'ok': False, 'error': 'invalid token'}
 
@@ -881,7 +871,7 @@ def test_launch_turns_crash_uploads_off_in_an_agents_designer_already_running(
     _an_agent_started(11, home=str(tmp_path / 'home'))
     calls: list[int] = []
 
-    def answers(request: dict[str, Any], wait: float, port: int | None = None) -> Reply:
+    def answers(request: Request, wait: float, port: int | None = None) -> Reply:
         calls.append(1)
         if not answers_at_once and len(calls) < 3:
             raise server.ToolError('Designer is not reachable.')
@@ -1175,12 +1165,7 @@ def test_launch_turns_crash_uploads_off_before_ending_an_agents_not_answering(
         at_the_end.append(_uploads(settings))
         return bool(force_end(pid, port, seen))
 
-    def begin(cmd: list[str], **kw: Any) -> _FakeProcess:
-        started.append(cmd)
-        processes.pids.append(77)
-        return _FakeProcess(77)
-
-    monkeypatch.setattr(subprocess, 'Popen', begin)
+    monkeypatch.setattr(subprocess, 'Popen', _popen(started, processes=processes))
     patch_server(monkeypatch, '_force_end', end)
     patch_server(monkeypatch, '_send', _answers_once_started(started))
     said = server.launch_designer(wait_s=30)
@@ -1240,9 +1225,9 @@ def test_the_file_doesnt_depend_on_the_servers_environment(monkeypatch: pytest.M
 
 def test_the_processes_are_listed_from_pgrep(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.undo()  # the real function, with subprocess faked
-    seen: list[Any] = []
+    seen: list[list[str]] = []
 
-    def run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+    def run(cmd: list[str], **kw: Unpack[RunOptions]) -> subprocess.CompletedProcess[str]:
         seen.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, stdout='11\n12\n', stderr='')
 
@@ -1264,7 +1249,7 @@ def test_windows_never_lists_a_process_to_end(monkeypatch: pytest.MonkeyPatch) -
 def test_designer_status_says_who_started_it(monkeypatch: pytest.MonkeyPatch) -> None:
     _Processes(monkeypatch, 11)
     patch_server(monkeypatch, '_send', lambda request, wait, port=None: {'ok': True, 'output': 'idle, 0 queued'})
-    patch_server(monkeypatch, '_bridge', lambda code, path=None, timeout=None, wait=None, port=None: 'process 11')
+    fake_bridge(monkeypatch, lambda code: 'process 11')
     assert 'Not started by an agent' in server.designer_status()
     _an_agent_started(11)
     assert 'Started by an agent' in server.designer_status()
@@ -1275,9 +1260,9 @@ def test_designer_status_goes_by_the_designer_answering(monkeypatch: pytest.Monk
     _Processes(monkeypatch, 11, 12)
     _an_agent_started(12)
     patch_server(monkeypatch, '_send', lambda request, wait, port=None: {'ok': True, 'output': 'idle, 0 queued'})
-    patch_server(monkeypatch, '_bridge', lambda code, path=None, timeout=None, wait=None, port=None: 'process 11')
+    fake_bridge(monkeypatch, lambda code: 'process 11')
     assert 'Not started by an agent' in server.designer_status()
-    patch_server(monkeypatch, '_bridge', lambda code, path=None, timeout=None, wait=None, port=None: 'process 12')
+    fake_bridge(monkeypatch, lambda code: 'process 12')
     assert 'Started by an agent' in server.designer_status()
 
 
@@ -1298,17 +1283,11 @@ def test_designer_status_while_a_job_runs_cant_tell_two_apart(monkeypatch: pytes
 def _closes(monkeypatch: pytest.MonkeyPatch, said: str = 'closing Designer') -> list[str]:
     asked: list[str] = []
 
-    def bridge(
-        code: str,
-        path: str | None = None,
-        timeout: float | None = None,
-        wait: float | None = None,
-        port: int | None = None,
-    ) -> str:
+    def bridge(code: str) -> str:
         asked.append(code)
         return said
 
-    patch_server(monkeypatch, '_bridge', bridge)
+    fake_bridge(monkeypatch, bridge)
     patch_server(monkeypatch, '_send', lambda request, wait, port=None: {'ok': True, 'output': 'idle, 0 queued'})
     return asked
 
@@ -1358,7 +1337,7 @@ START = '[INFO][Python] Python SDK Version 3.13'  # about 430 lines later, as th
 CLOSED = '[INFO][Python] %s' % project_constants.QUIT_CLOSED  # the quit helper's line once every window closed
 
 
-def _forced_with(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, lines: list[str] | None) -> tuple[str, Any]:
+def _forced_with(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, lines: list[str] | None) -> tuple[str, list[str]]:
     """quit_designer forcing the agent's Designer 11, whose own log holds `lines` (None: it has none)."""
     processes = _Processes(monkeypatch, 11)
     _an_agent_started(11, home=str(tmp_path))
@@ -1455,13 +1434,18 @@ def test_a_designer_ending_while_its_log_is_read_is_not_reported_forced(
 _POSIX_QUIT = pytest.mark.skipif(sys.platform == 'win32', reason="no fcntl there, and macOS's sample")
 
 
+_Sampled = tuple[
+    int, str, list[tuple[int, int]]
+]  # a call of the fake _sample: the process, the path, the signals before
+
+
 def _fake_sample(
     monkeypatch: pytest.MonkeyPatch, folder: Path, processes: _Processes, said: str | None = None
-) -> list[Any]:
+) -> list[_Sampled]:
     """As on macOS, with `folder` the agent's own: `_sample` faked, writing its file unless it says `said`; each call
     recorded with the signals sent before it."""
     patch_server(monkeypatch, '_checked_folder', lambda port: str(folder))
-    calls: list[Any] = []
+    calls: list[_Sampled] = []
 
     def sample(pid: int, path: str) -> str | None:
         calls.append((pid, path, list(processes.signals)))
@@ -1480,7 +1464,7 @@ def _sampling(
     said: str | None = None,
     home: str | None = None,
     ends_on: int = signal.SIGTERM,
-) -> tuple[_Processes, list[Any]]:
+) -> tuple[_Processes, list[_Sampled]]:
     """An agent's Designer 11, recorded with `home`, that stays past its quit's wait and ends on `ends_on`; its own
     folder tmp_path, its sample faked (_fake_sample)."""
     processes = _Processes(monkeypatch, 11, ends_on=ends_on)
@@ -1596,12 +1580,7 @@ def test_launch_samples_an_agents_it_ends(monkeypatch: pytest.MonkeyPatch, tmp_p
     own.mkdir()
     calls = _fake_sample(monkeypatch, own, processes)
 
-    def begin(cmd: list[str], **kw: Any) -> _FakeProcess:
-        started.append(cmd)
-        processes.pids.append(77)
-        return _FakeProcess(77)
-
-    monkeypatch.setattr(subprocess, 'Popen', begin)
+    monkeypatch.setattr(subprocess, 'Popen', _popen(started, processes=processes))
     patch_server(monkeypatch, '_send', _answers_once_started(started))
     text = server.launch_designer(wait_s=30)
     path = str(own / 'threads_11.sample.txt')
@@ -1636,12 +1615,12 @@ def test_launch_names_the_sample_of_one_it_cant_end(
     ],
 )
 def test_sample_runs_macos_sample_for_a_second_into_the_file(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, outcome: Any, said: str | None
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, outcome: tuple[int, str, bool] | Exception, said: str | None
 ) -> None:
     path = str(tmp_path / 'threads_11.sample.txt')
-    ran: list[Any] = []
+    ran: list[tuple[list[str], float | None]] = []
 
-    def run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+    def run(cmd: list[str], **kw: Unpack[RunOptions]) -> subprocess.CompletedProcess[str]:
         ran.append((cmd, kw.get('timeout')))
         if isinstance(outcome, Exception):
             raise outcome
@@ -1731,16 +1710,10 @@ def test_quit_forces_an_agents_with_no_bridge(monkeypatch: pytest.MonkeyPatch, n
     processes = _Processes(monkeypatch, 11)
     _an_agent_started(11)
 
-    def dead(
-        code: str,
-        path: str | None = None,
-        timeout: float | None = None,
-        wait: float | None = None,
-        port: int | None = None,
-    ) -> str:
+    def dead(code: str) -> str:
         raise server.ToolError('Designer is not reachable.')
 
-    patch_server(monkeypatch, '_bridge', dead)
+    fake_bridge(monkeypatch, dead)
     patch_server(monkeypatch, '_send', _no_bridge)
     text = server.quit_designer(wait_s=1)
     assert 'forced' in text and processes.signals and 'did not reply: Designer is not reachable' in text
@@ -1775,7 +1748,7 @@ def test_the_close_has_a_limit_of_its_own(
     _an_agent_started(11)
     waits: list[float] = []
 
-    def frozen(request: dict[str, Any], wait: float, port: int | None = None) -> Reply:
+    def frozen(request: Request, wait: float, port: int | None = None) -> Reply:
         if request.get('cmd'):
             return {'ok': True, 'output': 'idle, 0 queued', 'error': ''}
         waits.append(wait)
@@ -1825,10 +1798,10 @@ def test_a_process_gone_or_not_ours_to_signal_doesnt_raise(monkeypatch: pytest.M
 OTHER = 9901  # a port that isn't the server's (SD_BRIDGE_PORT, 9877 by default)
 
 
-def _ports_answering(*ports: int, asked: list[int | None] | None = None) -> Callable[..., Reply]:
+def _ports_answering(*ports: int, asked: list[int | None] | None = None) -> _Send:
     """_send that answers on `ports` only, noting the port of every request in asked."""
 
-    def send(request: dict[str, Any], wait: float, port: int | None = None) -> Reply:
+    def send(request: Request, wait: float, port: int | None = None) -> Reply:
         if asked is not None:
             asked.append(port)
         if port not in ports:
@@ -1853,14 +1826,14 @@ def test_launch_opens_a_new_instance_hidden_with_the_port(
     asked: list[int | None] = []
     answering: list[int] = []
 
-    def begin(cmd: list[str], **kw: object) -> _FakeProcess:
+    def begin(cmd: list[str], **kw: Unpack[_PopenArgs]) -> _FakeProcess:
         started.append(cmd)
         _started_with.append(kw)
         processes.pids.append(77)
         answering.append(want)
         return _FakeProcess(77)
 
-    def send(request: dict[str, object], wait: float, port: int | None = None) -> Reply:
+    def send(request: Request, wait: float, port: int | None = None) -> Reply:
         return _ports_answering(*answering, asked=asked)(request, wait, port)
 
     monkeypatch.setattr(subprocess, 'Popen', begin)
@@ -1911,7 +1884,7 @@ def test_the_designer_started_is_reaped_when_it_exits(
 
     started = _launch_fakes(monkeypatch, tmp_path)
 
-    def begin(cmd: list[str], **kw: object) -> Process:
+    def begin(cmd: list[str], **kw: Unpack[_PopenArgs]) -> Process:
         started.append(cmd)
         return Process(77)
 
@@ -1971,7 +1944,7 @@ def test_launch_on_a_port_next_to_an_agents_on_another(
     _an_agent_started(11)
     answering = [server.PORT]
 
-    def begin(cmd: list[str], **kw: Any) -> _FakeProcess:
+    def begin(cmd: list[str], **kw: Unpack[_PopenArgs]) -> _FakeProcess:
         started.append(cmd)
         processes.pids.append(77)
         answering.append(OTHER)
@@ -2119,7 +2092,7 @@ def test_quit_on_a_port_where_none_runs(monkeypatch: pytest.MonkeyPatch, no_slee
     ids=['launch_designer', 'designer_status', 'quit_designer', 'read_designer_log'],
 )
 def test_a_port_out_of_range_is_refused(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tool: Callable[[Any], str], port: Any
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tool: Callable[[int], str], port: int
 ) -> None:
     started = _launch_fakes(monkeypatch, tmp_path)
     asked: list[int | None] = []
@@ -2134,7 +2107,7 @@ def test_listening_ports_are_read_from_lsof(monkeypatch: pytest.MonkeyPatch) -> 
     seen: list[list[str]] = []
     out = 'p11\nf5\nn127.0.0.1:9877\nf6\nn*:5000\n'
 
-    def run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+    def run(cmd: list[str], **kw: Unpack[RunOptions]) -> subprocess.CompletedProcess[str]:
         seen.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr='')
 
@@ -2144,7 +2117,7 @@ def test_listening_ports_are_read_from_lsof(monkeypatch: pytest.MonkeyPatch) -> 
     out = ''
     assert server._listening_ports(11) == set()
 
-    def missing(cmd: list[str], **kw: Any) -> NoReturn:
+    def missing(cmd: list[str], **kw: Unpack[RunOptions]) -> NoReturn:
         raise FileNotFoundError('lsof')
 
     monkeypatch.setattr(subprocess, 'run', missing)
@@ -2361,15 +2334,10 @@ def test_the_record_says_which_home_the_designer_got(
     patch_server(monkeypatch, 'SHORT_TEMP', str(tmp_path))
     started = _launch_fakes(monkeypatch, tmp_path)
 
-    def begin(cmd: list[str], **kw: Any) -> _FakeProcess:
-        started.append(cmd)
-        processes.pids.append(77)
-        return _FakeProcess(77)
-
-    monkeypatch.setattr(subprocess, 'Popen', begin)
+    monkeypatch.setattr(subprocess, 'Popen', _popen(started, processes=processes))
     patch_server(monkeypatch, '_send', _answers_once_started(started))
     server.launch_designer(wait_s=30, port=OTHER)
-    record = json.loads(Path(server.agent_designer_file(OTHER)).read_text())
+    record = read_agent_record(server.agent_designer_file(OTHER))
     assert record['home'] == str(_own_folder(tmp_path, OTHER) / 'home')
 
 
@@ -2446,7 +2414,7 @@ def test_a_restart_during_the_wait_refuses_a_port_another_program_holds(
     processes = _Processes(monkeypatch, 55)
     calls: list[int] = []
 
-    def bridge(request: dict[str, Any], wait: float, port: int | None = None) -> NoReturn:
+    def bridge(request: Request, wait: float, port: int | None = None) -> NoReturn:
         calls.append(1)
         if len(calls) == 2:  # the first call of the wait: the Designer has gone
             processes.pids.clear()
@@ -2479,19 +2447,27 @@ def test_the_refusal_of_a_held_port_says_why_and_how_to_find_the_holder(
 class _BindRefused:
     """A socket whose bind fails as Windows refuses a port in an excluded range (WSAEACCES)."""
 
-    def __init__(self, *args: Any) -> None:
+    def __init__(
+        self,
+        family: socket.AddressFamily | int = -1,
+        type: socket.SocketKind | int = -1,
+        proto: int = -1,
+        fileno: int | None = None,
+    ) -> None:
         pass
 
     def __enter__(self) -> '_BindRefused':
         return self
 
-    def __exit__(self, *exc: object) -> None:
+    def __exit__(
+        self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: types.TracebackType | None
+    ) -> None:
         pass
 
-    def setsockopt(self, *args: Any) -> None:
+    def setsockopt(self, level: int, option: int, value: int | bytes, /) -> None:
         pass
 
-    def bind(self, address: Any) -> None:
+    def bind(self, address: tuple[str, int]) -> None:
         raise PermissionError(13, 'Permission denied')
 
     def close(self) -> None:
@@ -2523,9 +2499,9 @@ def test_a_record_read_while_it_is_written_isnt_lost(monkeypatch: pytest.MonkeyP
     real_dump = json.dump
     read_meanwhile: list[dict[int, int]] = []
 
-    def dump(obj: Any, f: Any, *args: Any, **kwargs: Any) -> None:
+    def dump(obj: object, f: IO[str], **kwargs: Unpack[DumpOptions]) -> None:
         read_meanwhile.append(server._agents())  # another server, at the worst moment
-        real_dump(obj, f, *args, **kwargs)
+        real_dump(obj, f, **kwargs)
 
     monkeypatch.setattr(json, 'dump', dump)
     server._remember_started(9901, 77, None)
@@ -2569,8 +2545,8 @@ def _relaunched_meanwhile(monkeypatch: pytest.MonkeyPatch, processes: '_Processe
     patch_server(monkeypatch, '_designer_pids', pids)
 
 
-def _recorded_pid() -> Any:
-    return json.loads(Path(server.agent_designer_file(server.PORT)).read_text())['pid']
+def _recorded_pid() -> int:
+    return read_agent_record(server.agent_designer_file(server.PORT))['pid']
 
 
 @pytest.mark.skipif(sys.platform == 'win32', reason='nothing is recorded there')
@@ -2628,18 +2604,13 @@ def test_a_stale_record_is_left_while_a_launch_holds_the_port(monkeypatch: pytes
     assert server._agent_designer(server.PORT) is None and not os.path.exists(server.agent_designer_file(server.PORT))
 
 
-def _starts_77(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[list[Any], '_Processes']:
+def _starts_77(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[list[list[str]], '_Processes']:
     """launch_designer's fakes, its start giving process 77, running until it gets SIGTERM."""
     monkeypatch.setattr(sys, 'platform', 'darwin')
     started = _launch_fakes(monkeypatch, tmp_path)
     processes = _Processes(monkeypatch)
 
-    def begin(cmd: list[str], **kw: Any) -> _FakeProcess:
-        started.append(cmd)
-        processes.pids.append(77)
-        return _FakeProcess(77)
-
-    monkeypatch.setattr(subprocess, 'Popen', begin)
+    monkeypatch.setattr(subprocess, 'Popen', _popen(started, processes=processes))
     patch_server(monkeypatch, '_send', _no_bridge)
     return started, processes
 
@@ -2763,8 +2734,8 @@ def test_a_designer_is_recorded_even_when_its_reaper_cant_start(
     # Designer running unrecorded; the thread only reaps the child when it ends
     started, _ = _starts_77(monkeypatch, tmp_path)
 
-    class NoThread:
-        def __init__(self, *args: Any, **kw: Any) -> None:
+    class NoThread:  # threading.Thread, called as launch_designer calls it
+        def __init__(self, target: Callable[[], object] | None = None, *, daemon: bool | None = None) -> None:
             pass
 
         def start(self) -> None:
@@ -2773,7 +2744,7 @@ def test_a_designer_is_recorded_even_when_its_reaper_cant_start(
     monkeypatch.setitem(vars(server_tools.lifecycle), 'threading', types.SimpleNamespace(Thread=NoThread))
     with pytest.raises(server.ToolError, match='did not answer'):  # it starts, and never answers here
         server.launch_designer(wait_s=5)
-    assert started and json.loads(Path(server.agent_designer_file(server.PORT)).read_text())['pid'] == 77
+    assert started and _recorded_pid() == 77
 
 
 @pytest.mark.skipif(sys.platform == 'win32', reason='macOS: the homes of its own are there')
@@ -2815,7 +2786,7 @@ def _pgrep_failing(monkeypatch: pytest.MonkeyPatch, failing: str = 'exit code 3'
     patch_server(monkeypatch, '_designer_running', REAL_DESIGNER_RUNNING)
     ran: list[list[str]] = []
 
-    def run(cmd: list[str], **kw: object) -> 'subprocess.CompletedProcess[str]':
+    def run(cmd: list[str], **kw: Unpack[RunOptions]) -> 'subprocess.CompletedProcess[str]':
         ran.append(cmd)
         assert cmd[0] == 'pgrep', cmd
         if failing == 'missing':
@@ -2892,7 +2863,7 @@ def test_two_launches_on_one_port_at_once_start_one_designer(
     processes = _Processes(monkeypatch)
     both_in = threading.Barrier(2, timeout=1)  # holds a start until the other launch is starting too, if it can be
 
-    def begin(cmd: list[str], **kw: Any) -> _FakeProcess:
+    def begin(cmd: list[str], **kw: Unpack[_PopenArgs]) -> _FakeProcess:
         pid = 77 + len(started)
         started.append(cmd)
         processes.pids.append(pid)
@@ -3012,7 +2983,7 @@ def test_a_folder_that_cant_be_made_is_refused_naming_the_port(
     patch_server(monkeypatch, 'SHORT_TEMP', str(tmp_path))
     if how == 'mkdir fails':
 
-        def refuse(path: Any, mode: int = 0o777) -> None:
+        def refuse(path: str | os.PathLike[str], mode: int = 0o777) -> None:
             raise PermissionError(13, 'Permission denied', str(path))
 
         monkeypatch.setattr(os, 'mkdir', refuse)
@@ -3075,7 +3046,10 @@ def test_no_unit_test_reads_the_users_project_file(monkeypatch: pytest.MonkeyPat
 
 # --- Designer's preferences plist, saved as an agent's Designer starts, put back once none runs (ROADMAP item 67)
 
-_USERS = {'session.mainWindow.state': b"the user's layout", 'session.lastSession.files': ['/Users/me/brick.sbs']}
+_USERS: dict[str, Plist] = {
+    'session.mainWindow.state': b"the user's layout",
+    'session.lastSession.files': ['/Users/me/brick.sbs'],
+}
 _MACOS_PLIST = pytest.mark.skipif(sys.platform != 'darwin', reason='the preferences plist is macOS only')
 _PUT_BACK = "Designer's preferences put back from their copy"
 _NOT_SAVED = (
@@ -3100,7 +3074,7 @@ def test_launch_saves_designers_preferences_before_its_designer_starts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, defaults: FakeDefaults
 ) -> None:
     defaults.domain = dict(_USERS)
-    copies: list[dict[str, object]] = []
+    copies: list[dict[str, Plist]] = []
     locked: list[bool] = []
 
     def at_start() -> None:
@@ -3119,7 +3093,7 @@ def test_a_launch_that_times_out_still_says_what_its_save_did(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, defaults: FakeDefaults
 ) -> None:
     defaults.fail['export'] = 'defaults export: exit code 1'
-    started: list[object] = []
+    started: list[list[str]] = []
     patch_server(monkeypatch, '_send', _no_bridge)
     monkeypatch.setenv('SD_DESIGNER_APP', str(tmp_path))
     monkeypatch.setattr(subprocess, 'Popen', _popen(started))
@@ -3137,7 +3111,7 @@ def test_a_launch_whose_designer_exits_during_the_wait_puts_back(
 ) -> None:
     # REVIEW.md SRV-135: it crashed as it started; none runs then, and no quit follows
     defaults.domain = dict(_USERS)
-    started: list[object] = []
+    started: list[list[str]] = []
 
     def changes(cmd: list[str]) -> list[str]:
         defaults.domain['session.instancePID'] = 77  # as it starts, before it crashes
@@ -3185,7 +3159,7 @@ def test_a_launch_whose_designer_cant_be_started_still_says_what_its_save_did(
     patch_server(monkeypatch, '_send', _no_bridge)
     patch_server(monkeypatch, '_own_home', lambda port: str(tmp_path / 'home'))
 
-    def fails(cmd: list[str], **kw: object) -> NoReturn:
+    def fails(cmd: list[str], **kw: Unpack[_PopenArgs]) -> NoReturn:
         raise PermissionError(13, 'Permission denied')
 
     monkeypatch.setattr(subprocess, 'Popen', fails)
@@ -3274,7 +3248,7 @@ def test_a_launch_whose_save_and_start_fail_speaks_of_no_designer_it_started(
     patch_server(monkeypatch, '_send', _no_bridge)
     patch_server(monkeypatch, '_own_home', lambda port: str(tmp_path / 'home'))
 
-    def fails(cmd: list[str], **kw: object) -> NoReturn:
+    def fails(cmd: list[str], **kw: Unpack[_PopenArgs]) -> NoReturn:
         raise PermissionError(13, 'Permission denied')
 
     monkeypatch.setattr(subprocess, 'Popen', fails)
@@ -3301,7 +3275,7 @@ def test_a_launch_that_ended_a_designer_and_starts_none_says_its_put_backs_in_or
     patch_server(monkeypatch, '_own_home', lambda port: str(tmp_path / 'home'))
     defaults.fail['import'] = 'the disk is full'
 
-    def fails(cmd: list[str], **kw: object) -> NoReturn:
+    def fails(cmd: list[str], **kw: Unpack[_PopenArgs]) -> NoReturn:
         del defaults.fail['import']  # the next put-back works
         raise PermissionError(13, 'Permission denied')
 
@@ -3341,7 +3315,7 @@ def test_a_launch_refuses_once_a_designer_starts_during_its_put_back(
 
     monkeypatch.setitem(vars(designer_preferences), 'run_defaults', as_the_user_opens_theirs)
 
-    def starts(cmd: list[str], **kw: object) -> NoReturn:
+    def starts(cmd: list[str], **kw: Unpack[_PopenArgs]) -> NoReturn:
         raise AssertionError('started next to the Designer that appeared')
 
     monkeypatch.setattr(subprocess, 'Popen', starts)
@@ -3393,7 +3367,7 @@ def test_a_launch_refuses_a_designer_that_appears_as_it_starts(
 
     monkeypatch.setitem(vars(designer_preferences), '_lock', as_the_user_opens_theirs)
 
-    def starts(cmd: list[str], **kw: object) -> NoReturn:
+    def starts(cmd: list[str], **kw: Unpack[_PopenArgs]) -> NoReturn:
         raise AssertionError('started next to the Designer that appeared')
 
     monkeypatch.setattr(subprocess, 'Popen', starts)
@@ -3483,9 +3457,9 @@ def test_a_launch_that_ended_a_designer_puts_back_an_old_copy_before_its_start(
     processes = _Processes(monkeypatch, 11)
     _an_agent_started(11, age=server.STARTUP_LIMIT + 1, home=str(tmp_path / 'home'))
     patch_server(monkeypatch, '_own_home', lambda port: str(tmp_path / 'home'))
-    at_the_start: list[dict[str, object]] = []
+    at_the_start: list[dict[str, Plist]] = []
 
-    def begin(cmd: list[str], **kw: object) -> _FakeProcess:
+    def begin(cmd: list[str], **kw: Unpack[_PopenArgs]) -> _FakeProcess:
         at_the_start.append(dict(defaults.domain))
         started.append(cmd)
         processes.pids.append(77)
@@ -3515,7 +3489,7 @@ def test_launch_puts_back_a_copy_left_by_designers_ended_outside_the_tools(
     # user may have worked since, so it is dropped (REVIEW.md TST-368: the launch passes ended=False when it ended none)
     _saved_as_by_a_launch(defaults, hours_ago=designer_preferences.LEFTOVER_HOURS + 1 if old else 0)
     changed = dict(defaults.domain)
-    at_the_start: list[dict[str, object]] = []
+    at_the_start: list[dict[str, Plist]] = []
     said = _launch_with_home(
         monkeypatch, tmp_path, tmp_path / 'home', at_start=lambda: at_the_start.append(dict(defaults.domain))
     )
@@ -3607,7 +3581,7 @@ def test_launch_asks_the_status_every_poll_interval(monkeypatch: pytest.MonkeyPa
     started = _launch_fakes(monkeypatch, tmp_path)
     answers = iter([False, False, True])
 
-    def bridge(request: dict[str, object], wait: float, port: int | None = None) -> Reply:
+    def bridge(request: Request, wait: float, port: int | None = None) -> Reply:
         if not next(answers, True):
             raise server.ToolError('Designer is not reachable.')
         return {'ok': True, 'output': 'idle'}
@@ -3685,8 +3659,8 @@ def test_a_process_ending_is_seen_by_its_exit_event_not_looked_for(monkeypatch: 
     try:
         patch_server(monkeypatch, '_designer_pids', lambda: [child.pid])
 
-        def watched_then_ended(pid: int) -> object:
-            watch = REAL_EXIT_WATCH(pid)
+        def watched_then_ended(pid: int) -> server_tools.lifecycle._ExitWatch | None:
+            watch: server_tools.lifecycle._ExitWatch | None = REAL_EXIT_WATCH(pid)
             assert child.stdin is not None
             child.stdin.close()  # it ends from here on, the watch already there
             return watch
@@ -3752,7 +3726,7 @@ def test_a_kqueue_that_cant_be_made_falls_back_to_the_poll(monkeypatch: pytest.M
     # escaped _exit_watch
     import select
 
-    def no_more(*args: object) -> object:
+    def no_more() -> NoReturn:
         raise OSError(24, 'Too many open files')
 
     monkeypatch.setattr(select, 'kqueue', no_more)
@@ -3779,10 +3753,10 @@ def test_the_exit_watch_type_checks_where_kqueue_doesnt_exist() -> None:
     assert 'kqueue' not in result.stdout, result.stdout
 
 
-def _refused_then_idle(refusals: int) -> Callable[..., Reply]:
+def _refused_then_idle(refusals: int) -> _Send:
     left = [refusals]
 
-    def bridge(request: dict[str, object], wait: float, port: int | None = None) -> Reply:
+    def bridge(request: Request, wait: float, port: int | None = None) -> Reply:
         if left[0]:
             left[0] -= 1
             raise server.ToolError('Designer is not reachable.')
@@ -3903,7 +3877,7 @@ def test_a_designer_open_started_whose_process_isnt_found_keeps_the_copy_of_the_
     patch_server(monkeypatch, '_own_home', lambda port: str(tmp_path / 'home'))
     patch_server(monkeypatch, '_carries', lambda pid, marks: found and pid == 88)
 
-    def not_found(opener: object, before: set[int], marks: tuple[str, ...]) -> int:
+    def not_found(opener: _FakeProcess, before: set[int], marks: tuple[str, ...]) -> int:
         processes.pids.append(88)  # it runs: its start writes the file
         defaults.domain['session.instancePID'] = 88
         raise server.ToolError("its process wasn't found within 60 s")
@@ -3935,7 +3909,7 @@ def test_opens_failure_is_said_with_what_open_printed_and_its_wait_has_a_limit(
             limits.append(timeout)
             return 1
 
-    def begin(cmd: list[str], **kw: object) -> Opener:
+    def begin(cmd: list[str], **kw: Unpack[_PopenArgs]) -> Opener:
         started.append(cmd)
         said = kw.get('stderr')
         if isinstance(said, io.BufferedIOBase):  # the temporary file `open`'s errors go to
@@ -3967,7 +3941,7 @@ def test_an_open_that_doesnt_exit_is_said_as_a_designer_that_may_run(
         def kill(self) -> None:
             killed.append(self.pid)
 
-    def begin(cmd: list[str], **kw: object) -> Opener:
+    def begin(cmd: list[str], **kw: Unpack[_PopenArgs]) -> Opener:
         started.append(cmd)
         return Opener(77)
 
@@ -3987,9 +3961,9 @@ def test_the_process_open_started_is_looked_for_with_the_launchs_port_and_home(
     # (TST-443: the port the call was given)
     monkeypatch.setattr(sys, 'platform', 'darwin')
     started = _launch_fakes(monkeypatch, tmp_path)
-    asked: list[object] = []
+    asked: list[tuple[str, ...]] = []
 
-    def found(opener: Any, before: set[int], marks: tuple[str, ...]) -> int:  # Any: the fake process
+    def found(opener: _FakeProcess, before: set[int], marks: tuple[str, ...]) -> int:
         asked.append(marks)
         return int(opener.pid)
 
@@ -4132,7 +4106,7 @@ def test_a_launch_waiting_on_a_designer_goes_on_when_its_processes_cant_be_liste
 
     asked = [0]
 
-    def send(request: dict[str, object], wait: float, port: int | None = None) -> Reply:
+    def send(request: Request, wait: float, port: int | None = None) -> Reply:
         asked[0] += 1
         if asked[0] <= 4:  # its bridge not up yet
             raise server.ToolError('Designer is not reachable.')
@@ -4181,3 +4155,30 @@ def test_a_launch_waiting_for_another_launchs_designer_starts_one_once_it_exited
     assert 'Designer started in' in server.launch_designer(wait_s=30) and started
     # before the start, then: once it exited (watched), or each round (not), then in start() under its lock
     assert len(looked) == (3 if watchable else 5), looked
+
+
+def test_the_home_comes_from_the_record_whose_designer_was_checked(monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md SRV-172: _agent_home checked one read of the record, then took the home from a second read: a record
+    # put in place meanwhile, by another server's launch on the port, gave its home for the Designer checked before
+    reads = iter(
+        [
+            json.dumps({'pid': 77, 'start': 'then', 'home': '/a/home'}).encode(),
+            json.dumps({'pid': 88, 'start': 'later', 'home': '/b/home'}).encode(),
+        ]
+    )
+    patch_server(monkeypatch, '_record_bytes', lambda port: next(reads))
+    patch_server(monkeypatch, '_designer_pids', lambda: [77])
+    patch_server(monkeypatch, '_process_start', lambda pid: 'then')
+    assert server._agent_home(9901) == '/a/home'
+
+
+def test_the_log_comes_from_the_record_whose_designer_was_checked(monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md SRV-174: _log_for checked one read of the record, then took the home from a second read: a quit by
+    # another server meanwhile, which removes the record, gave the shared log, the user's lines, for the agent's Designer
+    reads = iter([json.dumps({'pid': 77, 'start': 'then', 'home': '/a/home'}).encode(), None])
+    patch_server(monkeypatch, '_record_bytes', lambda port: next(reads))
+    patch_server(monkeypatch, '_designer_pids', lambda: [77])
+    patch_server(monkeypatch, '_process_start', lambda pid: 'then')
+    patch_server(monkeypatch, '_designer_log_path', lambda: '/the/shared/log.txt')
+    patch_server(monkeypatch, '_agent_log', lambda port, home: 'the own log in %s' % home)
+    assert server._log_for(9901) == 'the own log in /a/home'

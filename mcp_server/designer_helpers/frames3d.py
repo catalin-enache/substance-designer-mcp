@@ -82,8 +82,8 @@ So the waits (_Frames):
   there, and set_3d_view raised after switching the mesh (REVIEW.md HLP-170).
 """
 
-from .core import Any, Callable, cast
-from .waits import TICK, _event_signal, _settle, _until
+from .core import Callable, QtGui, QtWidgets, cast
+from .waits import TICK, _event_signal, _settle, _until, _unwatch
 
 SAMPLES = 8  # the count a settled view is waited for: the Rasterizer's at rest; the GPU Pathtracer counts on
 NO_RESTART = 1.0  # s a step's change may take to show: a step that restarts nothing changed nothing the view shows
@@ -167,11 +167,10 @@ class _Counts:
         )
 
 
-def _viewport(dock: Any) -> Any:  # Any: Qt widgets (screenshots.py)
+def _viewport(dock: QtWidgets.QDockWidget) -> QtWidgets.QWidget:
     """The 3D view's viewport in its `dock`, the one the set-up drags (_3d_set_up); refused when there is none."""
-    from PySide6 import QtWidgets
-
-    found = [w for w in dock.findChildren(QtWidgets.QWidget) if w.metaObject().className() == VIEWPORT]
+    # className() is a str: PySide's stubs say bytes
+    found = [w for w in dock.findChildren(QtWidgets.QWidget) if cast(str, w.metaObject().className()) == VIEWPORT]
     if not found:
         raise RuntimeError("the 3D View's viewport wasn't found")
     return found[0]
@@ -181,10 +180,8 @@ class _Frames:
     """The 3D view's frames, watched from now until close(): the count its overlay shows read at each paint (_Counts),
     and the waits on them (the module docstring). `render` takes a render, for the comparison where no count shows."""
 
-    def __init__(self, viewport: Any, render: Callable[[], object]) -> None:  # Any: Qt widgets (screenshots.py)
+    def __init__(self, viewport: QtWidgets.QWidget, render: Callable[[], QtGui.QImage]) -> None:
         import weakref
-
-        from PySide6 import QtWidgets
 
         self._viewport = viewport
         self._labels = viewport.findChildren(QtWidgets.QLabel)
@@ -228,8 +225,8 @@ class _Frames:
 
     def close(self) -> None:
         """Stops watching."""
-        self._viewport.removeEventFilter(self._spy)
-        self._window.removeEventFilter(self._exposed)
+        _unwatch(self._viewport, self._spy)
+        _unwatch(self._window, self._exposed)
 
     def _wait(self, state: Callable[[], bool], limit: float) -> bool:
         return _until(state, limit, [self._spy.fired, self._exposed.fired])

@@ -15,8 +15,8 @@ Only things that are this project's are touched: a plugin, skill or registration
 that points elsewhere is reported and left alone. This folder itself is left for you to delete.
 """
 
-# Annotations stay unevaluated: this script must run, or refuse with a message, on the system Python,
-# which can be older than 3.10 (REVIEW.md INS-25)
+# Annotations stay unevaluated: this script must run, or refuse with a message, on the system Python, 3.9 or
+# later, which can be older than 3.10 (REVIEW.md INS-25; 3.9 at the oldest: DECISIONS.md, Project rules)
 from __future__ import annotations
 
 import argparse
@@ -29,14 +29,21 @@ import stat
 import subprocess
 import sys
 from collections.abc import Callable
-from typing import Any, cast
+from typing import Literal, Protocol, cast
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import designer_preferences  # noqa: E402  (the copy launch_designer keeps of Designer's preferences)
 import install  # noqa: E402  (shares paths, names and the skill marker with the installer)
 import project_constants  # noqa: E402  (AGENT_RECORD_DIR, read when called)
-from project_constants import PLUGIN, TOKEN_FILE, agent_designer_file, agent_designer_folders, agent_designer_ports  # noqa: E402
+from project_constants import (  # noqa: E402
+    PLUGIN,
+    TOKEN_FILE,
+    Json,
+    agent_designer_file,
+    agent_designer_folders,
+    agent_designer_ports,
+)
 
 SERVER = os.path.join(HERE, 'mcp_server', 'server.py')
 VENV = os.path.join(HERE, 'mcp_server', 'venv')
@@ -57,31 +64,47 @@ def snapshot_dir() -> str:
 is_our_plugin = install.is_our_plugin
 
 
-def _points_here(entry: dict[str, Any]) -> bool:
-    """A registration is ours when it runs this folder's server.py."""
-    parts = [entry.get('command') or ''] + [str(a) for a in entry.get('args') or []]
+_Scope = Literal['user', 'local']  # where a registration is: every folder, or one
+
+
+def _object(value: Json) -> dict[str, Json]:
+    """`value` when it is a JSON object, else an empty one. ~/.claude.json is Claude Code's file, read here as found: a
+    part that isn't the object it should be counts as absent (REVIEW.md SRV-173)."""
+    return value if isinstance(value, dict) else {}
+
+
+def _our_entry(holder: Json) -> dict[str, Json]:
+    """The entry of this server's name in `holder`'s mcpServers, the config itself or a project in it: empty if any
+    part of the way isn't a JSON object (_object)."""
+    return _object(_object(_object(holder).get('mcpServers')).get(install.SERVER_NAME))
+
+
+def _points_here(entry: dict[str, Json]) -> bool:
+    """A registration (an MCP server's entry: its `command` and `args`) is ours when it runs this folder's server.py."""
+    command, args = entry.get('command'), entry.get('args')
+    parts = [command if isinstance(command, str) else ''] + [str(a) for a in (args if isinstance(args, list) else [])]
     return any(os.path.normcase(SERVER) in os.path.normcase(p) for p in parts)
 
 
-def find_registrations(path: str | None = None) -> tuple[list[tuple[str, str | None]], list[str]]:
+def find_registrations(path: str | None = None) -> tuple[list[tuple[_Scope, str | None]], list[str]]:
     """([(scope, folder or None)] that run this server, [notes about other ones]) from ~/.claude.json.
     This repo's committed .mcp.json is project scope and goes away with the folder."""
     path = path or claude_json()
     try:
         with open(path, encoding='utf-8') as f:
-            config = json.load(f)
+            config: Json = json.load(f)  # each part checked as it is read: _object
     except (OSError, ValueError):
         return [], []
-    found: list[tuple[str, str | None]] = []
+    found: list[tuple[_Scope, str | None]] = []
     notes: list[str] = []
-    entry = (config.get('mcpServers') or {}).get(install.SERVER_NAME)
+    entry = _our_entry(config)
     if entry:
         if _points_here(entry):
             found.append(('user', None))
         else:
             notes.append('a user-scope "%s" that runs something else' % install.SERVER_NAME)
-    for folder, project in sorted((config.get('projects') or {}).items()):
-        entry = (project.get('mcpServers') or {}).get(install.SERVER_NAME)
+    for folder, project in sorted(_object(_object(config).get('projects')).items()):
+        entry = _our_entry(project)
         if not entry:
             continue
         if _points_here(entry):
@@ -91,7 +114,7 @@ def find_registrations(path: str | None = None) -> tuple[list[tuple[str, str | N
     return found, notes
 
 
-def remove_registration(scope: str, folder: str | None, claude: str) -> str | None:
+def remove_registration(scope: _Scope, folder: str | None, claude: str) -> str | None:
     """Through Claude Code's own CLI (it owns ~/.claude.json); a local entry is keyed by the
     folder Claude Code started in, so the command runs there. Returns an error text or None."""
     cmd = [claude, 'mcp', 'remove', install.SERVER_NAME, '-s', scope]
@@ -146,7 +169,7 @@ def changed_since(snapshot: str) -> bool:
     written (the server's _changed_since): opened in Designer and saved in place."""
     try:
         with open(snapshot + '.json', encoding='utf-8') as f:
-            note = json.load(f)
+            note: Json = json.load(f)  # checked below
         st = os.stat(snapshot)
     except (OSError, ValueError):
         return False
@@ -238,7 +261,17 @@ def _preferences_items() -> list[tuple[str, Action | None]]:
     return [('%s, %s: %s' % (what, first, copy), put_back_preferences)]
 
 
-def plan(args: argparse.Namespace) -> list[tuple[str, Action | None]]:
+class _Args(Protocol):
+    """The command line, as main's parser reads it."""
+
+    plugins_dir: str
+    skills_dir: str
+    dry_run: bool
+    yes: bool
+    remove_snapshots: bool
+
+
+def plan(args: _Args) -> list[tuple[str, Action | None]]:
     """[(description, action or None)]; an action of None is only reported. An action returns
     None when done, or an error text."""
     items: list[tuple[str, Action | None]] = []
@@ -350,7 +383,7 @@ def main() -> None:
     ap.add_argument('--dry-run', action='store_true', help='only show what would be removed')
     ap.add_argument('--yes', '-y', action='store_true', help="don't ask before removing")
     ap.add_argument('--remove-snapshots', action='store_true', help='also delete the graph snapshots')
-    args = ap.parse_args()
+    args: _Args = ap.parse_args()
 
     if os.path.normcase(os.path.realpath(sys.prefix)) == os.path.normcase(os.path.realpath(VENV)):
         # its own files can't be deleted while it runs on Windows, and it removes them

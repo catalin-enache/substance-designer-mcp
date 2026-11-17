@@ -3,7 +3,7 @@
 import os
 from textwrap import dedent
 
-from test_all_tools.common import Ctx, check, text
+from test_all_tools.common import Ctx, Json, check, text
 
 
 async def run(ctx: Ctx) -> None:
@@ -31,7 +31,7 @@ async def run(ctx: Ctx) -> None:
                 raise ValueError('on line 2')
             """)
         )
-    args = {'name': 'it\'s "quoted" → é', 'ids': [1, 2.5, None, True]}
+    args: dict[str, Json] = {'name': 'it\'s "quoted" → é', 'ids': [1, 2.5, None, True]}
     t = text(await c('run_designer_script', {'path': args_script, 'timeout_s': 30, 'args': args}))
     check('run_designer_script', 'args reach the script as ARGS', 'ARGS=%r' % (args,) in t, t)
     check('run_designer_script', 'a traceback keeps the line numbers of the script', 'probe_args.py", line 2' in t, t)

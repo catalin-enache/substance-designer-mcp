@@ -8,12 +8,20 @@ import sys
 import types
 from collections.abc import Callable
 from types import FrameType, SimpleNamespace
-from typing import ClassVar, TypedDict
+from typing import TYPE_CHECKING, ClassVar, TypedDict
 
 import pytest
 from aborts import Abort, Tracer, at_each_event
 
 import designer_helpers
+
+if TYPE_CHECKING:  # for the checker only: the types the faked helpers take; sd and PySide6 are faked at run time
+    from PySide6 import QtCore, QtWidgets
+    from sd.api.sbs.sdsbscompgraph import SDSBSCompGraph
+    from sd.api.sdnode import SDNode
+    from sd.api.sdpackage import SDPackage
+    from sd.api.sdproperty import SDProperty, SDPropertyCategory, SDPropertyInheritanceMethod
+    from sd.api.sdtexture import SDTexture
 
 FILES = ('designer_helpers', __file__)  # the helpers as conftest's faked_helpers compiles them, and the fakes here
 
@@ -28,32 +36,35 @@ class Target:
     (GUIDE.md; REVIEW.md HLP-26)."""
 
     def __init__(self) -> None:
-        self.inherit: object = 'relative to parent'
-        self.value: object = 'original'
+        # strings stand for the user's inheritance and value; the swept values come as given (_make_value is faked)
+        self.inherit: SDPropertyInheritanceMethod | str = 'relative to parent'
+        self.value: list[int] | str = 'original'
         self.changed = False  # set by either change, put back or not
 
     def reset(self) -> None:
         self.inherit, self.value, self.changed = 'relative to parent', 'original', False
 
-    def getPropertyFromId(self, param: str, category: object) -> SimpleNamespace:
+    def getPropertyFromId(self, param: str, category: 'SDPropertyCategory') -> SimpleNamespace:
         return SimpleNamespace(isConnectable=lambda: False)
 
-    def getPropertyValue(self, prop: object) -> object:
+    def getPropertyValue(self, prop: 'SDProperty') -> list[int] | str:
         return self.value
 
-    def setPropertyValue(self, prop: object, value: object) -> None:
+    def setPropertyValue(self, prop: 'SDProperty', value: list[int] | str) -> None:
         self.value, self.changed = value, True
 
-    def getPropertyInheritanceMethod(self, prop: object) -> object:
+    def getPropertyInheritanceMethod(self, prop: 'SDProperty') -> 'SDPropertyInheritanceMethod | str':
         return self.inherit
 
-    def setPropertyInheritanceMethod(self, prop: object, method: object) -> None:
+    def setPropertyInheritanceMethod(self, prop: 'SDProperty', method: 'SDPropertyInheritanceMethod | str') -> None:
         # one line, as Designer's change is one call: an abort lands before it or after it, never inside
         self.value, self.inherit, self.changed = ('default' if method != self.inherit else self.value), method, True
 
 
 def _faked_sweep(
-    helpers: types.ModuleType, target: Target, texture: Callable[[object, object, object, object], None]
+    helpers: types.ModuleType,
+    target: Target,
+    texture: 'Callable[[SDSBSCompGraph, SDNode, str | None, Callable[[SDTexture, SDProperty], None]], None]',
 ) -> Callable[[], None]:
     """sweep_param of `target`'s $outputsize over two values, `texture` standing for _with_node_texture."""
     for name, value in {
@@ -100,7 +111,9 @@ def test_a_sweep_stopped_by_an_error_says_its_parameter_is_back(
     target = Target()
     textures: list[int] = []
 
-    def texture(g: object, node: object, output: object, use: object) -> None:
+    def texture(
+        g: 'SDSBSCompGraph', node: 'SDNode', output: str | None, use: 'Callable[[SDTexture, SDProperty], None]'
+    ) -> None:
         textures.append(1)
         if len(textures) == 2:
             raise RuntimeError('the second value gave no texture')
@@ -119,10 +132,10 @@ class Node:
     def getIdentifier(self) -> str:
         return self.ident
 
-    def getProperties(self, category: object) -> list[SimpleNamespace]:
+    def getProperties(self, category: 'SDPropertyCategory') -> list[SimpleNamespace]:
         return [SimpleNamespace(getId=lambda: 'output')]
 
-    def getPropertyValue(self, prop: object) -> SimpleNamespace:
+    def getPropertyValue(self, prop: 'SDProperty') -> SimpleNamespace:
         # Designer computes the nodes that feed an output node (GUIDE.md): a texture once the temporary one is there
         fed = len(self.graph.nodes) > 1
         return SimpleNamespace(get=lambda: 'its texture' if fed else None)
@@ -218,7 +231,7 @@ class Packages:
 
 class CompGraph:
     @staticmethod
-    def sNew(package: object) -> SimpleNamespace:
+    def sNew(package: 'SDPackage') -> SimpleNamespace:
         node = SimpleNamespace(getProperties=lambda category: [])
         return SimpleNamespace(newNode=lambda definition: node, getNodeDefinitions=list)
 
@@ -248,7 +261,7 @@ class Mac:
     """macOS's side of the Explorer menu's window: its look, and the holds on it. A release past the holds would free
     the window while Designer still uses it."""
 
-    def __init__(self, menu: object) -> None:
+    def __init__(self, menu: 'QtWidgets.QWidget') -> None:
         self.state = MENU_WINDOW
 
     def windows(self, all_of_them: bool) -> list[int]:
@@ -277,7 +290,7 @@ MENU_WINDOW: MenuWindow = {'holds': 0, 'look': (1.0, False)}
 class Timer:
     made: ClassVar[list['Timer']] = []  # every one made, in order: the look's first
 
-    def __init__(self, owner: object) -> None:
+    def __init__(self, owner: 'QtCore.QObject | None') -> None:
         self.running = False
         self.slot: Callable[[], object] = lambda: None
         self.timeout = SimpleNamespace(connect=self.connect)
@@ -321,7 +334,9 @@ class Menu:
         MENU_WINDOW['look'] = (opacity, MENU_WINDOW['look'][1])
 
     def windowHandle(self) -> SimpleNamespace:
-        def set_flag(flag: object, on: bool) -> None:  # WindowTransparentForInput: the window click-through
+        def set_flag(
+            flag: 'QtCore.Qt.WindowType', on: bool
+        ) -> None:  # WindowTransparentForInput: the window click-through
             MENU_WINDOW['look'] = (MENU_WINDOW['look'][0], on)
 
         return SimpleNamespace(setFlag=set_flag)
@@ -341,7 +356,7 @@ def test_an_abort_anywhere_in_an_explorer_menus_try_leaves_its_window_opaque_its
 
     guarded: list[bool] = []
 
-    def send(viewport: object, event: object) -> None:
+    def send(viewport: 'QtCore.QObject', event: 'QtCore.QEvent') -> None:
         # the menu runs, and its look's timer fires in it; Qt drops what a slot raises, and the plugin raises its
         # abort again at the next traced event, here as the menu's run ends. The menu runs until it closes: the guard
         # closes one still open, MENU_GUARD after it opened

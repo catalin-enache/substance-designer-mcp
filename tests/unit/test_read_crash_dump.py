@@ -15,8 +15,7 @@ import time
 import tracemalloc
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
+from types import FrameType, ModuleType, SimpleNamespace
 
 import pytest
 from minidumps import (
@@ -30,6 +29,7 @@ from minidumps import (
     STACK,
     WINDOWS,
     Crash,
+    CrashFields,
     Module,
     an_abort,
     frames,
@@ -42,7 +42,7 @@ from conftest import ROOT
 SCRIPT = os.path.join(ROOT, 'scripts', 'read_crash_dump.py')
 
 
-def _reader() -> Any:  # a script, loaded from its file: PyCharm can't see its names
+def _reader() -> ModuleType:  # a script, loaded from its file: PyCharm can't see its names
     spec = importlib.util.spec_from_file_location('read_crash_dump', SCRIPT)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -142,7 +142,7 @@ def test_frames_are_said_when_atos_cant_name_them(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize('kw', [{'arch': AMD64}, {'platform': WINDOWS}], ids=['x86_64', 'windows'])
-def test_a_dump_of_another_system_is_refused(tmp_path: Path, kw: dict[str, int]) -> None:
+def test_a_dump_of_another_system_is_refused(tmp_path: Path, kw: CrashFields) -> None:
     reader = _reader()
     with pytest.raises(reader.CannotRead, match='macOS on arm64'):
         reader.describe(str(_dump(tmp_path, an_abort(**kw))))
@@ -214,7 +214,7 @@ def _within(seconds: float) -> Iterator[None]:
         yield
         return
 
-    def late(number: int, frame: object) -> None:
+    def late(number: int, frame: FrameType | None) -> None:
         raise _TooLong('still running after %s s' % seconds)
 
     before = signal.signal(signal.SIGALRM, late)

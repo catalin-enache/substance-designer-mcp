@@ -18,7 +18,7 @@ user's Adobe account, is never read. macOS on arm64 only: other dumps are refuse
 Exit status: 0 when it read a dump, 1 when it can't (it says why), 2 for a bad argument.
 """
 
-# Annotations stay unevaluated: this script runs on the system Python, which can be older than 3.10
+# Annotations stay unevaluated: this script runs on the system Python, 3.9 or later, which can be older than 3.10
 from __future__ import annotations
 
 import argparse
@@ -128,7 +128,7 @@ class _Dump:
     def _modules(self) -> list[tuple[int, int, str, str | None]]:
         """(base, size, path, its build's UUID or None) per module."""
         rva = self.streams[MODULES][1]
-        found = []
+        found: list[tuple[int, int, str, str | None]] = []
         for i in range(struct.unpack_from('<I', self.data, rva)[0]):
             entry = rva + 4 + 108 * i
             base, size, _sum, _time, name = struct.unpack_from('<QIIII', self.data, entry)
@@ -147,7 +147,7 @@ class _Dump:
         return str(uuid.UUID(bytes_le=record[4:20])).upper()
 
     def _memory(self) -> list[tuple[int, bytes]]:
-        ranges = []
+        ranges: list[tuple[int, bytes]] = []
         if MEMORY in self.streams:
             rva = self.streams[MEMORY][1]
             for i in range(struct.unpack_from('<I', self.data, rva)[0]):
@@ -182,7 +182,7 @@ class _Dump:
         """The crashing thread, the exception's code, its parameters, and the RVA of the thread's registers."""
         rva = self.streams[EXCEPTION][1]
         thread, _align, code, _flags, _record, _address, count = struct.unpack_from('<IIIIQQI', self.data, rva)
-        params = list(struct.unpack_from('<%dQ' % min(count, 15), self.data, rva + 40))
+        params: list[int] = list(struct.unpack_from('<%dQ' % min(count, 15), self.data, rva + 40))
         context = struct.unpack_from('<I', self.data, rva + 164)[0]
         return thread, code, params, context
 
@@ -191,8 +191,8 @@ class _Dump:
         chains, as long as they rise on the stack and can be read; at most DEPTH."""
         regs = struct.unpack_from('<31Q', self.data, context + 8)
         pc = struct.unpack_from('<Q', self.data, context + 8 + 32 * 8)[0]  # after x0-x30 and sp
-        found = [pc & ADDRESS, regs[30] & ADDRESS]
-        fp = regs[29]
+        found: list[int] = [pc & ADDRESS, regs[30] & ADDRESS]
+        fp: int = regs[29]
         for walked in range(DEPTH - len(found)):
             if not fp:
                 break
@@ -216,7 +216,7 @@ class _Dump:
         listed = struct.unpack_from('<I', self.data, rva + 48)[0]
         if not listed:
             return []
-        said = []
+        said: list[str] = []
         for i in range(struct.unpack_from('<I', self.data, listed)[0]):
             index, _size, info = struct.unpack_from('<III', self.data, listed + 4 + 12 * i)
             size, texts = struct.unpack_from('<II', self.data, info + 4)
@@ -398,7 +398,7 @@ def _own_folder(folder: str) -> bool:
         info = os.lstat(folder)
     except OSError:
         return False
-    getuid = getattr(os, 'getuid', None)
+    getuid: Callable[[], int] | None = getattr(os, 'getuid', None)
     return stat.S_ISDIR(info.st_mode) and (getuid is None or info.st_uid == getuid())
 
 
@@ -413,7 +413,7 @@ def dump_folders() -> list[str]:
 
 def _newest(paths: list[str]) -> str | None:
     """The one last written, passing over any gone meanwhile (Sentry prunes old reports; REVIEW.md INS-31)."""
-    written = []
+    written: list[tuple[float, str]] = []
     for path in paths:
         try:
             written.append((os.path.getmtime(path), path))
@@ -426,7 +426,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="What a crash dump of Designer's says (macOS arm64).")
     parser.add_argument('dump', nargs='?', help='the dump; the newest of any Designer when omitted')
     args = parser.parse_args(argv)
-    path = args.dump
+    path: str | None = args.dump
     if path is None:
         folders = dump_folders()
         path = _newest([p for folder in folders for p in glob.glob(os.path.join(folder, '*.dmp'))])

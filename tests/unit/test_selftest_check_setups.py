@@ -4,29 +4,26 @@ TST-256), a view not visible in a Designer the self-test started (TST-258), the 
 
 import asyncio
 import sys
-from collections.abc import Callable, Coroutine
-from types import SimpleNamespace
-from typing import Any
+from types import ModuleType, SimpleNamespace
+from typing import NoReturn
 
 import pytest
-from selftest_fakes import fresh
+from selftest_fakes import FakeCall, fresh, tool_result
+
+from project_constants import ToolArgs
 
 NOT_VISIBLE = 'the 3D View panel is not visible in Designer'
-
-
-def _said(t: str, error: bool = False) -> SimpleNamespace:
-    return SimpleNamespace(content=[SimpleNamespace(type='text', text=t)], is_error=error)
 
 
 def _image() -> SimpleNamespace:
     return SimpleNamespace(content=[SimpleNamespace(type='image', data='')], is_error=False)
 
 
-def _common() -> Any:
+def _common() -> ModuleType:
     return sys.modules['test_all_tools.common']
 
 
-def _clipboard(monkeypatch: pytest.MonkeyPatch, editor: Any, held: bytes) -> tuple[list[bytes], list[bytes]]:
+def _clipboard(monkeypatch: pytest.MonkeyPatch, editor: ModuleType, held: bytes) -> tuple[list[bytes], list[bytes]]:
     """The machine's clipboard replaced: [what it holds], and what the check wrote to it."""
     state, written = [held], []
 
@@ -49,7 +46,7 @@ def test_a_capture_cancelled_on_the_clients_side_can_only_put_the_users_text_bac
     state, written = _clipboard(monkeypatch, editor, b'my text')
     backed_up: list[bytes] = []
 
-    async def c(name: str, args: dict[str, Any] | None = None) -> Any:
+    async def c(name: str, args: ToolArgs | None = None) -> NoReturn:
         backed_up.append(state[0])
         raise asyncio.CancelledError
 
@@ -66,7 +63,7 @@ def test_the_3d_capture_check_still_tells_a_capture_that_put_nothing_back(
     editor = fresh('editor_panels_and_fit.checks')
     state, _ = _clipboard(monkeypatch, editor, held)
 
-    async def c(name: str, args: dict[str, Any] | None = None) -> Any:
+    async def c(name: str, args: ToolArgs | None = None) -> SimpleNamespace:
         if not put_back:
             state[0] = b''  # the render left there: no text
         return _image()
@@ -85,30 +82,30 @@ def test_a_view_not_visible_is_a_skip_only_in_the_users_designer(
     editor = fresh('editor_panels_and_fit.checks')
     _clipboard(monkeypatch, editor, b'my text')
 
-    async def c(tool: str, args: dict[str, Any] | None = None) -> Any:
-        return _said(NOT_VISIBLE, True)
+    async def c(tool: str, args: ToolArgs | None = None) -> SimpleNamespace:
+        return tool_result(NOT_VISIBLE, True)
 
     asyncio.run(getattr(editor, name)(SimpleNamespace(c=c, was_running=was_running)))
     assert bool(_common().skipped) == was_running
     assert (False in _common().results['screenshot_designer']) != was_running
 
 
-def _measure_designer(calls: list[str], broken: str = '') -> Callable[..., Coroutine[Any, Any, Any]]:
+def _measure_designer(calls: list[str], broken: str = '') -> FakeCall:
     """The answers of check_a_node_measured_right_after_the_one_feeding_it; `broken`: the setup call that fails."""
 
-    async def c(name: str, args: dict[str, Any] | None = None) -> Any:
+    async def c(name: str, args: ToolArgs | None = None) -> SimpleNamespace:
         calls.append(name)
         args = args or {}
         if name == 'open_graph':
-            return _said('no such graph', True) if broken == 'open_graph' else _said('opened g')
+            return tool_result('no such graph', True) if broken == 'open_graph' else tool_result('opened g')
         if name == 'apply_edits':
-            return _said("added 9\n  ref 'up' = 1\n  ref 'down' = 2\n")
+            return tool_result("added 9\n  ref 'up' = 1\n  ref 'down' = 2\n")
         if name == 'node_stats' and args['node_id'] == '1' and broken == 'upstream':
-            return _said('the node computed nothing', True)
+            return tool_result('the node computed nothing', True)
         if name == 'node_stats':
-            return _said('pixel (0,0) = 0\npixel (256,256) = 0')
+            return tool_result('pixel (0,0) = 0\npixel (256,256) = 0')
         if name == 'execute_designer_code':
-            return _said('TEXTURE=True')
+            return tool_result('TEXTURE=True')
         return _image()
 
     return c

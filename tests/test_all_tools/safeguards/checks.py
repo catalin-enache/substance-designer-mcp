@@ -3,11 +3,23 @@ sweep_param, Designer library packages, two open graphs with one name."""
 
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from textwrap import dedent
-from typing import Any
 
-from test_all_tools.common import TEST_GRAPH, Ctx, added_id, check, designer_script, helpers_source, skip, text
+from test_all_tools.common import (
+    TEST_GRAPH,
+    Ctx,
+    Json,
+    JsonSent,
+    Ops,
+    ToolArgs,
+    added_id,
+    check,
+    designer_script,
+    helpers_source,
+    skip,
+    text,
+)
 
 # what the refusal for Designer's library packages says to do (designer_helpers/core.py)
 LIBRARY_WAY = (
@@ -63,8 +75,8 @@ async def run(ctx: Ctx) -> None:
     # case), which describe_graph shows (its position, or the node gone), so
     # a batch applied up to the bad op shows as a change; one "before" per case, so one failure
     # doesn't fail the cases after it (REVIEW.md TST-86)
-    first = {'op': 'move', 'position': [100, 100]}
-    cases: tuple[tuple[str, Callable[[str], list[dict[str, object]]], str], ...] = (
+    first: dict[str, Json] = {'op': 'move', 'position': [100, 100]}
+    cases: tuple[tuple[str, Callable[[str], Ops], str], ...] = (
         (
             'a bad id',
             lambda p: [{**first, 'node': p}, {'op': 'set', 'node': 'no_such_node', 'params': {}}],
@@ -483,7 +495,7 @@ async def run(ctx: Ctx) -> None:
             g = sd.getContext().getSDApplication().getQtForPythonUIMgr().getCurrentGraph()
             print('STATE', g.getIdentifier(), len(g.getNodes()), g.getPackage().isModified())""")
         state = text(await c('execute_designer_code', {'code': lib_state}))
-        edits: list[tuple[str, dict[str, object]]] = [
+        edits: list[tuple[str, dict[str, Json]]] = [
             ('apply_edits', {'ops': [{'op': 'add', 'definition': 'levels'}]}),
             ('arrange_graph', {}),
             ('add_frame', {'node_ids': ['1'], 'title': 'x'}),
@@ -568,7 +580,7 @@ async def run(ctx: Ctx) -> None:
     check('save_package', 'finds a dependency never saved', refuses and "'mcp_selftest_dep'" in t, t.strip()[-200:])
     if refuses:
         host = {'graph': 'mcp_selftest_host'}
-        calls: list[tuple[str, dict[str, object]]] = [
+        calls: list[tuple[str, dict[str, Json]]] = [
             ('save_package', {'graph_or_path': 'mcp_selftest_host'}),
             ('snapshot_graph', {**host, 'label': 'unsaved dependency'}),
             ('diff_graph', {**host, 'against': 'saved'}),
@@ -842,14 +854,14 @@ async def check_outputsize_above_log2_is_refused(ctx: Ctx) -> None:
     G = {'graph': name}
     await c('create_graph', {'name': name, 'size_log2': 9})
 
-    async def refused(what: str, tool: str, args: dict[str, Any], says: str = 'log2 of the size') -> None:
+    async def refused(what: str, tool: str, args: ToolArgs, says: str = 'log2 of the size') -> None:
         res = await c(tool, args)
         check(O, what, bool(res.is_error) and says in text(res), text(res))
 
-    def add(size: list[int]) -> dict[str, Any]:
+    def add(size: list[int]) -> dict[str, JsonSent]:
         return {'ops': [{'op': 'add', 'definition': 'uniform', 'ref': 'u', 'params': {S: size}}], **G}
 
-    def set_op(target: str, params: dict[str, Any]) -> dict[str, Any]:
+    def set_op(target: str, params: Mapping[str, JsonSent]) -> dict[str, JsonSent]:
         return {'ops': [{'op': 'set', 'node': target, 'params': params}], **G}
 
     async def computed(target: str) -> str:
@@ -956,7 +968,10 @@ async def check_outputsize_above_log2_is_refused(ctx: Ctx) -> None:
     await designer_script(
         c, 'shared/graph_parameter_function', identifier=base, path=os.path.join(ctx.scratch, base + '.sbs')
     )
-    base_set = {'ops': [{'op': 'set', 'node': 'graph', 'params': {'size_in': [1024, 1024]}}], 'graph': base}
+    base_set: dict[str, Json] = {
+        'ops': [{'op': 'set', 'node': 'graph', 'params': {'size_in': [1024, 1024]}}],
+        'graph': base,
+    }
     saved_text = "as last saved it drives $outputsize of the graph it belongs to; save that graph's package"
     await refused("an input bound to the graph's own size refuses", 'apply_edits', base_set, says=saved_text)
 

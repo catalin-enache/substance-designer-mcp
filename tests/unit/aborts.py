@@ -5,6 +5,7 @@ docs), so whatever runs after the abort runs to its end."""
 import sys
 from collections.abc import Callable, Collection, Iterator
 from types import CodeType, FrameType
+from typing import Protocol
 
 Tracer = Callable[[FrameType, str, object], 'Tracer | None']  # a function sys.settrace takes
 LIMIT = 20000  # events at most: a safety net, in case a run never ends
@@ -12,6 +13,13 @@ LIMIT = 20000  # events at most: a safety net, in case a run never ends
 
 class Abort(BaseException):
     """The plugin's ScriptAborted, a BaseException."""
+
+
+class _HasCode(Protocol):
+    """A function or a lambda: what has the code _codes reads."""
+
+    @property
+    def __code__(self) -> CodeType: ...
 
 
 def _codes(of: object) -> set[CodeType]:
@@ -32,10 +40,10 @@ def _codes(of: object) -> set[CodeType]:
 
 
 def at_each_event(
-    run: Callable[[], object],
+    run: Callable[[], None],
     files: Collection[str],
-    fresh: Callable[[], object],
-    untraced: Collection[object] = (),
+    fresh: Callable[[], None],
+    untraced: Collection[_HasCode | type] = (),
 ) -> Iterator[str]:
     """Calls `run` once per event Python traces in code from `files` (co_filename), the abort raised at that event:
     the first run at the first event, the next at the second, and so on, each after `fresh()`, untraced, has set the

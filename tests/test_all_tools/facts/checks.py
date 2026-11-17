@@ -247,7 +247,7 @@ async def run(ctx: Ctx) -> None:
 
     one, two = _graph_model(first, TEST_GRAPH), _graph_model(second, TEST_GRAPH)
     differing = [key for key in one if one[key] != two[key]]  # type: ignore[literal-required]
-    nodes = [
+    nodes: list[tuple[str, str, object, object]] = [
         (node, field, one['nodes'][node][field], two['nodes'][node][field])  # type: ignore[literal-required]
         for node in one['nodes']
         if node in two['nodes']
@@ -277,7 +277,7 @@ async def run(ctx: Ctx) -> None:
     # how a .sbs stores size inheritance (server._RELATIVE_TO): measure it
     inherit_dir = os.path.join(scratch, 'inherit')
     t = text(await designer_script(c, 'facts/size_inheritance_files', folder=inherit_dir))
-    stored = {}
+    stored: dict[str, tuple[list[str | None], list[str | None]]] = {}
     for name in ('Absolute', 'RelativeToInput', 'RelativeToParent'):
         import xml.etree.ElementTree as ET
 
@@ -298,7 +298,7 @@ async def run(ctx: Ctx) -> None:
         str(stored),
     )
     # a node's default is its own: an instance with no input stores nothing for relative to parent (REVIEW.md TST-222)
-    instance_stored = {}
+    instance_stored: dict[str, list[str | None]] = {}
     for name in ('Absolute', 'RelativeToInput', 'RelativeToParent'):
         outer = next(
             g

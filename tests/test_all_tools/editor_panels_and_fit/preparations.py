@@ -3,7 +3,7 @@ from its view), with nodes spread apart and a frame around two of them: fitting 
 out of view, and fitting the whole graph must show every frame whole. Then the 3D view's checks' graph, a checker in two
 outputs (VIEW3D_GRAPH), left closed."""
 
-from test_all_tools.common import TEST_GRAPH, Ctx, prepared_call, refs
+from test_all_tools.common import TEST_GRAPH, Ctx, Ops, prepared_call, refs
 
 
 async def prepare(ctx: Ctx) -> None:
@@ -43,7 +43,7 @@ VIEW3D_GRAPH = 'mcp_selftest_view3d'  # the 3D view checks' own
 VIEW3D_ADDED = 'mcp_selftest_view3d_added'  # the designer fact's: opened, then given its outputs
 # a checker into two outputs, base colour and roughness: two, so Designer maps them by usage rather than asking which
 # channel to show a single one in (designer_helpers/view3d.py)
-CHECKER_OPS = [
+CHECKER_OPS: Ops = [
     {'op': 'add', 'definition': 'pattern_checker_1.sbs/checker_1', 'ref': 'n', 'position': [-300, 0]},
     {'op': 'add', 'definition': 'output', 'ref': 'o', 'usage': 'baseColor', 'identifier': 'basecolor'},
     {'op': 'connect', 'from': 'n', 'to': 'o', 'input': 'inputNodeOutput'},
@@ -58,7 +58,7 @@ CHECKER_OPS = [
     {'op': 'connect', 'from': 'n', 'to': 'r', 'input': 'inputNodeOutput'},
 ]
 VIEW3D_PLAIN = 'mcp_selftest_view3d_plain'  # one colour on the mesh: no pattern
-PLAIN_OPS = [
+PLAIN_OPS: Ops = [
     {'op': 'add', 'definition': 'uniform', 'ref': 'n', 'position': [-300, 0]},
     {'op': 'add', 'definition': 'output', 'ref': 'o', 'usage': 'baseColor', 'identifier': 'basecolor'},
     {'op': 'connect', 'from': 'n', 'to': 'o', 'input': 'inputNodeOutput'},

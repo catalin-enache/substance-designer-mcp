@@ -9,8 +9,8 @@ Run it with a Python 3.10+ interpreter. Re-running is safe (it updates in place)
 uninstall.py undoes all of it.
 """
 
-# Annotations stay unevaluated: this script must run, or refuse with a message, on the system Python,
-# which can be older than 3.10 (REVIEW.md INS-25)
+# Annotations stay unevaluated: this script must run, or refuse with a message, on the system Python, 3.9 or
+# later, which can be older than 3.10 (REVIEW.md INS-25; 3.9 at the oldest: DECISIONS.md, Project rules)
 from __future__ import annotations
 
 import argparse
@@ -20,10 +20,11 @@ import shlex
 import shutil
 import subprocess
 import sys
+from typing import IO, Protocol
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from project_constants import PLUGIN, PLUGIN_DIR  # noqa: E402  (the plugin's name lives there)
+from project_constants import PLUGIN, PLUGIN_DIR, Json  # noqa: E402  (the plugin's name lives there)
 
 SERVER_NAME = 'substance-designer'
 # Before the rename the plugin was "sd_bridge" with its token in ~/.sd_bridge_token. Both copies
@@ -149,6 +150,16 @@ def venv_runs(py: str) -> bool:
         return False
 
 
+def _plugin_name(info: IO[str]) -> str | None:
+    """The name an open pluginInfo.json gives, None without one. ValueError when it isn't JSON, or isn't a JSON object
+    (REVIEW.md SRV-173), so that the callers take it as they take a file that isn't JSON."""
+    parsed: Json = json.load(info)
+    if not isinstance(parsed, dict):
+        raise ValueError('pluginInfo.json holds no JSON object')
+    name = parsed.get('name')
+    return name if isinstance(name, str) else None
+
+
 def is_our_plugin(folder: str) -> bool:
     """True when an installed plugin folder is this project's: its pluginInfo.json names the same
     plugin as the repo's (the installer and the uninstaller both decide by this)."""
@@ -157,7 +168,7 @@ def is_our_plugin(folder: str) -> bool:
             open(os.path.join(folder, 'pluginInfo.json'), encoding='utf-8') as f,
             open(os.path.join(PLUGIN_DIR, 'pluginInfo.json'), encoding='utf-8') as g,
         ):
-            return bool(json.load(f).get('name') == json.load(g).get('name'))
+            return _plugin_name(f) == _plugin_name(g)
     except (OSError, ValueError):
         return False
 
@@ -211,7 +222,7 @@ def is_old_plugin(folder: str) -> bool:
     """True if <folder> is this project's plugin from before the rename (its pluginInfo.json name)."""
     try:
         with open(os.path.join(folder, 'pluginInfo.json'), encoding='utf-8') as f:
-            return bool(json.load(f).get('name') == OLD_PLUGIN_NAME)
+            return _plugin_name(f) == OLD_PLUGIN_NAME
     except (OSError, ValueError):
         return False
 
@@ -232,6 +243,14 @@ def remove_old_plugin(plugins_dir: str) -> None:
         print('      Removed its old token file: %s' % OLD_TOKEN)
 
 
+class _Args(Protocol):
+    """The command line, as main's parser reads it."""
+
+    plugins_dir: str
+    skills_dir: str
+    no_skill: bool
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument('--plugins-dir', default=default_plugins_dir())
@@ -239,7 +258,7 @@ def main() -> None:
         '--skills-dir', default=default_skills_dir(), help='Claude Code user skills folder (default: ~/.claude/skills)'
     )
     ap.add_argument('--no-skill', action='store_true', help="don't add the Claude Code skill")
-    args = ap.parse_args()
+    args: _Args = ap.parse_args()
 
     if sys.version_info < (3, 10):  # noqa: UP036 (install.py is run by whatever python3 is installed)
         sys.exit('Python 3.10+ is required (found %s)' % sys.version.split()[0])

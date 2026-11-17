@@ -11,7 +11,7 @@ import numpy as np
 from mcp.types import CallToolResult
 from PIL import Image as PILImage
 
-from test_all_tools.common import Call, is_image, text
+from test_all_tools.common import Call, JsonSent, ToolArgs, is_image, text
 
 # dark-light changes that show the checker on the mesh: with it 11 to 30, with the default material 1 at most, in each
 # kind of shot the checks take (measured 2026-11-13: a rounded cube from the Front and the Top, a plane from the
@@ -116,7 +116,7 @@ def say_failed(what: str, *shots: CallToolResult) -> None:
         )
 
 
-async def with_checker(c: Call, args: dict[str, object]) -> CallToolResult:
+async def with_checker(c: Call, args: ToolArgs) -> CallToolResult:
     """screenshot_designer with `args`, then retaken as the 3D view is, each retake as the shot before returns, until
     the checker shows on the mesh (CHECKER), RETAKE_S at most. What the checks measure needs the checker. Once, after a
     call that switched the mesh and applied a graph, the shots didn't follow the camera for about 20 s (RETAKE_S);
@@ -125,7 +125,7 @@ async def with_checker(c: Call, args: dict[str, object]) -> CallToolResult:
     a retake doesn't say. A shot that failed is returned at once."""
     start = _now()
     first = r = await c('screenshot_designer', args)
-    again: dict[str, object] = {key: args[key] for key in ('panel', 'max_size') if key in args}
+    again: dict[str, JsonSent] = {key: args[key] for key in ('panel', 'max_size') if key in args}
     retakes = 0
     while is_image(r) and transitions(grey(r)) < CHECKER and _now() - start < RETAKE_S:
         r = await c('screenshot_designer', again)

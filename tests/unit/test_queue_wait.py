@@ -10,12 +10,12 @@ import sys
 import time
 import types
 from pathlib import Path
-from typing import Any, cast
+from typing import NoReturn, cast
 
 import pytest
 
 from conftest import ROOT, patch_server, server
-from project_constants import BRIDGE_PROTOCOL, PLUGIN, PLUGIN_PACKAGE_DIR
+from project_constants import BRIDGE_PROTOCOL, PLUGIN, PLUGIN_PACKAGE_DIR, Reply, Request
 
 
 def _plugin_queue_wait() -> int:
@@ -41,7 +41,7 @@ def test_the_clients_know_the_plugins_queue_wait() -> None:
 def test_server_waits_for_the_queue_and_the_script(monkeypatch: pytest.MonkeyPatch, timeout: int | None) -> None:
     waits: list[float] = []
 
-    def send(request: dict[str, Any], wait: float, port: int | None = None) -> dict[str, Any]:
+    def send(request: Request, wait: float, port: int | None = None) -> Reply:
         waits.append(wait)
         return {'ok': True, 'output': 'x'}
 
@@ -57,7 +57,7 @@ def test_sd_run_waits_for_the_queue_and_the_script(
     sd_run = _sd_run()
     waits: list[float] = []
 
-    def send(request: dict[str, Any], wait: float, port: int | None = None) -> dict[str, Any]:
+    def send(request: Request, wait: float, port: int | None = None) -> Reply:
         waits.append(wait)
         return {'ok': True, 'output': '', 'error': ''}
 
@@ -72,7 +72,7 @@ def test_sd_run_reports_a_timeout_without_a_traceback(
 ) -> None:
     sd_run = _sd_run()
 
-    def no_reply(request: dict[str, Any], wait: float) -> dict[str, Any]:
+    def no_reply(request: Request, wait: float) -> NoReturn:
         raise TimeoutError('timed out')
 
     monkeypatch.setitem(vars(sd_run), 'send', no_reply)
@@ -101,7 +101,7 @@ def test_sd_run_explains_a_closed_designer_or_a_missing_token(
     # isn't available, which is when Designer may well be closed
     sd_run = _sd_run()
 
-    def fails(request: dict[str, Any], wait: float) -> dict[str, Any]:
+    def fails(request: Request, wait: float) -> NoReturn:
         raise error
 
     monkeypatch.setitem(vars(sd_run), 'send', fails)

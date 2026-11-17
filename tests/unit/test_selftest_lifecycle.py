@@ -7,28 +7,25 @@ import json
 import os
 import re
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING
 
 import pytest
+from selftest_fakes import fresh, tool_result
+from typing_extensions import Unpack  # typing's from Python 3.11; mcp requires typing_extensions
 
 import project_constants
-from conftest import SELFTEST_DIR
-from project_constants import agent_designer_file, agent_folder_name
+from conftest import SELFTEST_DIR, RunOptions
+from project_constants import ToolArgs, agent_designer_file, agent_folder_name
+
+if TYPE_CHECKING:  # for the checker only: each test imports the self-test's modules afresh (fresh())
+    from test_all_tools.common import Ctx
+    from test_all_tools.crash_watch import CrashWatch
+    from test_all_tools.window_server import FrontWatch
 
 pytestmark = pytest.mark.skipif(sys.platform == 'win32', reason='no os.getuid there, and no agent folders')
-
-
-def _lifecycle() -> Any:  # a module imported by name: PyCharm can't see its names
-    """lifecycle/checks.py imported afresh with the self-test's modules, so each test starts with an empty check record."""
-    tests_dir = os.path.dirname(SELFTEST_DIR)
-    if tests_dir not in sys.path:
-        sys.path.insert(0, tests_dir)
-    for name in [m for m in sys.modules if m == 'test_all_tools' or m.startswith('test_all_tools.')]:
-        del sys.modules[name]
-    return importlib.import_module('test_all_tools.lifecycle.checks')
 
 
 def _windows_read(monkeypatch: pytest.MonkeyPatch, lifecycle: ModuleType) -> list[bool]:
@@ -36,9 +33,9 @@ def _windows_read(monkeypatch: pytest.MonkeyPatch, lifecycle: ModuleType) -> lis
     user's active app and the windows on their screen)."""
     watching: list[bool] = []
     real = lifecycle.window_server.FrontWatch
-    enter = real.__enter__
+    enter: Callable[[FrontWatch], FrontWatch] = real.__enter__
 
-    def entered(self: Any) -> Any:  # Any: a FrontWatch of the module loaded afresh, as it returns itself
+    def entered(self: 'FrontWatch') -> 'FrontWatch':
         watching.append(self.watching)
         return enter(self)
 
@@ -53,11 +50,7 @@ def _no_front_watch(monkeypatch: pytest.MonkeyPatch, lifecycle: ModuleType) -> N
     monkeypatch.setitem(vars(lifecycle.window_server), 'FrontWatch', lambda watching=True: real(watching=False))
 
 
-def _answer(out: str) -> SimpleNamespace:
-    return SimpleNamespace(is_error=False, content=[SimpleNamespace(type='text', text=out)])
-
-
-def _no_dumps(ports: Any = ()) -> set[str]:
+def _no_dumps(ports: Sequence[int] = ()) -> set[str]:
     return set()
 
 
@@ -67,13 +60,14 @@ def _no_dump_coming(ports: Sequence[int], before: set[str]) -> bool:
     return False
 
 
-def _no_wait(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+def _no_wait(monkeypatch: pytest.MonkeyPatch) -> list['CrashWatch']:
     """The crash watch of a check run here: no 10 s wait, no real crash-dump folder (REVIEW.md TST-261). The list gets
     each one made: empty, the patch no longer reaches what the check builds."""
     module = sys.modules['test_all_tools.crash_watch']
-    real, made = module.CrashWatch, []
+    real = module.CrashWatch
+    made: list[CrashWatch] = []
 
-    def build() -> Any:  # Any: a CrashWatch of the module loaded afresh
+    def build() -> 'CrashWatch':
         made.append(real(wait_s=0, find=_no_dumps, sleep=lambda seconds: None, coming=_no_dump_coming))
         return made[-1]
 
@@ -88,7 +82,7 @@ def test_the_check_on_another_port_never_quits_a_designer_it_didnt_start(
     # REVIEW.md TST-154: it took whatever record its free port had as its own second Designer, and quit it and removed
     # its folder: here another run's, still starting there (recorded, not listening yet, so the port looks free), or
     # recorded there just before this launch, which then finds it running
-    lifecycle = _lifecycle()
+    lifecycle = fresh('lifecycle.checks')
     common = lifecycle.common
     read = _windows_read(monkeypatch, lifecycle)
     _no_front_watch(monkeypatch, lifecycle)
@@ -107,15 +101,15 @@ def test_the_check_on_another_port_never_quits_a_designer_it_didnt_start(
     watches = _no_wait(monkeypatch)
     monkeypatch.setitem(vars(lifecycle), 'users_log', lambda: None)
     monkeypatch.setitem(vars(lifecycle), 'users_settings_file', lambda: None)
-    calls: list[tuple[str, dict[str, object]]] = []
+    calls: list[tuple[str, ToolArgs]] = []
 
-    async def c(name: str, args: dict[str, object] | None = None) -> SimpleNamespace:
+    async def c(name: str, args: ToolArgs | None = None) -> SimpleNamespace:
         calls.append((name, args or {}))
         if name == 'launch_designer':  # the other run's, made as this launch looks: it finds that one running
             folder.mkdir(exist_ok=True)
             Path(agent_designer_file(other)).write_text(record)
-            return _answer('Designer already running on port %d: idle, 0 queued' % other)
-        return _answer('77\n')
+            return tool_result('Designer already running on port %d: idle, 0 queued' % other)
+        return tool_result('77\n')
 
     asyncio.run(lifecycle.check_launch_on_another_port(SimpleNamespace(c=c)))
     assert watches or recorded == 'before the launch', 'the patch reaches the watch the check builds'
@@ -148,7 +142,7 @@ def test_the_check_on_another_port_ends_the_designer_its_own_launch_left(
     # REVIEW.md TST-187: a launch that started a Designer, recorded on the check's free port, and timed out was not the
     # check's to quit, so a regression there left a Designer open on a random port after the run; one that was already
     # running there (another run's) still isn't the check's
-    lifecycle = _lifecycle()
+    lifecycle = fresh('lifecycle.checks')
     common = lifecycle.common
     read = _windows_read(monkeypatch, lifecycle)
     _no_front_watch(monkeypatch, lifecycle)
@@ -161,15 +155,15 @@ def test_the_check_on_another_port_ends_the_designer_its_own_launch_left(
     watches = _no_wait(monkeypatch)
     monkeypatch.setitem(vars(lifecycle), 'users_log', lambda: None)
     monkeypatch.setitem(vars(lifecycle), 'users_settings_file', lambda: None)
-    calls: list[tuple[str, dict[str, object]]] = []
+    calls: list[tuple[str, ToolArgs]] = []
 
-    async def c(name: str, args: dict[str, object] | None = None) -> SimpleNamespace:
+    async def c(name: str, args: ToolArgs | None = None) -> SimpleNamespace:
         calls.append((name, args or {}))
         if name == 'launch_designer':  # recorded on the port as it starts, then no answer
             folder.mkdir(exist_ok=True)
             Path(agent_designer_file(other)).write_text(json.dumps({'pid': started, 'start': 'x', 'home': None}))
-            return _answer(answer)
-        return _answer('77\n')
+            return tool_result(answer)
+        return tool_result('77\n')
 
     asyncio.run(lifecycle.check_launch_on_another_port(SimpleNamespace(c=c)))
     assert watches, 'the patch reaches the watch the check builds'
@@ -182,7 +176,7 @@ def test_the_check_on_another_port_ends_the_designer_its_own_launch_left(
 
 def test_the_users_log_is_the_one_read_designer_log_finds(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # REVIEW.md TST-156: SD_DESIGNER_LOG was ignored, so the check watched another file
-    lifecycle = _lifecycle()
+    lifecycle = fresh('lifecycle.checks')
     log = tmp_path / 'my.log'
     log.write_text('a line\n')
     monkeypatch.setenv('SD_DESIGNER_LOG', str(log))
@@ -191,7 +185,7 @@ def test_the_users_log_is_the_one_read_designer_log_finds(monkeypatch: pytest.Mo
 
 def test_no_users_log_is_no_change(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # REVIEW.md TST-156: where the user never opened Designer there is no log, and none appearing is the log left alone
-    lifecycle = _lifecycle()
+    lifecycle = fresh('lifecycle.checks')
     monkeypatch.delenv('SD_DESIGNER_LOG', raising=False)
     monkeypatch.setenv('HOME', str(tmp_path))
     assert lifecycle.users_log() is None
@@ -223,7 +217,7 @@ def test_the_suite_tells_its_designers_from_other_runs(
 ) -> None:
     # REVIEW.md TST-170: designer_alive() is any Designer on the machine, which the suite took for the user's or the
     # run's own; another run's, on its own port, is neither
-    lifecycle = _lifecycle()
+    lifecycle = fresh('lifecycle.checks')
     common = lifecycle.common
     monkeypatch.setattr(sys, 'platform', 'darwin')
     monkeypatch.setitem(vars(common), 'PORT', 9877)
@@ -243,7 +237,7 @@ def test_the_quit_checks_ask_about_the_runs_designer_only() -> None:
 
 
 def test_its_own_designer_is_gone_whatever_else_starts(monkeypatch: pytest.MonkeyPatch) -> None:
-    lifecycle = _lifecycle()
+    lifecycle = fresh('lifecycle.checks')
     common = lifecycle.common
     monkeypatch.setitem(vars(lifecycle), 'agents_designers', lambda: {common.PORT: 11, common.PORT + 1: 12})
     assert lifecycle.own_pid() == 11
@@ -267,7 +261,7 @@ def test_ending_the_runs_designer_forces_only_its_own(
 
     from conftest import patch_server
 
-    lifecycle = _lifecycle()
+    lifecycle = fresh('lifecycle.checks')
     common = lifecycle.common
     Path(agent_designer_file(common.PORT)).write_text(json.dumps({'pid': 11, 'start': 'at 11', 'home': None}))
     patch_server(monkeypatch, '_process_start', lambda pid: 'at 11')
@@ -286,7 +280,7 @@ def test_ending_the_runs_designer_waits_for_its_exit_not_a_fixed_time(monkeypatc
 
     from conftest import patch_server
 
-    lifecycle = _lifecycle()
+    lifecycle = fresh('lifecycle.checks')
     common = lifecycle.common
     Path(agent_designer_file(common.PORT)).write_text(json.dumps({'pid': 11, 'start': 'at 11', 'home': None}))
     patch_server(monkeypatch, '_process_start', lambda pid: 'at 11')
@@ -313,12 +307,12 @@ def test_a_failing_pgrep_is_an_error_not_no_designer(
     # check_launch_on_another_port's finally removed a running Designer's folders
     import subprocess
 
-    lifecycle = _lifecycle()
+    lifecycle = fresh('lifecycle.checks')
     common = lifecycle.common
     monkeypatch.setattr(sys, 'platform', 'darwin')
     seen: list[list[str]] = []
 
-    def run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+    def run(cmd: list[str], **kw: Unpack[RunOptions]) -> subprocess.CompletedProcess[str]:
         seen.append(cmd)
         if isinstance(outcome, Exception):
             raise outcome
@@ -333,7 +327,7 @@ def test_a_failing_pgrep_is_an_error_not_no_designer(
 def test_pgrep_finding_nothing_is_no_designer(monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
-    lifecycle = _lifecycle()
+    lifecycle = fresh('lifecycle.checks')
     common = lifecycle.common
     monkeypatch.setattr(sys, 'platform', 'darwin')
     monkeypatch.setattr(subprocess, 'run', lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, '', ''))
@@ -343,7 +337,7 @@ def test_pgrep_finding_nothing_is_no_designer(monkeypatch: pytest.MonkeyPatch) -
 def test_the_lifecycle_checks_take_a_port_no_other_run_holds(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # REVIEW.md TST-172: another run's Designer still starting is recorded, and has its folder, but listens nowhere yet:
     # a port that binds isn't free of it
-    lifecycle = _lifecycle()
+    lifecycle = fresh('lifecycle.checks')
     monkeypatch.setitem(vars(lifecycle.common), 'SHORT_TEMP', str(tmp_path))
     Path(agent_designer_file(1)).write_text('{}')  # recorded
     (tmp_path / agent_folder_name(2)).mkdir()  # its folder made
@@ -371,24 +365,22 @@ class _Designer:
 
     def __init__(self, status: str | None, launch: str = STARTED, launch_error: bool = False) -> None:
         self.status, self.launch, self.launch_error = status, launch, launch_error
-        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.calls: list[tuple[str, ToolArgs]] = []
 
-    async def __call__(self, name: str, args: dict[str, Any] | None = None) -> Any:
+    async def __call__(self, name: str, args: ToolArgs | None = None) -> SimpleNamespace:  # a CallToolResult
         self.calls.append((name, args or {}))
         if name == 'designer_status':
-            return SimpleNamespace(
-                is_error=self.status is None, content=[SimpleNamespace(type='text', text=self.status or 'no Designer')]
-            )
+            return tool_result(self.status or 'no Designer', error=self.status is None)
         if name == 'launch_designer':
-            return SimpleNamespace(is_error=self.launch_error, content=[SimpleNamespace(type='text', text=self.launch)])
-        return _answer('Designer quit after 2s.')
+            return tool_result(self.launch, error=self.launch_error)
+        return tool_result('Designer quit after 2s.')
 
     def names(self) -> list[str]:
         return [n for n, _ in self.calls]
 
 
 def _prepared(lifecycle: ModuleType, c: _Designer) -> bool:
-    watch = sys.modules['test_all_tools.crash_watch'].CrashWatch(
+    watch: CrashWatch = sys.modules['test_all_tools.crash_watch'].CrashWatch(
         wait_s=0, find=_no_dumps, sleep=lambda seconds: None, coming=_no_dump_coming
     )
     ready = bool(asyncio.run(lifecycle.check_a_designer_of_its_own(SimpleNamespace(c=c, crash_watch=watch))))
@@ -399,13 +391,13 @@ def _prepared(lifecycle: ModuleType, c: _Designer) -> bool:
 def test_lifecycle_reads_the_guide_itself_first() -> None:
     # nothing of the suite before it: every tool refuses until get_guide, and the code tools until its scripting part
     c = _Designer(None)
-    assert _prepared(_lifecycle(), c)
+    assert _prepared(fresh('lifecycle.checks'), c)
     assert c.calls[:2] == [('get_guide', {}), ('get_guide', {'part': 'scripting'})]
 
 
 def test_lifecycle_starts_a_designer_when_none_runs() -> None:
     c = _Designer(None)
-    assert _prepared(_lifecycle(), c)
+    assert _prepared(fresh('lifecycle.checks'), c)
     assert 'launch_designer' in c.names()
     assert 'quit_designer' not in c.names()
 
@@ -413,13 +405,13 @@ def test_lifecycle_starts_a_designer_when_none_runs() -> None:
 def test_lifecycle_replaces_a_designer_an_agent_started_by_one_of_its_own() -> None:
     # whatever earlier checks left in it is gone, and the one running is the last started (the hand-over check's need)
     c = _Designer(AGENTS)
-    assert _prepared(_lifecycle(), c)
+    assert _prepared(fresh('lifecycle.checks'), c)
     assert c.names().index('quit_designer') < c.names().index('launch_designer')
 
 
 def test_lifecycle_never_touches_a_designer_no_agent_started(capsys: pytest.CaptureFixture[str]) -> None:
     c = _Designer(USERS)
-    assert not _prepared(_lifecycle(), c)
+    assert not _prepared(fresh('lifecycle.checks'), c)
     assert 'quit_designer' not in c.names() and 'launch_designer' not in c.names()
     assert 'FAIL' in capsys.readouterr().out
 
@@ -434,20 +426,20 @@ def test_lifecycle_never_touches_a_designer_no_agent_started(capsys: pytest.Capt
 def test_lifecycle_runs_nothing_without_a_designer_it_just_started(
     capsys: pytest.CaptureFixture[str], launch: str, error: bool
 ) -> None:
-    assert not _prepared(_lifecycle(), _Designer(None, launch, error))
+    assert not _prepared(fresh('lifecycle.checks'), _Designer(None, launch, error))
     assert 'FAIL' in capsys.readouterr().out
 
 
 @pytest.mark.parametrize('prepared', [True, False])
 def test_lifecycle_prepares_before_its_first_check_and_stops_if_it_cant(prepared: bool) -> None:
-    lifecycle = _lifecycle()
+    lifecycle = fresh('lifecycle.checks')
     order: list[str] = []
 
-    async def prepare(ctx: Any) -> bool:
+    async def prepare(ctx: 'Ctx') -> bool:
         order.append('prepare')
         return prepared
 
-    async def first_check(ctx: Any) -> None:
+    async def first_check(ctx: 'Ctx') -> None:
         order.append('first check')
         raise RuntimeError('stop here')
 
@@ -470,7 +462,7 @@ def test_ending_the_runs_designer_survives_a_failing_ps(
     # finally, so that must end in a line, not a traceback without the summary
     from conftest import patch_server, server
 
-    lifecycle = _lifecycle()
+    lifecycle = fresh('lifecycle.checks')
     common = lifecycle.common
     Path(agent_designer_file(common.PORT)).write_text(json.dumps({'pid': 11, 'start': 'at 11', 'home': None}))
 
@@ -518,7 +510,7 @@ def test_a_normal_close_forced_during_its_shutdown_is_recorded_for_the_pool(
     # REVIEW.md TST-293: the pool counts lifecycle's too, and keeps its folder, from what its worker reports
     import project_constants
 
-    lifecycle = _lifecycle()
+    lifecycle = fresh('lifecycle.checks')
     common = lifecycle.common
     monkeypatch.setitem(vars(common), 'forced_in_shutdown', [])
     hung = 'Designer quit after 31s (%s: every window had closed; its log stopped at "[INFO][IPC] Remove PID").' % (
@@ -531,8 +523,8 @@ def test_a_normal_close_forced_during_its_shutdown_is_recorded_for_the_pool(
     assert '[INFO][IPC] Remove PID' in capsys.readouterr().out, 'printed whole'
 
 
-def _samples() -> Any:  # a module imported by name: PyCharm can't see its names
-    _lifecycle()  # the self-test's folder on sys.path, its modules afresh
+def _samples() -> ModuleType:  # a module imported by name: PyCharm can't see its names
+    fresh('lifecycle.checks')  # the self-test's folder on sys.path, its modules afresh
     return importlib.import_module('test_all_tools.lifecycle.samples')
 
 

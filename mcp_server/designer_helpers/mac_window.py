@@ -22,8 +22,8 @@ Measured on macOS in a Designer an agent started (2026-11-13; what the 3D view d
 import ctypes
 import ctypes.util
 
-from .core import _APP, Any, cast, sys
-from .waits import _event_signal, _until
+from .core import QtGui, QtWidgets, _main_window, cast, sys
+from .waits import _event_signal, _until, _unwatch
 
 ACTIVATION_WAIT = 3.0  # s at most for Designer to be no longer the active app once hidden, then shown again: a limit
 NS_VISIBLE = 2  # NSWindowOcclusionStateVisible: part of the window is on screen
@@ -38,7 +38,7 @@ class _MacWindow:
     """Designer's main window as macOS sees it, and the calls that put it on screen without making Designer the active
     app (shot3d.py), sent through the Objective-C runtime."""
 
-    def __init__(self, mw: Any) -> None:  # Any: a Qt widget (screenshots.py: Qt widgets are Any in signatures)
+    def __init__(self, mw: QtWidgets.QWidget) -> None:
         self._objc = ctypes.CDLL(ctypes.util.find_library('objc'))
         self._objc.objc_getClass.restype = ctypes.c_void_p
         self._objc.sel_registerName.restype = ctypes.c_void_p
@@ -51,12 +51,16 @@ class _MacWindow:
         receiver: int | None,
         selector: str,
         argument: int | None = None,
-    ) -> object:
+    ) -> bool | int | float | None:
         """objc_msgSend: `selector` sent to `receiver`, with `argument`, nil when omitted (a selector without one ignores
-        it). An object or an index alike: either goes in one register of 64 bits."""
+        it). An object or an index alike: either goes in one register of 64 bits. Returns what ctypes makes of `result`:
+        an int, or None for nil (c_void_p), a bool, an int, or a float. Its callers cast the result to that type. No
+        @overload says it here: typing keeps each stub it decorates, and a stub's globals are the helpers job's scope.
+        The plugin drops the stubs once a job ends (REVIEW.md PLG-44), but a plugin installed before that kept the
+        scope alive after the job (REVIEW.md HLP-182)."""
         prototype = ctypes.CFUNCTYPE(result, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
         send = prototype(('objc_msgSend', self._objc))
-        return cast(object, send(receiver, self._objc.sel_registerName(selector.encode()), argument))
+        return cast(bool | int | float | None, send(receiver, self._objc.sel_registerName(selector.encode()), argument))
 
     def _object(self, receiver: int | None, selector: str, argument: int | None = None) -> int | None:
         return cast(int | None, self._send(ctypes.c_void_p, receiver, selector, argument))
@@ -118,7 +122,7 @@ class _MacWindow:
         SIGKILL. Not read back, a normal quit kept it. macOS only, as _MacWindow is."""
         self._objc.objc_autoreleasePoolPush.restype = ctypes.c_void_p
         self._objc.objc_autoreleasePoolPop.argtypes = [ctypes.c_void_p]
-        pool = self._objc.objc_autoreleasePoolPush()  # each read freed at once, not at the job's end
+        pool: int | None = self._objc.objc_autoreleasePoolPush()  # each read freed at once, not at the job's end
         try:
             board = self._object(self._objc.objc_getClass(b'NSPasteboard'), 'generalPasteboard')
             for kind in self._items(self._object(board, 'types')):  # nil when empty: no items
@@ -180,12 +184,15 @@ class _MacWindow:
         cf.CFNumberGetValue.restype = ctypes.c_bool
         cf.CFNumberGetValue.argtypes = [ctypes.c_void_p, ctypes.c_long, ctypes.c_void_p]
         cf.CFRelease.argtypes = [ctypes.c_void_p]
-        keys = [cf.CFStringCreateWithCString(None, name, CF_UTF8) for name in (b'kCGWindowNumber', b'kCGWindowLayer')]
-        windows = cg.CGWindowListCopyWindowInfo(option, relative)
+        # a c_void_p result is an int, or None for NULL
+        keys: list[int | None] = [
+            cf.CFStringCreateWithCString(None, name, CF_UTF8) for name in (b'kCGWindowNumber', b'kCGWindowLayer')
+        ]
+        windows: int | None = cg.CGWindowListCopyWindowInfo(option, relative)
         try:
             found: list[tuple[int, int]] = []
             for i in range(cf.CFArrayGetCount(windows) if windows else 0):
-                info = cf.CFArrayGetValueAtIndex(windows, i)
+                info: int | None = cf.CFArrayGetValueAtIndex(windows, i)
                 window, layer = ctypes.c_int64(), ctypes.c_int64()
                 cf.CFNumberGetValue(cf.CFDictionaryGetValue(info, keys[0]), CF_SINT64, ctypes.byref(window))
                 cf.CFNumberGetValue(cf.CFDictionaryGetValue(info, keys[1]), CF_SINT64, ctypes.byref(layer))
@@ -205,12 +212,12 @@ class _MacWindow:
         order(self._window, self._objc.sel_registerName(b'orderWindow:relativeTo:'), NS_BELOW, number)
 
 
-def _mac_window(mw: Any) -> _MacWindow | None:  # Any: a Qt widget (screenshots.py: Qt widgets are Any in signatures)
+def _mac_window(mw: QtWidgets.QMainWindow) -> _MacWindow | None:
     """Designer's main window as macOS sees it; None elsewhere."""
     return _MacWindow(mw) if sys.platform == 'darwin' else None
 
 
-def _wait_unhidden(mac: _MacWindow, handle: Any, limit: float) -> bool:  # Any: a QWindow (screenshots.py)
+def _wait_unhidden(mac: _MacWindow, handle: QtGui.QWindow, limit: float) -> bool:
     """Waits, at most `limit` s, for macOS to no longer say Designer is hidden once it was unhidden: looked at as Qt's
     expose events for `handle`, the main window's, come, and every TICK ms. Returns whether macOS said so. The unhide
     takes as Designer's events run (shot3d.py's module docstring; REVIEW.md HLP-160). The window's exposure is no sign
@@ -220,7 +227,7 @@ def _wait_unhidden(mac: _MacWindow, handle: Any, limit: float) -> bool:  # Any: 
     try:
         return _until(lambda: not mac.hidden(), limit, [spy.fired])
     finally:
-        handle.removeEventFilter(spy)
+        _unwatch(handle, spy)
 
 
 def give_back_activation(started_hidden: bool = False) -> None:
@@ -233,9 +240,7 @@ def give_back_activation(started_hidden: bool = False) -> None:
     applicationStateChanged), the show until macOS no longer says Designer is hidden (_wait_unhidden; REVIEW.md
     SRV-150, HLP-166).
     Prints what it did; nothing when Designer isn't the active app, or elsewhere than macOS."""
-    from PySide6 import QtGui
-
-    mw = _APP.getQtForPythonUIMgr().getMainWindow()  # type: ignore[no-untyped-call]  # sd: no annotations
+    mw = _main_window()
     mac = _mac_window(mw)
     if mac is None or not mac.active():
         return

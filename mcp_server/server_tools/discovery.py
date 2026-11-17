@@ -164,6 +164,10 @@ def search_nodes(query: str, limit: int = 30, include_hidden: bool = False) -> s
         # its graphs are hidden, so next to results this came on 24 of 25 queries (SRV-58)
         also = ' %d hidden graph(s) match too: include_hidden=True' % hidden if hidden else ''
         return 'No node types match %r.%s' % (query, also)
-    lines = [line for _, line in sorted(out, key=lambda item: item[0])]
+
+    def rank_of(item: tuple[int, str]) -> int:
+        return item[0]
+
+    lines = [line for _, line in sorted(out, key=rank_of)]
     more = '' if len(lines) <= limit else '\n... %d more (refine the query or raise limit)' % (len(lines) - limit)
     return '\n'.join(lines[:limit]) + more

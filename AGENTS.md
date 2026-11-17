@@ -144,9 +144,9 @@ Python 3.13, which evaluates annotations when a `def` runs: every name in an ann
 import annotations` (the helpers are joined into one script, where it can't come first). The standalone scripts
 (`install.py`, `uninstall.py`, `client/sd_run.py`, `scripts/review_lookup.py`, `scripts/read_crash_dump.py`), and the
 modules they import (`designer_preferences.py`, `project_constants.py`), are the opposite: they run on the system
-Python, maybe 3.9, so they do start with `from __future__ import annotations` and evaluate no `X | None` at module level
-(`tests/unit/test_old_python.py` runs them on an older Python when one is installed; the modules only through the
-scripts that import them).
+Python, 3.9 at the oldest (DECISIONS.md, Project rules), so they do start with `from __future__ import annotations`
+and evaluate no `X | None` at module level (`tests/unit/test_old_python.py` runs them on a Python 3.9 when one is
+installed; the modules only through the scripts that import them).
 
 **The most specific type that fits; `Any` is the last resort.** mypy strict accepts `Any` anywhere, and checks nothing
 through it, so before writing `Any` (or a `dict`, `list` or `tuple` whose items' types say less than is known: a
@@ -161,9 +161,9 @@ with its reason on the same line: `# type: ignore[explicit-any]  # <reason>` in 
 `disallow_any_explicit` is on (ROADMAP item 99), `# Any: <reason>` elsewhere, since strict mypy refuses that ignore
 as unused without the flag (measured, mypy 2.4.1). An `Any` so marked, with a reason that holds, is accepted; one
 without is narrowed or marked. A function you change gets the same look: an `Any`, or a `dict`, `list` or `tuple`
-whose items' types say less than is known, that it holds and could be narrower is narrowed in the same change (the rest
-of its file is ROADMAP item 98's). Reviewers report what is left in the functions a branch's diff adds or changes (the
-`project-code-review` skill; DECISIONS.md, Project rules).
+whose items' types say less than is known, that it holds and could be narrower is narrowed in the same change.
+Reviewers report what is left in the functions a branch's diff adds or changes, and anywhere in a whole-project review
+(the `project-code-review` skill).
 
 **Strings of code** (`tests/unit/test_selftest_safety.py` checks the self-test's and the server's modules). A string of
 several lines is written `dedent("""...""")` (`textwrap`), not joined pieces with `\n`; the server's own calls into the
@@ -258,7 +258,9 @@ when it misleads, never for its style alone.
   `sh -c` command uses plain `$VARS` (`tests/unit/test_mcp_json.py`).
 - **The bridge protocol** is defined in the plugin's docstring. `server_tools/core.py`, `client/sd_run.py` and the
   self-test's `raw_request` all speak it: change them together with the plugin, and raise `BRIDGE_PROTOCOL`
-  (`project_constants.py`) and the plugin's `PROTOCOL` with any change to it.
+  (`project_constants.py`) and the plugin's `PROTOCOL` with any change to it. Its messages' types (`Request`,
+  `Reply`, `Greeting`) are defined once, in `project_constants.py`; the plugin, which can't import it, has its own
+  `Reply` and reads requests as plain JSON.
 - Environment variables `SD_DESIGNER_BIN_DIR`, `SD_DESIGNER_APP`, `SD_DESIGNER_LOG`, `SD_SNAPSHOT_DIR`,
   `SD_BRIDGE_PORT`: README.md, Configuration. A port change must reach the plugin (Designer's environment) and the
   server alike.

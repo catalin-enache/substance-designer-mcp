@@ -4,7 +4,6 @@ replaced by a fake that answers each tool by name."""
 
 import asyncio
 import glob
-import importlib
 import os
 import shutil
 import subprocess
@@ -14,11 +13,15 @@ import time
 from collections.abc import Collection, Iterator, Sequence
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, cast
 
 import pytest
+from selftest_fakes import code_of, fresh, tool_result
 
-from conftest import SELFTEST_DIR
+from project_constants import ToolArgs
+
+if TYPE_CHECKING:  # for the checker only: each test imports the self-test's modules afresh (_alone())
+    from test_all_tools.common import Ctx, Step
 
 
 @pytest.fixture(autouse=True)
@@ -30,14 +33,9 @@ def _alone_forgotten() -> Iterator[None]:
         del sys.modules[name]
 
 
-def _alone() -> Any:  # a module imported by name: PyCharm can't see its names
+def _alone() -> ModuleType:  # a module imported by name: PyCharm can't see its names
     """alone.py imported afresh with the self-test's modules, so each test starts with an empty check record."""
-    tests_dir = os.path.dirname(SELFTEST_DIR)
-    if tests_dir not in sys.path:
-        sys.path.insert(0, tests_dir)
-    for name in [m for m in sys.modules if m == 'test_all_tools' or m.startswith('test_all_tools.')]:
-        del sys.modules[name]
-    alone = importlib.import_module('test_all_tools.alone')
+    alone = fresh('alone')
     # not the real pgrep: as if one of the user's ran, so close_with never removes the real SCRATCH_ROOT (REVIEW.md
     # TST-147) and a run with no bridge is refused; a test about none running says so itself
     vars(alone)['designer_here'] = lambda: True
@@ -48,29 +46,25 @@ def _alone() -> Any:  # a module imported by name: PyCharm can't see its names
     return alone
 
 
-def _result(t: str, error: bool = False) -> Any:
-    return SimpleNamespace(content=[SimpleNamespace(type='text', text=t)], is_error=error)
-
-
 class FakeDesigner:
     """c(name, args) for alone's calls: designer_status answers `status` (an error when None, as with no Designer
     running), launch_designer `launch`, execute_designer_code an empty library list or the clean-up's answer."""
 
     def __init__(self, status: str | None, launch: str = 'Designer started in 12 s.') -> None:
         self.status, self.launch = status, launch
-        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.calls: list[tuple[str, ToolArgs]] = []
 
-    async def __call__(self, name: str, args: dict[str, Any] | None = None) -> Any:
+    async def __call__(self, name: str, args: ToolArgs | None = None) -> SimpleNamespace:
         self.calls.append((name, args or {}))
         if name == 'designer_status':
-            return _result('Designer is not reachable', True) if self.status is None else _result(self.status)
+            return tool_result('Designer is not reachable', True) if self.status is None else tool_result(self.status)
         if name == 'launch_designer':
-            return _result(self.launch)
+            return tool_result(self.launch)
         if name == 'quit_designer':
-            return _result('Designer closed.')
+            return tool_result('Designer closed.')
         if name == 'execute_designer_code':
-            return _result('removed 0' if 'unloadUserPackage' in (args or {}).get('code', '') else 'LIBS=')
-        return _result('ok')
+            return tool_result('removed 0' if 'unloadUserPackage' in code_of(args) else 'LIBS=')
+        return tool_result('ok')
 
     def names(self) -> list[str]:
         return [n for n, _ in self.calls]
@@ -80,21 +74,23 @@ AGENTS = 'Designer 16.0.7, idle.\nStarted by an agent: disposable, nothing in it
 USERS = "Designer 16.0.7, idle.\nNot started by an agent: it is the user's."
 
 
-def _run(alone: Any, c: FakeDesigner, *checks: Any, **kw: Any) -> int:
-    if kw.get('scratch'):
-        return int(asyncio.run(alone.run_with(c, list(checks), kw.get('setup'), kw['scratch'])))
+def _run(
+    alone: ModuleType, c: FakeDesigner, *checks: 'Step', setup: 'Step | None' = None, scratch: str | None = None
+) -> int:
+    if scratch:
+        return int(asyncio.run(alone.run_with(c, list(checks), setup, scratch)))
     with tempfile.TemporaryDirectory(prefix='alone_unit_') as scratch:  # each category gets a folder in it
-        return int(asyncio.run(alone.run_with(c, list(checks), kw.get('setup'), scratch)))
+        return int(asyncio.run(alone.run_with(c, list(checks), setup, scratch)))
 
 
-def _run_own_designer(alone: Any, c: FakeDesigner, *checks: Any) -> int:
+def _run_own_designer(alone: ModuleType, c: FakeDesigner, *checks: 'Step') -> int:
     return int(asyncio.run(alone.run_with(c, list(checks), None, 'scratch', own_designer=True)))
 
 
-def _in_category(category: str, name: str, body: Any) -> Any:
+def _in_category(category: str, name: str, body: 'Step') -> 'Step':
     """A check of the category <category> (test_all_tools.<category>.checks), running body(ctx)."""
 
-    async def check(ctx: Any) -> None:
+    async def check(ctx: 'Ctx') -> None:
         await body(ctx)
 
     check.__module__, check.__qualname__ = 'test_all_tools.%s.checks' % category, name
@@ -109,7 +105,7 @@ def test_checks_with_their_own_designer_get_none_started_and_no_clean_up() -> No
     c = FakeDesigner(None)
     ran: list[str] = []
 
-    async def own(ctx: Any) -> None:
+    async def own(ctx: 'Ctx') -> None:
         ran.append('checks')
 
     assert _run_own_designer(alone, c, own) == 0
@@ -129,7 +125,7 @@ def test_checks_with_their_own_designer_never_run_beside_the_users(status: str |
     vars(alone)['users_designer_running'] = lambda: users_running
     ran: list[str] = []
 
-    async def own(ctx: Any) -> None:
+    async def own(ctx: 'Ctx') -> None:
         ran.append('checks')
 
     c = FakeDesigner(status)
@@ -148,7 +144,7 @@ def test_checks_with_their_own_designer_on_a_port_are_refused_beside_the_users_t
     vars(alone)['users_designer_running'] = lambda: users_running
     ran: list[str] = []
 
-    async def own(ctx: Any) -> None:
+    async def own(ctx: 'Ctx') -> None:
         ran.append('checks')
 
     assert (
@@ -163,7 +159,7 @@ def test_checks_with_their_own_designer_run_beside_an_agents() -> None:
     alone = _alone()
     ran: list[str] = []
 
-    async def own(ctx: Any) -> None:
+    async def own(ctx: 'Ctx') -> None:
         ran.append('checks')
 
     c = FakeDesigner(AGENTS)
@@ -175,10 +171,10 @@ def test_checks_with_their_own_designer_still_report_a_failure() -> None:
     alone = _alone()
     vars(alone)['users_designer_running'] = lambda: False
 
-    async def fails(ctx: Any) -> None:
+    async def fails(ctx: 'Ctx') -> None:
         alone.common.check('t', 'x', False)
 
-    async def raises(ctx: Any) -> None:
+    async def raises(ctx: 'Ctx') -> None:
         raise RuntimeError('boom')
 
     assert _run_own_designer(alone, FakeDesigner(None), fails) == 1
@@ -186,14 +182,14 @@ def test_checks_with_their_own_designer_still_report_a_failure() -> None:
 
 
 @pytest.mark.parametrize('kw', [{'setup': 'a setup'}])
-def test_checks_with_their_own_designer_take_no_environment(kw: dict[str, Any]) -> None:
+def test_checks_with_their_own_designer_take_no_environment(kw: dict[str, str]) -> None:
     # an environment would be built in a Designer those checks then replace
     alone = _alone()
     with pytest.raises(ValueError, match='own_designer'):
         alone.run(lambda ctx: None, own_designer=True, **kw)
 
 
-def test_the_snapshots_of_a_run_on_a_port_have_no_symlink_in_their_path(tmp_path: Any) -> None:
+def test_the_snapshots_of_a_run_on_a_port_have_no_symlink_in_their_path(tmp_path: Path) -> None:
     # macOS's temp folder is under /var, a symlink: Designer wrote a snapshot's paths to files outside it one `..` short
     # (measured: 'copied bitmaps stay reachable' failed on a port of its own, and passed with the snapshots in the home)
     real = tmp_path / 'real'
@@ -218,11 +214,11 @@ def test_a_check_runs_after_its_own_categorys_preparation(monkeypatch: pytest.Mo
     order: list[str] = []
     run = sys.modules['test_all_tools.category_run']
 
-    async def prepare(ctx: Any) -> None:
+    async def prepare(ctx: 'Ctx') -> None:
         order.append('prepare')
         ctx.lv = '12'
 
-    async def body(ctx: Any) -> None:
+    async def body(ctx: 'Ctx') -> None:
         order.append('check ' + ctx.lv)
 
     monkeypatch.setitem(vars(run), 'preparation', lambda step: prepare)
@@ -231,19 +227,19 @@ def test_a_check_runs_after_its_own_categorys_preparation(monkeypatch: pytest.Mo
 
 
 def test_checks_of_one_category_share_one_preparation_and_two_categories_get_one_each(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     alone = _alone()
     order: list[str] = []
     run = sys.modules['test_all_tools.category_run']
 
-    def preparation(step: Any) -> Any:
-        async def prepare(ctx: Any) -> None:
+    def preparation(step: 'Step') -> 'Step':
+        async def prepare(ctx: 'Ctx') -> None:
             order.append('prepare ' + step.__module__.split('.')[1])
 
         return prepare
 
-    async def body(ctx: Any) -> None:
+    async def body(ctx: 'Ctx') -> None:
         order.append('check in ' + os.path.basename(ctx.scratch))
 
     monkeypatch.setitem(vars(run), 'preparation', preparation)
@@ -257,10 +253,10 @@ def test_a_preparation_that_fails_gives_exit_code_2_and_runs_no_check(monkeypatc
     ran: list[str] = []
     run = sys.modules['test_all_tools.category_run']
 
-    async def prepare(ctx: Any) -> None:
+    async def prepare(ctx: 'Ctx') -> None:
         raise run.common.Unprepared('create_graph: refused')
 
-    async def body(ctx: Any) -> None:
+    async def body(ctx: 'Ctx') -> None:
         ran.append('check')
 
     monkeypatch.setitem(vars(run), 'preparation', lambda step: prepare)
@@ -273,7 +269,7 @@ def test_the_users_designer_is_refused_and_nothing_runs() -> None:
     alone = _alone()
     ran: list[str] = []
 
-    async def a_check(ctx: Any) -> None:
+    async def a_check(ctx: 'Ctx') -> None:
         ran.append('check')
 
     c = FakeDesigner(USERS)
@@ -294,7 +290,7 @@ def test_a_designer_is_started_when_none_runs(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setitem(vars(alone), 'users_designer_running', lambda: False)
     ran: list[str] = []
 
-    async def a_check(ctx: Any) -> None:
+    async def a_check(ctx: 'Ctx') -> None:
         ran.append('check')
 
     c = FakeDesigner(None)
@@ -307,7 +303,7 @@ def test_a_launch_that_fails_runs_nothing(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setitem(vars(alone), 'users_designer_running', lambda: False)
     ran: list[str] = []
 
-    async def a_check(ctx: Any) -> None:
+    async def a_check(ctx: 'Ctx') -> None:
         ran.append('check')
 
     assert _run(alone, FakeDesigner(None, launch='ERROR: Designer did not start'), a_check) == 2
@@ -332,10 +328,10 @@ def test_a_failing_check_gives_exit_code_1_and_passing_ones_0() -> None:
     alone = _alone()
     from test_all_tools import common
 
-    async def fails(ctx: Any) -> None:
+    async def fails(ctx: 'Ctx') -> None:
         common.check('tool', 'a check that fails', False)
 
-    async def passes(ctx: Any) -> None:
+    async def passes(ctx: 'Ctx') -> None:
         common.check('tool', 'a check that passes', True)
 
     assert _run(alone, FakeDesigner(AGENTS), passes) == 0
@@ -349,7 +345,7 @@ def test_a_run_here_leaves_no_folder_in_the_temp_folder() -> None:
     # REVIEW.md TST-263: each call left an alone_unit_* folder behind, a plain pytest run after run
     alone = _alone()
 
-    async def a_check(ctx: Any) -> None:
+    async def a_check(ctx: 'Ctx') -> None:
         pass
 
     before = set(glob.glob(os.path.join(tempfile.gettempdir(), 'alone_unit_*')))
@@ -359,16 +355,17 @@ def test_a_run_here_leaves_no_folder_in_the_temp_folder() -> None:
 
 def test_the_checks_get_a_ctx_of_an_agents_designer() -> None:
     alone = _alone()
-    seen: list[Any] = []
+    seen: list[Ctx] = []
 
-    async def a_check(ctx: Any) -> None:
+    async def a_check(ctx: 'Ctx') -> None:
         seen.append(ctx)
 
     c = FakeDesigner(AGENTS)
     scratch = tempfile.mkdtemp(prefix='alone_unit_')
     _run(alone, c, a_check, scratch=scratch)
     ctx = seen[0]
-    assert ctx.c is c and ctx.was_running is False and 'def ' in ctx.helper_source
+    # compared as objects: the checker sees the fake as no Call, and would call the check always false
+    assert cast(object, ctx.c) is c and ctx.was_running is False and 'def ' in ctx.helper_source
     assert os.path.dirname(ctx.scratch) == scratch, "a folder of its category's own, in the run's"
     shutil.rmtree(scratch)
 
@@ -376,7 +373,7 @@ def test_the_checks_get_a_ctx_of_an_agents_designer() -> None:
 def test_a_check_that_raises_fails_and_the_clean_up_still_runs() -> None:
     alone = _alone()
 
-    async def raises(ctx: Any) -> None:
+    async def raises(ctx: 'Ctx') -> None:
         raise RuntimeError('a parse that found nothing')
 
     c = FakeDesigner(AGENTS)
@@ -390,13 +387,13 @@ def test_the_setup_runs_before_the_checks_after_the_preparation(monkeypatch: pyt
     alone = _alone()
     order: list[str] = []
 
-    async def step(ctx: Any) -> None:
+    async def step(ctx: 'Ctx') -> None:
         order.append('prepare')
 
-    async def setup(ctx: Any) -> None:
+    async def setup(ctx: 'Ctx') -> None:
         order.append('setup')
 
-    async def body(ctx: Any) -> None:
+    async def body(ctx: 'Ctx') -> None:
         order.append('check')
 
     monkeypatch.setitem(vars(sys.modules['test_all_tools.category_run']), 'preparation', lambda s: step)
@@ -410,10 +407,10 @@ def test_a_setup_that_fails_skips_the_checks_and_still_cleans_up() -> None:
 
     ran: list[str] = []
 
-    async def setup(ctx: Any) -> None:
+    async def setup(ctx: 'Ctx') -> None:
         common.check('tool', 'the environment', False)
 
-    async def a_check(ctx: Any) -> None:
+    async def a_check(ctx: 'Ctx') -> None:
         ran.append('check')
 
     c = FakeDesigner(AGENTS)
@@ -425,16 +422,16 @@ def test_a_setup_that_raises_skips_the_checks_too() -> None:
     alone = _alone()
     ran: list[str] = []
 
-    async def setup(ctx: Any) -> None:
+    async def setup(ctx: 'Ctx') -> None:
         raise RuntimeError('no graph')
 
-    async def a_check(ctx: Any) -> None:
+    async def a_check(ctx: 'Ctx') -> None:
         ran.append('check')
 
     assert _run(alone, FakeDesigner(AGENTS), a_check, setup=setup) == 2 and ran == []
 
 
-def test_each_run_gets_a_fresh_folder_inside_one_root(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_each_run_gets_a_fresh_folder_inside_one_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # never deleted while Designer runs (deleting the suite's crashed Designer twice: __main__.py); close() does it
     alone = _alone()
     monkeypatch.setitem(vars(alone), 'SCRATCH_ROOT', str(tmp_path / 'root'))
@@ -445,7 +442,7 @@ def test_each_run_gets_a_fresh_folder_inside_one_root(tmp_path: Any, monkeypatch
 
 
 def test_close_quits_and_removes_the_folders_once_designer_has_ended(
-    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     alone = _alone()
     monkeypatch.setitem(vars(alone), 'SCRATCH_ROOT', str(tmp_path / 'root'))
@@ -477,7 +474,7 @@ def test_its_own_tool_calls_dont_count_as_the_suites_checks() -> None:
     assert set(selftest_check_sources()) == set(selftest_sources()) - {'alone.py'}
 
 
-async def named_check(ctx: Any) -> None:
+async def named_check(ctx: 'Ctx') -> None:
     """A check at module level, as a category's functions are."""
 
 
@@ -488,7 +485,7 @@ def test_each_check_is_announced_with_its_module(capsys: pytest.CaptureFixture[s
     assert 'alone: test_selftest_alone.named_check\n' in capsys.readouterr().out
 
 
-def test_a_port_goes_to_the_fresh_server_and_to_the_checks(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_port_goes_to_the_fresh_server_and_to_the_checks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # ROADMAP item 49: the server, the requests the checks send themselves (raw_request, sd_run) and the snapshots go
     # with the port, so runs on their own ports, in Designers of their own, don't meet
     alone = _alone()
@@ -516,7 +513,7 @@ def test_a_port_goes_to_the_fresh_server_and_to_the_checks(tmp_path: Any, monkey
 
 @pytest.mark.parametrize('port', [80, 65536])
 def test_a_port_out_of_range_is_refused_before_anything_starts(
-    tmp_path: Any, monkeypatch: pytest.MonkeyPatch, port: int
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, port: int
 ) -> None:
     alone = _alone()
     monkeypatch.setitem(vars(alone), 'SCRATCH_ROOT', str(tmp_path / 'root'))
@@ -582,7 +579,7 @@ def test_another_runs_designer_doesnt_stop_a_run_on_the_servers_port(monkeypatch
     assert _run(alone, c) == 0 and 'launch_designer' in c.names()
 
 
-def test_closing_a_port_removes_only_that_ports_folders(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_closing_a_port_removes_only_that_ports_folders(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # REVIEW.md TST-170: close_with removed the root of every run's folder, another port's run's included
     alone = _alone()
     root = tmp_path / 'root'
@@ -597,7 +594,7 @@ def test_closing_a_port_removes_only_that_ports_folders(tmp_path: Any, monkeypat
 
 
 def test_a_failing_process_listing_keeps_the_folders_and_starts_nothing(
-    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # REVIEW.md INS-27: Designer's processes that can't be listed are not "none running"
     alone = _alone()
@@ -624,11 +621,11 @@ class LeavesALibrary(FakeDesigner):
         super().__init__(AGENTS)
         self.listed = 0
 
-    async def __call__(self, name: str, args: dict[str, Any] | None = None) -> Any:
-        if name == 'execute_designer_code' and 'unloadUserPackage' not in (args or {}).get('code', ''):
+    async def __call__(self, name: str, args: ToolArgs | None = None) -> SimpleNamespace:
+        if name == 'execute_designer_code' and 'unloadUserPackage' not in code_of(args):
             self.calls.append((name, args or {}))
             self.listed += 1
-            return _result('LIBS=' if self.listed == 1 else 'LIBS=/library/noise.sbs')
+            return tool_result('LIBS=' if self.listed == 1 else 'LIBS=/library/noise.sbs')
         return await super().__call__(name, args)
 
 
@@ -638,7 +635,7 @@ def test_a_clean_up_that_fails_is_exit_code_2_though_every_check_passed(monkeypa
     monkeypatch.setitem(vars(sys.modules['test_all_tools.category_run']), 'preparation', lambda step: None)
     ran: list[str] = []
 
-    async def passes(ctx: Any) -> None:
+    async def passes(ctx: 'Ctx') -> None:
         ran.append('check')
         alone.common.check('t', 'x', True)
 
@@ -654,9 +651,7 @@ class CrashesAsItQuits(FakeDesigner):
         super().__init__(AGENTS)
         self.folder, self.late, self.quit = folder, late, False
 
-    async def __call__(
-        self, name: str, args: dict[str, object] | None = None
-    ) -> Any:  # Any: a SimpleNamespace for a CallToolResult, as its parent
+    async def __call__(self, name: str, args: ToolArgs | None = None) -> SimpleNamespace:
         if name == 'quit_designer':
             self.quit = True
         return await super().__call__(name, args)
@@ -749,9 +744,9 @@ def test_the_designer_is_hidden_before_any_check_as_in_the_suite(
     c = FakeDesigner(status)
     seen: list[int] = []
 
-    async def a_check(ctx: object) -> None:
+    async def a_check(ctx: 'Ctx') -> None:
         seen.append(len(c.calls))
 
     assert _run(alone, c, a_check) == 0
-    codes = [args.get('code', '') for name, args in c.calls[: seen[0]] if name == 'execute_designer_code']
+    codes = [code_of(args) for name, args in c.calls[: seen[0]] if name == 'execute_designer_code']
     assert any('mac.hide()' in code for code in codes)

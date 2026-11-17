@@ -3,15 +3,16 @@
 
 import os
 import types
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 from unittest import mock
 
 import pytest
 from mcp.server.mcpserver import Image
 from PIL import Image as PILImage
 
-from conftest import patch_server, server
+from conftest import fake_bridge, server
+from server_tools import views
 
 
 @pytest.fixture
@@ -20,7 +21,7 @@ def helpers(faked_helpers: types.ModuleType) -> types.ModuleType:
     return module
 
 
-def _node(*outputs: str) -> Any:
+def _node(*outputs: str) -> mock.MagicMock:
     node = mock.MagicMock()
     props = [mock.MagicMock(**{'getId.return_value': o}) for o in outputs]
     conn = mock.MagicMock(**{'getId.return_value': 'in', 'isConnectable.return_value': True})
@@ -63,17 +64,17 @@ def test_connect_says_when_it_took_the_first_of_several(
     assert ('the first of 3 (diffuse, basecolor, normal); pass output' in out) is note
 
 
-def _preview(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, printed: str, folders: list[str]) -> Any:
+def _preview(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, printed: str, folders: list[str]) -> list[str | Image]:
     """preview_node with a bridge saving its image in the folder the server made (folders: the temp_folders fixture),
     not one read back out of the call, which a Windows path's backslashes defeat (REVIEW.md TST-330)."""
 
-    def bridge(code: str, path: str | None = None, timeout: float | None = None) -> str:
+    def bridge(code: str) -> str:
         out = os.path.join(folders[-1], 'node.png')
         PILImage.new('RGB', (4, 4)).save(out)
         return printed
 
-    patch_server(monkeypatch, '_bridge', bridge)
-    return server.preview_node('1')
+    fake_bridge(monkeypatch, bridge)
+    return views.preview_node('1')
 
 
 def test_preview_returns_the_note_beside_the_image(
@@ -92,8 +93,8 @@ def test_preview_returns_only_the_image_when_there_is_no_note(
 
 
 # REVIEW.md HLP-66: with no output given, the one tagged base colour, else the first
-def _output_node(identifier: str, *usages: str) -> Any:
-    def annotation(name: str) -> Any:
+def _output_node(identifier: str, *usages: str) -> types.SimpleNamespace:
+    def annotation(name: str) -> types.SimpleNamespace:
         if name == 'identifier':
             return types.SimpleNamespace(get=lambda: identifier)
         items = [types.SimpleNamespace(get=lambda u=u: types.SimpleNamespace(getName=lambda: u)) for u in usages]
@@ -103,7 +104,7 @@ def _output_node(identifier: str, *usages: str) -> Any:
     return types.SimpleNamespace(getAnnotationPropertyValueFromId=annotation)
 
 
-def _instance(*tagged: Any) -> Any:
+def _instance(*tagged: types.SimpleNamespace) -> mock.MagicMock:
     node = mock.MagicMock()
     node.getReferencedResource.return_value = types.SimpleNamespace(getOutputNodes=lambda: list(tagged))
     return node
@@ -150,7 +151,7 @@ def test_an_output_only_named_basecolor_isnt_taken(helpers: types.ModuleType) ->
     ],
     ids=['no tags', 'tag on another output', 'atomic', 'raises', 'not a graph'],
 )
-def test_anything_else_takes_the_first(helpers: types.ModuleType, node: Any) -> None:
+def test_anything_else_takes_the_first(helpers: types.ModuleType, node: mock.MagicMock) -> None:
     assert helpers._default_output(node, ['height', 'normal']) == (
         'height',
         "'height', the first of 2 (height, normal)",
@@ -158,14 +159,14 @@ def test_anything_else_takes_the_first(helpers: types.ModuleType, node: Any) -> 
 
 
 def _pixels_bridge(monkeypatch: pytest.MonkeyPatch, printed: str, folders: list[str]) -> None:
-    def bridge(code: str, path: str | None = None, timeout: float | None = None) -> str:
+    def bridge(code: str) -> str:
         out = os.path.join(folders[-1], 'pixels.raw')
         with open(out, 'wb') as f:
             f.write(bytes(4 * 4 * 4))
         meta = '{"width": 4, "height": 4, "pitch": 16, "bpp": 4, "format": "RGBA8", "node": "1 m.basecolor"}'
         return '%s\nPIXELS=%s\n' % (printed, meta)
 
-    patch_server(monkeypatch, '_bridge', bridge)
+    fake_bridge(monkeypatch, bridge)
 
 
 NOTE = "no output given: 'basecolor', tagged base colour, of 9 (diffuse, basecolor); pass output to pick another"
@@ -176,14 +177,16 @@ NOTE = "no output given: 'basecolor', tagged base colour, of 9 (diffuse, basecol
     [lambda: server.node_stats('1'), lambda: server.check_tiling('1')],
     ids=['node_stats', 'check_tiling'],
 )
-def test_the_pixel_tools_carry_the_note(monkeypatch: pytest.MonkeyPatch, call: Any, temp_folders: list[str]) -> None:
+def test_the_pixel_tools_carry_the_note(
+    monkeypatch: pytest.MonkeyPatch, call: Callable[[], str], temp_folders: list[str]
+) -> None:
     _pixels_bridge(monkeypatch, NOTE, temp_folders)
     assert NOTE in call()
     _pixels_bridge(monkeypatch, '', temp_folders)
     assert 'no output given' not in call()
 
 
-def _tagged_material() -> Any:
+def _tagged_material() -> mock.MagicMock:
     node = _node('diffuse', 'basecolor', 'normal')
     node.getReferencedResource.return_value = types.SimpleNamespace(
         getOutputNodes=lambda: [_output_node('diffuse', 'diffuse'), _output_node('basecolor', 'baseColor')]
@@ -216,7 +219,7 @@ def test_a_failed_restore_is_reported_with_an_output_named_like_restored(
 ) -> None:
     # REVIEW.md SRV-61: the note puts output names in the text, so "'restored' in text" was true with no such line,
     # and the warning for a failed restore became an AttributeError
-    def bridge(code: str, path: str | None = None, timeout: float | None = None) -> str:
+    def bridge(code: str) -> str:
         with open(os.path.join(temp_folders[-1], '0.raw'), 'wb') as f:
             f.write(bytes(16 * 4))
         meta = '{"index": 0, "value": 1, "width": 4, "height": 4, "pitch": 16, "bpp": 4, "format": "RGBA8"}'
@@ -225,6 +228,6 @@ def test_a_failed_restore_is_reported_with_an_output_named_like_restored(
             % meta
         )
 
-    patch_server(monkeypatch, '_bridge', bridge)
+    fake_bridge(monkeypatch, bridge)
     text = server.sweep_param('1', 'p', [1])[0]
     assert 'original NOT restored!' in text and 'WARNING: the original value may not have been restored' in text

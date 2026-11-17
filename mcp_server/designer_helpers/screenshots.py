@@ -1,6 +1,6 @@
 """Screenshots of Designer's panels, the 3D view's own render included."""
 
-from .core import _APP, Any, cast
+from .core import QtCore, QtGui, QtWidgets, _main_window, _menu, _qt_app, _ui
 from .editor import _home_screen
 from .mac_window import _mac_window
 from .waits import _until
@@ -20,21 +20,16 @@ _PANEL_AREAS = {
 }
 
 
-# Qt widgets are Any in signatures: annotations are evaluated when the helpers load
-def _visible_dock(mw: Any, prefix: str) -> Any:
-    from PySide6 import QtWidgets
-
+def _visible_dock(mw: QtWidgets.QMainWindow, prefix: str) -> QtWidgets.QDockWidget | None:
     for d in mw.findChildren(QtWidgets.QDockWidget):
         if d.objectName().startswith(prefix) and d.isVisible():
             return d
     return None
 
 
-def _3d_dock(mw: Any) -> Any:
+def _3d_dock(mw: QtWidgets.QMainWindow) -> QtWidgets.QDockWidget:
     """The 3D View's dock; refused when it isn't visible, or not built yet: Designer builds its menu bar and viewport
     once a graph is opened (REVIEW.md HLP-115)."""
-    from PySide6 import QtWidgets
-
     dock = _visible_dock(mw, _PANEL_AREAS['3d'])
     if dock is None:
         raise RuntimeError(
@@ -46,27 +41,25 @@ def _3d_dock(mw: Any) -> Any:
     return dock
 
 
-def _3d_render(mw: Any) -> Any:  # Any: a Qt widget, and a QImage (Qt widgets are Any in signatures, above)
+def _3d_render(mw: QtWidgets.QMainWindow) -> QtGui.QImage:
     """The 3D view's render, a QImage. The 3D view is GPU-drawn, so a QWidget.grab() of its viewport is leftover black
     or grey blocks, varying between calls. Use the view's own Camera > 'Copy Render to Clipboard' (the renderer's image,
     never screen pixels; its last frame while Designer's window is off screen: shot3d.py), then put back what Qt can
     copy of the user's clipboard: its text; the rest may be lost (DECISIONS.md, the user's choice). On macOS the text is
     then handed over to the pasteboard (mac_window.py, _MacWindow.hand_over_clipboard). The render is read once the clipboard
     says it changed (its dataChanged), at most RENDER_LIMIT."""
-    from PySide6 import QtCore, QtWidgets
-
-    app = cast(QtWidgets.QApplication, QtWidgets.QApplication.instance())  # Designer's own: always there
+    app = _qt_app()
     dock = _3d_dock(mw)
     bars = dock.findChildren(QtWidgets.QMenuBar)
     if not bars:
         raise RuntimeError('3D View menu bar not found')
     # Keep Python references alive: Designer rebuilds these menus and stale wrappers raise
-    keep: list[object] = []
+    keep: list[QtGui.QAction | QtWidgets.QMenu] = []
     copy_action = None
     for top in list(bars[0].actions()):
         if top.text().replace('&', '') != 'Camera':
             continue
-        menu = cast(QtWidgets.QMenu, top.menu())  # the Camera menu
+        menu = _menu(top)  # the Camera menu
         keep += [top, menu]
         menu.aboutToShow.emit()  # menus are populated lazily
         app.processEvents()
@@ -113,18 +106,20 @@ def _3d_render(mw: Any) -> Any:  # Any: a Qt widget, and a QImage (Qt widgets ar
         raise
 
 
-def _graph_view(mw: Any) -> Any:
+def _graph_view(mw: QtWidgets.QMainWindow) -> QtWidgets.QGraphicsView | None:
     """The graph editor's node view (a QGraphicsView in the graph dock; its scene coordinates
     are graph units), or None. The dock's title bar and toolbars are not part of it. The
     caller keeps `mw` (the main window) referenced while using the view, or PySide reports
     its wrappers as already deleted."""
-    from PySide6 import QtWidgets
-
     dock = _visible_dock(mw, _PANEL_AREAS['graph'])
     if dock is None:
         return None
     views = [v for v in dock.findChildren(QtWidgets.QGraphicsView) if v.isVisible()]
-    return max(views, key=lambda v: v.width() * v.height()) if views else None
+
+    def area(view: QtWidgets.QGraphicsView) -> int:
+        return view.width() * view.height()
+
+    return max(views, key=area) if views else None
 
 
 def save_screenshot(panel: str, out_path: str) -> None:
@@ -132,11 +127,10 @@ def save_screenshot(panel: str, out_path: str) -> None:
     Screen/window grabs are deliberately not used: on macOS they copy whatever
     covers Designer, i.e. other apps. 'graph' is the node view alone, without the dock's
     title bar and toolbars."""
-    from PySide6 import QtWidgets
-
-    mw = _APP.getQtForPythonUIMgr().getMainWindow()  # type: ignore[no-untyped-call]  # sd: no annotations
+    mw = _main_window()
     if panel == '3d':
         raise RuntimeError("the 3D view is shot by shoot_3d, which puts Designer's window on screen first (shot3d.py)")
+    widget: QtWidgets.QWidget
     if panel == 'window':
         widget = mw
     else:
@@ -153,11 +147,11 @@ def save_screenshot(panel: str, out_path: str) -> None:
         widget = docks[0]
         if panel == 'graph':
             widget = _graph_view(mw) or widget
-    cast(QtWidgets.QApplication, QtWidgets.QApplication.instance()).processEvents()
+    _qt_app().processEvents()
     pixmap = widget.grab()
     if not pixmap.save(out_path):
         raise RuntimeError('could not save screenshot')
-    current = _APP.getQtForPythonUIMgr().getCurrentGraph()  # type: ignore[no-untyped-call]  # sd: no annotations
+    current = _ui().getCurrentGraph()
     print(
         '%s %dx%d | graph in editor: %s'
         % (panel, pixmap.width(), pixmap.height(), current.getIdentifier() if current else None)

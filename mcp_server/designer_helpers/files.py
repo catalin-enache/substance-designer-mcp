@@ -2,14 +2,14 @@
 make."""
 
 from .core import (
-    _APP,
     _PM,
-    Any,
+    SDPackage,
     SDSBSCompGraph,
     _is_library_package,
     _library_refusal,
     _refuse_unsaved_dependencies,
     _same_graph,
+    _ui,
     find_graph,
     os,
 )
@@ -29,7 +29,7 @@ def save_package_copy(identifier: str | SDSBSCompGraph | None, path: str) -> Non
     print('GRAPH=' + g.getIdentifier())
 
 
-def package_uid(pkg: Any) -> str:
+def package_uid(pkg: SDPackage) -> str:
     """The package's UID: what tells two unsaved packages apart (no file path) when their graphs
     share a name, as every new graph is "New_Graph" (REVIEW.md SRV-34). Not mHandle, which differs
     for every Python object wrapping the same package (measured)."""
@@ -62,7 +62,7 @@ def package_file_of(identifier: str | SDSBSCompGraph | None, save: bool = False)
     _refuse_unsaved_dependencies(pkg)
     if save:
         _PM.savePackage(pkg)
-    current = _APP.getQtForPythonUIMgr().getCurrentGraph()  # type: ignore[no-untyped-call]  # sd: no annotations
+    current = _ui().getCurrentGraph()
     print('FILE=' + path)
     print('GRAPH=' + g.getIdentifier())
     print('OPEN=' + ('1' if _same_graph(current, g) else '0'))
