@@ -19,7 +19,7 @@ class Args(TypedDict):
 
 
 ARGS: Args = globals()['ARGS']
-pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
+pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()
 
 loaded: list[SDPackage] = []
 try:

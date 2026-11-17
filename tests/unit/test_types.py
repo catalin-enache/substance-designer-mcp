@@ -7,12 +7,14 @@ the ignores written for sd calls go unused, sd values return Any and a QObject s
 then drops those three warnings for the whole repository, and keeps the rest of strict mode."""
 
 import glob
+import importlib.util
 import os
 import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from textwrap import dedent
 
 import pytest
 
@@ -49,12 +51,6 @@ def test_mypy_finds_nothing_without_designer(tmp_path: Path) -> None:
 
 
 def _assert_mypy_finds_nothing(tmp_path: Path, packages: dict[str, str]) -> None:
-    try:
-        import mypy  # noqa: F401
-    except ImportError:
-        pytest.fail(
-            'mypy is not installed: mcp_server/venv/bin/python -m pip install -r mcp_server/requirements-dev.txt'
-        )
     # Designer's packages sit next to its whole site-packages, which mypy refuses on its path:
     # link just these three into a folder of their own
     for name, folder in packages.items():
@@ -68,18 +64,71 @@ def _assert_mypy_finds_nothing(tmp_path: Path, packages: dict[str, str]) -> None
                     n for n in names if not os.path.isdir(os.path.join(d, n)) and not n.endswith(('.py', '.pyi'))
                 ],
             )
-    env = dict(os.environ, MYPYPATH=str(tmp_path))
     relaxed = (
         [] if 'sd' in packages else ['--no-warn-unused-ignores', '--no-warn-return-any', '--allow-subclassing-any']
     )
-    result = subprocess.run(
-        [sys.executable, '-m', 'mypy', '--cache-dir', str(tmp_path / '.cache'), *relaxed],
+    result = _mypy(tmp_path, *relaxed, env=dict(os.environ, MYPYPATH=str(tmp_path)))
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _mypy(tmp_path: Path, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    """mypy run from the repository's root, where it finds mypy.ini, with a cache in tmp_path. Its output is never
+    coloured, so a test can read it (REVIEW.md TST-499)."""
+    if importlib.util.find_spec('mypy') is None:
+        pytest.fail(
+            'mypy is not installed: mcp_server/venv/bin/python -m pip install -r mcp_server/requirements-dev.txt'
+        )
+    return subprocess.run(
+        [sys.executable, '-m', 'mypy', '--no-color-output', '--cache-dir', str(tmp_path / '.cache'), *args],
         cwd=ROOT,
         env=env,
         capture_output=True,
         text=True,
     )
-    assert result.returncode == 0, result.stdout + result.stderr
+
+
+# Each line ending in '# reported' must draw mypy's explicit-any error, and no other line any error
+_ANY_PROBE = dedent("""\
+    import json
+    from collections import defaultdict
+    from collections.abc import Callable
+    from typing import Any, cast
+
+    a: Any = 1  # reported
+    b: dict[str, Any] = {}  # reported
+    c: Callable[..., int] = len  # reported
+    d = cast(Any, 1)  # reported
+    Pair = tuple[str, Any]  # reported
+    e: Any = 1  # type: ignore[explicit-any]  # the mark AGENTS.md asks for
+    f = json.loads('1')
+    g = defaultdict[str, Any](int)  # an Any inside an expression (REVIEW.md TST-497)
+
+
+    def h(x: Any) -> None: ...  # reported
+
+
+    def i(  # type: ignore[explicit-any]  # on the def line of a signature over several lines (REVIEW.md TST-496)
+        x: Any,
+    ) -> None: ...
+    """)
+
+
+def test_mypy_refuses_an_explicit_any(tmp_path: Path) -> None:
+    """mypy.ini's disallow_any_explicit (ROADMAP item 99): mypy reports an Any written in an annotation, a signature, a
+    cast or a type alias, the ... of Callable[..., T] included. AGENTS.md's mark silences one, on a function's def
+    line. mypy doesn't report an Any inside an expression, nor one that comes in implicitly."""
+    probe = tmp_path / 'probe.py'
+    probe.write_text(_ANY_PROBE, encoding='utf-8')
+    # Colour forced, as a user's FORCE_COLOR or MYPY_FORCE_COLOR does even into a pipe: the output must stay plain text
+    # (REVIEW.md TST-499). mypy reads MYPY_FORCE_COLOR first
+    result = _mypy(tmp_path, str(probe), env=dict(os.environ, MYPY_FORCE_COLOR='1'))
+    errors: set[tuple[str, str]] = set(
+        re.findall(r'probe\.py:(\d+): error: .*\[([a-z-]+)\]$', result.stdout, re.MULTILINE)
+    )
+    expected = {
+        (str(n), 'explicit-any') for n, line in enumerate(_ANY_PROBE.splitlines(), 1) if line.endswith('# reported')
+    }
+    assert errors == expected, result.stdout + result.stderr
 
 
 def test_designer_packages_found_when_designer_is_installed() -> None:

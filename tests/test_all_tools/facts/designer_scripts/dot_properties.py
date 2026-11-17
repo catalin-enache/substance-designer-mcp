@@ -7,7 +7,7 @@ from sd.api.sdnode import SDNode
 from sd.api.sdpackagemgr import SDPackageMgr
 from sd.api.sdproperty import SDPropertyCategory as C
 
-pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
+pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()
 pkg = pm.newUserPackage()
 try:
     g = SDSBSCompGraph.sNew(pkg)

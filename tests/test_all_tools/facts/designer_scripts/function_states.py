@@ -39,7 +39,7 @@ from sd.api.sdvaluetexture import SDValueTexture
 
 C = SDPropertyCategory.Input
 PARAM = 'levelouthigh'
-pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
+pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()
 
 
 def grey(x: float) -> SDValueFloat4:

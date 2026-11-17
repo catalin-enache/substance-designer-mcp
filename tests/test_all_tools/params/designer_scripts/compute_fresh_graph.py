@@ -11,7 +11,7 @@ from sd.api.sdproperty import SDPropertyCategory
 from sd.api.sdtexture import SDTexture
 from sd.api.sdvaluetexture import SDValueTexture
 
-pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
+pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()
 
 
 def texture(node: SDNode) -> SDTexture | None:

@@ -13,7 +13,7 @@ class Args(TypedDict):
 
 ARGS: Args = globals()['ARGS']
 
-ui: QtForPythonUIMgrWrapper = sd.getContext().getSDApplication().getQtForPythonUIMgr()  # type: ignore[no-untyped-call]
+ui: QtForPythonUIMgrWrapper = sd.getContext().getSDApplication().getQtForPythonUIMgr()
 mw = cast(QMainWindow, ui.getMainWindow())  # None only without Designer's UI
 d = [d for d in mw.findChildren(QDockWidget) if d.objectName().startswith('areaD_') and d.isVisible()]
 # className() is a str: PySide's stubs say bytes

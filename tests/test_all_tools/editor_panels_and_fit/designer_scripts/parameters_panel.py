@@ -8,7 +8,7 @@ from PySide6 import QtWidgets
 from sd.api.qtforpythonuimgrwrapper import QtForPythonUIMgrWrapper
 
 # sd's getQtForPythonUIMgr() has no annotations. It and getMainWindow() give None only without Designer's UI.
-ui: QtForPythonUIMgrWrapper = sd.getContext().getSDApplication().getQtForPythonUIMgr()  # type: ignore[no-untyped-call]
+ui: QtForPythonUIMgrWrapper = sd.getContext().getSDApplication().getQtForPythonUIMgr()
 mw = cast(QtWidgets.QMainWindow, ui.getMainWindow())
 panels = [d for d in mw.findChildren(QtWidgets.QDockWidget) if d.objectName().startswith('areaC_') and d.isVisible()]
 editor = ui.getCurrentGraph()

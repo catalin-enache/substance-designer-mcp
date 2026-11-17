@@ -18,7 +18,7 @@ class Args(TypedDict):
 
 ARGS: Args = globals()['ARGS']
 print('TEMP=%s' % QDir.tempPath())  # Designer's own: launch_designer gives each Designer it starts one
-pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
+pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()
 for _ in range(2):
     pkg = pm.newUserPackage()
     try:

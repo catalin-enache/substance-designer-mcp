@@ -11,7 +11,7 @@ class Args(TypedDict):
 
 
 ARGS: Args = globals()['ARGS']
-pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
+pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()
 
 for p in list(pm.getUserPackages()):
     if (p.getFilePath() or '') in ARGS['paths']:

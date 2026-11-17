@@ -12,7 +12,7 @@ from sd.api.sdproperty import SDProperty, SDPropertyCategory as C
 from sd.api.sdvalueenum import SDValueEnum
 from sd.api.sdvalueint import SDValueInt
 
-pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
+pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()
 pkg = pm.newUserPackage()
 try:
     g = SDSBSCompGraph.sNew(pkg)

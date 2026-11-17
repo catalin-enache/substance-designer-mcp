@@ -153,7 +153,7 @@ line of the review log, with the decision's title. An answer in `REVIEW.md` can 
    their lines it leaves as they were too, or anywhere in a whole-project review: an `Any`, or a `dict`, `list` or `tuple` whose items' types say less than is known, where a
    more specific type fits, as AGENTS.md's typing rules say, the more specific the better: one finding per pattern with
    every location and the type each should have, Low unless the vague type hides a defect, which then sets the
-   severity; an `Any` marked as an exception with its reason on its line, as those rules say, is not reported unless
+   severity; an `Any` marked as an exception with its reason, as those rules say, is not reported unless
    the reason doesn't hold or a narrower type does fit), that they run no tests and don't probe Designer (above), and the report format: severity, file and
    line, one-sentence defect, concrete scenario, suggested fix, and whether reading settles it or what would (a
    probe's outline: what to build, what to measure, what result would prove it). Reviewers must quote

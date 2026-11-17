@@ -14,7 +14,7 @@ from sd.api.sdtexture import SDTexture
 from sd.api.sdvalueint2 import SDValueInt2
 from sd.api.sdvaluetexture import SDValueTexture
 
-pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
+pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()
 pkg = pm.newUserPackage()
 try:
     g = SDSBSCompGraph.sNew(pkg)

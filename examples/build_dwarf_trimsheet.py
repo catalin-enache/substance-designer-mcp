@@ -122,7 +122,7 @@ class Builder:
     def __init__(self, ctx: Context) -> None:
         # cast, not only declared: mypy takes a declared attribute assigned an Any as Any for the rest of __init__, and
         # pkg_mgr and lib_dir, made from it here, would then be Any in every method
-        self.app = cast(SDApplication, ctx.getSDApplication())  # type: ignore[no-untyped-call]  # Adobe's Context isn't annotated
+        self.app = cast(SDApplication, ctx.getSDApplication())
         self.pkg_mgr = self.app.getPackageMgr()
         self.lib_dir = os.path.join(self.app.getPath(SDApplicationPath.DefaultResourcesDir), 'packages')
         # Close the previous build (the package saved at OUT_SBS) so re-running doesn't pile up
@@ -680,4 +680,4 @@ def build_into(b: Builder) -> None:
         print('WARNING:', w)
 
 
-build(sd.getContext())  # type: ignore[no-untyped-call]  # Adobe's sd.getContext() isn't annotated
+build(sd.getContext())

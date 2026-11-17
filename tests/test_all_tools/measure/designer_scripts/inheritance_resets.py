@@ -25,7 +25,7 @@ class Args(TypedDict):
 
 ARGS: Args = globals()['ARGS']
 IM = SDPropertyInheritanceMethod
-pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
+pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()
 g = cast(
     SDSBSCompGraph,
     next(r for p in pm.getUserPackages() for r in p.getChildrenResources(False) if r.getIdentifier() == ARGS['graph']),

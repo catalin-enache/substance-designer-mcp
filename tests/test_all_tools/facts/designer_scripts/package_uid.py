@@ -17,7 +17,7 @@ class Args(TypedDict):
 
 
 ARGS: Args = globals()['ARGS']
-pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
+pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()
 
 
 def file_uid(name: str) -> str:

@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QApplication, QDockWidget, QGraphicsView, QMainWin
 from sd.api.qtforpythonuimgrwrapper import QtForPythonUIMgrWrapper
 
 # sd's getQtForPythonUIMgr() has no annotations. It and getMainWindow() give None only without Designer's UI.
-ui: QtForPythonUIMgrWrapper = sd.getContext().getSDApplication().getQtForPythonUIMgr()  # type: ignore[no-untyped-call]
+ui: QtForPythonUIMgrWrapper = sd.getContext().getSDApplication().getQtForPythonUIMgr()
 mw = cast(QMainWindow, ui.getMainWindow())
 d = next(w for w in mw.findChildren(QDockWidget) if w.objectName().startswith('areaB_') and w.isVisible())
 

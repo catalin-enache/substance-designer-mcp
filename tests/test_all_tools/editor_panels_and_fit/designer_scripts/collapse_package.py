@@ -16,14 +16,14 @@ class Args(TypedDict):
 
 
 ARGS: Args = globals()['ARGS']
-app: SDApplication = sd.getContext().getSDApplication()  # type: ignore[no-untyped-call]
+app: SDApplication = sd.getContext().getSDApplication()
 pm = app.getPackageMgr()
 g = cast(
     SDSBSCompGraph,
     next(r for p in pm.getUserPackages() for r in p.getChildrenResources(False) if r.getIdentifier() == ARGS['graph']),
 )
 # sd's getQtForPythonUIMgr() has no annotations. It and getMainWindow() give None only without Designer's UI.
-ui: QtForPythonUIMgrWrapper = app.getQtForPythonUIMgr()  # type: ignore[no-untyped-call]
+ui: QtForPythonUIMgrWrapper = app.getQtForPythonUIMgr()
 mw = cast(QtWidgets.QMainWindow, ui.getMainWindow())
 explorer = next(
     d for d in mw.findChildren(QtWidgets.QDockWidget) if d.objectName().startswith('areaA_') and d.isVisible()

@@ -22,9 +22,9 @@ class Args(_Tool, total=False):
 
 
 ARGS: Args = globals()['ARGS']
-app: SDApplication = sd.getContext().getSDApplication()  # type: ignore[no-untyped-call]
+app: SDApplication = sd.getContext().getSDApplication()
 # sd's getQtForPythonUIMgr() has no annotations. It and getMainWindow() give None only without Designer's UI.
-ui: QtForPythonUIMgrWrapper = app.getQtForPythonUIMgr()  # type: ignore[no-untyped-call]
+ui: QtForPythonUIMgrWrapper = app.getQtForPythonUIMgr()
 mw = cast(QtWidgets.QMainWindow, ui.getMainWindow())
 dock = next(d for d in mw.findChildren(QtWidgets.QDockWidget) if d.objectName().startswith('areaD_') and d.isVisible())
 tools = {

@@ -148,8 +148,8 @@ Python, 3.9 at the oldest (DECISIONS.md, Project rules), so they do start with `
 and evaluate no `X | None` at module level (`tests/unit/test_old_python.py` runs them on a Python 3.9 when one is
 installed; the modules only through the scripts that import them).
 
-**The most specific type that fits; `Any` is the last resort.** mypy strict accepts `Any` anywhere, and checks nothing
-through it, so before writing `Any` (or a `dict`, `list` or `tuple` whose items' types say less than is known: a
+**The most specific type that fits; `Any` is the last resort.** mypy checks nothing through an `Any`, so before
+writing `Any` (or a `dict`, `list` or `tuple` whose items' types say less than is known: a
 record's `dict[str, object]` where a `TypedDict` fits; a bare one strict mypy refuses already) look for what the value
 really is: a type of the code it comes from (`SDNode`, `Reply`,
 `subprocess.CompletedProcess[str]`), a union of the few it can be, a `TypedDict` for a dict with known keys (a record,
@@ -157,11 +157,14 @@ a reply, a worker's results), a `Protocol` for an object of which only some attr
 for a function, a `TypeVar` for a value passed through, `object` for one only stored, printed or compared, or for
 parsed JSON before it is checked (it makes the checks explicit). `Any` stays where nothing narrower is true or can be
 checked (a fake standing in for a type it can't subclass, what sd's own stubs leave untyped), marked as an exception
-with its reason on the same line: `# type: ignore[explicit-any]  # <reason>` in a module where mypy's
-`disallow_any_explicit` is on (ROADMAP item 99), `# Any: <reason>` elsewhere, since strict mypy refuses that ignore
-as unused without the flag (measured, mypy 2.4.1). An `Any` so marked, with a reason that holds, is accepted; one
-without is narrowed or marked. A function you change gets the same look: an `Any`, or a `dict`, `list` or `tuple`
-whose items' types say less than is known, that it holds and could be narrower is narrowed in the same change.
+with its reason: `# type: ignore[explicit-any]  # <reason>`, on the line mypy reports. For a function, that is its
+`def` line, even when the signature spans several lines. An `Any` so marked, with a reason that holds, is accepted.
+mypy refuses an `Any` written in an annotation, a signature, a `cast` or a type alias without the mark, the `...` of
+`Callable[..., T]` included (`disallow_any_explicit` in `mypy.ini`). It doesn't report an `Any` inside an expression,
+such as `defaultdict[str, Any](int)`, nor one that comes in implicitly, such as `json.loads`'s result
+(`tests/unit/test_types.py`), so look for those yourself. A function you change gets the same look: an `Any`,
+or a `dict`, `list` or `tuple` whose items' types say less than is known, that it holds and could be narrower is
+narrowed in the same change.
 Reviewers report what is left in the functions a branch's diff adds or changes, and anywhere in a whole-project review
 (the `project-code-review` skill).
 

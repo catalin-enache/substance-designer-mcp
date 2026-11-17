@@ -26,7 +26,7 @@ class Args(TypedDict):
 ARGS: Args = globals()['ARGS']
 new_string = SDValueString.sNew
 new_color = SDValueColorRGBA.sNew
-pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
+pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()
 HOST = 'mcp_selftest_rename_host'
 
 

@@ -33,14 +33,14 @@ from sd.api.sduimgr import SDUIMgr
 from sd.api.sdvalue import SDValue as SDValue
 from sd.api.sdvaluetexture import SDValueTexture
 
-_APP: SDApplication = sd.getContext().getSDApplication()  # type: ignore[no-untyped-call]  # sd: no annotations
+_APP: SDApplication = sd.getContext().getSDApplication()
 _PM: SDPackageMgr = _APP.getPackageMgr()
 
 
 def _ui() -> QtForPythonUIMgrWrapper:
     """Designer's Qt UI manager. sd's getQtForPythonUIMgr() has no annotations, and returns None only without Designer's
     UI, which the helpers always run with."""
-    return cast(QtForPythonUIMgrWrapper, _APP.getQtForPythonUIMgr())  # type: ignore[no-untyped-call]  # sd: no annotations
+    return cast(QtForPythonUIMgrWrapper, _APP.getQtForPythonUIMgr())
 
 
 def _ui_mgr() -> SDUIMgr:

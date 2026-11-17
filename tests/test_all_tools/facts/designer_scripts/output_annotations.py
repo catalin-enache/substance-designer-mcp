@@ -24,7 +24,7 @@ def ident(node: SDNode) -> str:
     return str(cast(SDValueString, node.getAnnotationPropertyValueFromId('identifier')).get())
 
 
-pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
+pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()
 pkg = pm.newUserPackage()
 try:
     g = SDSBSCompGraph.sNew(pkg)

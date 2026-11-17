@@ -17,7 +17,7 @@ class Args(TypedDict):
 
 ARGS: Args = globals()['ARGS']
 M = SDPropertyInheritanceMethod
-pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
+pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()
 os.makedirs(ARGS['folder'], exist_ok=True)
 for m in (M.Absolute, M.RelativeToInput, M.RelativeToParent):
     pkg = pm.newUserPackage()

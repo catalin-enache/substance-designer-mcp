@@ -27,7 +27,7 @@ class Args(TypedDict):
 
 
 ARGS: Args = globals()['ARGS']
-pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()  # type: ignore[no-untyped-call]
+pm: SDPackageMgr = sd.getContext().getSDApplication().getPackageMgr()
 
 
 def property_of(owner: SDNode | SDResource, pid: str, category: C) -> SDProperty:
