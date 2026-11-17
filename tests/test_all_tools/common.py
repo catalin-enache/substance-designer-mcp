@@ -537,8 +537,9 @@ HIDE = dedent("""
     spy = _event_signal(handle, ('Expose',))
     try:
         mac.hide()
-        # off screen: macOS says it hidden, Qt's expose event that the window no longer is (REVIEW.md TST-421)
-        _until(lambda: mac.hidden() and not handle.isExposed(), 3.0, [spy.fired])
+        # off screen: macOS says it hidden, as AppKit's notification comes (HIDDEN), and Qt's expose event that the
+        # window no longer is (REVIEW.md TST-421)
+        _until_notified(mac, lambda: mac.hidden() and not handle.isExposed(), 3.0, HIDDEN, [spy.fired])
     finally:
         handle.removeEventFilter(spy)
     print('HIDDEN=%s' % mac.hidden())

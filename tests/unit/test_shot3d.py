@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, NoReturn
 
 import pytest
 from aborts import Tracer
+from appkit_fakes import Notices
 from typing_extensions import Unpack  # typing's from Python 3.11; mcp requires typing_extensions
 
 from conftest import View3dOptions
@@ -56,6 +57,11 @@ class Mac:
         self.slow = 0
         self.held: dict[int, int] = {}  # holds not let go of, by window: one let go of twice would be freed
         self.done: list[str] = []
+        self.notified: list[Notices] = []  # the notices made, each the waits on AppKit's notifications observe
+
+    def notices(self, names: Sequence[str]) -> Notices:
+        self.notified.append(Notices(names))
+        return self.notified[-1]
 
     def landed(self) -> bool:
         return self.abort_on is None
@@ -417,6 +423,8 @@ def test_an_abort_at_any_event_of_the_shot_leaves_the_window_where_it_was_found_
 
     for where in at_each_event(run, ('designer_helpers', __file__), fresh, untraced=(Mac, Window)):
         assert mac.state[way], '%s: %s' % (where, mac.done)
+        # an observer of AppKit's notifications left, its callback freed, would crash Designer (ROADMAP item 101)
+        assert all(n.closed or not n.opened for n in mac.notified), '%s: %s' % (where, mac.done)
         assert all(mac.appearance(w) == OPAQUE for w in (MAIN, *OTHERS)), '%s: %s' % (where, mac.done)
         if 'show' in mac.done:  # shown: its look given back only once it was put back; a step done again after is
             # harmless (the handler runs put_back again)
@@ -584,6 +592,39 @@ def test_a_hidden_designer_is_brought_in_front_once_macos_says_its_unhide_took(h
     assert not mac.early, 'brought in front only once the unhide took'
     unhide = mac.done.index('unhide')
     assert mac.done[unhide + 1 : unhide + 3] == ['wait %g' % helpers.ON_SCREEN_WAIT, 'show']
+
+
+OFF_SCREEN = ('NSWindowDidMiniaturizeNotification', 'NSWindowDidChangeOcclusionStateNotification')
+
+
+@pytest.mark.parametrize(
+    'way, notified',
+    [
+        ('minimized', [OFF_SCREEN]),
+        ('hidden', [('NSApplicationDidUnhideNotification',), OFF_SCREEN]),
+        ('covered', []),
+    ],
+)
+def test_the_waits_on_macos_showing_or_putting_away_the_window_are_woken_by_appkits_notifications(
+    helpers: types.ModuleType, way: str, notified: list[tuple[str, ...]]
+) -> None:
+    # ROADMAP item 101: no Qt callback says Designer unhidden, nor its window off screen once minimized or hidden
+    # (REVIEW.md HLP-173). AppKit's notifications do, as measured (shot3d.py's module docstring). Designer hidden came
+    # while the window server still listed the window: not observed
+    mac = Mac(**{way: True})
+    _on(helpers, mac)
+    woken: list[list[str]] = []
+
+    def until(state: Callable[[], bool], limit: float, signals: Sequence[str] = ()) -> bool:
+        woken.append(list(signals))
+        return bool(state())
+
+    vars(helpers)['_until'] = until
+    with on_screen(helpers, Window(mac)):
+        mac.done.append('shot')
+    assert [n.names for n in mac.notified] == notified
+    assert all(n.opened == n.closed == 1 for n in mac.notified), 'each opened and closed once'
+    assert all([n.fired] in woken for n in mac.notified)
 
 
 def test_a_minimized_window_of_a_hidden_designer_is_minimized_and_designer_hidden_again(
@@ -1069,7 +1110,8 @@ def test_a_3d_view_not_shown_is_refused_before_the_window_changes(helpers: types
 
 @pytest.mark.parametrize('way', ['minimized', 'covered', 'hidden'])
 def test_each_spy_on_the_windows_expose_events_is_removed(helpers: types.ModuleType, way: str) -> None:
-    # REVIEW.md TST-428: the Expose spies of _wait_on_screen and _wait_off_screen were installed and never seen removed
+    # REVIEW.md TST-428: the Expose spies of _wait_on_screen and _wait_off_screen were installed and never seen removed.
+    # _wait_off_screen observes AppKit's notifications since (ROADMAP item 101): each closed, a test of its own
     installed: list[SimpleNamespace] = []
     removed: list[SimpleNamespace] = []
 

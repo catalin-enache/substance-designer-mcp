@@ -17,13 +17,17 @@ Measured on macOS in a Designer an agent started (2026-11-13; what the 3D view d
   SD_DESIGNER_APP starts shown (server_tools/lifecycle.py; REVIEW.md SRV-149, SRV-152). One that quits as the active app hands it back to the app active
   before it. Hidden (hide:), Designer makes the app active before it active again; shown again without being
   made active (unhideWithoutActivation), it stays so (2026-11-14, the front app read with lsappinfo: REVIEW.md SRV-148).
+- AppKit's notifications reach an observer of CoreFoundation's local center (CFNotificationCenterAddObserver), whose
+  callback is a C function: no Objective-C class is registered for it. With a Qt signal's own emit as the callback, a
+  QEventLoop connected to the signal woke at each notification, 4 of 4 (2026-11-17, ROADMAP item 101). What each
+  notification says against macOS's flags and the window server's list: shot3d.py.
 """
 
 import ctypes
 import ctypes.util
 
-from .core import QtGui, QtWidgets, _main_window, cast, sys
-from .waits import _event_signal, _until, _unwatch
+from .core import Callable, Protocol, QtCore, QtGui, QtWidgets, Sequence, _main_window, cast, sys
+from .waits import _until
 
 ACTIVATION_WAIT = 3.0  # s at most for Designer to be no longer the active app once hidden, then shown again: a limit
 NS_VISIBLE = 2  # NSWindowOcclusionStateVisible: part of the window is on screen
@@ -32,6 +36,57 @@ CG_ON_SCREEN = (1 << 0) | (1 << 4)  # kCGWindowListOptionOnScreenOnly, kCGWindow
 CG_ABOVE = (1 << 1) | (1 << 4)  # kCGWindowListOptionOnScreenAboveWindow, kCGWindowListExcludeDesktopElements
 CF_UTF8 = 0x08000100  # kCFStringEncodingUTF8
 CF_SINT64 = 4  # kCFNumberSInt64Type
+CF_AT_ONCE = 4  # CFNotificationSuspensionBehaviorDeliverImmediately
+NOTICE = ctypes.CFUNCTYPE(None, *(ctypes.c_void_p,) * 5)  # CFNotificationCallback: center, observer, name, sender, info
+# AppKit's notifications that wake the 3D shot's waits, and the self-test's (measured: shot3d.py's module docstring)
+UNHIDDEN = ('NSApplicationDidUnhideNotification',)  # macOS no longer says Designer hidden
+# the window unlisted, for the shot; its occlusion change also says it no longer covered, for the self-test's uncovered
+OFF_SCREEN = ('NSWindowDidMiniaturizeNotification', 'NSWindowDidChangeOcclusionStateNotification')
+HIDDEN = ('NSApplicationDidHideNotification',)  # macOS says Designer hidden: the self-test's waits only
+UNMINIMIZED = ('NSWindowDidDeminiaturizeNotification',)  # macOS no longer says it minimized: the self-test's only
+
+
+class _Relay(Protocol):
+    """The Qt object _relay returns: its `fired` signal relays CoreFoundation's callback, with its five arguments."""
+
+    fired: QtCore.SignalInstance
+
+
+def _relay() -> _Relay:
+    """A Qt object whose `fired` signal _Notices fires as each notification comes. Its class is made here, so loading
+    the helpers makes no Qt class (waits.py's _EventSpy)."""
+
+    class Relay(QtCore.QObject):
+        fired = QtCore.Signal(object, object, object, object, object)  # CoreFoundation's callback's arguments
+
+    return Relay()
+
+
+class _Notices:
+    """AppKit's notifications `sent`, each its name (an NSString) and its sender, relayed as `fired`, a Qt signal a wait
+    can be woken by (_until), from open() to close(). They come through CoreFoundation's local center (`cf`), which
+    AppKit's notifications reach. The callback is the signal's own emit, so no Python runs as a notification comes while
+    only Qt's own slots are connected to `fired`, as in the shot's waits, and no abort can land there (waits.py's
+    _until). close() must run once open() has: the next notification would call a callback freed with this object, and
+    crash Designer (_notified)."""
+
+    def __init__(self, cf: ctypes.CDLL, sent: Sequence[tuple[int, int | None]]) -> None:
+        self._cf = cf
+        self._sent = sent
+        self._relay = _relay()  # held: its signal's emit is the callback
+        self.fired = self._relay.fired
+        self._callback = NOTICE(self.fired.emit)
+
+    def open(self) -> None:
+        """Observes each notification, from its sender."""
+        center: int | None = self._cf.CFNotificationCenterGetLocalCenter()  # a c_void_p result: an int, or None
+        for name, sender in self._sent:
+            self._cf.CFNotificationCenterAddObserver(center, id(self), self._callback, name, sender, CF_AT_ONCE)
+
+    def close(self) -> None:
+        """Observes none of them any more. Run again, or before open(), it does nothing."""
+        center: int | None = self._cf.CFNotificationCenterGetLocalCenter()
+        self._cf.CFNotificationCenterRemoveEveryObserver(center, id(self))
 
 
 class _MacWindow:
@@ -211,23 +266,81 @@ class _MacWindow:
         order = prototype(('objc_msgSend', self._objc))
         order(self._window, self._objc.sel_registerName(b'orderWindow:relativeTo:'), NS_BELOW, number)
 
+    def notices(self, names: Sequence[str]) -> _Notices:
+        """AppKit's notifications `names`, relayed as a Qt signal (_Notices): an NSWindow one as the main window sends
+        it, an NSApplication one as Designer does."""
+        cf = ctypes.CDLL(ctypes.util.find_library('CoreFoundation'))
+        cf.CFNotificationCenterGetLocalCenter.restype = ctypes.c_void_p
+        cf.CFNotificationCenterAddObserver.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            NOTICE,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_long,
+        ]
+        cf.CFNotificationCenterRemoveEveryObserver.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        appkit = ctypes.CDLL(ctypes.util.find_library('AppKit'))
+        sent = [
+            (
+                cast(int, ctypes.c_void_p.in_dll(appkit, name).value),  # the NSString AppKit exports under that name
+                self._window if name.startswith('NSWindow') else self._app,
+            )
+            for name in names
+        ]
+        return _Notices(cf, sent)
+
 
 def _mac_window(mw: QtWidgets.QMainWindow) -> _MacWindow | None:
     """Designer's main window as macOS sees it; None elsewhere."""
     return _MacWindow(mw) if sys.platform == 'darwin' else None
 
 
-def _wait_unhidden(mac: _MacWindow, handle: QtGui.QWindow, limit: float) -> bool:
-    """Waits, at most `limit` s, for macOS to no longer say Designer is hidden once it was unhidden: looked at as Qt's
-    expose events for `handle`, the main window's, come, and every TICK ms. Returns whether macOS said so. The unhide
-    takes as Designer's events run (shot3d.py's module docstring; REVIEW.md HLP-160). The window's exposure is no sign
-    of it: the window can come back behind the active app's, and once covered whole Qt no longer exposes it (REVIEW.md
-    HLP-166)."""
-    spy = _event_signal(handle, ('Expose',))
+def _notified(mac: _MacWindow, names: Sequence[str], wait: Callable[[QtCore.SignalInstance], bool]) -> bool:
+    """Runs `wait` with the Qt signal relaying AppKit's notifications `names` (_MacWindow.notices), and returns what it
+    returns. They are observed while it runs only, and the observer is removed even when an abort lands on its removal
+    (_Notices)."""
+    notices = mac.notices(names)
     try:
-        return _until(lambda: not mac.hidden(), limit, [spy.fired])
-    finally:
-        _unwatch(handle, spy)
+        try:
+            notices.open()
+            return wait(notices.fired)
+        finally:
+            notices.close()
+    except BaseException:
+        # the plugin raises an abort once, then stops tracing: landed on the close above, it skipped it, and this one
+        # runs (as _on_screen's handler: REVIEW.md HLP-180)
+        notices.close()
+        raise
+
+
+def _until_notified(
+    mac: _MacWindow,
+    state: Callable[[], bool],
+    limit: float,
+    names: Sequence[str],
+    signals: Sequence[QtCore.SignalInstance] = (),
+) -> bool:
+    """_until, woken by AppKit's notifications `names` too (_notified), and by `signals`: returns whether `state()` held
+    within `limit` s."""
+    return _notified(mac, names, lambda fired: _until(state, limit, [fired, *signals]))
+
+
+def _wait_unhidden(mac: _MacWindow, limit: float) -> bool:
+    """Waits, at most `limit` s, for macOS to no longer say Designer is hidden once it was unhidden: looked at as AppKit
+    says Designer was unhidden (UNHIDDEN), and every TICK ms. Returns whether macOS said so. The unhide takes as
+    Designer's events run (shot3d.py's module docstring; REVIEW.md HLP-160). The window's exposure is no sign of it: the
+    window can come back behind the active app's, and once covered whole Qt no longer exposes it (REVIEW.md HLP-166)."""
+    return _until_notified(mac, lambda: not mac.hidden(), limit, UNHIDDEN)
+
+
+def _wait_unlisted(mac: _MacWindow, limit: float) -> bool:
+    """Waits, at most `limit` s, for the window server to no longer list the main window once it was minimized or
+    Designer hidden: looked at as AppKit says the window was minimized or its occlusion changed (OFF_SCREEN), and every
+    TICK ms. Returns whether it no longer listed it. Not macOS's hidden flag: macOS says Designer hidden while the window
+    server still lists the window (REVIEW.md HLP-173)."""
+    number = mac.number()
+    return _until_notified(mac, lambda: not mac.on_screen(number), limit, OFF_SCREEN)
 
 
 def give_back_activation(started_hidden: bool = False) -> None:
@@ -236,9 +349,9 @@ def give_back_activation(started_hidden: bool = False) -> None:
     becoming the active app unhides a hidden Designer (measured 2026-11-16: REVIEW.md SRV-161), so a Designer opened
     hidden reads shown by then. For launch_designer, once a Designer it started answers, in case that Designer became
     the active app anyway: one started hidden doesn't (REVIEW.md SRV-148, SRV-152, SRV-149). Each step is waited for on
-    Qt's callbacks, ACTIVATION_WAIT at most: the hide until Designer is no longer the active app (Qt's
-    applicationStateChanged), the show until macOS no longer says Designer is hidden (_wait_unhidden; REVIEW.md
-    SRV-150, HLP-166).
+    a callback, ACTIVATION_WAIT at most: the hide until Designer is no longer the active app (Qt's
+    applicationStateChanged), the show until macOS no longer says Designer is hidden (AppKit's notification:
+    _wait_unhidden; REVIEW.md SRV-150, HLP-166).
     Prints what it did; nothing when Designer isn't the active app, or elsewhere than macOS."""
     mw = _main_window()
     mac = _mac_window(mw)
@@ -258,11 +371,8 @@ def give_back_activation(started_hidden: bool = False) -> None:
             else 'still the active app after it was hidden'
         )
         return
-    top = mw.window()  # the top-level window: getMainWindow() is a page of it
-    # held: a handle taken through a wrapper dropped at once is deleted by the next line (REVIEW.md SRV-155)
-    handle = top.windowHandle()
     mac.unhide()
-    _wait_unhidden(mac, handle, ACTIVATION_WAIT)
+    _wait_unhidden(mac, ACTIVATION_WAIT)
     print(
         'gave the keyboard back to the app in front before it'
         if not mac.active()

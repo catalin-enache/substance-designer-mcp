@@ -4,11 +4,13 @@ helpers, the client, the examples and the self-test, their snippets of Designer 
 _settle, every `.start(...)` given a time and every single-shot timer after a number, written on one line, is a poll of
 POLL_S or TICK, or one of the waits listed here, each with the reason it stays (REVIEW.md TST-426: a timer started at a
 variable went unseen). A call split over lines isn't read, nor `Event.wait(...)`: the self-test's front watch samples
-every FRONT_EVERY through one (window_server.py; REVIEW.md TST-456)."""
+every FRONT_EVERY through one (window_server.py; REVIEW.md TST-456). A call spelled until( or _until( whose line reads
+mac.hidden or mac.minimized is given AppKit's notifications by name too (ROADMAP item 101)."""
 
 import os
 import re
 from collections import Counter
+from collections.abc import Iterator
 
 from conftest import ROOT
 from project_constants import PLUGIN
@@ -84,8 +86,8 @@ STAYS: dict[tuple[str, str], tuple[int, str]] = {
 }
 
 
-def _waits() -> Counter[tuple[str, str]]:
-    found: Counter[tuple[str, str]] = Counter()
+def _code_lines() -> Iterator[tuple[str, str]]:
+    """(file, its code) for each line of code read here, but a comment's or a def's: the file relative to the root."""
     paths = [os.path.join(ROOT, f) for f in FILES]
     for folder in FOLDERS:
         for top, dirs, files in os.walk(os.path.join(ROOT, folder)):
@@ -94,11 +96,16 @@ def _waits() -> Counter[tuple[str, str]]:
     for path in paths:
         with open(path, encoding='utf-8') as f:
             for line in f:
-                code = line.split('  #')[0]  # a comment after the code
                 if line.lstrip().startswith('#') or re.match(r'\s*def ', line):
                     continue
-                for wait in WAIT.findall(code):
-                    found[(os.path.relpath(path, ROOT).replace(os.sep, '/'), wait)] += 1
+                yield os.path.relpath(path, ROOT).replace(os.sep, '/'), line.split('  #')[0]  # a comment after it
+
+
+def _waits() -> Counter[tuple[str, str]]:
+    found: Counter[tuple[str, str]] = Counter()
+    for path, code in _code_lines():
+        for wait in WAIT.findall(code):
+            found[(path, wait)] += 1
     return found
 
 
@@ -107,6 +114,23 @@ def test_nothing_waits_a_fixed_time_but_the_waits_that_stay() -> None:
     fixed = {key: n for key, n in found.items() if key[1] not in POLLS}
     assert {key: n for key, n in fixed.items() if STAYS.get(key, (0, ''))[0] != n} == {}
     assert [key for key in STAYS if key not in fixed] == [], 'listed, no longer there'
+
+
+# a wait the guard reads: a call spelled until( or _until( whose line reads macOS's hidden or minimized flag through a
+# variable named mac (mac.hidden, mac.minimized). The helpers' waits on AppKit's notifications (_until_notified,
+# _wait_unhidden, _wait_unlisted) don't match it
+MACOS_FLAG = re.compile(r'\b_?until\(.*\bmac\.(?:hidden|minimized)\b')
+# given AppKit's notifications by name: window_states.py's until(), names= one of mac_window.py's tuples
+NOTIFIED = re.compile(r'\bnames=(?:UNHIDDEN|HIDDEN|OFF_SCREEN|UNMINIMIZED)\b')
+
+
+def test_a_wait_on_macoss_hidden_or_minimized_flag_wakes_on_appkits_notifications() -> None:
+    # ROADMAP item 101: Qt sends no event as macOS hides, shows or minimizes Designer (REVIEW.md HLP-173), so a wait
+    # woken by Qt's events and a poll alone sees the flag change up to 100 ms late. Read on the wait's line only: a
+    # state read through a function of its own (window_states.py's shown_again) isn't seen here
+    found = [(path, code.strip()) for path, code in _code_lines() if MACOS_FLAG.search(code)]
+    assert found, 'no wait on the flags found: the pattern no longer matches the code'
+    assert [wait for wait in found if not NOTIFIED.search(wait[1])] == []
 
 
 def test_the_polls_look_every_100_ms() -> None:

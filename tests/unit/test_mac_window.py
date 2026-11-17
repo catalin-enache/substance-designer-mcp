@@ -1,5 +1,5 @@
 """A Designer just started giving the keyboard back (designer_helpers/mac_window.py's give_back_activation; REVIEW.md
-SRV-148), with sd and PySide6 faked."""
+SRV-148), and the waits woken by AppKit's notifications (ROADMAP item 101), with sd and PySide6 faked."""
 
 import sys
 import types
@@ -8,22 +8,32 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
+from appkit_fakes import Center, Notices
 
-if TYPE_CHECKING:  # for the checker only: the type the faked helpers take; PySide6 is faked at run time
+if TYPE_CHECKING:  # for the checker only: the types the faked helpers take; PySide6 is faked at run time
     from PySide6 import QtCore
 
+    from designer_helpers.mac_window import _Notices
+
 GIVEN = 'gave the keyboard back to the app in front before it'
+UNHIDDEN = 'NSApplicationDidUnhideNotification'
 
 
 class App:
-    """_MacWindow, faked: whether Designer is the active app, and what was done, in order. Hiding Designer makes the
-    app active before it active again (measured: mac_window.py), unless it `stays` the active app."""
+    """_MacWindow, faked: whether Designer is the active app, what was done, in order, and the notices made (Notices).
+    Hiding Designer makes the app active before it active again (measured: mac_window.py), unless it `stays` the
+    active app."""
 
     def __init__(self, active: bool, stays: bool = False, hidden: bool = False) -> None:
         self.is_active = active
         self.stays = stays
         self.is_hidden = hidden
         self.done: list[str] = []
+        self.notified: list[Notices] = []
+
+    def notices(self, names: Sequence[str]) -> Notices:
+        self.notified.append(Notices(names))
+        return self.notified[-1]
 
     def active(self) -> bool:
         return self.is_active
@@ -43,7 +53,8 @@ class App:
 def helpers(faked_helpers: types.ModuleType) -> types.ModuleType:
     vars(faked_helpers)['_settle'] = lambda seconds: None
     vars(faked_helpers)['_until'] = lambda state, limit, signals=(): bool(state())
-    vars(faked_helpers)['_event_signal'] = lambda window, kinds, seen=None: SimpleNamespace(fired='its signal')
+    # the Qt object relaying CoreFoundation's callback: its signal's emit is the callback (mac_window.py's _Notices)
+    vars(faked_helpers)['_relay'] = lambda: SimpleNamespace(fired=SimpleNamespace(emit=lambda *sent: None))
     return faked_helpers
 
 
@@ -87,47 +98,121 @@ def test_designer_still_the_active_app_after_is_said(
     assert capsys.readouterr().out.splitlines() == ['still the active app after it was hidden and shown again']
 
 
-def test_the_hide_and_the_show_are_waited_for_on_qts_callbacks_not_a_fixed_time(helpers: types.ModuleType) -> None:
+def test_the_hide_and_the_show_are_waited_for_on_callbacks_not_a_fixed_time(helpers: types.ModuleType) -> None:
     # REVIEW.md SRV-150: 1.0 s after the hide and 1.0 s after the show, whatever macOS did (AGENTS.md: callbacks, never
-    # a time measured here)
+    # a time measured here). The show is woken by AppKit's notification that Designer was unhidden, which came with
+    # macOS no longer saying it hidden (shot3d.py's module docstring; ROADMAP item 101): Qt's expose events came before
+    # the unhide took in one probe and after it in another (REVIEW.md HLP-160)
     def fixed(seconds: float) -> None:
         raise AssertionError('a fixed wait of %g s' % seconds)
 
-    # each wait's signals: the faked app's applicationStateChanged, then the fake spy's `fired`
+    # each wait's signals: the faked app's applicationStateChanged, then the fake notices' `fired`
     waited: list[tuple[bool, float, list[QtCore.SignalInstance | str]]] = []
 
     def until(state: Callable[[], bool], limit: float, signals: Sequence['QtCore.SignalInstance | str'] = ()) -> bool:
         waited.append((bool(state()), limit, list(signals)))
         return bool(state())
 
-    watched: list[tuple[SimpleNamespace, tuple[str, ...]]] = []  # the stand-ins watched: the window's handle
-    removed: list[SimpleNamespace] = []
-    spy = SimpleNamespace(fired='the Expose signal')
-    handle = SimpleNamespace(isExposed=lambda: True, removeEventFilter=removed.append)
-
-    def event_signal(
-        window: SimpleNamespace, kinds: Sequence[str], seen: Callable[[str], None] | None = None
-    ) -> SimpleNamespace:
-        watched.append((window, tuple(kinds)))
-        return spy
-
     vars(helpers)['_settle'] = fixed
     vars(helpers)['_until'] = until
-    vars(helpers)['_event_signal'] = event_signal
     mac = App(active=True)
     _on(helpers, mac)
-    top = SimpleNamespace(windowHandle=lambda: handle)
-    vars(helpers)['_APP'] = SimpleNamespace(
-        getQtForPythonUIMgr=lambda: SimpleNamespace(getMainWindow=lambda: SimpleNamespace(window=lambda: top))
-    )
     helpers.give_back_activation()
     qt = sys.modules['PySide6'].QtGui
     assert waited == [
         (True, helpers.ACTIVATION_WAIT, [qt.QGuiApplication.instance().applicationStateChanged]),  # no longer active
-        (True, helpers.ACTIVATION_WAIT, ['the Expose signal']),  # on screen again
+        (True, helpers.ACTIVATION_WAIT, ['notified of ' + UNHIDDEN]),  # shown again
     ]
-    assert watched == [(handle, ('Expose',))]
-    assert removed == [spy]  # REVIEW.md TST-428: the spy is removed
+    assert [(n.names, n.opened, n.closed) for n in mac.notified] == [((UNHIDDEN,), 1, 1)]  # observed, then no more
+
+
+class Observed:
+    """_MacWindow, faked for a wait on AppKit's notifications: its notices are real (_Notices), on the faked `center`,
+    each name a number of its own, sent by Designer, or by its window for an NSWindow one."""
+
+    APP, WINDOW = 21, 22
+
+    def __init__(self, helpers: types.ModuleType, center: Center) -> None:
+        self.helpers = helpers
+        self.center = center
+        self.made: list[_Notices] = []
+
+    def notices(self, names: Sequence[str]) -> '_Notices':
+        sent = [(10 + i, self.WINDOW if name.startswith('NSWindow') else self.APP) for i, name in enumerate(names)]
+        made: _Notices = self.helpers._Notices(self.center, sent)
+        self.made.append(made)
+        return made
+
+
+NAMES = (UNHIDDEN, 'NSWindowDidChangeOcclusionStateNotification')
+
+
+def test_a_wait_on_appkits_notifications_is_woken_by_them_while_it_observes_them(helpers: types.ModuleType) -> None:
+    # ROADMAP item 101: no Qt callback says Designer was unhidden, nor its window off screen (REVIEW.md HLP-173)
+    center = Center()
+    seen: list[tuple[float, list[object], dict[int, list[tuple[int, int | None]]]]] = []
+
+    def until(state: Callable[[], bool], limit: float, signals: Sequence[object] = ()) -> bool:
+        seen.append((limit, list(signals), {k: list(v) for k, v in center.observers.items()}))
+        return bool(state())
+
+    vars(helpers)['_until'] = until
+    mac = Observed(helpers, center)
+    assert helpers._until_notified(mac, lambda: True, 2.0, NAMES)
+    assert len(seen) == 1 and len(mac.made) == 1
+    limit, signals, observers = seen[0]
+    assert limit == 2.0 and signals == [mac.made[0].fired]
+    assert list(observers.values()) == [[(10, Observed.APP), (11, Observed.WINDOW)]]
+    assert center.observers == {}, 'observed after the wait'
+    assert helpers._until_notified(mac, lambda: False, 2.0, NAMES) is False, "the wait's result, not held"
+    # REVIEW.md TST-526: the signals given wake it too, after AppKit's notifications
+    helpers._until_notified(mac, lambda: True, 2.0, NAMES, ['expose'])
+    assert seen[-1][1] == [mac.made[-1].fired, 'expose'], seen[-1]
+
+
+def test_corefoundation_is_given_the_callback_the_notices_hold_and_it_relays_what_comes(
+    helpers: types.ModuleType,
+) -> None:
+    # REVIEW.md TST-526: a callback made for the call and not held is freed after it, and the next notification would
+    # crash Designer; one that doesn't emit `fired` wakes no wait. The callback is called as CoreFoundation does: the
+    # center, the observer, the name, the sender and the user info, five pointers
+    center = Center()
+    relayed: list[tuple[object, ...]] = []
+    vars(helpers)['_relay'] = lambda: SimpleNamespace(fired=SimpleNamespace(emit=lambda *sent: relayed.append(sent)))
+    made = Observed(helpers, center).notices(NAMES)
+    made.open()
+    try:
+        assert len(center.callbacks) == 2 and all(c is made._callback for c in center.callbacks), center.callbacks
+        made._callback(1, 2, 3, 4, 5)
+        assert relayed == [(1, 2, 3, 4, 5)], relayed
+    finally:
+        made.close()
+
+
+def test_an_abort_at_any_event_of_a_wait_on_appkits_notifications_leaves_no_observer(helpers: types.ModuleType) -> None:
+    # an observer left once its callback is freed: the next notification would crash Designer. The plugin raises its
+    # abort at a traced event, once, then stops tracing (REVIEW.md HLP-180): landed on the removal after the wait, it
+    # skips it. Center stands for CoreFoundation: in a file of its own, it isn't traced, as Qt isn't
+    from aborts import at_each_event
+
+    center = Center()
+    observed: list[bool] = []  # whether the wait ran while observing, in each run that reached it
+
+    def until(state: Callable[[], bool], limit: float, signals: Sequence[object] = ()) -> bool:
+        observed.append(bool(center.observers))
+        return bool(state())
+
+    vars(helpers)['_until'] = until
+    mac = Observed(helpers, center)
+
+    def run() -> None:
+        helpers._until_notified(mac, lambda: True, 2.0, NAMES)
+
+    landed = []
+    for where in at_each_event(run, ('designer_helpers', __file__), center.observers.clear):
+        assert center.observers == {}, where
+        landed.append(where)
+    assert landed and observed and all(observed)
 
 
 def test_no_window_handle_is_taken_through_a_wrapper_dropped_at_once() -> None:
@@ -195,14 +280,16 @@ def test_the_show_is_waited_for_until_macos_says_designer_is_shown_not_until_its
     helpers: types.ModuleType,
 ) -> None:
     # REVIEW.md HLP-166: an unhidden window goes behind the active app's window, and once covered whole, Qt no longer
-    # exposes it (REVIEW.md HLP-160, measured): the wait for its exposure then ran ACTIVATION_WAIT, a limit as its time
+    # exposes it (REVIEW.md HLP-160, measured): the wait for its exposure then ran ACTIVATION_WAIT, a limit as its time.
+    # The wait reads macOS's flag, which Unhides sets as it unhides. The main window here is covered whole: a wait that
+    # read its exposure would never hold (REVIEW.md TST-515)
     held: list[bool] = []
 
     def until(state: Callable[[], bool], limit: float, signals: Sequence['QtCore.SignalInstance | str'] = ()) -> bool:
         held.append(bool(state()))
         return held[-1]
 
-    handle = SimpleNamespace(isExposed=lambda: False, removeEventFilter=lambda spy: None)  # covered whole
+    handle = SimpleNamespace(isExposed=lambda: False)  # covered whole; any other read of it raises
     top = SimpleNamespace(windowHandle=lambda: handle)
     vars(helpers)['_until'] = until
     vars(helpers)['_APP'] = SimpleNamespace(

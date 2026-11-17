@@ -4,11 +4,13 @@ state lines its snippets print, and whether a shot left Designer not the active 
 
 import ast
 import re
-from collections.abc import Sequence
-from types import ModuleType
+from collections.abc import Callable, Sequence
+from types import ModuleType, SimpleNamespace
+from typing import cast
 
 import pytest
 from selftest_fakes import fresh
+from window_fakes import Screen
 
 from project_constants import ToolArgs
 
@@ -559,6 +561,31 @@ def _defs(states: ModuleType) -> dict[str, ast.FunctionDef]:
     return {n.name: n for n in ast.walk(ast.parse(states._WINDOW)) if isinstance(n, ast.FunctionDef)}
 
 
+def _defined(code: str, scope: dict[str, object], kept: Sequence[str] = ()) -> dict[str, object]:
+    """`scope` with the functions snippet `code` defines at its top level, and the values it assigns there to the names
+    `kept`. The fakes in `scope` replace those of the same name."""
+    tops: list[ast.stmt] = [
+        n
+        for n in ast.parse(code).body
+        if isinstance(n, ast.FunctionDef)
+        or (isinstance(n, ast.Assign) and [ast.unparse(t) for t in n.targets] in [[name] for name in kept])
+    ]
+    defined: dict[str, object] = {}
+    exec(compile(ast.Module(body=tops, type_ignores=[]), 'snippet', 'exec'), defined)
+    defined.update(scope)  # the functions' globals: they read the fakes
+    return defined
+
+
+# what the snippets' count of the windows in the way reads, faked: each wait on AppKit's notifications looks at its state
+# a few times, as it does until its limit, so a state that comes after a look holds and one that never comes doesn't;
+# no window of another app is in front
+COUNTED: dict[str, object] = {
+    '_until_notified': lambda window, state, limit, names: any(state() for _ in range(3)),
+    'OFF_SCREEN': (),
+    'in_front_of': lambda window: [],
+}
+
+
 def _branch(code: str, test: str) -> ast.Module:
     """The body of the `if` (or `elif`) of `code` whose test reads `test`, without the branches after it."""
     found = next(n for n in ast.walk(ast.parse(code)) if isinstance(n, ast.If) and ast.unparse(n.test) == test)
@@ -589,7 +616,13 @@ def test_a_set_up_whose_wait_for_designers_window_runs_out_stops_before_it_place
     # out; Designer's windows, back near the front, were then made opaque in front of the user's
     states = fresh('editor_panels_and_fit.window_states')
     defs = _defs(states)
-    last = defs['until'].body[-1]
+    # until() returns its loop's state(), directly or through the helpers' _notified, which returns what it runs: every
+    # return of it, a bare one included, and its last statement (REVIEW.md TST-515)
+    until = defs['until']
+    said = [ast.unparse(n) for n in ast.walk(until) if isinstance(n, ast.Return)]  # a bare one is 'return'
+    assert said and all('woken_until(state, limit, ' in value for value in said), said
+    assert isinstance(until.body[-1], ast.Return), said
+    last = defs['woken_until'].body[-1]
     assert isinstance(last, ast.Return) and last.value is not None and ast.unparse(last.value) == 'state()'
     for name in ('window', 'to_back'):
         assert _waits_not_stopping(defs[name]) == [], name
@@ -597,7 +630,7 @@ def test_a_set_up_whose_wait_for_designers_window_runs_out_stops_before_it_place
     # at rest, made opaque only once Designer is hidden: left transparent and click-through otherwise
     clear = ast.parse(states._CLEAR)
     bare = [ast.unparse(n) for n in clear.body if isinstance(n, ast.Expr) and ast.unparse(n.value) == 'fade(False)']
-    assert bare == [] and 'until(mac.hidden)' in states._CLEAR, bare
+    assert bare == [] and 'hidden = until(mac.hidden, ' in states._CLEAR, bare
 
 
 def test_a_window_the_checks_make_is_registered_for_the_clear_before_it_shows() -> None:
@@ -618,7 +651,7 @@ def test_to_back_makes_designers_windows_transparent_before_it_shows_them_and_le
     to_back = ast.unparse(_defs(states)['to_back'])
     shows = [to_back.index(step) for step in ('mac.unhide()', "'deminiaturize:'", 'mw.setWindowState(')]
     assert to_back.index('fade(True)') < min(shows)
-    assert max(shows) < to_back.index('until(shown_again)') < to_back.index("'orderBack:'")
+    assert max(shows) < to_back.index('until(shown_again, ') < to_back.index("'orderBack:'")
     assert 'fade(False)' not in to_back, 'the caller makes them opaque, once behind'
 
 
@@ -636,3 +669,175 @@ def test_the_minimized_way_makes_designers_windows_opaque_only_once_the_window_i
     assert any('on_screen' in wait for wait in waits) and _waits_not_stopping(minimized) == [], waits
     assert "'performMiniaturize:'" in ast.unparse(minimized)
     assert 'fade(False)' not in ast.unparse(minimized), 'made opaque after it, with the other ways behind'
+
+
+@pytest.mark.parametrize('covered', [True, False])
+def test_a_window_still_covered_once_brought_in_front_reads_as_one_in_the_way(covered: bool) -> None:
+    # REVIEW.md TST-516, TST-520: the count of the windows in front, taken right after orderFrontRegardless, keeps only
+    # normal windows, so it read 0 whatever covered the window: a window above them, or a locked screen. The facts
+    # check's hide then changed no occlusion, and the window-under fact read the window under covered; both failed
+    # with nothing said and no try again
+    states = fresh('editor_panels_and_fit.window_states')
+    others: list[int] = []
+    window = Screen(cover=covered).below  # covered under the main window until brought in front of it
+    uncovered = _defined(states.notified(), COUNTED)['uncovered']
+    cast(Callable[[object, list[int]], None], uncovered)(window, others)
+    assert bool(others) == covered, others
+
+
+@pytest.mark.parametrize(
+    'screen, counted',
+    [
+        (Screen(), False),
+        (Screen(late=[99]), False),  # listed in front only by CoreGraphics' late list
+        (Screen(ahead=[99]), True),  # a window of another app still in front
+        (Screen(cover=True), True),  # a window above every normal one, or a locked screen
+    ],
+)
+def test_the_facts_checks_window_brought_in_front_counts_only_what_is_still_in_the_way(
+    screen: Screen, counted: bool
+) -> None:
+    # REVIEW.md TST-522: in_front() read the windows in front right after the show, and CoreGraphics still listed the
+    # order before it (2 of 3, the review's probe): a window of the user's over part of Designer's, no longer in front,
+    # was counted in the way. REVIEW.md TST-521, TST-516: no unit test ran in_front() since TST-520 moved its wait
+    states = fresh('editor_panels_and_fit.window_states')
+    others: list[int] = []
+    fakes = {**COUNTED, 'mac': screen.main, 'others': others, 'in_front_of': screen.in_front_of}
+    scope = _defined(states.notified(), fakes)
+    cast(Callable[[], None], scope['in_front'])()
+    assert bool(others) == counted, others
+
+
+def test_the_facts_check_brings_designers_window_in_front_before_each_minimize_and_hide() -> None:
+    # REVIEW.md TST-521, TST-516: a minimize or a hide of a window covered changes no occlusion, and nothing would count
+    # what covers it. Each reading of one comes after an in_front() of its own
+    states = fresh('editor_panels_and_fit.window_states')
+    fronted, read = False, []
+    for statement in ast.parse(states._NOTIFIED).body:
+        if ast.unparse(statement) == 'in_front()':
+            fronted = True
+        for call in ast.walk(statement):
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == 'first':
+                change = ast.unparse(call.args[1])
+                if any(away in change for away in ('mac.minimize', "'performMiniaturize:'", 'mac.hide')):
+                    read.append((change, fronted))
+                fronted = False
+    assert len(read) == 4 and all(fronted for _, fronted in read), read
+
+
+@pytest.mark.parametrize(
+    'screen, readings, clear',
+    [
+        (Screen(), 'alone=False opaque=True transparent=False', True),  # the fact, nothing in the way
+        (Screen(cover=True), 'alone=True opaque=True transparent=True', False),  # a window above every normal one
+        # a cover come after the reading alone, and one gone after it: each counted once
+        (Screen(cover_after=True), 'alone=False opaque=True transparent=True', False),
+        (Screen(cover=True, cover_after=False), 'alone=True opaque=True transparent=False', False),
+        # macOS counting the transparent window as covering: its answer, not a window in the way, so not taken again
+        (Screen(through_covers=True), 'alone=False opaque=True transparent=True', True),
+    ],
+)
+def test_the_window_under_fact_counts_a_cover_no_window_list_shows_as_one_in_the_way(
+    capsys: pytest.CaptureFixture[str], screen: Screen, readings: str, clear: bool
+) -> None:
+    # REVIEW.md TST-520: _UNDER counted the windows in front right after it brought a window in front, normal windows
+    # only. A window above them, or a locked screen, made the window under read covered alone and under the transparent
+    # window: the fact failed with IN_FRONT 0, so it wasn't taken again, and nothing said why
+    states = fresh('editor_panels_and_fit.window_states')
+    made = SimpleNamespace(close=lambda: None, deleteLater=lambda: None)
+    kept = SimpleNamespace(mcp_selftest_below=made)  # sys, where the checks keep the windows they make
+    frame = SimpleNamespace(adjusted=lambda *by: None)
+    scope = {
+        **COUNTED,
+        'mac': screen.main,
+        '_MacWindow': lambda widget: screen.below,
+        'mw': SimpleNamespace(window=lambda: SimpleNamespace(frameGeometry=lambda: frame)),
+        'window': lambda geometry, name: made,
+        'sys': kept,
+        '_settle': lambda seconds: None,
+    }
+    exec(states._UNDER, _defined(states.notified(), scope))
+    printed = capsys.readouterr().out
+    assert 'UNDER ' + readings in printed.splitlines(), printed
+    assert states.nothing_in_front(printed) is clear, printed
+    assert not hasattr(kept, 'mcp_selftest_below'), 'closed and kept: the clear would close it again'
+
+
+@pytest.mark.parametrize(
+    'way, covered, counted',
+    [
+        (None, True, True),  # on screen
+        ('partly covered', True, True),
+        ('transparent in front', True, True),
+        (None, False, False),
+        ('minimized', True, False),  # covered as it should be: no window in the way
+        ('covered', True, False),
+    ],
+)
+def test_a_way_that_leaves_the_view_drawn_still_covered_reads_as_one_in_the_way_at_each_count(
+    way: str | None, covered: bool, counted: bool
+) -> None:
+    # REVIEW.md TST-520: the not-drawn fact's pan counted the windows in front of Designer's, normal windows only. A
+    # window above them, or a locked screen, stopped the drawing of a way that leaves the view drawn with IN_FRONT 0,
+    # so the way wasn't read again, and the fact failed saying the view wasn't drawn. REVIEW.md TST-523: counted before
+    # the pan only, a cover come during it went unseen
+    states = fresh('editor_panels_and_fit.window_states')
+    code = states.panned(way)
+    # the way, and _PUT's ways that leave the view drawn, as the snippet sets them
+    scope = _defined(code, {**COUNTED, 'mac': Screen(cover=covered).main}, ('way', 'on_screen'))
+    counts = [
+        n
+        for n in ast.walk(ast.parse(code))
+        if (isinstance(n, ast.Assign) and [ast.unparse(t) for t in n.targets] == ['others'])
+        or (isinstance(n, ast.AugAssign) and ast.unparse(n.target) == 'others')
+    ]
+    assert len(counts) == 2, [ast.unparse(n) for n in counts]  # before the pan, and after its first drag
+    for count in counts:
+        scope['others'] = []
+        exec(compile(ast.Module(body=[count], type_ignores=[]), 'panned', 'exec'), scope)
+        assert bool(scope['others']) == counted, ast.unparse(count)
+
+
+def _steps(states: ModuleType, names: str) -> list[ast.Call]:
+    """The facts check's readings (first(...) calls in window_states._NOTIFIED) of AppKit's notifications `names`."""
+    return [
+        n
+        for n in ast.walk(ast.parse(states._NOTIFIED))
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Name)
+        and n.func.id == 'first'
+        and ast.unparse(n.args[0]) == names
+    ]
+
+
+# each reading of the facts check: AppKit's notifications, and the call its change makes, the one the waits on them
+# follow: the shot's (_bring, put_back) and the self-test's own (to_back, _PUT, _CLEAR, HIDE, uncovered)
+READINGS = [
+    ('UNHIDDEN', 'mac.unhide'),
+    ('OFF_SCREEN', 'mac.show'),  # orderFrontRegardless, uncovered's
+    ('OFF_SCREEN', 'mac.minimize'),  # miniaturize:, the shot's
+    ('OFF_SCREEN', "'performMiniaturize:'"),  # the self-test's minimized way
+    ('UNMINIMIZED', "'deminiaturize:'"),  # to_back, _CLEAR
+    ('OFF_SCREEN', 'mac.hide'),
+    ('HIDDEN', 'mac.hide'),
+]
+
+
+@pytest.mark.parametrize('names, call', READINGS)
+def test_the_facts_check_reads_each_notification_after_the_call_the_waits_on_it_follow(names: str, call: str) -> None:
+    # REVIEW.md TST-517: the check showed the window again with orderFrontRegardless and minimized it with miniaturize:
+    # only, while the self-test's waits follow deminiaturize: and performMiniaturize:
+    changes = [ast.unparse(step.args[1]) for step in _steps(fresh('editor_panels_and_fit.window_states'), names)]
+    assert any(call in change for change in changes), changes
+
+
+def test_the_self_tests_waits_follow_the_calls_the_facts_check_reads_after() -> None:
+    # REVIEW.md TST-517: the other side of READINGS, for the self-test's own waits on UNMINIMIZED and OFF_SCREEN
+    states = fresh('editor_panels_and_fit.window_states')
+    for waits in (ast.unparse(_defs(states)['to_back']), states._CLEAR):
+        assert "'deminiaturize:'" in waits and re.search(r'names=[\w +]*\bUNMINIMIZED\b', waits), waits
+    minimized = ast.unparse(_branch(states.put('minimized'), "way == 'minimized'"))
+    assert "'performMiniaturize:'" in minimized and 'names=OFF_SCREEN' in minimized, minimized
+    # REVIEW.md TST-524: uncovered shows the window, then waits on OFF_SCREEN for it no longer covered
+    uncovered = ast.unparse(_defs(states)['uncovered'])
+    assert re.search(r'_until_notified\(window, \w+, [\d.]+, OFF_SCREEN\)', uncovered), uncovered

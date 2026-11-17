@@ -661,7 +661,8 @@ ADD_MATERIAL = dedent("""
             spy = _event_signal(handle, ('Expose',))
             try:
                 mac.hide()
-                _until(lambda: mac.hidden() and not handle.isExposed(), 3.0, [spy.fired])  # off screen again
+                # off screen again: macOS says it hidden (AppKit's notification), Qt that the window isn't exposed
+                _until_notified(mac, lambda: mac.hidden() and not handle.isExposed(), 3.0, HIDDEN, [spy.fired])
             finally:
                 handle.removeEventFilter(spy)
                 if mac.hidden():  # opaque on the user's screen otherwise (REVIEW.md TST-478, as _CLEAR: TST-474)
@@ -1029,9 +1030,10 @@ async def check_the_3d_view_isnt_drawn_while_designers_window_is_off_screen(ctx:
     window's True, and the window not exposed (designer facts: designer_helpers/shot3d.py, REVIEW.md SRV-146,
     TST-391). With `in_front`, the two ways in front of the user's windows instead: on screen and partly covered, the
     pan changes it too; run() runs them with the other checks that need a window there. A drawn way with a window of
-    another app found in front of Designer's is taken again (without_others_in_front), and the ways are read while no
-    Designer of the run starts or quits (no_designer_starting: REVIEW.md TST-417). macOS only, in a Designer the
-    self-test started."""
+    another app found in front of Designer's is taken again (without_others_in_front), and so is one with Designer's
+    window still covered for macOS once put there: a window above every normal one, or a locked screen (REVIEW.md
+    TST-520). The ways are read while no Designer of the run starts or quits (no_designer_starting: REVIEW.md
+    TST-417). macOS only, in a Designer the self-test started."""
     c = ctx.c
     if ctx.was_running or sys.platform != 'darwin':
         skip('designer facts', "the 3D view isn't drawn off screen", USERS_3D_VIEW if ctx.was_running else 'macOS only')
@@ -1039,7 +1041,7 @@ async def check_the_3d_view_isnt_drawn_while_designers_window_is_off_screen(ctx:
     await with_checker(c, {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH, 'zoom': -4})
     seen: dict[str, str] = {}
     states: dict[str, dict[str, str]] = {}
-    unclear = []  # drawn ways with another app's window in front in every try
+    unclear = []  # drawn ways with a window in the way in every try: another app's in front, or a cover (TST-520)
     off_screen = [way for way in window_states.WAYS if way != QT_MINIMIZED]
     ways = [None, 'partly covered'] if in_front else [*off_screen, 'transparent in front']
     with no_designer_starting():
@@ -1052,7 +1054,7 @@ async def check_the_3d_view_isnt_drawn_while_designers_window_is_off_screen(ctx:
             seen[way or 'on screen'] = m.group(1) if m else t.strip().splitlines()[-1] if t.strip() else '?'
             states[way or 'on screen'] = window_states.states(t.split('SAME=')[0]).get('STATE', {})
     said = '%srender unchanged by a pan: %s' % (
-        'another app in front in each try: %s; ' % ', '.join(unclear) if unclear else '',
+        'a window in the way in each try: %s; ' % ', '.join(unclear) if unclear else '',
         ', '.join('%s %s' % item for item in seen.items()),
     )
     if in_front:
@@ -1122,6 +1124,44 @@ async def check_a_click_goes_through_designers_window_once_transparent_and_click
     )
 
 
+async def check_appkits_notifications_come_once_designers_window_changed(ctx: Ctx) -> None:
+    """AppKit's notifications that wake the 3D shot's waits and the self-test's come once what each wait looks at has
+    changed, Designer's windows transparent and click-through, as the shot makes them (designer facts:
+    designer_helpers/mac_window.py, UNHIDDEN, OFF_SCREEN, UNMINIMIZED and HIDDEN; ROADMAP item 101):
+
+    - Designer unhidden, once macOS no longer says it hidden;
+    - its window's occlusion changed, once macOS no longer says it covered, after the window was shown in front of a
+      window of Designer's own covering it whole (as uncovered waits for it: REVIEW.md TST-524);
+    - the first of its window minimized or its occlusion changed, once the window server no longer lists the window,
+      after a minimize (miniaturize:, as the shot does, and performMiniaturize:, as the self-test's minimized way does)
+      and after a hide;
+    - the window shown again by deminiaturize:, as the self-test's waits follow it, once macOS no longer says it
+      minimized;
+    - Designer hidden, once macOS says it hidden.
+
+    Taken again while a window of another app is in front of Designer's, or Designer's window is still covered once
+    brought in front (without_others_in_front; REVIEW.md TST-516), and read while no
+    worker of the pool starts or quits its Designer (no_designer_starting: REVIEW.md TST-417). macOS only, in a
+    Designer the self-test started."""
+    what = "AppKit's notifications come once Designer is hidden or unhidden, or its window minimized or shown again"
+    if ctx.was_running or sys.platform != 'darwin':
+        skip('designer facts', what, "it would hide the user's Designer" if ctx.was_running else 'macOS only')
+        return
+    with no_designer_starting():
+        t, tried = await without_others_in_front(ctx, window_states.notified())
+    m = re.search(r'NOTIFIED (.*)', t)
+    seen = m.group(1) if m else (t.strip().splitlines() or ['?'])[-1]
+    check(
+        'designer facts',
+        what,
+        window_states.nothing_in_front(t)
+        and seen
+        == 'unhidden=True uncovered=True minimized=True unminimized=True minimized_by_button=True hidden=True '
+        'hidden_flag=True',
+        seen + tries_said(t, tried),
+    )
+
+
 async def check_a_window_under_designers_transparent_window_counts_as_visible(ctx: Ctx) -> None:
     """A window of Designer's own, shown alone in front of its main window first, then whole under it, counts as covered
     for macOS (occlusionState) with the main window opaque, and as visible with it transparent and click-through, as
@@ -1129,7 +1169,9 @@ async def check_a_window_under_designers_transparent_window_counts_as_visible(ct
     designer_helpers/shot3d.py; REVIEW.md HLP-141). A window never shown read covered either way, so the reading alone
     in front comes first (REVIEW.md TST-412). A reading with a window of another app found in front of the window it
     reads is taken again (without_others_in_front), and read while no worker of the pool starts or quits its Designer
-    (no_designer_starting: REVIEW.md TST-417, TST-467). macOS only, in a Designer the self-test started."""
+    (no_designer_starting: REVIEW.md TST-417, TST-467). So is a reading where the window under stays covered once
+    brought in front of every normal window, after the first reading or the last: a window above them, or a locked
+    screen, covers it (REVIEW.md TST-520). macOS only, in a Designer the self-test started."""
     if ctx.was_running or sys.platform != 'darwin':
         skip(
             'designer facts',
@@ -1973,7 +2015,7 @@ SHOWN_FROM_HIDDEN = dedent("""
     try:
         print('HIDDEN_BEFORE=%r' % mac.hidden())
         with _on_screen(mw, frames):
-            unhidden = _until(lambda: not mac.hidden(), 3.0, [spy.fired])
+            unhidden = _wait_unhidden(mac, 3.0)
             print('SHOT=%r' % ((unhidden, [who(n) for n in mac.in_front()], lost[0]),))
     finally:
         handle.removeEventFilter(spy)
@@ -2692,6 +2734,7 @@ async def run(ctx: Ctx) -> None:
         await check_an_abort_putting_a_shots_window_back_still_hides_designer_again(ctx)
         await check_the_3d_views_frames_say_when_it_has_drawn(ctx)
         await check_a_hidden_designers_window_is_brought_in_front_for_a_3d_shot_once_its_unhide_took(ctx)
+        await check_appkits_notifications_come_once_designers_window_changed(ctx)
         await check_a_watch_of_the_3d_views_frames_dropped_without_close_goes_at_once(ctx)
         await check_a_3d_shots_window_shown_again_mid_accumulation_waits_for_the_count_at_rest(ctx)
         await check_set_3d_view_moves_the_camera_as_a_3d_shots_set_up_does(ctx)

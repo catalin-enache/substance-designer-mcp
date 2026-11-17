@@ -82,6 +82,18 @@ _WINDOW = (
         widgets = [getattr(sys, 'mcp_selftest_' + name, None) for name in ('cover', 'later', 'below')]
         made = {_MacWindow(widget).number() for widget in widgets if widget is not None}
         return [number for number in window.in_front() if number not in made]
+    def uncovered(window, others):
+        # `window` (a _MacWindow) brought in front of every normal window, until macOS no longer says it covered and no
+        # window is listed in front of it, woken by its occlusion changes (OFF_SCREEN holds them). Right after the show,
+        # CoreGraphics still listed the windows in front before it, 2 of 3 and 3 of 3 (2026-11-17, REVIEW.md TST-522).
+        # Still covered, no normal window can be what covers it: a window above them, or a locked screen, which
+        # in_front_of doesn't list. That, or a window still in front, is counted in `others` as one in the way
+        # (REVIEW.md TST-516, TST-520)
+        window.show()
+        number = window.number()
+        clear = lambda: window.on_screen(number) and not window.covered() and not in_front_of(window)
+        if not _until_notified(window, clear, 3.0, OFF_SCREEN):
+            others.append(-1)
     def next_to(window, place, number):
         # NSWindow `window` right in front of (place 1) or behind (-1) window `number` (orderWindow:relativeTo:)
         f = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long, ctypes.c_long)
@@ -108,6 +120,13 @@ _WINDOW = (
             next_to(shown._window, *place)
             made.setWindowOpacity(1.0)
         return made
+    def close_made(name):
+        # the window the checks made as sys.mcp_selftest_<name>, if any, closed and forgotten: the clear closes what is left
+        made = getattr(sys, 'mcp_selftest_' + name, None)
+        if made is not None:
+            made.close()
+            made.deleteLater()
+            delattr(sys, 'mcp_selftest_' + name)
     def fade(on, but=None):
         # Designer's windows transparent and click-through (on), as the 3D shot makes them, or opaque and clickable;
         # all but window `but`
@@ -124,7 +143,7 @@ _WINDOW = (
             mac._object(mac._window, 'deminiaturize:')
         if mw.isMinimized():
             mw.setWindowState(mw.windowState() & ~QtCore.Qt.WindowState.WindowMinimized)
-        if not until(shown_again):  # put back before that, they came back near the front (REVIEW.md TST-460)
+        if not until(shown_again, names=UNHIDDEN + UNMINIMIZED):  # put back before that, they came back near the front (REVIEW.md TST-460)
             raise RuntimeError("Designer's windows weren't shown again: left transparent, not put behind")
         for w in mac.windows(True):
             if mac._flag(w, 'isVisible'):
@@ -150,10 +169,17 @@ _WINDOW = (
             if event.type() in self.kinds:
                 self.loop.quit()
             return False
-    def until(state, limit=3.0):
+    def until(state, limit=3.0, names=()):
         # until state() holds, looked at as each event about Designer's windows comes (expose, show, hide, window
-        # state: Qt's from macOS's) and every 100 ms where none says it, at most `limit` s in case none comes. No time
-        # waited after it: under load a time measured idle can be too short (REVIEW.md TST-420)
+        # state: Qt's from macOS's), as each of AppKit's notifications `names` comes (mac_window.py: Qt sends no event
+        # as macOS hides, shows or minimizes Designer, REVIEW.md HLP-173), and every 100 ms where none says it, at
+        # most `limit` s in case none comes. No time waited after it: under load a time measured idle can be too
+        # short (REVIEW.md TST-420)
+        if names:
+            return _notified(mac, names, lambda fired: woken_until(state, limit, fired))
+        return woken_until(state, limit, None)
+    def woken_until(state, limit, fired):
+        # until(), its loop ended by `fired` too, when given
         kinds = (QtCore.QEvent.Type.Expose, QtCore.QEvent.Type.Show, QtCore.QEvent.Type.Hide,
                  QtCore.QEvent.Type.WindowStateChange)
         start = _time.monotonic()
@@ -163,6 +189,8 @@ _WINDOW = (
             watched = [*QtGui.QGuiApplication.allWindows(), *views()]
             for w in watched:
                 w.installEventFilter(woken)
+            if fired is not None:
+                fired.connect(loop.quit)
             tick = QtCore.QTimer(loop)
             tick.setSingleShot(True)
             tick.timeout.connect(loop.quit)
@@ -172,6 +200,8 @@ _WINDOW = (
             finally:
                 for w in watched:
                     w.removeEventFilter(woken)
+                if fired is not None:
+                    fired.disconnect(loop.quit)
             if quitting:
                 break
         return state()
@@ -208,7 +238,7 @@ _PUT = dedent("""
         if mac.hidden():
             mac.unhide()
             # shown in front before the unhide took, it came up behind the active app's window
-            until(lambda: shown_again() and exposed())
+            until(lambda: shown_again() and exposed(), names=UNHIDDEN)
         if way in ('covered in front', 'covered by an always-on-top window'):  # ON_TOP
             window(frame.adjusted(100, 100, -100, -100), 'below')
         mac.show()  # in front of the one below, and of the user's windows
@@ -226,7 +256,7 @@ _PUT = dedent("""
         if not mac.hidden():  # at rest it is (at_rest)
             to_back()
             mac.hide()
-            if not until(lambda: mac.hidden() and not exposed()):  # REVIEW.md TST-460
+            if not until(lambda: mac.hidden() and not exposed(), names=HIDDEN):  # REVIEW.md TST-460
                 raise RuntimeError("Designer wasn't hidden: its windows left transparent")
             fade(False)
     else:  # behind every window: never in front of the user's (REVIEW.md SRV-149's report)
@@ -236,7 +266,7 @@ _PUT = dedent("""
             # opaque only once off screen: as macOS's animation runs, the window flies to the Dock at the opacity it
             # has (REVIEW.md TST-472, measured: about 0.55 s); it is listed off screen once in the Dock
             number = mac.number()
-            if not until(lambda: mac.minimized() and not mac.on_screen(number)):
+            if not until(lambda: mac.minimized() and not mac.on_screen(number), names=OFF_SCREEN):
                 raise RuntimeError("Designer's window wasn't minimized: its windows left transparent")
         elif way == 'qt minimized':
             seen, stop = hidden_view()
@@ -276,20 +306,16 @@ _PUT = dedent("""
 # the windows are left transparent and click-through, and NOT_HIDDEN printed (REVIEW.md TST-460, TST-474)
 _CLEAR = dedent("""
     for name in ('cover', 'later', 'below'):
-        made = getattr(sys, 'mcp_selftest_' + name, None)
-        if made is not None:
-            made.close()
-            made.deleteLater()
-            delattr(sys, 'mcp_selftest_' + name)
+        close_made(name)
     fade(True)
     if mw.isMinimized():
         mw.setWindowState(mw.windowState() & ~QtCore.Qt.WindowState.WindowMinimized)
     if mac.minimized():
         mac._object(mac._window, 'deminiaturize:')
-    until(lambda: not (mac.minimized() or mw.isMinimized()))  # macOS's animation: 0.63 s (2026-11-15)
+    until(lambda: not (mac.minimized() or mw.isMinimized()), names=UNMINIMIZED)  # macOS's animation: 0.63 s (2026-11-15)
     if not mac.hidden():
         mac.hide()
-    hidden = until(mac.hidden)
+    hidden = until(mac.hidden, names=HIDDEN)
     for w, look in getattr(sys, 'mcp_selftest_looks', {}).items():  # as _PUT found them
         if hidden:  # opaque on the user's screen otherwise (REVIEW.md TST-474)
             mac.set_appearance(w, *look)
@@ -346,26 +372,28 @@ _HITS = dedent("""
 
 # whether a window of Designer's own counts as covered for macOS: in front of its main window first, as the reading
 # with nothing over it (REVIEW.md TST-412), then whole under it, the main window opaque, then transparent and
-# click-through, as the 3D shot makes it (UNDER alone=... opaque=... transparent=...)
+# click-through, as the 3D shot makes it (UNDER alone=... opaque=... transparent=...). The window under is brought in
+# front again after the first reading and after the last: still covered there, something the checks didn't make
+# covers it, and IN_FRONT counts it (uncovered; REVIEW.md TST-520)
 _UNDER = dedent("""
     below = window(mw.window().frameGeometry().adjusted(100, 100, -100, -100), 'below')
-    _MacWindow(below).show()
+    under = _MacWindow(below)
+    under.show()
     _settle(1.0)
-    seen = ['alone=%s' % _MacWindow(below).covered()]
-    others = in_front_of(_MacWindow(below))
+    seen, others = ['alone=%s' % under.covered()], in_front_of(under)
+    uncovered(under, others)
     mac.show()
     _settle(1.0)
     try:
         for name, look in (('opaque', (1.0, False)), ('transparent', (0.0, True))):
             mac.set_appearance(mac.windows(False)[0], *look)
             _settle(1.0)
-            seen.append('%s=%s' % (name, _MacWindow(below).covered()))
+            seen.append('%s=%s' % (name, under.covered()))
             others += in_front_of(mac)
+        uncovered(under, others)  # read covered under the transparent window: by it only if no longer once in front
     finally:
         mac.set_appearance(mac.windows(False)[0], 1.0, False)
-        below.close()
-        below.deleteLater()
-        del sys.mcp_selftest_below  # closed here: the clear would close it again
+        close_made('below')
     print('UNDER ' + ' '.join(seen))
     print('IN_FRONT %d' % len(set(others)))
 """)
@@ -382,17 +410,22 @@ _DRAG = dedent("""
         frames.close()
 """)
 
-# a pan of the 3D view, the render before and after compared: SAME=True when the render didn't follow it
+# a pan of the 3D view, the render before and after compared: SAME=True when the render didn't follow it. The windows in
+# front of Designer's are counted before the pan and after its first drag (in_the_way). In a way that leaves the view
+# drawn (_PUT's on_screen), Designer's window still covered for macOS is counted as one in the way too: a window above
+# every normal one, or a locked screen, which in_front_of doesn't list (REVIEW.md TST-520, TST-523)
 _PANNED = dedent("""
     viewport = [w for w in _3d_dock(mw).findChildren(QtWidgets.QWidget)
                 if w.metaObject().className() == 'Alg::Gui3D::ViewportWidget'][0]
     keep = [mw, viewport]
-    others = in_front_of(mac)
+    def in_the_way():
+        return in_front_of(mac) + ([-1] if way in on_screen and mac.covered() else [])
+    others = in_the_way()
     before = _3d_render(mw)
     frames = _Frames(viewport, lambda: _3d_render(mw))
     try:  # each drag taken: its frame drawn, or off screen the view's request for one (_Frames.taking; REVIEW.md HLP-149)
         _drag(viewport, QtCore.Qt.MouseButton.MiddleButton, 40, 0, [], frames.taking)
-        others += in_front_of(mac)
+        others += in_the_way()
         print('SAME=%s' % (_3d_render(mw) == before))
         print('IN_FRONT %d' % len(set(others)))
         _drag(viewport, QtCore.Qt.MouseButton.MiddleButton, -40, 0, [], frames.taking)
@@ -497,6 +530,63 @@ LEFT_UP = "Designer's window: left on screen, as Designer became the active app 
 # what a shot says when a window brought over Designer's during it made it bring the window in front again: the start
 # of the line, which says ', transparent' only when Designer isn't the active app at that look (REVIEW.md TST-416)
 AGAIN = "Designer's window: brought in front again"
+# AppKit's notifications that wake the 3D shot's waits and the self-test's (designer_helpers/mac_window.py's UNHIDDEN,
+# OFF_SCREEN, UNMINIMIZED and HIDDEN), made to come in turn, from rest (Designer hidden) at the start, its windows
+# transparent and click-through, as the shot makes them. For each, whether what the waits look at had changed as the
+# first of its notifications came, 'none' if none came (NOTIFIED name=...):
+# - unhidden: macOS no longer saying Designer hidden, once unhidden (UNHIDDEN);
+# - uncovered: macOS no longer saying the window covered, once shown in front of a window of Designer's own covering it
+#   whole, as uncovered does (OFF_SCREEN);
+# - minimized: the window server no longer listing the window, once minimized by miniaturize:, as the shot does
+#   (OFF_SCREEN);
+# - unminimized: macOS no longer saying the window minimized, once shown again by deminiaturize: (UNMINIMIZED);
+# - minimized_by_button: as minimized, by performMiniaturize:, as the self-test's minimized way does (OFF_SCREEN);
+# - hidden: the window server no longer listing the window, once Designer hidden (OFF_SCREEN);
+# - hidden_flag: macOS saying Designer hidden, once hidden (HIDDEN).
+# The window is brought in front of every normal window before each minimize or hide (in_front), so that it changes the
+# window's occlusion. IN_FRONT counts what is still in the way once it is: a window still listed in front of it, or the
+# window still covered, which a hide would then not change (uncovered; REVIEW.md TST-417, TST-516, TST-522)
+_NOTIFIED = dedent("""
+    def in_front():
+        uncovered(mac, others)
+    def first(names, change, done):
+        seen = []
+        def wait(fired):
+            fired.connect(lambda *sent: seen.append(done()))  # before the wait's own, so read before it wakes
+            change()
+            return _until(lambda: seen, 3.0, [fired])
+        _notified(mac, names, wait)
+        return str(seen[0]) if seen else 'none'
+    number, others = mac.number(), []
+    fade(True)
+    seen = ['unhidden=' + first(UNHIDDEN, mac.unhide, lambda: not mac.hidden())]
+    # covered whole by a window of its own, both behind every window, then shown in front of it, as uncovered does
+    mac._object(mac._window, 'orderBack:')
+    window(mw.window().frameGeometry().adjusted(-50, -50, 50, 50), 'cover', place=(1, mac.number()))
+    until(mac.covered, names=OFF_SCREEN)
+    seen.append('uncovered=' + first(OFF_SCREEN, mac.show, lambda: not mac.covered()))
+    close_made('cover')
+    in_front()
+    seen.append('minimized=' + first(OFF_SCREEN, mac.minimize, lambda: not mac.on_screen(number)))
+    # shown again as the self-test's waits on it follow (to_back, _CLEAR; REVIEW.md TST-517)
+    unminimized = first(UNMINIMIZED, lambda: mac._object(mac._window, 'deminiaturize:'), lambda: not mac.minimized())
+    seen.append('unminimized=' + unminimized)
+    in_front()
+    # minimized as its minimize button does: the self-test's minimized way (_PUT; REVIEW.md TST-517)
+    pressed = first(OFF_SCREEN, lambda: mac._object(mac._window, 'performMiniaturize:'), lambda: not mac.on_screen(number))
+    seen.append('minimized_by_button=' + pressed)
+    mac._object(mac._window, 'deminiaturize:')
+    until(lambda: not mac.minimized(), names=UNMINIMIZED)
+    in_front()
+    seen.append('hidden=' + first(OFF_SCREEN, mac.hide, lambda: not mac.on_screen(number)))
+    mac.unhide()
+    _wait_unhidden(mac, 3.0)
+    in_front()
+    seen.append('hidden_flag=' + first(HIDDEN, mac.hide, mac.hidden))
+    print('NOTIFIED ' + ' '.join(seen))
+    print('IN_FRONT %d' % len(set(others)))
+""")
+
 # how each event is seen to have happened, from what the shot said and the window's state after it (STATE): an event
 # that did nothing would leave a check passing on the put-back it was made to catch (REVIEW.md TST-415). A window
 # brought over Designer's makes the shot bring Designer's window in front again, and say so (AGAIN). TWO's smaller
@@ -579,6 +669,14 @@ def under() -> str:
     the main window opaque, then transparent and click-through (UNDER alone=... opaque=... transparent=...); then makes
     it opaque again."""
     return put('on screen') + _UNDER
+
+
+def notified() -> str:
+    """From rest, makes each of AppKit's notifications that wake the 3D shot's and the self-test's waits come. Prints
+    whether what the waits look at had changed as the first came (NOTIFIED unhidden=... hidden_flag=...; _NOTIFIED).
+    Designer is left hidden, its windows transparent: at_rest puts them back, as without_others_in_front does after
+    each try."""
+    return _WINDOW + _NOTIFIED
 
 
 def put_and_drag(way: str, pixels: int) -> str:

@@ -6,8 +6,8 @@ Measured on macOS in a Designer an agent started (2026-11-13 and 2026-11-14), by
 drag and comparing its renders. The self-test's editor_panels_and_fit re-measures the first point (minimized and
 hidden; covered by a window of Designer's own, it says what it saw) and the second, but for its time, the identical
 render and the window never shown. It also
-re-measures drags reaching the camera off screen, the top-level window and the page as macOS minimizes it, and the
-last point. The rest was measured once.
+re-measures drags reaching the camera off screen, the top-level window and the page as macOS minimizes it, AppKit's
+notifications coming once the state each wait looks at has changed, and the last point. The rest was measured once.
 
 - The 3D view's render (Copy Render to Clipboard) is the last frame the view drew while Designer's main window isn't
   on screen: minimized, fully covered by another window (Designer's own or another app's), or Designer hidden. A
@@ -43,10 +43,21 @@ last point. The rest was measured once.
   the same app active (2026-11-16, REVIEW.md HLP-160). What sets it off isn't known. Brought in front once macOS no
   longer said Designer hidden, the window stayed in front: 5 of 5 tries, each watched 3 s, and in each scratch run
   since. Qt's applicationStateChanged didn't fire for the unhide, and the window's expose events came before it in one
-  probe and after it in another. So the shot waits for macOS's flag, looked at as those events come and every TICK ms.
-  No other Qt callback says it, nor the window off screen after a minimize or a hide: neither window's
-  windowStateChanged nor visibleChanged fired, and the top-level widget's Hide and Show events came for some hides and
-  unhides and not others (2026-11-16, REVIEW.md HLP-173; AppKit's notifications: ROADMAP item 101).
+  probe and after it in another. So the shot waits for macOS's flag. No other Qt callback says it, nor the window off
+  screen after a minimize or a hide: neither window's windowStateChanged nor visibleChanged fired, and the top-level
+  widget's Hide and Show events came for some hides and unhides and not others (2026-11-16, REVIEW.md HLP-173).
+  AppKit's notifications say them (mac_window.py, UNHIDDEN and OFF_SCREEN), so the waits look as those come, and every
+  TICK ms. Measured with Designer's windows transparent and click-through (2026-11-17, ROADMAP item 101):
+  - NSApplicationDidUnhideNotification came with macOS no longer saying Designer hidden, 5 of 5;
+  - NSWindowDidMiniaturizeNotification came once the window server no longer listed the window, before the occlusion
+    change: after miniaturize: (the shot's) 6 of 6, after performMiniaturize: (the self-test's minimized way) 3 of 3;
+  - NSWindowDidChangeOcclusionStateNotification came once it no longer listed it, after a hide 4 of 4, after a
+    minimize 9 of 9. It came with macOS no longer saying the window covered once orderFrontRegardless showed it in
+    front of a window of Designer's own covering it whole, 4 of 4: the self-test's uncovered looks as it comes;
+  - NSApplicationDidHideNotification came while it still listed the window, 4 of 4: the wait doesn't look as it comes.
+    It came with macOS saying Designer hidden, 4 of 4: the self-test's waits for that flag look as it comes (HIDDEN);
+  - NSWindowDidDeminiaturizeNotification came with macOS no longer saying the window minimized: after deminiaturize:
+    5 of 5, after orderFrontRegardless 4 of 4. The self-test's waits for that look as it comes (UNMINIMIZED).
 - A hidden Designer shown again that way, its windows transparent and its main window ordered in front, sometimes
   wasn't drawn: 0.5 s on, Designer was no longer hidden and CoreGraphics listed the window on screen, but macOS still
   counted it covered (occlusionState), so Qt never exposed it. That happened in 3 of 14 runs of the self-test's
@@ -69,7 +80,7 @@ from collections.abc import Iterator
 from .core import Callable, Kept, QtCore, QtGui, QtWidgets, _main_window, _menu, cast
 from .editor import _process_events
 from .frames3d import _Frames, _viewport
-from .mac_window import _mac_window, _MacWindow, _wait_unhidden
+from .mac_window import _mac_window, _MacWindow, _wait_unhidden, _wait_unlisted
 from .screenshots import _3d_dock, _3d_render
 from .view3d import MESHES, _3d_set_up, _menu_action
 from .waits import _event_signal, _until, _unwatch
@@ -257,7 +268,7 @@ class _Screen:
             if hidden:
                 mac.unhide()
                 # in front before, the window went behind the active app's (REVIEW.md HLP-160)
-                _wait_unhidden(mac, self._mw.windowHandle(), ON_SCREEN_WAIT)
+                _wait_unhidden(mac, ON_SCREEN_WAIT)
             mac.show()
         elif qt:  # restored by Qt alone, the view drew no new frame; brought in front too, it drew (2026-11-14)
             mac.show()
@@ -281,16 +292,9 @@ class _Screen:
         self._bring(again=True)
 
     def _wait_off_screen(self) -> None:
-        """Waits, at most ON_SCREEN_WAIT, for the window to be off screen once minimized or hidden again: the window
-        server's list, looked at as Qt says the window is no longer exposed, and every TICK ms."""
-        mac = cast(_MacWindow, self._mac)
-        number = mac.number()
-        handle = self._mw.windowHandle()
-        spy = _event_signal(handle, ('Expose',))
-        try:
-            _until(lambda: not mac.on_screen(number), ON_SCREEN_WAIT, [spy.fired])
-        finally:
-            _unwatch(handle, spy)
+        """Waits, at most ON_SCREEN_WAIT, for the window to be off screen once minimized or hidden again, as the window
+        server lists it (_wait_unlisted)."""
+        _wait_unlisted(cast(_MacWindow, self._mac), ON_SCREEN_WAIT)
 
     def put_back(self) -> None:
         """Puts the window back as it was found off screen: minimized again, behind the windows that were in front of
