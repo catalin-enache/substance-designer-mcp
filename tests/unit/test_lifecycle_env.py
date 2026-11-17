@@ -52,6 +52,19 @@ from conftest import (
 from designer_preferences import Plist
 from project_constants import PLUGIN, PLUGIN_PACKAGE_DIR, Reply, Request, read_agent_record
 
+# The tests that depend on the system say so, and skip elsewhere (REVIEW.md TST-508; test_windows_simulation.py)
+# a test setting the platform to macOS or Linux: that platform's code takes fcntl and os.getuid
+_SETS_UNIX = pytest.mark.skipif(
+    sys.platform == 'win32', reason='sets the platform to macOS or Linux, whose code needs fcntl and os.getuid'
+)
+_RECORDED = pytest.mark.skipif(sys.platform == 'win32', reason='nothing is recorded there')
+# each platform, the ones whose code a Windows host can't run marked (REVIEW.md TST-510)
+_EACH_PLATFORM = [pytest.param('darwin', marks=_SETS_UNIX), pytest.param('linux', marks=_SETS_UNIX), 'win32']
+# a test ending an agent's Designer it recorded: _force_end takes signal.SIGKILL (REVIEW.md TST-509)
+_FORCE_ENDS = pytest.mark.skipif(
+    sys.platform == 'win32', reason='ends a recorded Designer with signal.SIGKILL; Windows records none, and lacks it'
+)
+
 
 class _Send(Protocol):
     """core._send's signature, which the fakes of _send below have."""
@@ -495,6 +508,23 @@ def _an_agent_started(
     os.utime(record, (time.time() - age, time.time() - age))
 
 
+def _record_reads(monkeypatch: pytest.MonkeyPatch, then_gone: bool = False) -> list[int]:
+    """The ports whose record is read from now on, in order (ROADMAP item 106). With `then_gone`, each record is removed
+    once read, as another server's quit removes it."""
+    read_record: Callable[[int], tuple[bytes, float] | None] = server._read_record
+    reads: list[int] = []
+
+    def read(port: int) -> tuple[bytes, float] | None:
+        reads.append(port)
+        found = read_record(port)
+        if then_gone:
+            Path(server.agent_designer_file(port)).unlink(missing_ok=True)
+        return found
+
+    patch_server(monkeypatch, '_read_record', read)
+    return reads
+
+
 def _launch_fakes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[list[str]]:
     started: list[list[str]] = []
     monkeypatch.setenv('SD_DESIGNER_APP', str(tmp_path))
@@ -512,6 +542,7 @@ def _answers_once_started(started: list[list[str]]) -> _Send:
     return bridge
 
 
+@_RECORDED
 def test_launch_state_not_running(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None) -> None:
     started = _launch_fakes(monkeypatch, tmp_path)
     home: list[str] = []
@@ -534,6 +565,7 @@ def test_launch_state_not_running(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     [(True, 'give_back_activation(started_hidden=True)'), (False, 'give_back_activation()')],
     ids=['an app bundle, opened hidden', 'a binary'],
 )
+@_SETS_UNIX
 def test_a_designer_started_gives_the_keyboard_back_once_its_home_screen_is_closed(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, bundle: bool, give_back: str
 ) -> None:
@@ -566,6 +598,7 @@ def test_a_designer_started_gives_the_keyboard_back_once_its_home_screen_is_clos
     assert '(closed the Home screen; gave the keyboard back to the app in front before it)' in result
 
 
+@_RECORDED
 def test_a_user_opening_one_at_the_same_moment_doesnt_confuse_the_record(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
 ) -> None:
@@ -594,12 +627,12 @@ def test_a_launch_timing_out_whose_processes_cant_be_listed_still_says_what_to_d
     patch_server(monkeypatch, '_send', _no_bridge)
     clock = iter(range(0, 1000, 10))
     monkeypatch.setattr(time, 'time', lambda: next(clock))
-    listed: Callable[[int], tuple[list[int], list[int]]] = server._sorted_out
+    listed: Callable[[int, dict[int, int] | None], tuple[list[int], list[int]]] = server._sorted_out
 
-    def sorted_out(port: int) -> tuple[list[int], list[int]]:
+    def sorted_out(port: int, agents: dict[int, int] | None = None) -> tuple[list[int], list[int]]:
         if sys._getframe(1).f_code.co_name == '_how_to_end':
             raise server._NoListing("Designer's processes couldn't be listed (pgrep exit code 3: fork failed)")
-        return listed(port)
+        return listed(port, agents)
 
     patch_server(monkeypatch, '_sorted_out', sorted_out)
     with pytest.raises(server.ToolError) as raised:
@@ -644,6 +677,7 @@ def test_launch_state_second_instance(monkeypatch: pytest.MonkeyPatch, tmp_path:
     assert not processes.signals and not started
 
 
+@_RECORDED
 def test_launch_state_agents_not_answering(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None) -> None:
     # REVIEW.md HLP-82: an agent's Designer is disposable, so it isn't waited for
     started = _launch_fakes(monkeypatch, tmp_path)
@@ -693,6 +727,7 @@ def test_launch_state_agents_too_slow_for_this_wait(
     assert not processes.signals and not started
 
 
+@_RECORDED
 def test_launch_ends_an_agents_passing_the_limit(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
 ) -> None:
@@ -710,6 +745,7 @@ def test_launch_ends_an_agents_passing_the_limit(
     assert 'Ended' in text and 'Designer started in' in text and server._agent_designer(server.PORT) == 77
 
 
+@_FORCE_ENDS
 def test_launch_stops_at_an_agents_it_cant_end(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None) -> None:
     # REVIEW.md SRV-79: it said a later call would end it, right after failing to, and tried again at every poll
     started = _launch_fakes(monkeypatch, tmp_path)
@@ -721,6 +757,7 @@ def test_launch_stops_at_an_agents_it_cant_end(monkeypatch: pytest.MonkeyPatch, 
     assert processes.signals == [(11, signal.SIGTERM), (11, signal.SIGKILL)] and not started
 
 
+@_FORCE_ENDS
 def test_launch_says_it_ended_one_even_if_the_new_one_fails(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
 ) -> None:
@@ -858,7 +895,7 @@ def test_launch_turns_crash_uploads_off_before_leaving_the_home_screen(
     assert struct.unpack_from('<I', settings.read_bytes(), 8)[0] == 0, 'uploads off'
 
 
-@pytest.mark.skipif(sys.platform == 'win32', reason='nothing is recorded there')
+@_RECORDED
 @pytest.mark.parametrize('answers_at_once', [True, False], ids=['answering', 'waited for'])
 def test_launch_turns_crash_uploads_off_in_an_agents_designer_already_running(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, answers_at_once: bool
@@ -885,7 +922,7 @@ def test_launch_turns_crash_uploads_off_in_an_agents_designer_already_running(
     assert after[:8] + after[12:] == CRASHPAD_SETTINGS[:8] + CRASHPAD_SETTINGS[12:], 'the rest as Crashpad wrote it'
 
 
-@pytest.mark.skipif(sys.platform == 'win32', reason='nothing is recorded there')
+@_RECORDED
 def test_launch_says_when_an_agents_designer_already_running_keeps_crash_uploads_on(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -910,7 +947,7 @@ def test_a_designer_it_started_refusing_gets_crash_uploads_off_too(
     assert 'upload' not in str(refused.value)
 
 
-@pytest.mark.skipif(sys.platform == 'win32', reason='nothing is recorded there')
+@_RECORDED
 @pytest.mark.parametrize('settings_there', [True, False], ids=['turned off', 'missing'])
 def test_an_agents_designer_refusing_gets_crash_uploads_off_too(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, settings_there: bool
@@ -1277,6 +1314,22 @@ def test_designer_status_while_a_job_runs_cant_tell_two_apart(monkeypatch: pytes
     assert 'Started by an agent' in server.designer_status()
 
 
+@pytest.mark.parametrize('state', ['idle, 0 queued', 'running for 4.0s, 0 queued'], ids=['idle', 'while a job runs'])
+def test_designer_status_reads_each_record_once(monkeypatch: pytest.MonkeyPatch, state: str) -> None:
+    # ROADMAP item 106, REVIEW.md TST-502. Idle, _started_by read the port's record and _others every record. While a
+    # job runs, _sorted_out read every record, _started_by the port's again and _others every record once more. Each read
+    # lists Designer's processes again
+    _Processes(monkeypatch, 11, 12)
+    _an_agent_started(11)
+    _an_agent_started(12, port=OTHER)
+    reads = _record_reads(monkeypatch)
+    patch_server(monkeypatch, '_send', lambda request, wait, port=None: {'ok': True, 'output': state})
+    fake_bridge(monkeypatch, lambda code: 'process 11')
+    text = server.designer_status()
+    assert 'Started by an agent' in text and '%d (process 12)' % OTHER in text, text
+    assert sorted(reads) == sorted([server.PORT, OTHER]), reads
+
+
 # --- closing it
 
 
@@ -1300,6 +1353,7 @@ def test_quit_refuses_a_designer_no_agent_started(monkeypatch: pytest.MonkeyPatc
     assert not processes.signals and not asked, 'nothing is sent to it'
 
 
+@_FORCE_ENDS
 def test_quit_leaves_the_users_next_to_the_agents(monkeypatch: pytest.MonkeyPatch, no_sleep: None) -> None:
     processes = _Processes(monkeypatch, 11, 12)
     _closes(monkeypatch)
@@ -1322,6 +1376,7 @@ def test_quit_closes_an_agents_normally(monkeypatch: pytest.MonkeyPatch, no_slee
     assert not processes.signals and not Path(server.agent_designer_file(server.PORT)).exists()
 
 
+@_FORCE_ENDS
 def test_quit_forces_an_agents_that_stays(monkeypatch: pytest.MonkeyPatch, no_sleep: None) -> None:
     # REVIEW.md HLP-82: Designer can hang at the very end of its shutdown, past anything inside it
     processes = _Processes(monkeypatch, 11)
@@ -1338,7 +1393,10 @@ CLOSED = '[INFO][Python] %s' % project_constants.QUIT_CLOSED  # the quit helper'
 
 
 def _forced_with(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, lines: list[str] | None) -> tuple[str, list[str]]:
-    """quit_designer forcing the agent's Designer 11, whose own log holds `lines` (None: it has none)."""
+    """quit_designer forcing the agent's Designer 11, whose own log holds `lines` (None: it has none). Skips on
+    Windows: a home recorded reaches the crash uploads' fcntl (REVIEW.md TST-507)."""
+    if sys.platform == 'win32':
+        pytest.skip('Windows lacks fcntl')
     processes = _Processes(monkeypatch, 11)
     _an_agent_started(11, home=str(tmp_path))
     asked = _closes(monkeypatch)
@@ -1347,7 +1405,7 @@ def _forced_with(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, lines: list[st
         log.write_text('\n'.join(lines))
     patch_server(monkeypatch, '_log_for', lambda port: pytest.fail('the shared log may be read (REVIEW.md SRV-108)'))
 
-    def agent_log(port: int, home: str) -> str:
+    def agent_log(port: int, home: str, written: float) -> str:
         if lines is None:  # as the real one says it (REVIEW.md TST-294)
             raise server.ToolError(
                 'The Designer on port %d has no log yet: it is still starting. Try again shortly.' % port
@@ -1401,16 +1459,28 @@ def test_a_forced_quit_with_no_log_of_its_own_says_so(
     )
 
 
+@_FORCE_ENDS
 def test_a_forced_quit_reads_no_log_but_its_own(monkeypatch: pytest.MonkeyPatch, no_sleep: None) -> None:
     # one recorded without a home writes the shared log, the user's lines among its own: not read
     _Processes(monkeypatch, 11)
     _an_agent_started(11)
     _closes(monkeypatch)
     patch_server(monkeypatch, '_log_for', lambda port: pytest.fail('the shared log was read'))
-    patch_server(monkeypatch, '_agent_log', lambda port, home: pytest.fail('a log read without a home'))
+    patch_server(monkeypatch, '_agent_log', lambda port, home, written: pytest.fail('a log read without a home'))
     assert 'its log could not be read' in server.quit_designer(wait_s=3)
 
 
+def test_a_forced_quit_reads_its_record_once(monkeypatch: pytest.MonkeyPatch, no_sleep: None, tmp_path: Path) -> None:
+    # ROADMAP item 106: _quit read the record, then _quit_evidence read it again for the home, listing Designer's
+    # processes again (REVIEW.md TST-501)
+    reads = _record_reads(monkeypatch)
+    text, _ = _forced_with(monkeypatch, tmp_path, [NEW, START, CLOSED, '[INFO][IPC] Remove PID'])
+    assert project_constants.QUIT_FORCED_IN_SHUTDOWN in text and reads == [server.PORT], (text, reads)
+
+
+@pytest.mark.skipif(
+    sys.platform == 'win32', reason='Windows lacks fcntl: a home recorded reaches it (REVIEW.md TST-507)'
+)
 def test_a_designer_ending_while_its_log_is_read_is_not_reported_forced(
     monkeypatch: pytest.MonkeyPatch, no_sleep: None, tmp_path: Path
 ) -> None:
@@ -1421,7 +1491,7 @@ def test_a_designer_ending_while_its_log_is_read_is_not_reported_forced(
     log = tmp_path / 'log.txt'
     log.write_text('\n'.join([NEW, START, CLOSED]))
 
-    def read_as_it_ends(port: int, home: str) -> str:
+    def read_as_it_ends(port: int, home: str, written: float) -> str:
         processes.pids.clear()
         return str(log)
 
@@ -1550,7 +1620,7 @@ def test_a_close_logged_while_it_is_sampled_counts(
     processes, _ = _sampling(monkeypatch, tmp_path, home=str(tmp_path))
     log = tmp_path / 'log.txt'
     log.write_text('\n'.join([NEW, START, '[INFO] ready']))
-    patch_server(monkeypatch, '_agent_log', lambda port, home: str(log))
+    patch_server(monkeypatch, '_agent_log', lambda port, home, written: str(log))
 
     def sample(pid: int, path: str) -> None:
         log.write_text('\n'.join([NEW, START, '[INFO] ready', CLOSED]))  # its close taking meanwhile
@@ -1690,6 +1760,7 @@ def test_a_forced_quit_reads_its_logs_tail_and_judges_this_session(
     assert (project_constants.QUIT_FORCED_IN_SHUTDOWN in text) == closed and '"%s"' % lines[-1] in text
 
 
+@_FORCE_ENDS
 def test_quit_forces_harder_if_it_must(monkeypatch: pytest.MonkeyPatch, no_sleep: None) -> None:
     processes = _Processes(monkeypatch, 11, ends_on=signal.SIGKILL)
     _an_agent_started(11)
@@ -1698,6 +1769,7 @@ def test_quit_forces_harder_if_it_must(monkeypatch: pytest.MonkeyPatch, no_sleep
     assert processes.signals == [(11, signal.SIGTERM), (11, signal.SIGKILL)]
 
 
+@_FORCE_ENDS
 def test_quit_says_so_if_even_that_fails(monkeypatch: pytest.MonkeyPatch, no_sleep: None) -> None:
     _Processes(monkeypatch, 11, ends_on=-1)
     _an_agent_started(11)
@@ -1706,6 +1778,7 @@ def test_quit_says_so_if_even_that_fails(monkeypatch: pytest.MonkeyPatch, no_sle
         server.quit_designer(wait_s=1)
 
 
+@_FORCE_ENDS
 def test_quit_forces_an_agents_with_no_bridge(monkeypatch: pytest.MonkeyPatch, no_sleep: None) -> None:
     processes = _Processes(monkeypatch, 11)
     _an_agent_started(11)
@@ -1719,6 +1792,7 @@ def test_quit_forces_an_agents_with_no_bridge(monkeypatch: pytest.MonkeyPatch, n
     assert 'forced' in text and processes.signals and 'did not reply: Designer is not reachable' in text
 
 
+@_FORCE_ENDS
 def test_quit_names_the_process_it_means(monkeypatch: pytest.MonkeyPatch, no_sleep: None) -> None:
     # REVIEW.md SRV-73: the close goes to whichever Designer holds the port, and the helper refuses any other
     _Processes(monkeypatch, 11)
@@ -1728,6 +1802,7 @@ def test_quit_names_the_process_it_means(monkeypatch: pytest.MonkeyPatch, no_sle
     assert asked[0].rstrip().endswith('quit_designer(11, %r)' % project_constants.QUIT_CLOSED)
 
 
+@_FORCE_ENDS
 def test_quit_with_another_designer_on_the_port_only_ends_its_own(
     monkeypatch: pytest.MonkeyPatch, no_sleep: None
 ) -> None:
@@ -1740,6 +1815,7 @@ def test_quit_with_another_designer_on_the_port_only_ends_its_own(
 
 
 @pytest.mark.parametrize(('wait_s', 'limit'), [(1, 10), (30, 30)])
+@_FORCE_ENDS
 def test_the_close_has_a_limit_of_its_own(
     monkeypatch: pytest.MonkeyPatch, no_sleep: None, wait_s: int, limit: int
 ) -> None:
@@ -1763,6 +1839,7 @@ def test_the_close_has_a_limit_of_its_own(
 
 
 @pytest.mark.parametrize('state', ['running for 412.0s, 0 queued', 'idle, 2 queued'])
+@_FORCE_ENDS
 def test_quit_doesnt_queue_behind_a_job(monkeypatch: pytest.MonkeyPatch, no_sleep: None, state: str) -> None:
     # REVIEW.md SRV-74: the close would wait about 15 minutes in the queue before wait_s even started
     processes = _Processes(monkeypatch, 11)
@@ -1774,6 +1851,7 @@ def test_quit_doesnt_queue_behind_a_job(monkeypatch: pytest.MonkeyPatch, no_slee
     assert 'not asked to close' in text and state in text and 'forced' in text
 
 
+@_FORCE_ENDS
 def test_a_process_gone_or_not_ours_to_signal_doesnt_raise(monkeypatch: pytest.MonkeyPatch, no_sleep: None) -> None:
     processes = _Processes(monkeypatch, 11)
 
@@ -1812,6 +1890,7 @@ def _ports_answering(*ports: int, asked: list[int | None] | None = None) -> _Sen
 
 
 @pytest.mark.parametrize('port', [None, OTHER], ids=['the servers', 'another'])
+@_SETS_UNIX
 def test_launch_opens_a_new_instance_hidden_with_the_port(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, port: int | None
 ) -> None:
@@ -1936,6 +2015,7 @@ def test_each_port_has_a_record_of_its_own(monkeypatch: pytest.MonkeyPatch) -> N
     assert (server._agent_designer(server.PORT), server._agent_designer(OTHER)) == (11, 12)
 
 
+@_RECORDED
 def test_launch_on_a_port_next_to_an_agents_on_another(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
 ) -> None:
@@ -2080,6 +2160,18 @@ def test_quit_on_a_port_where_none_runs(monkeypatch: pytest.MonkeyPatch, no_slee
     assert not asked and not processes.signals
 
 
+def test_quit_on_a_port_where_none_runs_reads_each_record_once(monkeypatch: pytest.MonkeyPatch, no_sleep: None) -> None:
+    # ROADMAP item 106: _running_on read every record, then _others read them all again for the same answer, each read
+    # listing Designer's processes again
+    _Processes(monkeypatch, 11)
+    _an_agent_started(11)
+    reads = _record_reads(monkeypatch)
+    text = server.quit_designer(port=OTHER)
+    assert text.startswith('No Designer is running on port %d.' % OTHER), text
+    assert '%d (process 11)' % server.PORT in text, text
+    assert sorted(reads) == sorted([OTHER, server.PORT]), reads
+
+
 @pytest.mark.parametrize('port', [0, 80, 1023, 65536, True], ids=str)
 @pytest.mark.parametrize(
     'tool',
@@ -2144,7 +2236,7 @@ def _own_folder(tmp_path: Path, port: int) -> Path:
     return tmp_path / ('sd_mcp_%d_%d' % (os.getuid(), port))
 
 
-@pytest.mark.parametrize('platform', ['darwin', 'linux', 'win32'])
+@pytest.mark.parametrize('platform', _EACH_PLATFORM)
 def test_each_designer_started_has_a_temp_folder_of_its_own(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, platform: str
 ) -> None:
@@ -2160,7 +2252,7 @@ def test_each_designer_started_has_a_temp_folder_of_its_own(
     assert all(os.path.isdir(t) for t in temps if t)
 
 
-@pytest.mark.parametrize('platform', ['darwin', 'linux', 'win32'])
+@pytest.mark.parametrize('platform', _EACH_PLATFORM)
 def test_each_designer_started_on_macos_has_a_home_of_its_own(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, platform: str
 ) -> None:
@@ -2218,6 +2310,7 @@ def test_the_plugin_folders_are_those_the_users_designer_loads(monkeypatch: pyte
     ), "no project file yet: Designer's default, where install.py puts it"
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason="a Unix socket's path, in a folder named with os.getuid")
 def test_the_temp_folder_leaves_room_for_designers_socket() -> None:
     # measured: the socket's name takes 41 bytes with a 5-digit process ID, in the folder's real path (/tmp is
     # /private/tmp), and a socket's whole path at most 103 (104 with its NUL). With too long a path Designer made none
@@ -2227,6 +2320,7 @@ def test_the_temp_folder_leaves_room_for_designers_socket() -> None:
 
 
 @pytest.mark.parametrize('kind', ['_own_temp', '_own_home'])
+@_SETS_UNIX
 def test_a_folder_that_isnt_ours_is_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, kind: str) -> None:
     # /tmp is shared: a folder someone else made there, or a link to one, isn't given to Designer
     monkeypatch.setattr(sys, 'platform', 'darwin')
@@ -2261,7 +2355,10 @@ def test_a_folder_another_user_owns_is_refused(monkeypatch: pytest.MonkeyPatch, 
 
 
 def _logs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path]:
-    """The shared log, and the log of the Designer an agent starts on OTHER, both written; macOS."""
+    """The shared log, and the log of the Designer an agent starts on OTHER, both written; macOS. Skips on Windows,
+    before it says macOS: its folder's name takes os.getuid() (REVIEW.md TST-507)."""
+    if sys.platform == 'win32':
+        pytest.skip('Windows lacks os.getuid')
     monkeypatch.setattr(sys, 'platform', 'darwin')
     monkeypatch.delenv('SD_DESIGNER_LOG', raising=False)
     patch_server(monkeypatch, 'SHORT_TEMP', str(tmp_path))
@@ -2287,6 +2384,20 @@ def test_the_log_of_a_designer_an_agent_started_is_its_own(monkeypatch: pytest.M
     assert text.startswith(str(own)) and 'written by the agents' in text
     text = server.read_designer_log()  # the user's, on the server's port
     assert text.startswith(str(shared)) and 'written by the users' in text
+
+
+def test_the_log_of_a_designer_whose_record_goes_after_its_read_is_its_own(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # REVIEW.md SRV-175: _agent_log looked at the record again, for its age, after _log_for's one read. A record removed
+    # between them, by another server's quit once that Designer exited, failed the tool with a raw FileNotFoundError
+    _, own = _logs(monkeypatch, tmp_path)
+    _Processes(monkeypatch, 12)
+    _an_agent_started(12, port=OTHER, home=str(_own_folder(tmp_path, OTHER) / 'home'))
+    os.utime(own, (time.time() + 5, time.time() + 5))  # written by it once started, after its record
+    reads = _record_reads(monkeypatch, then_gone=True)
+    text = server.read_designer_log(port=OTHER)
+    assert text.startswith(str(own)) and 'written by the agents' in text and reads == [OTHER], (text, reads)
 
 
 def test_the_log_of_an_agents_designer_that_has_ended_is_still_read(
@@ -2323,6 +2434,7 @@ def test_a_designer_an_agent_started_without_a_home_is_read_from_the_shared_log(
     assert own.exists() and server.read_designer_log(port=OTHER).startswith(str(shared))
 
 
+@_SETS_UNIX
 def test_the_record_says_which_home_the_designer_got(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
 ) -> None:
@@ -2492,6 +2604,7 @@ def test_a_port_that_cant_be_bound_for_another_reason_isnt_blamed_on_a_program(
 
 
 # ---- the record of a Designer an agent started, with servers side by side (REVIEW.md SRV-83)
+@_RECORDED
 def test_a_record_read_while_it_is_written_isnt_lost(monkeypatch: pytest.MonkeyPatch) -> None:
     # (b): the record was emptied, then written; another server reading it in between deleted it as unreadable, and
     # the write then went into the deleted file
@@ -2549,7 +2662,7 @@ def _recorded_pid() -> int:
     return read_agent_record(server.agent_designer_file(server.PORT))['pid']
 
 
-@pytest.mark.skipif(sys.platform == 'win32', reason='nothing is recorded there')
+@_RECORDED
 def test_a_record_replaced_while_it_is_checked_is_kept(monkeypatch: pytest.MonkeyPatch) -> None:
     # REVIEW.md SRV-91: the record of 77, which has ended, is found stale; meanwhile another server put 78's in place
     processes = _Processes(monkeypatch)
@@ -2559,17 +2672,17 @@ def test_a_record_replaced_while_it_is_checked_is_kept(monkeypatch: pytest.Monke
     assert _recorded_pid() == 78 and server._agent_designer(server.PORT) == 78
 
 
-@pytest.mark.skipif(sys.platform == 'win32', reason='nothing is recorded there')
+@_RECORDED
 def test_a_record_replaced_while_a_designer_is_forced_is_kept(monkeypatch: pytest.MonkeyPatch) -> None:
     # REVIEW.md SRV-91: 77 is force-ended; as it goes, another server starts and records 78
     processes = _Processes(monkeypatch, 77)
     _an_agent_started(77)
     _relaunched_meanwhile(monkeypatch, processes, lambda: 77 not in processes.pids)
-    assert server._force_end(77, server.PORT, server._record_bytes(server.PORT) or b'')
+    assert server._force_end(77, server.PORT, Path(server.agent_designer_file(server.PORT)).read_bytes())
     assert _recorded_pid() == 78
 
 
-@pytest.mark.skipif(sys.platform == 'win32', reason='nothing is recorded there')
+@_RECORDED
 def test_a_record_replaced_while_quit_waits_is_kept(monkeypatch: pytest.MonkeyPatch, no_sleep: None) -> None:
     # REVIEW.md SRV-91: quit_designer's wait sees 77 gone; another server has started and recorded 78 meanwhile
     processes = _Processes(monkeypatch, 77)
@@ -2615,7 +2728,7 @@ def _starts_77(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[list[li
     return started, processes
 
 
-@pytest.mark.skipif(sys.platform == 'win32', reason='nothing is recorded there')
+@_RECORDED
 @pytest.mark.parametrize('folder', ['missing', 'read-only'])
 def test_no_designer_is_started_where_its_record_cant_be_written(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None, folder: str
@@ -2638,7 +2751,7 @@ def test_no_designer_is_started_where_its_record_cant_be_written(
     assert str(records) in str(raised.value)
 
 
-@pytest.mark.skipif(sys.platform == 'win32', reason='nothing is recorded there')
+@_RECORDED
 def test_a_designer_whose_record_fails_after_the_start_is_ended(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
 ) -> None:
@@ -2683,7 +2796,7 @@ def _ps_fails(pid: int) -> NoReturn:
     )
 
 
-@pytest.mark.skipif(sys.platform == 'win32', reason='nothing is recorded there')
+@_RECORDED
 def test_a_failing_ps_keeps_a_live_record(monkeypatch: pytest.MonkeyPatch) -> None:
     # REVIEW.md SRV-97: a sweep read the record of a live Designer as stale and removed it; it can't tell, so the
     # record stays (and the Designer isn't taken for an agent's meanwhile)
@@ -2694,7 +2807,7 @@ def test_a_failing_ps_keeps_a_live_record(monkeypatch: pytest.MonkeyPatch) -> No
     assert os.path.exists(server.agent_designer_file(server.PORT))
 
 
-@pytest.mark.skipif(sys.platform == 'win32', reason='nothing is recorded there')
+@_RECORDED
 def test_a_designer_whose_start_cant_be_read_is_ended(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
 ) -> None:
@@ -2706,7 +2819,7 @@ def test_a_designer_whose_start_cant_be_read_is_ended(
     assert started and (77, signal.SIGTERM) in processes.signals and 'cannot allocate memory' in str(raised.value)
 
 
-@pytest.mark.skipif(sys.platform == 'win32', reason='nothing is recorded there')
+@_RECORDED
 def test_a_designer_left_unrecorded_is_reported_when_its_end_cant_be_seen(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
 ) -> None:
@@ -2726,7 +2839,7 @@ def test_a_designer_left_unrecorded_is_reported_when_its_end_cant_be_seen(
     assert started and 'kill -9 77' in str(raised.value) and (77, signal.SIGTERM) in processes.signals
 
 
-@pytest.mark.skipif(sys.platform == 'win32', reason='nothing is recorded there')
+@_RECORDED
 def test_a_designer_is_recorded_even_when_its_reaper_cant_start(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
 ) -> None:
@@ -2763,6 +2876,7 @@ def test_a_log_older_than_the_designer_on_its_port_is_not_yet_its(
     assert server.read_designer_log(port=OTHER).startswith(str(own))
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason='tasklist, not pgrep, lists them on Windows')
 def test_a_failed_process_listing_keeps_a_live_record(monkeypatch: pytest.MonkeyPatch) -> None:
     # (c): pgrep failing (exit code 2 or 3, not 1 for nothing found) gave an empty list, and the record of a Designer
     # still running was deleted
@@ -2973,6 +3087,7 @@ def test_an_agents_designer_with_no_log_yet_isnt_read_from_the_shared_log(
 # ---- the folders and the plugin path, when something is off (REVIEW.md SRV-86)
 @pytest.mark.parametrize('how', ['mkdir fails', 'a file in the way'])
 @pytest.mark.parametrize('kind', ['_own_temp', '_own_home'])
+@_SETS_UNIX
 def test_a_folder_that_cant_be_made_is_refused_naming_the_port(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, kind: str, how: str
 ) -> None:
@@ -3610,6 +3725,7 @@ def test_quit_waits_for_the_processs_exit(monkeypatch: pytest.MonkeyPatch, no_sl
     assert waited == [(11, 7)]
 
 
+@_FORCE_ENDS
 def test_a_forced_end_waits_for_the_processs_exit_after_each_signal(monkeypatch: pytest.MonkeyPatch) -> None:
     sent: list[int] = []
     waited: list[tuple[int, float]] = []
@@ -3784,6 +3900,10 @@ def test_a_launch_waiting_for_its_own_start_looks_up_no_process_between_its_poll
     assert len(looked) == 2  # before the start, and in it, under the launch lock
 
 
+# another launch's Designer 11, recorded without a home (_agent_record)
+ANOTHER_LAUNCHS = server_tools.lifecycle._Recorded(11, None, b'{}', 0.0)
+
+
 def test_a_launch_waiting_for_another_launchs_designer_looks_it_up_once_its_process_exits(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -3796,7 +3916,7 @@ def test_a_launch_waiting_for_another_launchs_designer_looks_it_up_once_its_proc
         return True
 
     patch_server(monkeypatch, '_running_on', running_on)
-    patch_server(monkeypatch, '_agent_record', lambda port: (11, b'{}'))
+    patch_server(monkeypatch, '_agent_record', lambda port: ANOTHER_LAUNCHS)
     patch_server(monkeypatch, '_still_starting', lambda port: True)
     patch_server(monkeypatch, '_exit_watch', lambda pid: SimpleNamespace(ended=lambda: False, close=lambda: None))
     patch_server(monkeypatch, '_send', _refused_then_idle(5))
@@ -3896,6 +4016,7 @@ def test_a_designer_open_started_whose_process_isnt_found_keeps_the_copy_of_the_
         assert defaults.domain['session.instancePID'] == 88, 'not put back while it may run'
 
 
+@_SETS_UNIX
 def test_opens_failure_is_said_with_what_open_printed_and_its_wait_has_a_limit(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
 ) -> None:
@@ -3926,6 +4047,7 @@ def test_opens_failure_is_said_with_what_open_printed_and_its_wait_has_a_limit(
     assert limits and limits[0] is not None, 'a limit, a safety net'
 
 
+@_SETS_UNIX
 def test_an_open_that_doesnt_exit_is_said_as_a_designer_that_may_run(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
 ) -> None:
@@ -3954,6 +4076,7 @@ def test_an_open_that_doesnt_exit_is_said_as_a_designer_that_may_run(
     assert killed == [77] and "Designer was opened, but `open` didn't exit within" in said, said
 
 
+@_SETS_UNIX
 def test_the_process_open_started_is_looked_for_with_the_launchs_port_and_home(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
 ) -> None:
@@ -3977,6 +4100,7 @@ def test_the_process_open_started_is_looked_for_with_the_launchs_port_and_home(
     assert asked == [('SD_BRIDGE_PORT=%d' % OTHER, 'CFFIXED_USER_HOME=%s' % home)], asked
 
 
+@_SETS_UNIX
 def test_a_binary_in_sd_designer_app_is_started_itself_on_macos(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
 ) -> None:
@@ -3993,6 +4117,7 @@ def test_a_binary_in_sd_designer_app_is_started_itself_on_macos(
     assert _started_with[0]['start_new_session'] and _started_with[0]['cwd'] == '/'
 
 
+@_SETS_UNIX
 def test_processes_that_cant_be_listed_before_open_are_said_as_no_start(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
 ) -> None:
@@ -4052,9 +4177,9 @@ def test_a_launch_waiting_for_another_launchs_designer_reads_its_record_once_and
     closed: list[int] = []
     patch_server(monkeypatch, '_running_on', lambda port: True)
 
-    def record(port: int) -> tuple[int, bytes]:
+    def record(port: int) -> server_tools.lifecycle._Recorded:
         read.append(port)
-        return 11, b'{}'
+        return ANOTHER_LAUNCHS
 
     patch_server(monkeypatch, '_agent_record', record)
     patch_server(monkeypatch, '_still_starting', lambda port: True)
@@ -4143,13 +4268,13 @@ def test_a_launch_waiting_for_another_launchs_designer_starts_one_once_it_exited
         return not running[0]
 
     patch_server(monkeypatch, '_running_on', running_on)
-    patch_server(monkeypatch, '_agent_record', lambda port: (11, b'{}') if running[0] else None)
+    patch_server(monkeypatch, '_agent_record', lambda port: ANOTHER_LAUNCHS if running[0] else None)
     patch_server(monkeypatch, '_still_starting', lambda port: True)
     if watchable:
         patch_server(monkeypatch, '_exit_watch', lambda pid: SimpleNamespace(ended=ended, close=lambda: None))
     else:
         patch_server(monkeypatch, '_exit_watch', lambda pid: None)
-        patch_server(monkeypatch, '_agent_record', lambda port: (11, b'{}') if ended() is False else None)
+        patch_server(monkeypatch, '_agent_record', lambda port: ANOTHER_LAUNCHS if ended() is False else None)
     patch_server(monkeypatch, '_send', _answers_once_started(started))
     monkeypatch.setattr(time, 'sleep', lambda seconds: None)
     assert 'Designer started in' in server.launch_designer(wait_s=30) and started
@@ -4162,11 +4287,11 @@ def test_the_home_comes_from_the_record_whose_designer_was_checked(monkeypatch: 
     # put in place meanwhile, by another server's launch on the port, gave its home for the Designer checked before
     reads = iter(
         [
-            json.dumps({'pid': 77, 'start': 'then', 'home': '/a/home'}).encode(),
-            json.dumps({'pid': 88, 'start': 'later', 'home': '/b/home'}).encode(),
+            (json.dumps({'pid': 77, 'start': 'then', 'home': '/a/home'}).encode(), 1.0),
+            (json.dumps({'pid': 88, 'start': 'later', 'home': '/b/home'}).encode(), 2.0),
         ]
     )
-    patch_server(monkeypatch, '_record_bytes', lambda port: next(reads))
+    patch_server(monkeypatch, '_read_record', lambda port: next(reads))
     patch_server(monkeypatch, '_designer_pids', lambda: [77])
     patch_server(monkeypatch, '_process_start', lambda pid: 'then')
     assert server._agent_home(9901) == '/a/home'
@@ -4175,10 +4300,10 @@ def test_the_home_comes_from_the_record_whose_designer_was_checked(monkeypatch: 
 def test_the_log_comes_from_the_record_whose_designer_was_checked(monkeypatch: pytest.MonkeyPatch) -> None:
     # REVIEW.md SRV-174: _log_for checked one read of the record, then took the home from a second read: a quit by
     # another server meanwhile, which removes the record, gave the shared log, the user's lines, for the agent's Designer
-    reads = iter([json.dumps({'pid': 77, 'start': 'then', 'home': '/a/home'}).encode(), None])
-    patch_server(monkeypatch, '_record_bytes', lambda port: next(reads))
+    reads = iter([(json.dumps({'pid': 77, 'start': 'then', 'home': '/a/home'}).encode(), 1.0), None])
+    patch_server(monkeypatch, '_read_record', lambda port: next(reads))
     patch_server(monkeypatch, '_designer_pids', lambda: [77])
     patch_server(monkeypatch, '_process_start', lambda pid: 'then')
     patch_server(monkeypatch, '_designer_log_path', lambda: '/the/shared/log.txt')
-    patch_server(monkeypatch, '_agent_log', lambda port, home: 'the own log in %s' % home)
+    patch_server(monkeypatch, '_agent_log', lambda port, home, written: 'the own log in %s' % home)
     assert server._log_for(9901) == 'the own log in /a/home'

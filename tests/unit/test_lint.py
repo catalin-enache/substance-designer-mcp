@@ -5,6 +5,7 @@ import subprocess
 import sys
 
 import pytest
+from windows_simulation import POSIX_ONLY
 
 from conftest import ROOT
 
@@ -25,9 +26,6 @@ def test_ruff_check_finds_nothing() -> None:
 def test_every_file_is_formatted() -> None:
     result = _ruff('format', '--check', '--no-cache', '.')
     assert result.returncode == 0, result.stdout + result.stderr + '\nRun: mcp_server/venv/bin/ruff format .'
-
-
-POSIX_ONLY = ('fcntl', 'termios', 'pwd', 'grp', 'resource', 'posix')
 
 
 def test_no_module_imports_a_posix_only_module_at_its_top() -> None:

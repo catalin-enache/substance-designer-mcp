@@ -2,6 +2,7 @@
 `definition` names them by path. Real files in a temporary folder; the live self-test uses Designer's own."""
 
 import os
+import sys
 import types
 from pathlib import Path
 from unittest import mock
@@ -113,6 +114,10 @@ def test_a_missing_library_folder_is_an_error_and_not_remembered(
     assert "definition='hbao'" in server.search_nodes('hbao')
 
 
+@pytest.mark.skipif(
+    sys.platform == 'win32',
+    reason="its folder is made unreadable by POSIX permissions, which Windows' chmod doesn't set",
+)
 def test_an_unreadable_library_subfolder_is_an_error(monkeypatch: pytest.MonkeyPatch, resources: Path) -> None:
     if os.geteuid() == 0:
         pytest.skip('root reads everything')

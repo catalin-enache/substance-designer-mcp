@@ -137,6 +137,14 @@ commit or a whole branch, run only the tests that validate the docs, the final c
 `mcp_server/venv/bin/ruff check --fix .` and `mcp_server/venv/bin/ruff format .` (`test_lint.py` runs `ruff check` and
 `ruff format --check`).
 
+**A unit test that depends on the system** says which systems it runs on, and skips elsewhere: a `skipif` on
+`sys.platform`, with the reason. Such a test sets the platform itself, uses what only Unix has (`fcntl`,
+`os.getuid`, `signal.SIGKILL`), or checks what only macOS does. `tests/unit/test_windows_simulation.py` runs the test
+files that mention the system, or a name Unix has and Windows lacks that this code uses, with the platform set to
+`win32` and those names taken away (`tests/unit/windows_simulation.py` lists them). It fails on a test that then fails
+unmarked, and on a `win32` case skipped. It simulates only those differences: a test that depends on Windows in another
+way shows only in a run there (ROADMAP item 18).
+
 **Typing** (`test_types.py` runs mypy strict over every Python file). The helpers, the plugin and the example are
 checked against Designer's own `sd` package and PySide6 stubs (found in the Designer install) and run on Designer's
 Python 3.13, which evaluates annotations when a `def` runs: every name in an annotation there must exist at runtime

@@ -80,7 +80,9 @@ def test_never_registers_globally(
     _run(module, monkeypatch, '--plugins-dir', str(tmp_path))
     assert not any('claude' in os.path.basename(str(c[0])) for c in calls)
     out = capsys.readouterr().out
-    assert 'Not registered globally' in out and '.mcp.json' in out and '--scope local' in out
+    assert 'Not registered globally' in out and '--scope local' in out
+    # .mcp.json runs sh, which Windows may not have: there the installer names only the command (REVIEW.md INS-24)
+    assert ('.mcp.json' in out) == (sys.platform != 'win32'), out
 
 
 def _old_plugin(root: Path, name: str) -> Path:

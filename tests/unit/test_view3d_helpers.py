@@ -464,6 +464,7 @@ def test_a_menu_without_the_action_isnt_opened_again(helpers: types.ModuleType) 
         _outputs_applied(helpers, _looked)
 
 
+@pytest.mark.skipif(sys.platform != 'darwin', reason='only macOS holds a window transparent (view3d.py)')
 def test_a_menu_picked_has_its_window_given_its_look_back_once_closed(helpers: types.ModuleType) -> None:
     # REVIEW.md HLP-146: the shot leaves no window of Designer's transparent, the menu's included
     menu = Menu(VIEW)

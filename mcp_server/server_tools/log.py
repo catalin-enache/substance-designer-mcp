@@ -9,11 +9,10 @@ from mcp.server.mcpserver.exceptions import ToolError
 from project_constants import (
     PLUGIN,
     QUIT_CLOSED,
-    agent_designer_file,
 )  # on sys.path: the package's __init__ imports .core, which puts it there
 
 from .core import _designer_data_dir, _tool
-from .lifecycle import _agent_home, _agent_record, _checked_folder, _home_in, _own_home_path, _port, _running_on
+from .lifecycle import _agent_record, _checked_folder, _own_home_path, _port, _Recorded, _running_on
 
 NEW_SESSION = '===== New Session ====='  # the first line Designer logs at each start
 ENDED = 'Application uninitialized'  # its last, in a session that ends
@@ -55,10 +54,9 @@ def _log_for(port: int) -> str | None:
     shared = _designer_log_path()
     found = _agent_record(port)  # one read: the home from the record whose Designer was checked (REVIEW.md SRV-174)
     if found is not None:  # its record says where it writes
-        home = _home_in(found[1])
-        if not home:  # older code started it, or not macOS: it writes the shared log
+        if not found.home:  # older code started it, or not macOS: it writes the shared log
             return shared
-        return _agent_log(port, home)
+        return _agent_log(port, found.home, found.written)
     # only from this user's own folder: another account may have made it first (REVIEW.md SRV-96)
     ours = sys.platform == 'darwin' and _checked_folder(port) is not None
     own = _newest_log(_designer_data_dir(_own_home_path(port))) if ours else None
@@ -69,9 +67,10 @@ def _log_for(port: int) -> str | None:
     return own if os.path.getmtime(own) >= os.path.getmtime(shared) else shared
 
 
-def _agent_log(port: int, home: str) -> str:
-    """The own log of the Designer an agent started on `port`, whose home is `home`, never the shared one; ToolError if
-    that folder isn't this user's or the log isn't written yet."""
+def _agent_log(port: int, home: str, written: float) -> str:
+    """The own log of the Designer an agent started on `port`, whose home is `home` and whose record was `written` (its
+    mtime, from the caller's read of it: REVIEW.md SRV-175), never the shared one; ToolError if that folder isn't this
+    user's or the log isn't written yet."""
     if _checked_folder(port) is None:  # its record names a home there (REVIEW.md SRV-96)
         raise ToolError(
             "%s is not a folder of this user: the log of the Designer on port %d isn't read from it"
@@ -79,7 +78,7 @@ def _agent_log(port: int, home: str) -> str:
         )
     own = _newest_log(_designer_data_dir(home))
     # older than its record, it is an earlier run's on this port: the folder outlives a quit (REVIEW.md SRV-99)
-    if own is None or os.path.getmtime(own) < os.path.getmtime(agent_designer_file(port)):  # not the shared log
+    if own is None or os.path.getmtime(own) < written:  # not the shared log
         raise ToolError('The Designer on port %d has no log yet: it is still starting. Try again shortly.' % port)
     return own
 
@@ -119,16 +118,15 @@ def read_designer_log(
 LOG_TAIL = 256 * 1024  # the end of its log a forced quit reads: the quit's lines are its last
 
 
-def _quit_evidence(port: int) -> tuple[bool, str] | None:
-    """From the own log of the Designer an agent started on `port`, since its last start: whether the quit helper logged
-    every window closed (QUIT_CLOSED: its close taken, whatever its shutdown did next), and its last line that isn't
-    blank. None without a log of its own to read; one recorded without a home writes the shared log, the user's lines
-    among its own: never read here (REVIEW.md SRV-108)."""
-    home = _agent_home(port)
-    if not home:
+def _quit_evidence(port: int, found: _Recorded) -> tuple[bool, str] | None:
+    """From the own log of the Designer an agent started on `port`, as one read of its record `found` it, since its last
+    start: whether the quit helper logged every window closed (QUIT_CLOSED: its close taken, whatever its shutdown did
+    next), and its last line that isn't blank. None without a log of its own to read; one recorded without a home
+    writes the shared log, the user's lines among its own: never read here (REVIEW.md SRV-108)."""
+    if not found.home:
         return None
     try:
-        path = _agent_log(port, home)
+        path = _agent_log(port, found.home, found.written)
         with open(path, 'rb') as f:
             f.seek(max(0, os.path.getsize(path) - LOG_TAIL))
             lines = f.read().decode('utf-8', errors='replace').splitlines()

@@ -97,7 +97,7 @@ import time
 import urllib.parse
 from collections.abc import Iterator, Sequence
 from textwrap import dedent
-from typing import Protocol, cast
+from typing import NamedTuple, Protocol, cast
 from xml.etree import ElementTree
 
 from mcp.server.mcpserver.exceptions import ToolError
@@ -145,11 +145,12 @@ def designer_status(port: int | None = None) -> str:
     port = _port(port)
     state = _control('status', wait=10, port=port)
     if 'idle, 0 queued' not in state:  # the listing is a job too; it would queue (REVIEW.md SRV-22)
+        agents = _agents()  # every record read once, for both lines (ROADMAP item 106)
         return _lines(
             state,
             'Bridge port %d.' % port,
-            _started_by(port),
-            _others(port),
+            _started_by(port, agents),
+            _others(port, agents),
             _server_versions(),
             '(Designer version and package list skipped while a job runs)',
         )
@@ -169,8 +170,9 @@ def designer_status(port: int | None = None) -> str:
         port=port,
     )
     answering = re.search(r'^process (\d+)$', listing, re.M)
-    started_by = _started_by(port, int(answering.group(1)) if answering else None)
-    return _lines(state, 'Bridge port %d.' % port, started_by, _others(port), _server_versions(), listing)
+    agents = _agents()
+    started_by = _started_by(port, agents, int(answering.group(1)) if answering else None)
+    return _lines(state, 'Bridge port %d.' % port, started_by, _others(port, agents), _server_versions(), listing)
 
 
 def _lines(*parts: str) -> str:
@@ -186,19 +188,19 @@ def _port(port: int | None) -> int:
     return port
 
 
-def _started_by(port: int, answering: int | None = None) -> str:
+def _started_by(port: int, agents: dict[int, int], answering: int | None = None) -> str:
     """Who started the Designer answering on `port`, or with its process unknown, the only one that may be there.
-    Unclear means the user's."""
-    running = [answering] if answering is not None else _sorted_out(port)[0]
-    own = _agent_designer(port)
+    Unclear means the user's. `agents` is what _agents() read."""
+    running = [answering] if answering is not None else _sorted_out(port, agents)[0]
+    own = agents.get(port)
     if own is not None and running == [own]:
         return 'Started by an agent: disposable, nothing in it is kept.'
     return "Not started by an agent: it is the user's."
 
 
-def _others(port: int) -> str:
-    """The Designers an agent started on other ports, or nothing."""
-    others = sorted((p, pid) for p, pid in _agents().items() if p != port)
+def _others(port: int, agents: dict[int, int]) -> str:
+    """The Designers an agent started on other ports, or nothing. `agents` is what _agents() read."""
+    others = sorted((p, pid) for p, pid in agents.items() if p != port)
     if not others:
         return ''
     return 'Designers an agent started on other ports: %s.' % ', '.join('%d (process %d)' % o for o in others)
@@ -695,26 +697,40 @@ def _forget_started(port: int, seen: bytes) -> None:
             os.remove(path)
 
 
-def _record_bytes(port: int) -> bytes | None:
+def _read_record(port: int) -> tuple[bytes, float] | None:
+    """`port`'s record as read, and when it was written (its mtime), both from one open of the file: a caller needs no
+    second look at it (REVIEW.md SRV-175). None without one."""
     try:
         with open(agent_designer_file(port), 'rb') as f:
-            return f.read()
+            return f.read(), os.fstat(f.fileno()).st_mtime
     except OSError:
         return None
 
 
-def _agent_record(port: int) -> tuple[int, bytes] | None:
-    """The process ID of the Designer an agent started on `port`, if it is still running, with its record as read
-    (what _forget_started is given). The start time tells it from a later process given the same ID. Anything unclear
-    means it isn't an agent's, and a stale record goes, unless it was replaced meanwhile."""
-    seen = _record_bytes(port)
-    if seen is None:
+class _Recorded(NamedTuple):
+    """The Designer an agent started on a port, still running, as one read of its record gave it (_agent_record)."""
+
+    pid: int
+    home: str | None  # the home of its own it got; None without one: older code started it, or not macOS
+    seen: bytes  # the record as read: what _forget_started is given
+    written: float  # when the record was written (its mtime): _agent_log's log is no older (REVIEW.md SRV-175)
+
+
+def _agent_record(port: int) -> _Recorded | None:
+    """The Designer an agent started on `port`, if it is still running. The start time tells it from a later process
+    given the same ID. Anything unclear means it isn't an agent's, and a stale record goes, unless it was replaced
+    meanwhile. Its callers take the fields they use from one call: a second read may find another record, or none
+    (ROADMAP item 106)."""
+    read = _read_record(port)
+    if read is None:
         return None
+    seen, written = read
     try:
         record: dict[str, Json] = json.loads(seen)  # not a dict, or no pid or start: TypeError or KeyError here
-        pid, start = record['pid'], record['start']
+        pid, start, home = record['pid'], record['start'], record.get('home')
         if not isinstance(pid, int):
             raise TypeError
+        found = _Recorded(pid, home if isinstance(home, str) else None, seen, written)
         try:
             listed: bool | None = pid in _designer_pids()
         except _NoListing:
@@ -724,9 +740,9 @@ def _agent_record(port: int) -> tuple[int, bytes] | None:
         except _NoListing:  # can't tell: not taken for an agent's meanwhile, and the record is kept (REVIEW.md SRV-97)
             return None
         if listed is None:  # its start time alone tells; gone or not, the record is kept (REVIEW.md SRV-83)
-            return (pid, seen) if same else None
+            return found if same else None
         if listed and same:
-            return pid, seen
+            return found
     except (ValueError, KeyError, TypeError):
         pass
     _forget_started(port, seen)
@@ -736,14 +752,14 @@ def _agent_record(port: int) -> tuple[int, bytes] | None:
 def _agent_designer(port: int) -> int | None:
     """The process ID of the Designer an agent started on `port`, if it is still running (_agent_record)."""
     found = _agent_record(port)
-    return found[0] if found else None
+    return found.pid if found else None
 
 
 def _agent_home(port: int) -> str | None:
     """The home the Designer an agent started on `port` got, if it still runs: None for the user's (no home of its own,
     a record without one: older code started it, or not macOS) or when no agent's runs there."""
     found = _agent_record(port)  # the home from the record whose Designer was checked (REVIEW.md SRV-172)
-    return _home_in(found[1]) if found else None
+    return found.home if found else None
 
 
 def _agents() -> dict[int, int]:
@@ -756,11 +772,13 @@ def _agents() -> dict[int, int]:
     return found
 
 
-def _sorted_out(port: int) -> tuple[list[int], list[int]]:
+def _sorted_out(port: int, agents: dict[int, int] | None = None) -> tuple[list[int], list[int]]:
     """Designer's processes as `port` sees them: those that may hold it, and those no agent started that listen on
     other ports but not this one (the user's, on their own). The ones an agent started on other ports are in neither.
-    One listening nowhere yet may still be starting on this port."""
-    agents = _agents()
+    One listening nowhere yet may still be starting on this port. `agents` is what _agents() read, when the caller
+    has it; read here otherwise."""
+    if agents is None:
+        agents = _agents()
     elsewhere = {pid for p, pid in agents.items() if p != port}
     here: list[int] = []
     users: list[int] = []
@@ -772,11 +790,12 @@ def _sorted_out(port: int) -> tuple[list[int], list[int]]:
     return here, users
 
 
-def _running_on(port: int) -> bool:
-    """Whether a Designer that may hold `port` runs. Processes that can't be listed (Windows) all may."""
+def _running_on(port: int, agents: dict[int, int] | None = None) -> bool:
+    """Whether a Designer that may hold `port` runs. Processes that can't be listed (Windows) all may. `agents` is what
+    _agents() read, when the caller has it (_sorted_out)."""
     if not _designer_running():
         return False
-    return not _designer_pids() or bool(_sorted_out(port)[0])
+    return not _designer_pids() or bool(_sorted_out(port, agents)[0])
 
 
 def _may_hold(port: int) -> bool:
@@ -903,28 +922,18 @@ def _end_if_past_startup(port: int) -> str | None:
     found = _agent_record(port)
     if found is None:
         return None
-    own, seen = found
-    uploads = _crash_uploads_off(_home_in(seen))  # a crash in its teardown isn't uploaded (REVIEW.md SRV-124)
+    own = found.pid
+    uploads = _crash_uploads_off(found.home)  # a crash in its teardown isn't uploaded (REVIEW.md SRV-124)
     # the path last, as quit_designer says it: a stop after it would be read as part of it (REVIEW.md SRV-168)
     said = uploads + _sampled_before_force(own, port)
     try:
-        ended = _force_end(own, port, seen)
+        ended = _force_end(own, port, found.seen)
     except _NoListing as e:  # what it was doing and found, said too (REVIEW.md SRV-169, SRV-171)
         ending = 'Designer %d, which an agent started, was not answering past its start-up and was being ended. ' % own
         raise _NoListing(ending + _sentence(str(e)) + said) from e
     if not ended:
         raise ToolError(_could_not_end(own) + said)  # once is enough (REVIEW.md SRV-79)
     return said
-
-
-def _home_in(seen: bytes) -> str | None:
-    """The home a record of a Designer an agent started gives, read from its bytes as _record_bytes returns them. None
-    without one."""
-    try:
-        home: Json = json.loads(seen).get('home')  # checked below, and AttributeError when not a dict
-    except (ValueError, AttributeError):
-        return None
-    return home if isinstance(home, str) else None
 
 
 def _could_not_end(pid: int) -> str:
@@ -1138,7 +1147,7 @@ def launch_designer(wait_s: int = 180, port: int | None = None) -> str:
         watched.clear()
         found = _agent_record(port)
         if found is not None:
-            watched[found[0]] = _exit_watch(found[0])
+            watched[found.pid] = _exit_watch(found.pid)
         return not watched or None in watched.values()
 
     try:
@@ -1334,13 +1343,14 @@ def _quit(port: int, wait_s: int) -> tuple[str, bool]:
     if found is None:
         if not _designer_running():
             return 'Designer is not running.', False
-        if not _running_on(port):
-            return _lines('No Designer is running on port %d.' % port, _others(port)), False
+        agents = _agents()  # every record read once, for both (ROADMAP item 106)
+        if not _running_on(port, agents):
+            return _lines('No Designer is running on port %d.' % port, _others(port, agents)), False
         raise ToolError("This Designer wasn't started by an agent: ask the user to save, close and reopen it.")
-    own, seen = found
+    own, seen = found.pid, found.seen
     # the call that started it may have stopped waiting, so none turned them off: a crash as it quits isn't uploaded
     # (REVIEW.md SRV-124)
-    uploads = _crash_uploads_off(_home_in(seen)).strip()
+    uploads = _crash_uploads_off(found.home).strip()
     try:
         state = _control('status', wait=5, port=port)
         if 'idle, 0 queued' not in state:  # the close would queue behind it, for up to 15 minutes (REVIEW.md SRV-74)
@@ -1366,7 +1376,7 @@ def _quit(port: int, wait_s: int) -> tuple[str, bool]:
         step = 'Designer %d did not quit within %ds and was being ended. ' % (own, wait_s)
         sampled = _sampled_before_force(own, port)  # what it is stuck in (ROADMAP item 70)
         # read while it still runs, after the sample: how far its quit got (REVIEW.md SRV-111)
-        evidence = _quit_evidence(port)
+        evidence = _quit_evidence(port, found)  # from its one read (ROADMAP item 106)
         if own not in _designer_pids():  # it ended while those were read: by itself (REVIEW.md SRV-108)
             _forget_started(port, seen)
             # a shutdown that hung past its wait, then ended: its sample is a hang's evidence (REVIEW.md SRV-115)

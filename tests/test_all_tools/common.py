@@ -61,6 +61,9 @@ PARAMS = StdioServerParameters(command=sys.executable, args=[SERVER], env=dict(o
 
 results: dict[str, list[bool]] = {}
 skipped: list[tuple[str, str]] = []
+# when each check and skip was recorded, time.monotonic(), and its "tool: name": what the start of a front watch's
+# stretch is placed between (window_server.said)
+checked: list[tuple[float, str]] = []
 times: dict[str, float] = {}  # seconds each category took: __main__.py's run_steps
 
 
@@ -69,12 +72,14 @@ def check(tool: str, name: str, ok: bool, detail: str = '') -> None:
     # (REVIEW.md TST-29)
     ok = bool(ok)
     results.setdefault(tool, []).append(ok)
+    checked.append((time.monotonic(), '%s: %s' % (tool, name)))
     print('%s  %-22s %s | %s' % ('PASS' if ok else 'FAIL', tool, name, detail.strip()[:150].replace('\n', ' / ')))
 
 
 def skip(tool: str, name: str, why: str) -> None:
     results.setdefault(tool, [])
     skipped.append((tool, name))
+    checked.append((time.monotonic(), '%s: %s' % (tool, name)))
     print('SKIP  %-22s %s | %s' % (tool, name, why))
 
 

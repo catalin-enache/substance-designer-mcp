@@ -5,7 +5,7 @@ import contextlib
 import os
 import re
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from textwrap import dedent
 
 from test_all_tools import common, window_server
@@ -2401,15 +2401,16 @@ async def check_every_panels_screenshot(ctx: Ctx) -> None:
             check('screenshot_designer', panel, is_image(r_), '' if is_image(r_) else text(r_))
 
 
-async def check_designer_stayed_behind(ctx: Ctx, samples: Sequence[window_server.Sample]) -> None:
-    """Over every check up to the window checks off screen (`samples`, the front watch run() kept, sampled every
+async def check_designer_stayed_behind(ctx: Ctx, watch: window_server.FrontWatch) -> None:
+    """Over every check up to the window checks off screen (`watch`'s samples, the front watch run() kept, sampled every
     FRONT_EVERY s or so: window_server.py; REVIEW.md TST-471, TST-473), no normal window of Designer's (layer 0) at an
     opacity above 0 was seen in front of another app's window it overlaps, and Designer was never seen the active app;
     its windows above the normal ones, the Explorer's menus, are said, not judged
     (window_server.stayed_behind): the window checks set up their ways behind every window (window_states), and the
     shot keeps its window transparent while it is in front (the user's report: REVIEW.md SRV-149). The checks that need
-    a window in front of the user's run after them, unwatched (run). macOS only, in a Designer the self-test
-    started."""
+    a window in front of the user's run after them, unwatched (run). Up to FRONTS_SAID stretches in front are printed
+    whole after the check, each with the checks recorded around its start, the others counted
+    (window_server.fronts_said). macOS only, in a Designer the self-test started."""
     name = (
         "every check up to the window checks off screen leaves Designer's windows behind the other apps', and Designer"
         ' not the active app'
@@ -2418,8 +2419,10 @@ async def check_designer_stayed_behind(ctx: Ctx, samples: Sequence[window_server
         skip('self-test', name, USERS_3D_VIEW if ctx.was_running else 'macOS only')
         return
     pid = int(text(await ctx.c('execute_designer_code', {'code': 'import os; print(os.getpid())'})).strip())
-    behind, said = window_server.stayed_behind(samples, pid)
+    behind, said = window_server.stayed_behind(watch.samples, pid)
     check('self-test', name, behind, said)
+    for line in window_server.fronts_said(watch.samples, pid, common.checked, watch.names):  # a detail is cut
+        print('      in front %s' % line)
 
 
 async def check_the_self_tests_hide_hides_designer(ctx: Ctx) -> None:
@@ -2708,7 +2711,7 @@ async def run(ctx: Ctx) -> None:
         await check_a_plain_3d_shot_shows_a_change_made_while_designers_window_was_off_screen(ctx)
         await check_a_viewpoint_set_off_screen_is_turned_with_designers_window_on_screen(ctx)
         await check_the_3d_views_scene_menu_checks_the_mesh_shown(ctx)  # watched too (REVIEW.md TST-473)
-    await check_designer_stayed_behind(ctx, front.samples)
+    await check_designer_stayed_behind(ctx, front)
     # then, together, those that need a window in front of the user's: what they measure can't be set up off screen
     await check_the_3d_view_isnt_drawn_while_designers_window_is_off_screen(ctx, in_front=True)
     await check_a_click_goes_through_designers_window_once_transparent_and_click_through(ctx)
