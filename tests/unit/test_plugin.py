@@ -18,11 +18,10 @@ import typing
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from textwrap import dedent
-from typing import Protocol, TypedDict, cast
+from typing import Protocol, TypedDict, Unpack, cast
 
 import pytest
 from aborts import Tracer
-from typing_extensions import Unpack  # typing's from Python 3.11; mcp requires typing_extensions
 
 import project_constants
 from conftest import ROOT, DumpOptions, LoadOptions, patch_server, server

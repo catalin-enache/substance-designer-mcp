@@ -9,7 +9,7 @@ from mcp.server.mcpserver import Image
 from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image as PILImage
 
-from .core import _tool
+from .core import Box, NoneIfEmpty, _tool
 from .measure import Pixels, _crop, _labelled, _node_pixels, _sheet, _to_display
 
 Values = npt.NDArray[np.float64]  # one channel, (H, W) or flattened
@@ -17,7 +17,7 @@ Values = npt.NDArray[np.float64]  # one channel, (H, W) or flattened
 _LUMA: npt.NDArray[np.float64] = np.array([0.2126, 0.7152, 0.0722])
 
 
-def _load_reference(path: str, region: list[int] | None = None) -> tuple[Pixels, str]:
+def _load_reference(path: str, region: Box | None = None) -> tuple[Pixels, str]:
     """Image file -> (pixels 0..1 as (H, W, C) floats, 'RGBA' or 'L'; a grayscale image with alpha
     is 'L' with alpha as a second channel). PIL reads 16-bit RGBA PNGs as 8-bit; 16-bit grayscale
     and float (mode F) keep their precision."""
@@ -30,7 +30,7 @@ def _load_reference(path: str, region: list[int] | None = None) -> tuple[Pixels,
     if im.mode in ('I', 'I;16', 'I;16B', 'I;16L', 'F'):
         a = np.array(im).astype(np.float64)
         if im.mode != 'F':
-            a /= 65535.0 if im.mode.startswith('I;16') or a.max() > 255 else 255.0  # type: ignore[call-overload]  # numpy stubs: see measure.Pixels
+            a /= 65535.0 if im.mode.startswith('I;16') or a.max() > 255 else 255.0
         data, layout = a[:, :, None], 'L'
     elif im.mode in ('1', 'L'):
         data, layout = np.array(im.convert('L')).astype(np.float64)[:, :, None] / 255.0, 'L'
@@ -189,8 +189,8 @@ def compare_to_reference(
     reference_path: str,
     graph: str | None = None,
     output: str | None = None,
-    region: list[int] | None = None,
-    reference_region: list[int] | None = None,
+    region: NoneIfEmpty[Box] = None,
+    reference_region: NoneIfEmpty[Box] = None,
     aligned: bool = False,
     tile_size: int = 256,
 ) -> list[str | Image]:
@@ -240,7 +240,7 @@ def compare_to_reference(
         )
     )
     if diff is not None:
-        peak = max(float(diff.max()), 1e-9)  # type: ignore[call-overload]  # numpy stubs: see measure.Pixels
+        peak = max(float(diff.max()), 1e-9)
         im = _to_display((diff / peak)[:, :, None], 'L')
         im.thumbnail((tile_size, tile_size))
         tiles.append(_labelled(im, 'difference (white = %.3f)' % peak))

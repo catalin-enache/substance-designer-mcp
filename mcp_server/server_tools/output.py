@@ -15,7 +15,7 @@ from mcp.server.mcpserver import Image
 from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image as PILImage
 
-from .core import SBSCOOKER, SBSRENDER, _bridge, _checked, _helpers_call, _local_path, _tool
+from .core import SBSCOOKER, SBSRENDER, Box, NoneIfEmpty, _bridge, _checked, _helpers_call, _local_path, _tool
 from .measure import _crop_box, _sheet
 from .snapshots import _v
 
@@ -310,7 +310,7 @@ def _load_8bit(path: str) -> PILImage.Image:
 
 @_tool()
 def preview_maps(
-    map_dir: str, names: list[str] | None = None, tile_size: int = 384, crop: list[int] | None = None
+    map_dir: str, names: list[str] | None = None, tile_size: int = 384, crop: NoneIfEmpty[Box] = None
 ) -> Image:
     """Return a side-by-side preview of rendered maps (PNG files in map_dir). `names` picks
     maps by file stem (default: all). `crop` = [x0, y0, x1, y1] in source pixels to zoom in."""

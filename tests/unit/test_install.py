@@ -5,6 +5,7 @@ import filecmp
 import importlib.util
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -178,6 +179,16 @@ def test_skills_dir_follows_claude_config_dir(monkeypatch: pytest.MonkeyPatch, t
     assert fresh.default_skills_dir() == os.path.join(str(tmp_path), 'skills')
 
 
+def _in_bash(path: str, platform: str) -> str:
+    """`path` as shell_command writes it for Claude Code's Bash: with forward slashes on 'win32'."""
+    return path.replace('\\', '/') if platform == 'win32' else path
+
+
+def _step2(out: str) -> str:
+    """The installer's [2/4] line, from its output."""
+    return out.split('[2/4]')[1].split('[3/4]')[0]
+
+
 def _skill_commands(text: str) -> tuple[str, str]:
     """The registration command (the code block) and the uninstall command (last backticks)."""
     register = text.split('```\n', 2)[1].strip()
@@ -193,8 +204,6 @@ def test_skill_commands_survive_a_posix_shell(
 ) -> None:
     # REVIEW.md INS-4: Claude Code's Bash tool is a POSIX shell everywhere (Git Bash on Windows),
     # which drops unquoted backslashes and splits on spaces
-    import shlex
-
     module, _ = install
     monkeypatch.setattr(sys, 'platform', platform)
     sep = '\\' if platform == 'win32' else '/'
@@ -206,12 +215,9 @@ def test_skill_commands_survive_a_posix_shell(
     )
     server_py = sep.join([repo, 'mcp_server', 'server.py'])
     register, uninstall = _skill_commands(module.skill_text(py, server_py))
-
-    def as_posix(p: str) -> str:
-        return p.replace('\\', '/')
-
-    assert shlex.split(register)[-2:] == [as_posix(py), as_posix(server_py)]
-    assert shlex.split(uninstall)[-1] == as_posix(sep.join([repo, 'uninstall.py']))
+    assert shlex.split(register)[-2:] == [_in_bash(py, platform), _in_bash(server_py, platform)]
+    # the path as os.path.join builds it, which keeps its backslash on Windows outside 'win32' (REVIEW.md TST-536)
+    assert shlex.split(uninstall)[-1] == _in_bash(os.path.join(repo, 'uninstall.py'), platform)
 
 
 def test_reports_the_venvs_python(
@@ -369,6 +375,11 @@ def test_reports_an_old_copy_it_could_not_remove(
     assert 'could not remove' in capsys.readouterr().out
 
 
+def _venv_calls(calls: list[list[str]]) -> list[list[str]]:
+    """The commands the installer ran that make a venv (`python -m venv ...`)."""
+    return [c for c in calls if c[1:3] == ['-m', 'venv']]
+
+
 def _venv_with_python(
     module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, target: str | Path
 ) -> None:
@@ -385,15 +396,18 @@ def _venv_with_python(
 
 @pytest.mark.skipif(sys.platform == 'win32', reason='a dangling symlink venv is the macOS/Linux case')
 def test_rerun_repairs_a_venv_whose_python_is_gone(
-    install: Install, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    install: Install, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # REVIEW.md INS-23: after a Python upgrade the venv's python is a dangling link; `-m venv` over
     # it without --clear exits 0 and keeps the link, so pip then failed: the documented repair didn't
     module, calls = install
     _venv_with_python(module, monkeypatch, tmp_path, tmp_path / 'gone' / 'python3.12')
     _run(module, monkeypatch, '--plugins-dir', str(tmp_path / 'plugins'), '--no-skill')
-    venv_calls = [c for c in calls if c[1:3] == ['-m', 'venv']]
+    venv_calls = _venv_calls(calls)
     assert venv_calls and '--clear' in venv_calls[0], calls
+    # REVIEW.md INS-45: made again, it lost the tests' packages as when an older Python made it
+    step2 = _step2(capsys.readouterr().out)
+    assert 'made again' in step2 and 'requirements-dev.txt' in step2, step2
 
 
 @pytest.mark.skipif(sys.platform == 'win32', reason='symlinks')
@@ -401,7 +415,82 @@ def test_rerun_keeps_a_working_venv(install: Install, monkeypatch: pytest.Monkey
     module, calls = install
     _venv_with_python(module, monkeypatch, tmp_path, sys.executable)
     _run(module, monkeypatch, '--plugins-dir', str(tmp_path / 'plugins'), '--no-skill')
-    assert not [c for c in calls if c[1:3] == ['-m', 'venv']], calls
+    assert not _venv_calls(calls), calls
+
+
+@pytest.mark.parametrize(('version', 'remade'), [('3.9.6', True), ('3.11.9', True), ('3.12.0', False)])
+def test_rerun_remakes_a_venv_only_when_a_python_older_than_3_12_made_it(
+    install: Install,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    version: str,
+    remade: bool,
+) -> None:
+    # ROADMAP item 105: the installer kept any venv whose python still ran, so an install made with Python 3.10 went on
+    # running the server on 3.10 after the minimum became 3.12. 3.9 against 3.12: the versions compare as numbers
+    module, calls = install
+    here = tmp_path / 'repo'
+    venv = str(here / 'mcp_server' / 'venv')
+    os.makedirs(venv)  # the fixture says its python exists
+    monkeypatch.setitem(vars(module), 'HERE', str(here))
+    py = module.venv_python(venv)
+
+    def check_output(cmd: list[str], **kw: object) -> str:
+        # only the venv's python answers, as the one an older Python made until the venv is made again (REVIEW.md
+        # TST-529: a fake answering anything couldn't tell which Python was asked)
+        if cmd != [py, '--version']:
+            pytest.fail('asked %r' % (cmd,))
+        made = bool(_venv_calls(calls))
+        return 'Python %s\n' % ('3.12.10' if made else version)
+
+    monkeypatch.setattr(subprocess, 'check_output', check_output)
+    _run(module, monkeypatch, '--plugins-dir', str(tmp_path / 'plugins'), '--no-skill')
+    expected = [[sys.executable, '-m', 'venv', '--clear', venv]] if remade else []
+    assert _venv_calls(calls) == expected, calls
+    # REVIEW.md INS-43: made again, the venv lost the tests' packages, which the installer doesn't install
+    step2 = _step2(capsys.readouterr().out)
+    said = 'made again: the one there ran Python %s' % version
+    assert (said in step2 and 'requirements-dev.txt' in step2) if remade else 'made again' not in step2, step2
+
+
+@pytest.mark.parametrize('platform', ['darwin', 'win32'])
+@pytest.mark.parametrize('in_a_venv', [False, True], ids=['a system Python', 'a venv'])
+def test_uninstall_runs_with_the_system_python_that_ran_the_installer(
+    install: Install, monkeypatch: pytest.MonkeyPatch, platform: str, in_a_venv: bool
+) -> None:
+    # REVIEW.md INS-42: not a bare python3, 3.9 on a Mac with no other Python, which uninstall.py refuses. INS-44: in a
+    # venv (this repo's, which uninstall.py removes, or another, which may go), the Python it was made from, by the name
+    # every install of it has: `make altinstall` links no python3; py -3 needs the launcher
+    module, _ = install
+    monkeypatch.setattr(sys, 'platform', platform)
+    monkeypatch.setattr(sys, 'executable', '/usr/local/bin/python3.12')
+    monkeypatch.setattr(sys, 'base_prefix', '/opt/py')
+    monkeypatch.setattr(sys, 'prefix', '/work/.venv' if in_a_venv else '/opt/py')
+    version = 'python%d.%d' % sys.version_info[:2]
+    expected = {
+        (False, 'darwin'): '/usr/local/bin/python3.12',
+        (False, 'win32'): '/usr/local/bin/python3.12',
+        (True, 'darwin'): os.path.join('/opt/py', 'bin', version),
+        (True, 'win32'): os.path.join('/opt/py', 'python.exe'),
+    }[(in_a_venv, platform)]
+    assert module.system_python() == expected
+    _, uninstall = _skill_commands(module.skill_text('py', 'server.py'))
+    assert shlex.split(uninstall)[0] == _in_bash(expected, platform)
+
+
+@pytest.mark.parametrize(
+    ('platform', 'quoted'),
+    [('darwin', "'/My Tools/python' x"), ('win32', '"/My Tools/python" x')],
+    ids=['posix', 'cmd'],
+)
+def test_a_command_for_the_users_terminal_is_quoted_for_it(
+    install: Install, monkeypatch: pytest.MonkeyPatch, platform: str, quoted: str
+) -> None:
+    # REVIEW.md INS-46: cmd.exe takes no single quotes, a POSIX shell no unquoted $ or '
+    module, _ = install
+    monkeypatch.setattr(sys, 'platform', platform)
+    assert module.terminal_command(['/My Tools/python', 'x']) == quoted
 
 
 def test_on_windows_step_3_gives_this_folders_command_not_mcp_json(

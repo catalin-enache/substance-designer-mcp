@@ -8,7 +8,7 @@ import re
 import sys
 import tempfile
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import IO, TypedDict, cast
 from unittest import mock
@@ -108,8 +108,8 @@ class View3dOptions(TypedDict, total=False):
     view: str | None
     zoom: int
     tiling: float | None
-    orbit: list[float] | None
-    pan: list[float] | None
+    orbit: Sequence[float] | None  # a tuple from screenshot_designer (REVIEW.md HLP-188)
+    pan: Sequence[float] | None
 
 
 # What builtins.open takes as its file: typeshed's FileDescriptorOrPath, which exists for the checker only.
@@ -156,6 +156,20 @@ def fake_bridge(monkeypatch: pytest.MonkeyPatch, answer: Callable[[str], str]) -
     patch_server(monkeypatch, '_bridge', bridge)
 
 
+@pytest.fixture
+def sent(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The code each tool call sends to Designer, through a bridge that answers nothing: a test of a refusal asserts it
+    stays empty."""
+    calls: list[str] = []
+
+    def bridge(code: str) -> str:
+        calls.append(code)
+        return ''
+
+    fake_bridge(monkeypatch, bridge)
+    return calls
+
+
 def server_source() -> str:
     """The server's code as text: server.py and every module of server_tools/."""
     texts = []
@@ -178,6 +192,21 @@ def selftest_sources() -> dict[str, str]:
                 with open(path, encoding='utf-8') as f:
                     sources[os.path.relpath(path, SELFTEST_DIR)] = f.read()
     return sources
+
+
+# The scripts a user starts, with whatever python3 is installed: each refuses a Python older than the minimum before any
+# other import, and keeps to the syntax Python 3.9 parses (DECISIONS.md, Project rules; test_old_python.py)
+ENTRY_SCRIPTS = (
+    'client/sd_run.py',
+    'install.py',
+    'scripts/read_crash_dump.py',
+    'scripts/review_lookup.py',
+    'uninstall.py',
+)
+# The server, started by Claude Code with the venv's Python, which an older Python may have made: it refuses one the same
+# way, saying to run install.py again (REVIEW.md SRV-176)
+SERVER_SCRIPT = 'mcp_server/server.py'
+VERSION_CHECKED = (*ENTRY_SCRIPTS, SERVER_SCRIPT)  # each checks the Python first, readable by 3.9
 
 
 # what runs the suite's checks rather than being one: its own tool calls (launch_designer, quit_designer...) mustn't

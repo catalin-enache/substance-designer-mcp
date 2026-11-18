@@ -7,7 +7,8 @@ import sys
 import pytest
 from windows_simulation import POSIX_ONLY
 
-from conftest import ROOT
+from conftest import ROOT, VERSION_CHECKED
+from project_constants import MIN_PYTHON
 
 
 def _ruff(*args: str) -> subprocess.CompletedProcess[str]:
@@ -21,6 +22,21 @@ def _ruff(*args: str) -> subprocess.CompletedProcess[str]:
 def test_ruff_check_finds_nothing() -> None:
     result = _ruff('check', '--no-cache', '.')
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_ruff_checks_the_scripts_a_user_starts_as_python_3_9() -> None:
+    """ruff checks the code as the minimum Python, 3.12 (project_constants.MIN_PYTHON). The scripts a user starts, and
+    the server, must still parse on an older Python, a stock Mac's 3.9, to refuse it with a message (DECISIONS.md, Project
+    rules): ruff checks them as 3.9, so it reports most of the syntax 3.9 lacks, and its fixes add none. ruff 0.17.3 lets
+    `a[e := 0]` through (REVIEW.md TST-530): test_old_python.py's run on a real Python 3.9, where one is installed,
+    catches the rest."""
+    import os
+    import tomllib
+
+    with open(os.path.join(ROOT, 'ruff.toml'), 'rb') as f:
+        config = tomllib.load(f)
+    assert config['target-version'] == 'py%d%d' % MIN_PYTHON
+    assert config.get('per-file-target-version') == dict.fromkeys(VERSION_CHECKED, 'py39')
 
 
 def test_every_file_is_formatted() -> None:

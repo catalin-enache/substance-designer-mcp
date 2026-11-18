@@ -2,7 +2,7 @@
 and on the graph (GUIDE.md; checks.py). Everything is put back. ARGS: graph, node."""
 
 from collections.abc import Callable
-from typing import TypedDict, TypeVar, cast
+from typing import TypedDict, cast
 
 import sd
 from sd.api.sbs.sdsbscompgraph import SDSBSCompGraph
@@ -13,9 +13,6 @@ from sd.api.sdproperty import SDProperty, SDPropertyCategory, SDPropertyInherita
 from sd.api.sdvalue import SDValue
 from sd.api.sdvalueint import SDValueInt
 from sd.api.sdvalueint2 import SDValueInt2
-
-V = TypeVar('V', bound=SDValue)  # the class of the value set, which the value read back has too
-R = TypeVar('R')  # what resets()' read makes of it
 
 
 class Args(TypedDict):
@@ -32,7 +29,8 @@ g = cast(
 )
 
 
-def resets(
+# V: the class of the value set, which the value read back has too. R: what read makes of it
+def resets[V: SDValue, R](
     target: SDSBSCompNode | SDSBSCompGraph,
     pid: str,
     value: V,

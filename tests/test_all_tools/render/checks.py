@@ -326,7 +326,7 @@ async def run(ctx: Ctx) -> None:
     check(
         'render_sbs',
         'a material in a subfolder renders an image with detail',
-        rendered_material[..., :3].std() > 1,
+        bool(rendered_material[..., :3].std() > 1),
         str(rendered_material[..., :3].std()),
     )
     # a material's first output is `diffuse`, off by default and black on a metal, so a tool picking the first says so

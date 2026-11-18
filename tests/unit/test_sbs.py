@@ -156,7 +156,7 @@ def test_select_links_ignores_function_graph_links(sbs_path: str) -> None:
     assert [c.find('identifier').get('v') for c in chosen] == ['source']  # the other is a portal already
     chosen, _, _ = server._select_links(g, 'wire', fanout_at_least=1)
     assert [c.find('identifier').get('v') for c in chosen] == ['inputNodeOutput']
-    chosen, _, _ = server._select_links(g, 'portal', links=[['202', 'inputNodeOutput']])
+    chosen, _, _ = server._select_links(g, 'portal', links=[('202', 'inputNodeOutput')])
     assert chosen == []  # already a portal: nothing to change
     chosen, _, _ = server._select_links(g, 'portal', from_nodes=['200'])
     assert [c.find('connRef').get('v') for c in chosen] == ['200']
@@ -172,7 +172,7 @@ def test_select_links_counts_selected_and_changed_apart(sbs_path: str) -> None:
     g = server._xml_graph(ET.parse(sbs_path).getroot(), 'alpha', sbs_path)
     chosen, selected, total = server._select_links(g, 'portal', longer_than=1)
     assert (len(chosen), selected, total) == (1, 2, 2)  # both selected, one is a portal already
-    chosen, selected, total = server._select_links(g, 'portal', links=[['202', 'inputNodeOutput']])
+    chosen, selected, total = server._select_links(g, 'portal', links=[('202', 'inputNodeOutput')])
     assert (len(chosen), selected) == (0, 1)
 
 

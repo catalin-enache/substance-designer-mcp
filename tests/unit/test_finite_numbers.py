@@ -11,7 +11,7 @@ import pydantic
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
-from conftest import fake_bridge, server
+from conftest import server
 from project_constants import Json
 
 INF, NAN = float('inf'), float('nan')
@@ -33,18 +33,6 @@ REFUSED = [
     ('screenshot_designer', {'panel': '3d', 'orbit': [INF, 0]}, 'orbit[0]'),
     ('screenshot_designer', {'panel': '3d', 'pan': [0, NAN]}, 'pan[1]'),
 ]
-
-
-@pytest.fixture
-def sent(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    calls: list[str] = []
-
-    def bridge(code: str) -> str:
-        calls.append(code)
-        return ''
-
-    fake_bridge(monkeypatch, bridge)
-    return calls
 
 
 @pytest.mark.parametrize('tool, arguments, where', REFUSED, ids=[t for t, _, _ in REFUSED])

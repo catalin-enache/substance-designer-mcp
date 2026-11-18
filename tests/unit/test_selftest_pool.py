@@ -12,12 +12,11 @@ import time
 from collections.abc import Collection, Sequence
 from pathlib import Path
 from types import ModuleType, SimpleNamespace, TracebackType
-from typing import IO, TYPE_CHECKING, NoReturn, TypedDict, cast
+from typing import IO, TYPE_CHECKING, NoReturn, TypedDict, Unpack, cast
 
 import pytest
 from fake_defaults import FakeDefaults
 from selftest_fakes import Designer, Done, FakeRun, OpenGate, fresh, part, pool, unit_log
-from typing_extensions import Unpack  # typing's from Python 3.11; mcp requires typing_extensions
 
 import designer_preferences
 import project_constants

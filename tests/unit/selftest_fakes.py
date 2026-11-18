@@ -18,10 +18,9 @@ import time
 from collections.abc import Awaitable, Callable, Collection, Iterable
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import TYPE_CHECKING, Protocol, TypedDict, cast, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, TypedDict, Unpack, cast, runtime_checkable
 
 import pytest
-from typing_extensions import Unpack  # typing's from Python 3.11; mcp requires typing_extensions
 
 from conftest import SELFTEST_DIR
 from project_constants import ToolArgs

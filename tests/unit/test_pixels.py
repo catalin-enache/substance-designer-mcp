@@ -111,7 +111,8 @@ def test_decode_other_channel_layouts(
     assert layout == ('L' if names == 'LA' else 'RGBA')
 
 
-@pytest.mark.parametrize('region', [[10, 10, 5, 20], [0, 0, 0, 5], [50, 50, 60, 60], [1, 2, 3]])
+# [1, 2, 3]: its schema refuses it (test_server.py, REVIEW.md SRV-177)
+@pytest.mark.parametrize('region', [[10, 10, 5, 20], [0, 0, 0, 5], [50, 50, 60, 60]])
 def test_bad_regions_are_errors(region: list[int]) -> None:
     with pytest.raises(server.ToolError):
         server._crop(np.zeros((20, 20, 1)), region, 'region')

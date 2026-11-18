@@ -48,7 +48,7 @@ import typing
 import weakref
 from collections.abc import Callable
 from types import FrameType, TracebackType
-from typing import ParamSpec, Protocol, TypeAlias, TypedDict
+from typing import ParamSpec, Protocol, TypedDict
 
 from PySide6 import QtCore
 
@@ -90,12 +90,12 @@ class _Box(TypedDict, total=False):
 
 
 # A JSON value, as json.loads gives it: a request and its fields before they are checked
-_Json: TypeAlias = bool | int | float | str | list['_Json'] | dict[str, '_Json'] | None
+type _Json = bool | int | float | str | list[_Json] | dict[str, _Json] | None
 # (code, path, timeout, box, done): one queued script; the path is the client's, unchecked
 _Job = tuple[str, _Json, float | None, _Box, threading.Event]
 # sys.settrace's function: called with a frame, an event and the event's argument, it returns the function for the
 # frame's next events, or None
-_TraceFunc: TypeAlias = Callable[[FrameType, str, object], '_TraceFunc | None']
+type _TraceFunc = Callable[[FrameType, str, object], _TraceFunc | None]
 _P = ParamSpec('_P')  # the parameters of a hook _run's untraced calls
 
 

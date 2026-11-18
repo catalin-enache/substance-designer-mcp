@@ -1,20 +1,29 @@
-"""The standalone scripts still behave on Python 3.9, the oldest supported (DECISIONS.md, Project rules; a stock Mac's
-`python3` is 3.9): install.py refuses with its message instead of a traceback, uninstall.py (which tells users to run it
-with the system Python) works, sd_run.py explains a timeout (REVIEW.md INS-25), and read_crash_dump.py reads a dump. Skipped when no
-Python 3.9 is installed."""
+"""The scripts a user starts (conftest.ENTRY_SCRIPTS) refuse a Python older than the minimum, 3.12, with a message
+instead of a traceback: a stock Mac's `python3` is 3.9 (DECISIONS.md, Project rules). Each script checks
+sys.version_info before any other import, and keeps to the syntax Python 3.9 parses (ruff.toml). The refusal is checked
+in this Python with sys.version_info set lower, and on a Python 3.9 when one is installed."""
 
+import ast
 import os
+import re
+import runpy
 import shutil
 import subprocess
-from pathlib import Path
-from textwrap import dedent
+import sys
 
 import pytest
-from minidumps import an_abort, minidump
 
-from conftest import ROOT
+from conftest import ENTRY_SCRIPTS, ROOT, SERVER_SCRIPT, VERSION_CHECKED
+from project_constants import MIN_PYTHON
 
-CANDIDATES = ('/usr/bin/python3', 'python3.9')  # 3.9 at the oldest (DECISIONS.md, Project rules; REVIEW.md INS-40)
+CANDIDATES = ('/usr/bin/python3', 'python3.9')  # a stock Mac's python3 is 3.9 (REVIEW.md INS-40)
+REFUSAL = r'Python %d\.%d\+ is required \(found %%s\)' % MIN_PYTHON  # the scripts' message, the found version left out
+# what the server adds: Claude Code starts it with the venv's Python, which an older Python may have made (SRV-176)
+AGAIN = '. If this is mcp_server/venv, an older Python made it: run install.py again, with a Python %d.%d+' % MIN_PYTHON
+
+
+def _refusal(script: str, found: str) -> str:
+    return REFUSAL % found + (re.escape(AGAIN) if script == SERVER_SCRIPT else '')
 
 
 def _old_python() -> str | None:
@@ -44,57 +53,48 @@ def old_python() -> str:
     return exe
 
 
-def test_review_lookup_runs_on_an_old_python(old_python: str) -> None:
-    done = subprocess.run(
-        [old_python, os.path.join(ROOT, 'scripts', 'review_lookup.py'), '--help'], capture_output=True, text=True
-    )
-    assert done.returncode == 0 and '--last-used' in done.stdout, done.stderr
+def test_every_script_a_user_starts_is_listed() -> None:
+    """ENTRY_SCRIPTS holds every file of the repository's root folder, client/ and scripts/ that runs as a script."""
+    found = []
+    for folder in ('', 'client', 'scripts'):
+        for name in os.listdir(os.path.join(ROOT, folder)):
+            if name.endswith('.py'):
+                with open(os.path.join(ROOT, folder, name), encoding='utf-8') as f:
+                    if re.search(r"^if __name__ == '__main__':$", f.read(), re.MULTILINE):
+                        found.append('%s/%s' % (folder, name) if folder else name)
+    assert sorted(found) == sorted(ENTRY_SCRIPTS)
 
 
-def test_read_crash_dump_reads_a_dump_on_an_old_python(old_python: str, tmp_path: Path) -> None:
-    dump = tmp_path / 'a.dmp'
-    dump.write_bytes(minidump(an_abort()))
-    done = subprocess.run(
-        [old_python, os.path.join(ROOT, 'scripts', 'read_crash_dump.py'), str(dump)],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    assert done.returncode == 0 and "first frame outside the system's libraries: #2 QtCore" in done.stdout, done.stderr
+@pytest.mark.parametrize('script', VERSION_CHECKED)
+def test_each_script_checks_the_python_before_anything_else(script: str) -> None:
+    """Only the docstring and `import sys` come before the check: any other import could need what an older Python
+    lacks, and this project's modules use what 3.12 has."""
+    with open(os.path.join(ROOT, script), encoding='utf-8') as f:
+        tree = ast.parse(f.read())
+    body = tree.body[1:] if ast.get_docstring(tree) is not None else tree.body
+    assert ast.unparse(body[0]) == 'import sys'
+    guard = body[1]
+    assert isinstance(guard, ast.If) and ast.unparse(guard.test) == 'sys.version_info < %r' % (MIN_PYTHON,)
 
 
-def test_install_refuses_an_old_python_with_its_message(old_python: str, tmp_path: Path) -> None:
-    plugins, skills = tmp_path / 'plugins', tmp_path / 'skills'
+@pytest.mark.parametrize('version', [(3, 9, 6), (3, 11, 9)])
+@pytest.mark.parametrize('script', VERSION_CHECKED)
+def test_each_script_refuses_an_older_python(
+    script: str, version: tuple[int, int, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    found = '%d.%d.%d' % version
+    monkeypatch.setattr(sys, 'version_info', version)
+    monkeypatch.setattr(sys, 'version', found + ' (main)')
+    monkeypatch.setattr(sys, 'argv', [script, '--help'])
+    with pytest.raises(SystemExit, match='^%s$' % _refusal(script, re.escape(found))):
+        runpy.run_path(os.path.join(ROOT, script), run_name='__main__')
+
+
+@pytest.mark.parametrize('script', VERSION_CHECKED)
+def test_each_script_refuses_a_real_python_3_9(old_python: str, script: str) -> None:
+    """Python 3.9 parses the whole file before it runs the check: any syntax it lacks would fail first."""
     result = subprocess.run(
-        [old_python, os.path.join(ROOT, 'install.py'), '--plugins-dir', str(plugins), '--skills-dir', str(skills)],
-        capture_output=True,
-        text=True,
-        timeout=60,
+        [old_python, os.path.join(ROOT, script), '--help'], capture_output=True, text=True, timeout=60
     )
-    assert result.returncode != 0 and 'Python 3.10+ is required' in result.stderr, result.stderr
-    assert 'Traceback' not in result.stderr
-    assert not plugins.exists() and not skills.exists()
-
-
-def test_uninstall_runs_on_an_old_python(old_python: str) -> None:
-    result = subprocess.run(
-        [old_python, os.path.join(ROOT, 'uninstall.py'), '--help'], capture_output=True, text=True, timeout=60
-    )
-    assert result.returncode == 0 and 'usage' in result.stdout, result.stderr
-
-
-def test_sd_run_explains_a_timeout_on_an_old_python(old_python: str) -> None:
-    # on 3.9 socket.timeout is not a TimeoutError: the bridge never answering raised it raw
-    code = (
-        dedent("""\
-            import socket, sys
-            sys.path[:0] = [%r, %r]
-            import sd_run
-            def send(request, wait):
-                raise socket.timeout('timed out')
-            sd_run.send = send
-            sd_run._send_or_explain({'cmd': 'status'}, 1)
-        """)
-    ) % (os.path.join(ROOT, 'client'), ROOT)
-    result = subprocess.run([old_python, '-c', code], capture_output=True, text=True, timeout=60)
-    assert result.returncode == 1 and 'No reply from Designer' in result.stderr, result.stderr
+    assert result.returncode == 1 and not result.stdout, result.stdout + result.stderr
+    assert re.fullmatch(_refusal(script, r'3\.9\.\d+') + '\n', result.stderr), result.stderr

@@ -15,9 +15,13 @@ Only things that are this project's are touched: a plugin, skill or registration
 that points elsewhere is reported and left alone. This folder itself is left for you to delete.
 """
 
-# Annotations stay unevaluated: this script must run, or refuse with a message, on the system Python, 3.9 or
-# later, which can be older than 3.10 (REVIEW.md INS-25; 3.9 at the oldest: DECISIONS.md, Project rules)
-from __future__ import annotations
+import sys
+
+# This project's code runs only on Python 3.12 or later, and python3 may be older: a stock Mac's is 3.9. This check
+# comes before any other import, and this file stays readable by 3.9, so that an older Python refuses with a message
+# instead of a traceback (DECISIONS.md, Project rules)
+if sys.version_info < (3, 12):
+    sys.exit('Python 3.12+ is required (found %s)' % sys.version.split()[0])
 
 import argparse
 import contextlib
@@ -27,7 +31,6 @@ import re
 import shutil
 import stat
 import subprocess
-import sys
 from collections.abc import Callable
 from typing import Literal, Protocol, cast
 
@@ -46,7 +49,7 @@ from project_constants import (  # noqa: E402
 )
 
 SERVER = os.path.join(HERE, 'mcp_server', 'server.py')
-VENV = os.path.join(HERE, 'mcp_server', 'venv')
+VENV = install.venv_dir()
 
 
 def claude_json() -> str:
@@ -179,7 +182,7 @@ def changed_since(snapshot: str) -> bool:
 
 
 # an uninstall step: returns None when done, or an error text (Kept: done, but something stays)
-Action = Callable[[], 'str | None']  # quoted: a module-level alias is evaluated even so (INS-25)
+Action = Callable[[], str | None]
 
 
 def folders_in_use() -> str | None:
@@ -387,9 +390,10 @@ def main() -> None:
 
     if os.path.normcase(os.path.realpath(sys.prefix)) == os.path.normcase(os.path.realpath(VENV)):
         # its own files can't be deleted while it runs on Windows, and it removes them
+        again = install.terminal_command(install.uninstall_args())
         print(
             "Note: this runs with the MCP server's own Python (mcp_server/venv), which it removes. "
-            'Run it with your system Python instead: python3 uninstall.py (Windows: py -3 uninstall.py).\n'
+            'Run it with your system Python instead: %s\n' % again
         )
     items = plan(args)
     actions = [(text, act) for text, act in items if act]

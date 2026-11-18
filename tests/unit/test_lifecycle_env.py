@@ -21,11 +21,10 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from textwrap import dedent
 from types import SimpleNamespace
-from typing import IO, NoReturn, Protocol, TypedDict
+from typing import IO, NoReturn, Protocol, TypedDict, Unpack
 
 import pytest
 from fake_defaults import FakeDefaults, lock_held
-from typing_extensions import Unpack  # typing's from Python 3.11; mcp requires typing_extensions
 
 import designer_preferences
 import project_constants

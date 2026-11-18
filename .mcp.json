@@ -5,7 +5,7 @@
       "command": "sh",
       "args": [
         "-c",
-        "has() { [ -x \"$1/mcp_server/venv/bin/python\" ] || [ -x \"$1/mcp_server/venv/Scripts/python.exe\" ]; }; d=$CLAUDE_PROJECT_DIR; has \"$d\" || d=$(git rev-parse --show-toplevel 2>/dev/null || pwd); cd \"$d\" || exit 1; p=mcp_server/venv/bin/python; [ -x \"$p\" ] || p=mcp_server/venv/Scripts/python.exe; [ -x \"$p\" ] || { echo \"substance-designer: no Python environment in $d/mcp_server/venv; run python3 install.py (Windows: py -3 install.py) in the repository first\" >&2; exit 1; }; exec \"$p\" mcp_server/server.py"
+        "has() { [ -x \"$1/mcp_server/venv/bin/python\" ] || [ -x \"$1/mcp_server/venv/Scripts/python.exe\" ]; }; d=$CLAUDE_PROJECT_DIR; has \"$d\" || d=$(git rev-parse --show-toplevel 2>/dev/null || pwd); cd \"$d\" || exit 1; p=mcp_server/venv/bin/python; [ -x \"$p\" ] || p=mcp_server/venv/Scripts/python.exe; [ -x \"$p\" ] || { echo \"substance-designer: no Python environment in $d/mcp_server/venv; run install.py with a Python 3.12+ in the repository first (python3 install.py, or python3.12 install.py where python3 is older; Windows: py -3 install.py)\" >&2; exit 1; }; exec \"$p\" mcp_server/server.py"
       ]
     }
   }

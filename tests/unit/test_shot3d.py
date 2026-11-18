@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, NoReturn
 import pytest
 from aborts import Tracer
 from appkit_fakes import Notices
-from typing_extensions import Unpack  # typing's from Python 3.11; mcp requires typing_extensions
 
 from conftest import View3dOptions
 
@@ -947,8 +946,8 @@ class Shot:
             self.events.append('put back')
 
         def set_up(  # shoot_3d passes every argument, in order: graph, mesh, view, zoom, tiling, orbit, pan
-            *args: Unpack[
-                tuple[str | None, str | None, str | None, int, float | None, list[float] | None, list[float] | None]
+            *args: *tuple[
+                str | None, str | None, str | None, int, float | None, Sequence[float] | None, Sequence[float] | None
             ],
         ) -> Callable[[Callable[[], None] | None, Frames | None], None]:
             checked(*args[:3])

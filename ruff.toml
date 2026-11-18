@@ -1,7 +1,7 @@
 # Linting and formatting for every Python file in the repository (tests/unit/test_lint.py runs both).
 #   mcp_server/venv/bin/ruff check .      lint (--fix applies the safe fixes)
 #   mcp_server/venv/bin/ruff format .     format
-target-version = "py310"
+target-version = "py312"  # the server's minimum Python (ROADMAP item 105)
 line-length = 120
 extend-exclude = ["mcp_server/venv", ".claude/skills/mcp-builder"]  # the last: Anthropic's skill, vendored
 
@@ -11,7 +11,7 @@ select = [
     "F",        # pyflakes: unused imports and names, undefined names
     "I",        # import order
     "B",        # bugbear: likely bugs
-    "UP",       # newer syntax for the minimum Python (3.10)
+    "UP",       # newer syntax for the minimum Python (3.12; 3.9 for the scripts a user starts)
     "SIM",      # simplifications
     "C4",       # comprehensions
     "PIE",      # misc. lints
@@ -32,3 +32,16 @@ combine-as-imports = true
 
 [format]
 quote-style = "single"
+
+# The scripts a user starts check the Python first, and must parse on an older python3 (a stock Mac's is 3.9) to refuse
+# it with a message (DECISIONS.md, Project rules); so must the server, started with the venv's Python, which an older
+# Python may have made (REVIEW.md SRV-176). ruff checks them as 3.9, so it reports most of the syntax 3.9 lacks, and its
+# fixes add none; tests/unit/test_old_python.py's run on a real Python 3.9, where one is installed, catches the rest
+# (REVIEW.md TST-530, TST-533)
+[per-file-target-version]
+"client/sd_run.py" = "py39"
+"install.py" = "py39"
+"mcp_server/server.py" = "py39"
+"scripts/read_crash_dump.py" = "py39"
+"scripts/review_lookup.py" = "py39"
+"uninstall.py" = "py39"

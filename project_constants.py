@@ -7,15 +7,14 @@ both plugin/<PLUGIN>/ folders to match. tests/unit/test_constants.py checks that
 match, that no other code spells the name out, and that README.md, AGENTS.md and GUIDE.md mention it.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import re
 from collections.abc import Mapping, Sequence
-from typing import Literal, TypedDict, Union
+from typing import Literal, TypedDict
 
 PLUGIN = 'sd_claude_bridge_kve'
+MIN_PYTHON = (3, 12)  # every Python file's minimum (DECISIONS.md, Project rules; ROADMAP item 105)
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_DIR = os.path.join(ROOT, 'plugin', PLUGIN)  # what install.py copies (holds pluginInfo.json)
@@ -32,11 +31,11 @@ BRIDGE_PROTOCOL = 2
 # could hold a newline and shift the signed message's lines (REVIEW.md SRV-94; tests/unit/test_plugin.py checks it).
 NONCE = re.compile(r'[0-9a-f]{32}')
 # A JSON value, as json.loads gives it and json.dumps takes it: the bridge's messages, the agent records and the tools'
-# JSON arguments. Union: this alias is evaluated, and the installer and the client run on Python 3.9 too, which has no |.
-Json = Union[bool, int, float, str, list['Json'], dict[str, 'Json'], None]  # noqa: UP007
+# JSON arguments.
+type Json = bool | int | float | str | list[Json] | dict[str, Json] | None
 # A JSON value to send, only read on its way: as Json, with any sequence or mapping of them. So a list[str] is one, where
 # it is no list[Json]: a list[Json] may be given any JSON value, which a list[str] must not hold.
-JsonSent = Union[bool, int, float, str, Sequence['JsonSent'], Mapping[str, 'JsonSent'], None]  # noqa: UP007
+type JsonSent = bool | int | float | str | Sequence[JsonSent] | Mapping[str, JsonSent] | None
 # A tool's arguments as the tests send them: JSON values by name
 ToolArgs = Mapping[str, JsonSent]
 
@@ -69,7 +68,7 @@ class ControlRequest(TypedDict):
 
 
 # What a client sends: one JSON object
-Request = Union[ScriptRequest, ControlRequest]  # noqa: UP007 (a module-level alias is evaluated: Python 3.9 has no |)
+Request = ScriptRequest | ControlRequest
 
 
 class Reply(TypedDict, total=False):

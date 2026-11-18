@@ -60,6 +60,9 @@ async def run(ctx: Ctx) -> None:
         'fitted 2 node(s)' in t and len(points) == 2 and contains(box, points),
         t,
     )
+    # REVIEW.md SRV-180: '' for frame is not given, as for every optional name (SRV-147); it looked for a frame titled ''
+    t = text(await c('open_graph', {'graph': TEST_GRAPH, 'node_ids': shape_nodes, 'frame': ''}))
+    check('open_graph', 'an empty frame is not given: node_ids fit', 'fitted 2 node(s)' in t, t)
     t = text(await c('open_graph', {'graph': TEST_GRAPH, 'rect': [0, 0, 10, 10]}))
     zoom, box = visible(t)
     check(

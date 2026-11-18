@@ -79,8 +79,8 @@ Parameters are in each tool's description; this is when to reach for which.
 `sweep_param` → `node_stats` / `check_tiling` → render or export → `preview_maps` → fix → repeat. Look at the result,
 on a mesh too (`screenshot_designer('3d', graph=...)`), before telling the user it works.
 
-Fallback without MCP: `python client/sd_run.py script.py [--timeout N]`, `-c CODE`, `--status`, `--cancel` (no undo
-grouping, no `ARGS`).
+Fallback without MCP: `client/sd_run.py script.py [--timeout N]`, `-c CODE`, `--status`, `--cancel`, run with a Python
+3.12+ such as the venv's (no undo grouping, no `ARGS`).
 
 ## Undo and timeouts
 

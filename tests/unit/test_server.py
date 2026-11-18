@@ -1,6 +1,7 @@
 """The server starts without Designer, and the docs list every tool it serves."""
 
 import asyncio
+import json
 import os
 import re
 import sys
@@ -454,3 +455,150 @@ def test_the_json_parameters_keep_the_schemas_agents_saw(tool: str, name: str) -
     # REVIEW.md TST-485: the schemas were said to be pinned, with no test
     _tools()
     assert PROPERTIES[tool][name] == _PINNED[(tool, name)]
+
+
+# The parameters that take a fixed number of values (their docstrings), and the least and most their schemas allow; for a
+# list of such items, those of each item; and the array parameters that take any number (REVIEW.md SRV-177)
+_FIXED: dict[tuple[str, str], tuple[int, int, str]] = {  # (least, most, the values' JSON type)
+    ('add_comment', 'position'): (2, 2, 'number'),
+    ('add_frame', 'color'): (3, 4, 'number'),
+    ('arrange_graph', 'spacing'): (2, 2, 'number'),
+    ('compare_to_reference', 'region'): (4, 4, 'integer'),
+    ('compare_to_reference', 'reference_region'): (4, 4, 'integer'),
+    ('node_stats', 'region'): (4, 4, 'integer'),
+    ('open_graph', 'rect'): (4, 4, 'number'),
+    ('preview_maps', 'crop'): (4, 4, 'integer'),
+    ('screenshot_designer', 'crop'): (4, 4, 'number'),
+    ('screenshot_designer', 'orbit'): (2, 2, 'number'),
+    ('screenshot_designer', 'pan'): (2, 2, 'number'),
+}
+_FIXED_ITEMS: dict[tuple[str, str], tuple[int, int, str]] = {  # the same, of each item
+    ('node_stats', 'points'): (2, 2, 'integer'),
+    ('set_link_display', 'links'): (2, 2, 'string'),
+}
+_A_VALUE: dict[str, Json] = {'integer': 1, 'number': 1, 'string': 'a'}  # one of each JSON type
+_ANY_LENGTH = {
+    ('add_frame', 'node_ids'),
+    ('apply_edits', 'ops'),
+    ('arrange_graph', 'node_ids'),
+    ('describe_graph', 'node_ids'),
+    ('export_outputs', 'outputs'),
+    ('open_graph', 'node_ids'),
+    ('preview_maps', 'names'),
+    ('render_sbs', 'outputs'),
+    ('set_link_display', 'from_nodes'),
+    ('sweep_param', 'values'),
+}
+
+
+def _arrays(schema: Json) -> list[dict[str, Json]]:
+    """The array forms a parameter's schema allows, its null left out."""
+    assert isinstance(schema, dict)
+    forms = schema.get('anyOf', [schema])
+    assert isinstance(forms, list)
+    return [f for f in forms if isinstance(f, dict) and f.get('type') == 'array']
+
+
+def _bounds(array: dict[str, Json]) -> tuple[Json, Json, Json]:
+    """The least and most items an array schema allows, None where it sets none, and its items' JSON type."""
+    items = array.get('items')
+    return array.get('minItems'), array.get('maxItems'), items.get('type') if isinstance(items, dict) else None
+
+
+def test_every_array_parameter_says_how_many_values_it_takes() -> None:
+    """A new parameter of a fixed number of values typed `list[...]` would let any number through (REVIEW.md SRV-177):
+    each array parameter is one of the three kinds above, and those taking any number say no bound."""
+    _tools()
+    arrays = {(tool, name) for tool, params in PROPERTIES.items() for name, s in params.items() if _arrays(s)}
+    assert arrays == set(_FIXED) | set(_FIXED_ITEMS) | _ANY_LENGTH
+    assert all(_bounds(a)[:2] == (None, None) for key in _ANY_LENGTH for a in _arrays(PROPERTIES[key[0]][key[1]]))
+
+
+@pytest.mark.parametrize(('tool', 'name'), list(_FIXED), ids=['%s.%s' % key for key in _FIXED])
+def test_a_parameter_of_a_fixed_length_says_it_in_its_schema(tool: str, name: str) -> None:
+    _tools()
+    assert [_bounds(a) for a in _arrays(PROPERTIES[tool][name])] == [_FIXED[(tool, name)]]
+
+
+@pytest.mark.parametrize(('tool', 'name'), list(_FIXED_ITEMS), ids=['%s.%s' % key for key in _FIXED_ITEMS])
+def test_a_list_of_items_of_a_fixed_length_says_it_in_its_schema(tool: str, name: str) -> None:
+    _tools()
+    (array,) = _arrays(PROPERTIES[tool][name])
+    items = array.get('items')
+    assert (
+        _bounds(array)[:2] == (None, None) and isinstance(items, dict) and _bounds(items) == _FIXED_ITEMS[(tool, name)]
+    )
+
+
+# What each of those tools needs besides the parameter tested
+_REQUIRED: dict[str, dict[str, Json]] = {
+    'add_comment': {'text': 't'},
+    'add_frame': {'node_ids': ['a'], 'title': 't'},
+    'arrange_graph': {},
+    'compare_to_reference': {'node_id': 'n', 'reference_path': 'r.png'},
+    'node_stats': {'node_id': 'n'},
+    'open_graph': {'graph': 'g'},
+    'preview_maps': {'map_dir': '.'},
+    'screenshot_designer': {},
+    'set_link_display': {},
+}
+
+
+def _wrong_counts() -> list[tuple[str, str, Json]]:
+    """(tool, parameter, value) for each parameter of a fixed number of values: one value too few and one too many; for a
+    list of such items, one item of each. The schema tests read only the published schema, and the tuple type alone
+    refuses (REVIEW.md TST-535)."""
+    cases: list[tuple[str, str, Json]] = []
+    for (tool, name), (least, most, kind) in _FIXED.items():  # values of the right type: refused for their number
+        for n in (least - 1, most + 1):
+            values: list[Json] = [_A_VALUE[kind]] * n
+            cases.append((tool, name, values))
+    for (tool, name), (least, most, kind) in _FIXED_ITEMS.items():
+        for n in (least - 1, most + 1):
+            items: list[Json] = [[_A_VALUE[kind]] * n]
+            cases.append((tool, name, items))
+    return cases
+
+
+_WRONG_COUNTS = _wrong_counts()
+
+
+@pytest.mark.parametrize(
+    ('tool', 'name', 'value'), _WRONG_COUNTS, ids=['%s.%s=%s' % (t, n, json.dumps(v)) for t, n, v in _WRONG_COUNTS]
+)
+def test_a_wrong_number_of_values_is_refused_before_anything_reaches_designer(
+    sent: list[str], tool: str, name: str, value: Json
+) -> None:
+    """The schema refuses it with a message naming the parameter. Read in the tool, `for x, y in points` refused a point
+    of 3 with 'too many values to unpack', which didn't say what was wrong (REVIEW.md SRV-177)."""
+    with pytest.raises(server.ToolError, match=r'validation error(.|\n)*%s' % name):
+        asyncio.run(server.server.call_tool(tool, {**_REQUIRED[tool], name: value}))
+    assert sent == []
+
+
+@pytest.mark.parametrize(('tool', 'name'), list(_FIXED), ids=['%s.%s' % key for key in _FIXED])
+def test_an_empty_array_is_taken_as_not_given(tool: str, name: str) -> None:
+    """A client filling optional fields with empty values sends [] for one it doesn't give: main took it so (`if region:`),
+    and the tuple types refused it (REVIEW.md SRV-178; SRV-147 for strings)."""
+    found = server.server._tool_manager.get_tool(tool)
+    assert found is not None
+    arguments = found.fn_metadata.arg_model.model_validate({**_REQUIRED[tool], name: []})
+    assert getattr(arguments, name) is None
+
+
+@pytest.mark.parametrize(
+    ('arguments', 'sent_as'),
+    [
+        ({'frame': ''}, 'None, None, None, None'),
+        ({'node_ids': ['a', 'b'], 'frame': ''}, "None, ['a', 'b'], None, None"),
+        ({'node_id': '', 'node_ids': [], 'frame': 'Shape'}, "None, None, 'Shape', None"),
+    ],
+    ids=['an empty frame', 'nodes and an empty frame', 'a frame and empty others'],
+)
+def test_open_graph_sends_an_empty_choice_as_not_given(
+    sent: list[str], arguments: dict[str, Json], sent_as: str
+) -> None:
+    """'' or [] for node_id, node_ids or frame is not given, as the check of one choice counts it (SRV-147's rule): the
+    helper took frame='' as a frame titled '' and refused it (REVIEW.md SRV-180)."""
+    asyncio.run(server.server.call_tool('open_graph', {'graph': 'g', **arguments}))
+    assert sent and sent[0].rstrip('\n').endswith("open_graph('g', %s)" % sent_as), sent[-1:]

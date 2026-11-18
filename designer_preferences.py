@@ -33,8 +33,6 @@ started, in the home folder, so a restart doesn't lose it. Tests: tests/unit/tes
 pool's end check (workers.check_the_preferences), which compares the file with what the run's last quit should leave.
 """
 
-from __future__ import annotations
-
 import contextlib
 import datetime
 import glob
@@ -44,7 +42,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Iterator
-from typing import IO, Union
+from typing import IO
 
 import project_constants
 
@@ -57,10 +55,8 @@ RECHECK_EVERY = 50  # deletes between two looks for a Designer started meanwhile
 # why a put-back stops at one: running() is also True when Designers can't be listed (REVIEW.md SRV-145)
 STARTED = "a Designer started meanwhile, or Designers couldn't be listed"
 # A plist value, as plistlib reads one: a dict of keys, a list, text, data, a number, a bool or a date; a binary plist
-# can also hold a UID or a null. Union: this alias is evaluated, and this module runs on Python 3.9 too, which has no |.
-Plist = Union[  # noqa: UP007
-    bool, int, float, str, bytes, datetime.datetime, plistlib.UID, list['Plist'], dict[str, 'Plist'], None
-]
+# can also hold a UID or a null.
+type Plist = bool | int | float | str | bytes | datetime.datetime | plistlib.UID | list[Plist] | dict[str, Plist] | None
 
 
 class PreferencesError(Exception):

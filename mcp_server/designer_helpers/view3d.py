@@ -492,7 +492,7 @@ def _tool_back(light: QtGui.QAction, switched: bool) -> None:
 WAYS = (('right', 'left'), ('up', 'down'))  # [right, up]'s values said, positive and negative
 
 
-def _directions(values: list[float], unit: str) -> str:
+def _directions(values: Sequence[float], unit: str) -> str:
     """[right, up] said, each value that isn't 0 with its direction, to 3 digits, `unit` after the first value:
     '90 degrees right, 30.1 up'."""
     said: list[str] = []
@@ -503,7 +503,7 @@ def _directions(values: list[float], unit: str) -> str:
 
 
 def _drags(
-    option: str, values: list[float], steps: tuple[float, float], unit: str
+    option: str, values: Sequence[float], steps: tuple[float, float], unit: str
 ) -> tuple[list[tuple[int, int]], list[float]]:
     """The drags (dx, dy: right, down) carrying `values`, [right, up], `steps` what a pixel dragged left and up carries,
     [right, up] (REVIEW.md HLP-123), and the [right, up] they carry; a value that isn't 0 but rounds to no pixel is
@@ -519,13 +519,13 @@ def _drags(
     return drags, [-pixels[0] * steps[0], -pixels[1] * steps[1]]
 
 
-def _orbit_drags(orbit: list[float]) -> tuple[list[tuple[int, int]], list[float]]:
+def _orbit_drags(orbit: Sequence[float]) -> tuple[list[tuple[int, int]], list[float]]:
     """The left-drags turning the camera orbit[0] degrees right and orbit[1] up, and the degrees they turn: the mouse
     left turns it right, the mouse down raises it (the module docstring)."""
     return _drags('orbit', orbit, (ORBIT_ACROSS, -ORBIT_UP), ' degrees')
 
 
-def _pan_drags(pan: list[float], width: int, height: int) -> tuple[list[tuple[int, int]], list[float]]:
+def _pan_drags(pan: Sequence[float], width: int, height: int) -> tuple[list[tuple[int, int]], list[float]]:
     """The middle-drags moving a `width` x `height` view pan[0] of its width right and pan[1] of its height up, and the
     fractions they move it: the content follows the mouse, a view's width every PAN_WIDTH pixels either way (the module
     docstring)."""
@@ -633,8 +633,8 @@ def _3d_set_up(
     view: str | None = None,
     zoom: int = 0,
     tiling: float | None = None,
-    orbit: list[float] | None = None,
-    pan: list[float] | None = None,
+    orbit: Sequence[float] | None = None,
+    pan: Sequence[float] | None = None,
 ) -> Callable[[Callable[[], None] | None, _Frames | None], None]:
     """set_3d_view checked, changing nothing: what the arguments rule out, the graph, the panels, the menu entries and
     the tools it needs, an orbit or pan of less than a pixel's drag; refused here (shoot_3d calls it before it puts
@@ -801,8 +801,8 @@ def set_3d_view(
     view: str | None = None,
     zoom: int = 0,
     tiling: float | None = None,
-    orbit: list[float] | None = None,
-    pan: list[float] | None = None,
+    orbit: Sequence[float] | None = None,
+    pan: Sequence[float] | None = None,
 ) -> None:
     """Set up the 3D view as the user sees it too: `graph`'s outputs on the mesh, the mesh (MESHES), the viewpoint
     (VIEWS, then framed), the camera turned `orbit` [right, up] degrees around the point it looks at and moved `pan`

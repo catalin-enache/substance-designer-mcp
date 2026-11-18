@@ -8,10 +8,9 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import TYPE_CHECKING, NoReturn, cast
+from typing import TYPE_CHECKING, NoReturn, Unpack, cast
 
 import pytest
-from typing_extensions import Unpack  # typing's from Python 3.11; mcp requires typing_extensions
 
 from conftest import SELFTEST_DIR, RunOptions
 

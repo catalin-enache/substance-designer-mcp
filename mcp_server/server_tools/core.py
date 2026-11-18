@@ -20,7 +20,7 @@ from typing import Annotated, Literal, ParamSpec, TypeVar
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
-from pydantic import JsonValue, WithJsonSchema
+from pydantic import BeforeValidator, JsonValue, WithJsonSchema
 
 PORT = int(os.environ.get('SD_BRIDGE_PORT', '9877'))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -171,6 +171,34 @@ R = TypeVar('R')
 # agents saw before these parameters were narrowed to JsonValue.
 JsonObject = Annotated[dict[str, JsonValue], WithJsonSchema({'additionalProperties': True, 'type': 'object'})]
 AnyJson = Annotated[JsonValue, WithJsonSchema({})]
+
+
+def _array(items: Literal['integer', 'number', 'string'], least: int, most: int | None = None) -> WithJsonSchema:
+    """The schema of a parameter holding `least` (to `most`) values of the JSON type `items`: pydantic would describe a
+    tuple's every position, which costs agents more to read. A call with another number is still refused before the
+    tool runs, by the tuple type (REVIEW.md SRV-177)."""
+    return WithJsonSchema({'type': 'array', 'items': {'type': items}, 'minItems': least, 'maxItems': most or least})
+
+
+# The parameters of a fixed number of values (REVIEW.md SRV-177)
+XY = Annotated[tuple[float, float], _array('number', 2)]  # [x, y], [dx, dy], [right, up]
+Four = Annotated[tuple[float, float, float, float], _array('number', 4)]  # a rect, a crop's fractions
+Box = Annotated[tuple[int, int, int, int], _array('integer', 4)]  # [x0, y0, x1, y1] in pixels
+Pixel = Annotated[tuple[int, int], _array('integer', 2)]  # [x, y] in pixels
+Color = Annotated[
+    tuple[float, float, float] | tuple[float, float, float, float], _array('number', 3, 4)
+]  # [r, g, b(, a)]
+Link = Annotated[tuple[str, str], _array('string', 2)]  # [to_node, input]
+T = TypeVar('T')
+
+
+def _empty_is_none(value: object) -> object:
+    """[] for an optional parameter of a fixed number of values: not given, as a client filling optional fields with
+    empty values means it (REVIEW.md SRV-178; SRV-147 for strings)."""
+    return None if value == [] else value
+
+
+NoneIfEmpty = Annotated[T | None, BeforeValidator(_empty_is_none)]  # an optional XY, Four, Box or Color: None, or []
 
 
 def _not_finite(value: JsonSent, where: str) -> tuple[str, float] | None:

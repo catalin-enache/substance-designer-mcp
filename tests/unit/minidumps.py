@@ -8,9 +8,7 @@ import struct
 import uuid as uuids
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TypedDict
-
-from typing_extensions import Unpack  # typing's from Python 3.11; mcp requires typing_extensions
+from typing import TypedDict, Unpack
 
 ARM64, AMD64 = 12, 9  # MINIDUMP_SYSTEM_INFO's ProcessorArchitecture
 MACOS, WINDOWS = 0x8101, 2  # its PlatformId

@@ -149,12 +149,16 @@ way shows only in a run there (ROADMAP item 18).
 checked against Designer's own `sd` package and PySide6 stubs (found in the Designer install) and run on Designer's
 Python 3.13, which evaluates annotations when a `def` runs: every name in an annotation there must exist at runtime
 (import real types, `from sd.api.sdnode import SDNode`, never only under `if TYPE_CHECKING:`), and no `from __future__
-import annotations` (the helpers are joined into one script, where it can't come first). The standalone scripts
-(`install.py`, `uninstall.py`, `client/sd_run.py`, `scripts/review_lookup.py`, `scripts/read_crash_dump.py`), and the
-modules they import (`designer_preferences.py`, `project_constants.py`), are the opposite: they run on the system
-Python, 3.9 at the oldest (DECISIONS.md, Project rules), so they do start with `from __future__ import annotations`
-and evaluate no `X | None` at module level (`tests/unit/test_old_python.py` runs them on a Python 3.9 when one is
-installed; the modules only through the scripts that import them).
+import annotations` (the helpers are joined into one script, where it can't come first). Every other Python file
+needs Python 3.12 (`MIN_PYTHON` in `project_constants.py`), and mypy and ruff check the code as 3.12 (DECISIONS.md,
+Project rules). The scripts a user starts (`install.py`, `uninstall.py`, `client/sd_run.py`,
+`scripts/review_lookup.py`, `scripts/read_crash_dump.py`; `ENTRY_SCRIPTS` in `tests/unit/conftest.py`) run only on
+3.12 or later too, but are started with whatever `python3` is installed, a stock Mac's being 3.9. Each starts with
+`import sys` and a check of `sys.version_info` that refuses an older Python with a message, before any other import.
+`mcp_server/server.py` does too, for a venv an older Python made (`SERVER_SCRIPT`). Python reads a whole file before it
+runs the first line, so such a file stays readable by 3.9: it leaves out the syntax added after 3.9 (`type`
+statements, `def f[T]`, `match`), and may call anything 3.12 has. ruff checks most of that syntax (`ruff.toml`);
+`tests/unit/test_old_python.py` checks the refusal and, where a Python 3.9 is installed, the rest on it.
 
 **The most specific type that fits; `Any` is the last resort.** mypy checks nothing through an `Any`, so before
 writing `Any` (or a `dict`, `list` or `tuple` whose items' types say less than is known: a
@@ -237,6 +241,9 @@ when it misleads, never for its style alone.
 - **Fresh clone, or a deleted `mcp_server/venv`:** run `python3 install.py` (Windows: `py -3 install.py`) first;
   without the venv the server can't start, and the `.mcp.json` command says so in `/mcp`. Then the user reconnects
   `/mcp`. `designer_status` shows which Python and library versions the server runs on.
+- **The `python3 ...` commands** in these docs and the skills need a `python3` of 3.12 or later (DECISIONS.md, Project
+  rules); where it is older, each script says so. `mcp_server/venv/bin/python` runs them too, but `uninstall.py` should
+  run on a system Python, as it removes the venv (it says so when it runs on the venv's; REVIEW.md INS-42).
 - **The helpers** (`mcp_server/designer_helpers/`) are parts joined into one script (README.md, How it works). A part
   imports what it uses from other parts (`from .core import find_graph`), for PyCharm and readers; `part_source()` drops
   those lines. `tests/unit/test_designer_helpers.py` fails on a missing, extra or misplaced import, a name no part

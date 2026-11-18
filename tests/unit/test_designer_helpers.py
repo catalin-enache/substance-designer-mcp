@@ -59,32 +59,44 @@ def _bindings(stmt: ast.AST) -> set[str]:
     return names
 
 
+def _type_params(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef | ast.Lambda) -> set[str]:
+    """The names of a generic def's or class's type parameters (`def f[T]`, `class C[T]`); none for a lambda."""
+    if isinstance(node, ast.Lambda):
+        return set()
+    return {t.name for t in node.type_params if isinstance(t, (ast.TypeVar, ast.ParamSpec, ast.TypeVarTuple))}
+
+
 def _load_time_uses(stmt: ast.AST) -> set[str]:
     """The names a top-level statement reads while the script loads: module- and class-level code,
-    decorators, default values and annotations, not function bodies (those run at call time). A class
-    body's own earlier names count as bound inside it (REVIEW.md TST-78)."""
+    decorators, default values and annotations, not function bodies (those run at call time). Not a type statement's
+    value either, nor a type parameter's bound: each is evaluated only when its `__value__` or `__bound__` is first read
+    (typing introspection), not when the script loads or reads the alias (REVIEW.md TST-528). A class body's own earlier
+    names count as bound inside it (REVIEW.md TST-78), and a generic def's or class's type parameters inside its
+    annotations, bases and body (REVIEW.md TST-527)."""
     uses: set[str] = set()
     local: set[str] = set()
 
     def visit(node: ast.AST) -> None:
+        if isinstance(node, ast.TypeAlias):
+            return
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
             args = node.args
             params = args.posonlyargs + args.args + args.kwonlyargs + [a for a in (args.vararg, args.kwarg) if a]
-            evaluated = (
-                getattr(node, 'decorator_list', [])
-                + args.defaults
-                + list(args.kw_defaults)
-                + [a.annotation for a in params]
-                + [getattr(node, 'returns', None)]
-            )
-            for child in evaluated:
+            generic = _type_params(node)  # bound where the annotations are read
+            for child in getattr(node, 'decorator_list', []) + args.defaults + list(args.kw_defaults):
                 if child is not None:
                     visit(child)
+            for child in [a.annotation for a in params] + [getattr(node, 'returns', None)]:
+                if child is not None:
+                    uses.update(_load_time_uses(child) - generic)
             return
         if isinstance(node, ast.ClassDef):
-            for child in node.decorator_list + node.bases + node.keywords:
+            generic = _type_params(node)  # bound in its bases and its body
+            for child in node.decorator_list:
                 visit(child)
-            own: set[str] = set()
+            for child in node.bases + node.keywords:
+                uses.update(_load_time_uses(child) - generic)
+            own: set[str] = set(generic)
             for child in node.body:
                 uses.update(_load_time_uses(child) - own)
                 own |= _bindings(child)
@@ -238,6 +250,13 @@ def test_the_checks_below_can_fail() -> None:
         ('a', 'Base'),
         ('a', 'Z'),
     ]
+    # a type statement binds its name as it loads; its value is evaluated only when its __value__ is read (core's Json)
+    assert _used_before_bound([p('a', 'type J = list[J] | Later\nX = J'), p('b', 'Later = int')]) == []
+    assert _used_before_bound([p('a', 'X = J'), p('b', 'type J = int')]) == [('a', 'J')]
+    # a generic def's or class's type parameters are bound in its annotations, bases and body, and their bounds are
+    # evaluated only when read; its defaults, decorators and bases' other names load first (REVIEW.md TST-527)
+    generics = 'def f[T: Later](x: T = D) -> list[T]:\n    return [x]\nclass C[T](Base[T]):\n    x: T'
+    assert _used_before_bound([p('a', generics), p('b', 'D = Base = 1')]) == [('a', 'D'), ('a', 'Base')]
 
 
 def test_core_comes_first_and_nothing_else_depends_on_the_order() -> None:

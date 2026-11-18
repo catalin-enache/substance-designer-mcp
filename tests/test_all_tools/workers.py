@@ -46,9 +46,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable, Collection, Mapping, Sequence
-from typing import IO, Protocol, TypedDict, cast
-
-from typing_extensions import Unpack  # typing's from Python 3.11; mcp requires typing_extensions
+from typing import IO, Protocol, TypedDict, Unpack, cast
 
 import designer_preferences
 from test_all_tools import common

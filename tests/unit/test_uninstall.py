@@ -11,10 +11,10 @@ import time
 import types
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Unpack
 
 import pytest
 from fake_defaults import FakeDefaults
-from typing_extensions import Unpack  # typing's from Python 3.11; mcp requires typing_extensions
 
 import designer_preferences
 from conftest import ROOT, RunOptions
@@ -252,8 +252,14 @@ def test_warns_when_run_with_the_venvs_own_python(
     env: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(sys, 'prefix', str(env.venv))
+    monkeypatch.setattr(sys, 'base_prefix', os.path.join(str(env.venv), 'made from'))
     run(env, monkeypatch, '--dry-run')
-    assert 'python3 uninstall.py' in capsys.readouterr().out
+    # REVIEW.md INS-42: not a bare python3, 3.9 on a Mac with no other Python, which this refuses: the Python the venv was
+    # made from (install.system_python, tested in test_install.py). INS-46: quoted for the user's terminal, cmd.exe
+    # included, which takes no single quotes: the space in its path between double quotes
+    out = capsys.readouterr().out
+    install = env.module.install
+    assert install.terminal_command(install.uninstall_args()) in out and install.system_python() in out, out
 
 
 def test_someone_elses_sd_bridge_is_never_reported_as_removed(

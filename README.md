@@ -30,7 +30,7 @@ There are two programs, plus Designer's own command-line tools:
       │  MCP over stdio: tool calls in, text and images back
       ▼
  MCP server ─ mcp_server/server.py + server_tools/ + designer_helpers/
- (a separate Python 3.10+ process in mcp_server/venv, started by Claude Code)
+ (a separate Python 3.12+ process in mcp_server/venv, started by Claude Code)
       │                                         │
       │  JSON over TCP 127.0.0.1:9877            │  runs as needed
       │  (token-signed request: code, timeout)   ▼
@@ -105,10 +105,11 @@ changes to your graphs, Claude can take a snapshot and afterwards show you exact
 ## Requirements
 
 - Substance 3D Designer 16 (tested on 16.0.7, which bundles Python 3.13). Older versions aren't supported.
-- Python **3.10+** (only for the MCP server; the plugin uses Designer's own Python). 3.10 is the
-  minimum the installer accepts; the tests run on 3.12. The installer and `designer_status` show
-  which Python the server uses. `install.py` and `uninstall.py` start on an older `python3`, 3.9 or
-  later (a stock Mac's is 3.9): the installer then says it needs 3.10+, and the uninstaller works.
+- Python **3.12+** for the MCP server and the scripts (`install.py`, `uninstall.py`,
+  `client/sd_run.py`, `scripts/read_crash_dump.py`); the plugin uses Designer's own Python. The `python3` a Mac comes with is 3.9,
+  even on macOS 26: install a newer one, for example from python.org or Homebrew. On an older Python
+  each script says it needs 3.12+. The tests run on 3.12. The installer and `designer_status` show
+  which Python the server uses.
 - Claude Code (`claude` command), or any MCP client
 
 ## Install
@@ -117,8 +118,8 @@ Put this folder somewhere permanent (the server's Python environment is created 
 for example `~/Tools/substance-designer-mcp` or `C:\Tools\substance-designer-mcp`, then:
 
 ```bash
-python3 install.py          # macOS
-py -3 install.py            # Windows (PowerShell); or the full path to a Python 3.10+ python.exe
+python3 install.py          # macOS; python3.12 install.py where python3 is older
+py -3 install.py            # Windows (PowerShell); or the full path to a Python 3.12+ python.exe
 ```
 
 The installer:
@@ -134,7 +135,8 @@ The installer:
    The plugin used to be called `sd_bridge` (token `~/.sd_bridge_token`). If that old copy is
    there and is this project's, the installer removes it and its token, since two copies
    loaded together fight over the port.
-2. Creates `mcp_server/venv` and installs `mcp`, `pillow` and `numpy`.
+2. Creates `mcp_server/venv` and installs `mcp`, `pillow` and `numpy`. It makes the venv again
+   when a Python older than 3.12 made it, or when the venv's Python is gone.
 3. Does **not** register the server globally: it prints how to register it per folder (see
    **Where the tools are available** below).
 4. Adds a small Claude Code skill, `~/.claude/skills/substance-designer/SKILL.md` (in
@@ -179,9 +181,9 @@ context on it:
 <summary>Manual install (without install.py)</summary>
 
 1. Copy `plugin/sd_claude_bridge_kve` (the folder containing `pluginInfo.json`) into the plugin folder above.
-2. Create the environment:
+2. Create the environment, with a Python 3.12 or later:
    ```bash
-   python3 -m venv mcp_server/venv                                  # Windows: py -3 -m venv mcp_server\venv
+   python3 -m venv mcp_server/venv            # python3.12 where python3 is older; Windows: py -3 -m venv mcp_server\venv
    mcp_server/venv/bin/pip install -r mcp_server/requirements.txt   # Windows: mcp_server\venv\Scripts\pip ...
    ```
 3. Registration: as in **Where the tools are available**.
@@ -336,6 +338,8 @@ the `.mcp.json` entry, or pass them when registering a folder:
 
 ## Using it without MCP
 
+With a Python 3.12+, such as the server's own (`mcp_server/venv/bin/python`):
+
 ```bash
 python client/sd_run.py my_script.py          # run a file inside Designer
 python client/sd_run.py -c "print('hello')"   # run a snippet
@@ -384,6 +388,9 @@ python3 uninstall.py --dry-run   # macOS; Windows: py -3 uninstall.py --dry-run.
 python3 uninstall.py             # lists it again, asks, then removes it (--yes to skip the question)
 ```
 
+Run it with a Python 3.12+ of your system, as for the install (`python3.12 uninstall.py` where
+`python3` is older), not the server's own: it removes `mcp_server/venv`.
+
 It removes the `sd_claude_bridge_kve` plugin from Designer's plugin folder (and the old `sd_bridge`
 one), `~/.sd_claude_bridge_kve_token`, the skill, `mcp_server/venv`, and this server's registration in
 every folder where you ran `claude mcp add --scope local`, plus a user-scope registration
@@ -407,7 +414,7 @@ one an agent started uses its own folder and writes Designer's preferences as it
 
 | Symptom | Fix |
 |---|---|
-| `substance-designer` fails to connect in `/mcp`; its log says "no Python environment" | The venv is missing (a fresh clone, or it was deleted): run `python3 install.py`, then reconnect in `/mcp`. |
+| `substance-designer` fails to connect in `/mcp`; its log says "no Python environment" | The venv is missing (a fresh clone, or it was deleted): run `python3 install.py` (`python3.12` where `python3` is older), then reconnect in `/mcp`. |
 | `No bridge token found` | The plugin has never run. Restart Designer and check its console. |
 | `Designer is not reachable` | Designer isn't running, or the plugin failed to load. Check the Designer log. |
 | Every call returns `invalid token`, or says the plugin `speaks another bridge protocol` | The plugin and the server are different versions (for example after `git pull`): re-run `install.py`, restart Designer and reconnect `/mcp`. |

@@ -7,9 +7,13 @@ Usage:
     python sd_run.py --cancel
 """
 
-# Annotations stay unevaluated: this script must run, or refuse with a message, on the system Python, 3.9 or
-# later, which can be older than 3.10 (REVIEW.md INS-25; 3.9 at the oldest: DECISIONS.md, Project rules)
-from __future__ import annotations
+import sys
+
+# This project's code runs only on Python 3.12 or later, and python3 may be older: a stock Mac's is 3.9. This check
+# comes before any other import, and this file stays readable by 3.9, so that an older Python refuses with a message
+# instead of a traceback (DECISIONS.md, Project rules)
+if sys.version_info < (3, 12):
+    sys.exit('Python 3.12+ is required (found %s)' % sys.version.split()[0])
 
 import argparse
 import hashlib
@@ -18,7 +22,6 @@ import io
 import json
 import os
 import socket
-import sys
 from typing import Protocol, cast
 
 PORT = int(os.environ.get('SD_BRIDGE_PORT', '9877'))
@@ -94,11 +97,11 @@ def _send_or_explain(request: Request, wait: float) -> Reply:
         sys.exit(1)
     except FileNotFoundError:
         sys.stderr.write(
-            'No bridge token at %s: is the plugin installed (python3 install.py) and has '
+            'No bridge token at %s: is the plugin installed (install.py, with a Python 3.12+) and has '
             'Designer started once since?\n' % TOKEN_FILE
         )
         sys.exit(1)
-    except (socket.timeout, TimeoutError):  # noqa: UP041 (on Python 3.9 socket.timeout is no TimeoutError)
+    except TimeoutError:  # socket.timeout too, from Python 3.10
         sys.stderr.write(
             'No reply from Designer after %ds; it may be busy, or a script may still be running '
             '(sd_run.py --status, --cancel).\n' % wait

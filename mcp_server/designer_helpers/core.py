@@ -7,7 +7,7 @@ import math
 import os as os
 import sys as sys
 from collections.abc import Callable as Callable, Sequence as Sequence
-from typing import Protocol as Protocol, TypeAlias, TypedDict as TypedDict, cast as cast
+from typing import Protocol as Protocol, TypedDict as TypedDict, cast as cast
 
 import sd
 from PySide6 import QtCore as QtCore, QtGui as QtGui, QtWidgets as QtWidgets
@@ -236,7 +236,7 @@ def _output_note(how: str) -> str:
 
 
 # A JSON value, as the tools' arguments reach the helpers (the server writes them into the call as Python literals)
-Json: TypeAlias = bool | int | float | str | list['Json'] | dict[str, 'Json'] | None
+type Json = bool | int | float | str | list[Json] | dict[str, Json] | None
 # fmt()'s forms of a value: None, a bool, number or string, a vector's or colour's components, or '<its type>'
 Shown = bool | int | float | str | tuple[bool | int | float, ...] | None
 
@@ -268,7 +268,8 @@ def _position(value: Json | Sequence[float], what: str = 'position') -> tuple[fl
         else:  # not 'nan', 'inf', '1e400': Designer would take them, the print after wouldn't (HLP-51)
             if all(math.isfinite(v) and abs(v) < 1e30 for v in xy):
                 return xy
-    raise RuntimeError('%s must be [x, y], two numbers, not %r' % (what, value))
+    shown = list(value) if isinstance(value, tuple) else value  # as the agent sent it (REVIEW.md HLP-188)
+    raise RuntimeError('%s must be [x, y], two numbers, not %r' % (what, shown))
 
 
 def fmt(value: SDValue | None) -> Shown:

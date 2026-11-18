@@ -10,11 +10,10 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Unpack
 
 import pytest
 from selftest_fakes import fresh, tool_result
-from typing_extensions import Unpack  # typing's from Python 3.11; mcp requires typing_extensions
 
 import project_constants
 from conftest import SELFTEST_DIR, RunOptions

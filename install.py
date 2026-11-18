@@ -5,26 +5,30 @@ Installer for the Substance Designer bridge plugin + MCP server (macOS and Windo
     python install.py --plugins-dir PATH   # custom Designer user-plugin folder
     python install.py --no-skill      # don't add the skill to ~/.claude/skills
 
-Run it with a Python 3.10+ interpreter. Re-running is safe (it updates in place).
+Run it with a Python 3.12+ interpreter. Re-running is safe (it updates in place).
 uninstall.py undoes all of it.
 """
 
-# Annotations stay unevaluated: this script must run, or refuse with a message, on the system Python, 3.9 or
-# later, which can be older than 3.10 (REVIEW.md INS-25; 3.9 at the oldest: DECISIONS.md, Project rules)
-from __future__ import annotations
+import sys
+
+# This project's code runs only on Python 3.12 or later, and python3 may be older: a stock Mac's is 3.9. This check
+# comes before any other import, and this file stays readable by 3.9, so that an older Python refuses with a message
+# instead of a traceback (DECISIONS.md, Project rules)
+if sys.version_info < (3, 12):
+    sys.exit('Python 3.12+ is required (found %s)' % sys.version.split()[0])
 
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
-import sys
 from typing import IO, Protocol
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from project_constants import PLUGIN, PLUGIN_DIR, Json  # noqa: E402  (the plugin's name lives there)
+from project_constants import MIN_PYTHON, PLUGIN, PLUGIN_DIR, Json  # noqa: E402  (the plugin's name lives there)
 
 SERVER_NAME = 'substance-designer'
 # Before the rename the plugin was "sd_bridge" with its token in ~/.sd_bridge_token. Both copies
@@ -60,6 +64,11 @@ def shell_command(args: list[str]) -> str:
     """For Claude Code's Bash tool, a POSIX shell on every platform (Git Bash on Windows): quoted,
     with forward slashes, since that shell drops unquoted backslashes."""
     return shlex.join(a.replace('\\', '/') if sys.platform == 'win32' else a for a in args)
+
+
+def terminal_command(args: list[str]) -> str:
+    """For the user's own terminal: cmd's quoting on Windows (REVIEW.md INS-46), a POSIX shell's elsewhere."""
+    return subprocess.list2cmdline(args) if sys.platform == 'win32' else shlex.join(args)
 
 
 def skill_text(py: str, server: str) -> str:
@@ -100,9 +109,7 @@ token, this skill, every folder's registration): `%(uninstall)s`.
         'marker': SKILL_MARKER,
         'repo': HERE,
         'cmd': shell_command(register_args(py, server)),
-        'uninstall': shell_command(
-            (['py', '-3'] if sys.platform == 'win32' else ['python3']) + [os.path.join(HERE, 'uninstall.py')]
-        ),
+        'uninstall': shell_command(uninstall_args()),
     }
 
 
@@ -139,15 +146,45 @@ def venv_python(venv: str) -> str:
     return os.path.join(venv, 'bin', 'python')
 
 
-def venv_runs(py: str) -> bool:
-    """True when the venv's Python exists and starts."""
+def venv_version(py: str) -> str | None:
+    """What the venv's Python says its version is ('Python 3.12.10'); None when it is missing or doesn't start."""
     if not os.path.exists(py):
-        return False
+        return None
     try:
-        subprocess.check_output([py, '--version'], stderr=subprocess.STDOUT)
-        return True
+        return subprocess.check_output([py, '--version'], stderr=subprocess.STDOUT, text=True).strip()
     except (OSError, subprocess.CalledProcessError):
-        return False
+        return None
+
+
+def usable(version: str | None) -> bool:
+    """True when a venv's Python, by what venv_version read, starts and is the minimum or later. An install made with an
+    older Python left a venv that still runs (ROADMAP item 105)."""
+    found = re.match(r'Python (\d+)\.(\d+)', version or '')
+    return found is not None and (int(found.group(1)), int(found.group(2))) >= MIN_PYTHON
+
+
+def venv_dir() -> str:
+    """The MCP server's venv, mcp_server/venv in this folder."""
+    return os.path.join(HERE, 'mcp_server', 'venv')
+
+
+def system_python() -> str:
+    """The command running a Python 3.12+ of the system, for uninstall.py, which removes the venv (a bare python3 is 3.9
+    on a Mac with no other Python: REVIEW.md INS-42):
+    - this Python, which passed the version check;
+    - in a venv (this repo's, or another that may go), the Python it was made from, also a 3.12+, by the name every
+      install of it has: `make altinstall` links no python3 (REVIEW.md INS-44). Windows: its python.exe, as py -3 needs
+      the launcher."""
+    if sys.prefix == sys.base_prefix:
+        return sys.executable
+    if sys.platform == 'win32':
+        return os.path.join(sys.base_prefix, 'python.exe')
+    return os.path.join(sys.base_prefix, 'bin', 'python%d.%d' % sys.version_info[:2])
+
+
+def uninstall_args() -> list[str]:
+    """The command running uninstall.py with a Python 3.12+ of the system."""
+    return [system_python(), os.path.join(HERE, 'uninstall.py')]
 
 
 def _plugin_name(info: IO[str]) -> str | None:
@@ -260,9 +297,6 @@ def main() -> None:
     ap.add_argument('--no-skill', action='store_true', help="don't add the Claude Code skill")
     args: _Args = ap.parse_args()
 
-    if sys.version_info < (3, 10):  # noqa: UP036 (install.py is run by whatever python3 is installed)
-        sys.exit('Python 3.10+ is required (found %s)' % sys.version.split()[0])
-
     # 1. Designer plugin
     src = PLUGIN_DIR
     dst = os.path.join(args.plugins_dir, PLUGIN)
@@ -272,21 +306,30 @@ def main() -> None:
     remove_old_plugin(args.plugins_dir)
 
     # 2. Virtual environment for the MCP server
-    venv = os.path.join(HERE, 'mcp_server', 'venv')
+    venv = venv_dir()
     py = venv_python(venv)
-    if not venv_runs(py):
+    before = venv_version(py)
+    there = os.path.isdir(venv)
+    remade = ''
+    if not usable(before):
         # also a venv whose Python was removed or upgraded: its python is a dead link (or, on Windows,
-        # points at a missing home), and `-m venv` over it keeps that unless told to clear it (INS-23)
-        subprocess.check_call([sys.executable, '-m', 'venv'] + (['--clear'] if os.path.isdir(venv) else []) + [venv])
+        # points at a missing home), and `-m venv` over it keeps that unless told to clear it (INS-23).
+        # A venv an older Python made is cleared too
+        subprocess.check_call([sys.executable, '-m', 'venv'] + (['--clear'] if there else []) + [venv])
+        if there:  # it lost what it held, the tests' packages too (REVIEW.md INS-43, INS-45)
+            dev = os.path.join(HERE, 'mcp_server', 'requirements-dev.txt')
+            remade = ', made again: the one there %s. For the tests: %s' % (
+                'ran %s' % before if before else "didn't start",
+                terminal_command([py, '-m', 'pip', 'install', '-r', dev]),
+            )
     subprocess.check_call([py, '-m', 'pip', 'install', '-q', '--upgrade', 'pip'])
     subprocess.check_call(
         [py, '-m', 'pip', 'install', '-q', '-r', os.path.join(HERE, 'mcp_server', 'requirements.txt')]
     )
-    try:  # which Python the server runs on (the one that ran this installer, when it made the venv)
-        version = subprocess.check_output([py, '--version'], text=True).strip()
-    except (OSError, subprocess.CalledProcessError):
-        version = 'Python version unknown'
-    print('[2/4] MCP server environment ready (%s): %s' % (version, venv))
+    # which Python the server runs on (the one that ran this installer, when it made the venv)
+    print(
+        '[2/4] MCP server environment ready (%s%s): %s' % (venv_version(py) or 'Python version unknown', remade, venv)
+    )
 
     # 3. Registration: never global. This repo's .mcp.json registers the server for this folder
     # (Claude Code asks once to approve it); other folders opt in one by one.

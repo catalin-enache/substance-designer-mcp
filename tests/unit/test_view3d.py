@@ -1,14 +1,17 @@
 """screenshot_designer's 3D view options (ROADMAP items 7 and 74): what the server refuses before reaching Designer, and how it
 calls the helpers. Driving the 3D view itself is checked live (editor_panels_and_fit)."""
 
+import asyncio
 import os
 
 import pytest
 from mcp.server.mcpserver import Image
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.types import CallToolResult, InputRequiredResult
 from PIL import Image as PILImage
 
 from conftest import fake_bridge, server
+from project_constants import Json
 from server_tools import views
 
 NOTE = "3D view: Plane, graph g's outputs on the mesh, view Top, framed, +2 wheel steps, tiling 2 (the Parameters panel back on g)"
@@ -40,7 +43,7 @@ def _call(code: str) -> str:
     return code[code.rindex('\n\n') + 2 :].rstrip('\n')
 
 
-OPTIONS = {
+OPTIONS: dict[str, Json] = {
     'graph': 'g',
     'mesh': 'Plane',
     'view': 'Top',
@@ -51,11 +54,20 @@ OPTIONS = {
 }
 
 
+def _shoot(arguments: dict[str, Json]) -> CallToolResult | InputRequiredResult:
+    """screenshot_designer called as an agent's client does: through the server, which validates the arguments first and
+    gives the tool orbit and pan as tuples (REVIEW.md TST-534: called directly with lists, a test hid a TypeError)."""
+    result: CallToolResult | InputRequiredResult = asyncio.run(
+        server.server.call_tool('screenshot_designer', arguments)
+    )
+    return result
+
+
 @pytest.mark.parametrize('option', sorted(OPTIONS))
 def test_3d_options_need_the_3d_panel(monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], option: str) -> None:
     sent = _bridge(monkeypatch, temp_folders)
     with pytest.raises(ToolError, match=r"panel='3d'"):
-        server.screenshot_designer('graph', **{option: OPTIONS[option]})
+        _shoot({'panel': 'graph', option: OPTIONS[option]})
     assert sent == []
 
 
@@ -68,21 +80,23 @@ def test_3d_options_need_the_3d_panel(monkeypatch: pytest.MonkeyPatch, temp_fold
         ('tiling', -1.0, 'tiling'),
         ('tiling', float('nan'), 'tiling'),
         ('tiling', float('inf'), 'tiling'),  # REVIEW.md HLP-110, SRV-119: it reached Designer as a NameError
-        ('orbit', [181.0, 0.0], r'orbit is \[right, up\] in degrees'),
+        ('orbit', [181.0, 0.0], r'orbit is \[right, up\] in degrees.*not \[181\.0, 0\.0\]'),
         ('orbit', [0.0, -91.0], r'orbit is \[right, up\] in degrees'),
-        ('orbit', [90.0], r'orbit is \[right, up\] in degrees'),
-        ('orbit', [1.0, 2.0, 3.0], r'orbit is \[right, up\] in degrees'),
-        ('pan', [1.5, 0.0], r'pan is \[right, up\] in fractions of the view'),
+        ('pan', [1.5, 0.0], r'pan is \[right, up\] in fractions of the view.*not \[1\.5, 0\.0\]'),
         ('pan', [0.0, -1.01], r'pan is \[right, up\] in fractions of the view'),
-        ('pan', [0.5], r'pan is \[right, up\] in fractions of the view'),
+        # orbit [90] or [1, 2, 3], pan [0.5]: their schemas refuse them (test_server.py, REVIEW.md SRV-177)
     ],
 )
 def test_options_out_of_range_are_refused(
-    monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], option: str, value: float | list[float], message: str
+    monkeypatch: pytest.MonkeyPatch,
+    temp_folders: list[str],
+    option: str,
+    value: Json,
+    message: str,
 ) -> None:
     sent = _bridge(monkeypatch, temp_folders)
     with pytest.raises(ToolError, match=message):
-        server.screenshot_designer('3d', **{option: value})
+        _shoot({'panel': '3d', option: value})
     assert sent == []
 
 
@@ -91,10 +105,10 @@ def test_the_3d_view_is_set_up_and_shot_in_one_helper_call(
 ) -> None:
     # shoot_3d keeps Designer's window on screen through both (REVIEW.md SRV-146)
     sent = _bridge(monkeypatch, temp_folders, NOTE + '\n3d render 4x4\n')
-    server.screenshot_designer('3d', **OPTIONS)
+    _shoot({'panel': '3d', **OPTIONS})
     assert len(sent) == 1
     shot = os.path.join(temp_folders[-1], 'shot.png')
-    assert _call(sent[0]) == "shoot_3d(%r, 'g', 'Plane', 'Top', 2, 2.0, [90.0, -30.0], [0.25, 0.5])" % shot
+    assert _call(sent[0]) == "shoot_3d(%r, 'g', 'Plane', 'Top', 2, 2.0, (90.0, -30.0), (0.25, 0.5))" % shot
 
 
 def _plain(panel: str, folders: list[str]) -> str:
@@ -171,14 +185,17 @@ def test_a_shot_that_failed_says_what_was_done_to_designers_window(
     ids=['orbit', 'pan', 'zoom', 'graph', 'mesh', 'view'],
 )
 def test_a_turn_pan_or_zoom_of_zero_or_an_empty_name_sets_nothing_up(
-    monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], panel: str, option: str, value: float | list[float] | str
+    monkeypatch: pytest.MonkeyPatch,
+    temp_folders: list[str],
+    panel: str,
+    option: str,
+    value: Json,
 ) -> None:
     # REVIEW.md TST-336: nothing to set, so not sent, and not refused with another panel; SRV-147: '' is no name
     sent = _bridge(monkeypatch, temp_folders)
-    # through server, whose names the checker doesn't type: the keyword is chosen as the test runs
-    result: list[str | Image] = server.screenshot_designer(panel, **{option: value})
+    result = _shoot({'panel': panel, option: value})
     assert _call(sent[0]) == _plain(panel, temp_folders)
-    assert len(result) == 1 and isinstance(result[0], Image)
+    assert isinstance(result, CallToolResult) and [b.type for b in result.content] == ['image']
 
 
 @pytest.mark.parametrize('panel', ['3d', 'graph'])

@@ -21,22 +21,18 @@ from typing import cast
 
 from mcp.server.mcpserver.exceptions import ToolError
 
-from .core import _bridge, _checked, _edit, _helpers_call, _sentence, _tool
+from .core import XY, Color, Link, NoneIfEmpty, _bridge, _checked, _edit, _helpers_call, _sentence, _tool
 from .snapshots import _new_snapshot_path, _note_package, _v, _whole_or_none, _xml_graph, snapshot_graph
 
 
 @_tool()
-def arrange_graph(
-    graph: str | None = None, node_ids: list[str] | None = None, spacing: list[float] | None = None
-) -> str:
+def arrange_graph(graph: str | None = None, node_ids: list[str] | None = None, spacing: NoneIfEmpty[XY] = None) -> str:
     """Tidy a graph: left-to-right columns by data flow, ordered to reduce crossing links,
     outputs in the last column. Only positions change (connections are never touched).
     node_ids: arrange just these nodes, from their current top-left (an id that names no node is
     refused, nothing moved). spacing: [dx, dy]
     (default [200, 150]). One undo step."""
-    return _edit(
-        'arrange_graph(%r, %r, %r)' % (graph, node_ids, tuple(spacing or (200.0, 150.0))), 'Claude: arrange graph'
-    )
+    return _edit('arrange_graph(%r, %r, %r)' % (graph, node_ids, spacing or (200.0, 150.0)), 'Claude: arrange graph')
 
 
 @_tool()
@@ -44,7 +40,7 @@ def add_frame(
     node_ids: list[str],
     title: str,
     graph: str | None = None,
-    color: list[float] | None = None,
+    color: NoneIfEmpty[Color] = None,
     description: str | None = None,
 ) -> str:
     """Draw a titled frame around nodes (e.g. one per section of a material). color: [r, g, b(, a)]
@@ -56,7 +52,7 @@ def add_frame(
 
 @_tool()
 def add_comment(
-    text: str, graph: str | None = None, node_id: str | None = None, position: list[float] | None = None
+    text: str, graph: str | None = None, node_id: str | None = None, position: NoneIfEmpty[XY] = None
 ) -> str:
     """Add a comment to a graph: attached to node_id, or free-standing at position [x, y].
     One undo step."""
@@ -73,7 +69,7 @@ def set_link_display(
     from_nodes: list[str] | None = None,
     fanout_at_least: int | None = None,
     longer_than: float | None = None,
-    links: list[list[str]] | None = None,
+    links: list[Link] | None = None,
 ) -> str:
     """Show connections as portals (hidden wires with a symbol at each end) or as normal wires, to
     reduce wire clutter. Pick links by any of: from_nodes (all outgoing links of these nodes),
@@ -236,7 +232,7 @@ def _select_links(
     from_nodes: list[str] | None = None,
     fanout_at_least: int | None = None,
     longer_than: float | None = None,
-    links: list[list[str]] | None = None,
+    links: list[Link] | None = None,
 ) -> tuple[list[ET.Element], int, int]:
     """(the <connection> elements of a <graph> that the selection picks and that would change
     display mode, how many it picks in all, the total number of links). Only the graph's own
@@ -259,7 +255,7 @@ def _select_links(
     fanout: dict[tuple[str, str | None], int] = {}
     for _, _, src, output in conns:
         fanout[(src, output)] = fanout.get((src, output), 0) + 1
-    wanted_links = {(str(a), str(b)) for a, b in (links or [])}
+    wanted_links = set(links or [])
     chosen: list[ET.Element] = []
     selected = 0
     for down, c, src, output in conns:

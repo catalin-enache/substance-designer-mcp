@@ -242,7 +242,7 @@ async def close_with(c: Call) -> int:
         dumps = common.new_dumps(common.crash_dumps(), before)
         if dumps:
             print(
-                'alone: a crash dump appeared as it quit: %s (python3 scripts/read_crash_dump.py <dump> reads it)'
+                'alone: a crash dump appeared as it quit: %s (mcp_server/venv/bin/python scripts/read_crash_dump.py <dump> reads it)'
                 % ', '.join(sorted(dumps))
             )
             code = 1

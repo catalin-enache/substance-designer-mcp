@@ -9,7 +9,7 @@ from mcp.server.mcpserver import Image
 from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image as PILImage
 
-from .core import _bridge, _checked, _helpers_call, _output_note_in, _tool, _with_undo
+from .core import XY, Four, NoneIfEmpty, _bridge, _checked, _helpers_call, _output_note_in, _tool, _with_undo
 from .output import _load_8bit
 
 # screenshot_designer('3d', zoom=...): wheel steps either way (their size: designer_helpers/view3d.py)
@@ -56,14 +56,14 @@ def preview_node(
 def screenshot_designer(
     panel: str = 'window',
     max_size: int = 1000,
-    crop: list[float] | None = None,
+    crop: NoneIfEmpty[Four] = None,
     graph: str | None = None,
     mesh: str | None = None,
     view: str | None = None,
     zoom: int = 0,
     tiling: float | None = None,
-    orbit: list[float] | None = None,
-    pan: list[float] | None = None,
+    orbit: NoneIfEmpty[XY] = None,
+    pan: NoneIfEmpty[XY] = None,
 ) -> list[str | Image]:
     """Capture Designer's own UI (never other apps): panel = window, graph, 2d, 3d, explorer,
     parameters, library or console. Shows what the user sees (node layout, 2D view, properties).
@@ -89,9 +89,7 @@ def screenshot_designer(
     crop: [left, top, right, bottom] as fractions 0-1 of the panel, applied before max_size.
     An image costs about width x height / 750 tokens (1000 x 700 is about 930), so keep
     max_size small and crop to what you need."""
-    if crop is not None and (
-        len(crop) != 4 or not all(0.0 <= float(v) <= 1.0 for v in crop) or not (crop[0] < crop[2] and crop[1] < crop[3])
-    ):
+    if crop is not None and (not all(0.0 <= v <= 1.0 for v in crop) or not (crop[0] < crop[2] and crop[1] < crop[3])):
         raise ToolError('crop is [left, top, right, bottom] as fractions 0-1, with left < right and top < bottom')
     options = {
         'graph': graph,
@@ -109,13 +107,13 @@ def screenshot_designer(
         raise ToolError('zoom is -%d to %d wheel steps (positive: closer), not %r' % (ZOOM_STEPS, ZOOM_STEPS, zoom))
     if tiling is not None and not tiling > 0:
         raise ToolError('tiling is how often the material repeats on the mesh: more than 0, not %r' % tiling)
-    if orbit is not None and not (len(orbit) == 2 and abs(orbit[0]) <= 180 and abs(orbit[1]) <= 90):
+    if orbit is not None and not (abs(orbit[0]) <= 180 and abs(orbit[1]) <= 90):
         raise ToolError(
-            'orbit is [right, up] in degrees, -180 to 180 and -90 to 90 (negative: left, down), not %r' % orbit
+            'orbit is [right, up] in degrees, -180 to 180 and -90 to 90 (negative: left, down), not %r' % list(orbit)
         )
-    if pan is not None and not (len(pan) == 2 and all(abs(v) <= 1 for v in pan)):
+    if pan is not None and not all(abs(v) <= 1 for v in pan):
         raise ToolError(
-            'pan is [right, up] in fractions of the view, each -1 to 1 (negative: left, down), not %r' % pan
+            'pan is [right, up] in fractions of the view, each -1 to 1 (negative: left, down), not %r' % list(pan)
         )
     tmp_dir = tempfile.mkdtemp(prefix='sd_shot_')
     out_path = os.path.join(tmp_dir, 'shot.png')
@@ -139,7 +137,7 @@ def screenshot_designer(
             w, h = im.size
             box = (round(crop[0] * w), round(crop[1] * h), round(crop[2] * w), round(crop[3] * h))
             if box[2] - box[0] < 1 or box[3] - box[1] < 1:
-                raise ToolError('crop %r is less than a pixel of the %dx%d panel%s' % (crop, w, h, said))
+                raise ToolError('crop %r is less than a pixel of the %dx%d panel%s' % (list(crop), w, h, said))
             im = im.crop(box)
         im.thumbnail((max_size, max_size))
         buf = io.BytesIO()
@@ -155,7 +153,7 @@ def open_graph(
     node_id: str | None = None,
     node_ids: list[str] | None = None,
     frame: str | None = None,
-    rect: list[float] | None = None,
+    rect: NoneIfEmpty[Four] = None,
 ) -> str:
     """Open a graph in Designer's graph editor (so the user and screenshot_designer see it;
     closes Designer's Home screen if it is showing). By default the whole graph is fitted in
@@ -172,8 +170,12 @@ def open_graph(
     ]
     if len(chosen) > 1:
         raise ToolError('choose one of node_id, node_ids, frame or rect (got %s)' % ', '.join(chosen))
-    if rect is not None and len(rect) != 4:
-        raise ToolError('rect is [x, y, width, height] in graph units')
     return _checked(
-        _bridge(_helpers_call('open_graph(%r, %r, %r, %r, %r)' % (graph, node_id, node_ids, frame, rect)), timeout=60)
+        # '' or [] is no choice, as above: sent as one, frame='' was looked for as a title (REVIEW.md SRV-180)
+        _bridge(
+            _helpers_call(
+                'open_graph(%r, %r, %r, %r, %r)' % (graph, node_id or None, node_ids or None, frame or None, rect)
+            ),
+            timeout=60,
+        )
     )

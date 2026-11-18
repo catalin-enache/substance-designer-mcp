@@ -14,14 +14,12 @@ from mcp.server.mcpserver import Image
 from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image as PILImage
 
-from .core import AnyJson, _bridge, _helpers_call, _output_note_in, _tool, _with_undo
+from .core import AnyJson, Box, NoneIfEmpty, Pixel, _bridge, _helpers_call, _output_note_in, _tool, _with_undo
 
 # decoded pixels: (H, W, C) floats
 Pixels = npt.NDArray[np.float64]
 # the type of one channel of a raw pixel, by Designer's pixel format (_PIXEL_TYPES)
 PixelType = type[np.uint8 | np.uint16 | np.float16 | np.float32]
-# numpy 2.5's stubs declare ndarray.min()/max() without arguments in a way mypy doesn't match
-# ("All overload variants ... require at least one argument"), hence the ignores on those calls.
 
 _PIXEL_TYPES: dict[str, tuple[PixelType, float]] = {
     '8': (np.uint8, 255.0),
@@ -92,12 +90,10 @@ def _channel_names(data: Pixels, layout: str) -> str:
     return ('RGBA', 'RGB')[data.shape[2] == 3] if layout == 'RGBA' else 'LA'[: data.shape[2]]
 
 
-def _crop_box(region: list[int], w: int, h: int, what: str) -> tuple[int, int, int, int]:
+def _crop_box(region: Box, w: int, h: int, what: str) -> Box:
     """(x0, y0, x1, y1) for region [x0, y0, x1, y1] in pixels, clamped to a w x h image. An empty
     or inverted region is an error (numpy would silently wrap negative coordinates)."""
-    if len(region) != 4:
-        raise ToolError('%s must be [x0, y0, x1, y1]' % what)
-    x0, y0, x1, y1 = (int(v) for v in region)
+    x0, y0, x1, y1 = region
     x0, x1 = max(0, min(x0, w)), max(0, min(x1, w))
     y0, y1 = max(0, min(y0, h)), max(0, min(y1, h))
     if x1 <= x0 or y1 <= y0:
@@ -105,7 +101,7 @@ def _crop_box(region: list[int], w: int, h: int, what: str) -> tuple[int, int, i
     return x0, y0, x1, y1
 
 
-def _crop(data: Pixels, region: list[int], what: str) -> Pixels:
+def _crop(data: Pixels, region: Box, what: str) -> Pixels:
     """data[y0:y1, x0:x1] for region [x0, y0, x1, y1], clamped to the image (see _crop_box)."""
     x0, y0, x1, y1 = _crop_box(region, data.shape[1], data.shape[0], what)
     return data[y0:y1, x0:x1]
@@ -142,8 +138,8 @@ def node_stats(
     node_id: str,
     graph: str | None = None,
     output: str | None = None,
-    region: list[int] | None = None,
-    points: list[list[int]] | None = None,
+    region: NoneIfEmpty[Box] = None,
+    points: list[Pixel] | None = None,
 ) -> str:
     """Exact pixel statistics of any node's output (computed in Designer, read from the raw
     buffer, so 16-bit/float precision is kept). Per channel: min, max, mean, std.
@@ -162,7 +158,7 @@ def node_stats(
     names = _channel_names(data, layout)
     for ch, name in enumerate(names):
         a = area[:, :, ch]
-        lines.append('%s: min %.4f  max %.4f  mean %.4f  std %.4f' % (name, a.min(), a.max(), a.mean(), a.std()))  # type: ignore[call-overload]  # numpy stubs: see Pixels
+        lines.append('%s: min %.4f  max %.4f  mean %.4f  std %.4f' % (name, a.min(), a.max(), a.mean(), a.std()))
     for x, y in points or []:
         if 0 <= x < w and 0 <= y < h:
             lines.append(
@@ -210,8 +206,8 @@ def _channel_summary(data: Pixels, layout: str) -> str:
         '%s %.3f..%.3f (mean %.3f)'
         % (
             n,
-            data[:, :, i].min(),  # type: ignore[call-overload]  # numpy stubs: see Pixels
-            data[:, :, i].max(),  # type: ignore[call-overload]  # numpy stubs: see Pixels
+            data[:, :, i].min(),
+            data[:, :, i].max(),
             data[:, :, i].mean(),
         )
         for i, n in enumerate(names)

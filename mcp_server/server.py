@@ -11,8 +11,18 @@ they import) is re-exported here; a function looks names up in its own module, s
 replaces one patches it in every module that binds it (tests/unit/conftest.py, patch_server).
 """
 
-import os
 import sys
+
+# Claude Code starts this with the venv's Python, which an older Python may have made: one from before the minimum
+# became 3.12, kept until install.py runs again. This check comes before any other import, and this file stays readable
+# by 3.9, so that the server refuses with a message instead of a SyntaxError (REVIEW.md SRV-176)
+if sys.version_info < (3, 12):
+    sys.exit(
+        'Python 3.12+ is required (found %s). If this is mcp_server/venv, an older Python made it: run install.py again, '
+        'with a Python 3.12+' % sys.version.split()[0]
+    )
+
+import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import server_tools

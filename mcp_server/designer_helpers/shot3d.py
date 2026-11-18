@@ -77,7 +77,7 @@ macOS nothing was measured: the window is left as it is, and the shot taken as b
 import contextlib
 from collections.abc import Iterator
 
-from .core import Callable, Kept, QtCore, QtGui, QtWidgets, _main_window, _menu, cast
+from .core import Callable, Kept, QtCore, QtGui, QtWidgets, Sequence, _main_window, _menu, cast
 from .editor import _process_events
 from .frames3d import _Frames, _viewport
 from .mac_window import _mac_window, _MacWindow, _wait_unhidden, _wait_unlisted
@@ -384,8 +384,8 @@ def shoot_3d(
     view: str | None = None,
     zoom: int = 0,
     tiling: float | None = None,
-    orbit: list[float] | None = None,
-    pan: list[float] | None = None,
+    orbit: Sequence[float] | None = None,  # a tuple from screenshot_designer (REVIEW.md HLP-188)
+    pan: Sequence[float] | None = None,
 ) -> None:
     """screenshot_designer('3d'): the 3D view set up when anything is given (_3d_set_up, set_3d_view's steps), then its
     render saved to `out_path`, with Designer's window on screen throughout (_on_screen, looked at again before each

@@ -5,12 +5,11 @@ import os
 import subprocess
 import types
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, Unpack
 
 import numpy as np
 import pytest
 from PIL import Image
-from typing_extensions import Unpack  # typing's from Python 3.11; mcp requires typing_extensions
 
 from conftest import patch_server, server
 from server_tools.output import _Value
@@ -159,8 +158,8 @@ def test_preview_maps_explains_what_is_missing(tmp_path: Path, case: str) -> Non
 
 
 @pytest.mark.parametrize(
-    'crop, message', [([30, 0, 10, 8], 'empty'), ([100, 100, 120, 120], 'empty'), ([0, 0, 4], 'x0, y0, x1, y1')]
-)
+    'crop, message', [([30, 0, 10, 8], 'empty'), ([100, 100, 120, 120], 'empty')]
+)  # [0, 0, 4]: its schema refuses it (test_server.py, REVIEW.md SRV-177)
 def test_preview_maps_checks_the_crop(tmp_path: Path, crop: list[int], message: str) -> None:
     # REVIEW.md SRV-23: an inverted box raised PIL's ValueError; one outside the image gave a black tile
     Image.new('L', (32, 16), 200).save(tmp_path / 'height.png')

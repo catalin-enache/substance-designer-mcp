@@ -18,8 +18,13 @@ user's Adobe account, is never read. macOS on arm64 only: other dumps are refuse
 Exit status: 0 when it read a dump, 1 when it can't (it says why), 2 for a bad argument.
 """
 
-# Annotations stay unevaluated: this script runs on the system Python, 3.9 or later, which can be older than 3.10
-from __future__ import annotations
+import sys
+
+# This project's code runs only on Python 3.12 or later, and python3 may be older: a stock Mac's is 3.9. This check
+# comes before any other import, and this file stays readable by 3.9, so that an older Python refuses with a message
+# instead of a traceback (DECISIONS.md, Project rules)
+if sys.version_info < (3, 12):
+    sys.exit('Python 3.12+ is required (found %s)' % sys.version.split()[0])
 
 import argparse
 import datetime
@@ -28,7 +33,6 @@ import os
 import stat
 import struct
 import subprocess
-import sys
 import uuid
 from collections.abc import Callable
 
@@ -334,7 +338,7 @@ def _names(
             found = name_frames(path, base, addresses)
         except (OSError, subprocess.SubprocessError):
             continue
-        for i, address in enumerate(addresses):  # no zip(strict=): this runs on Python 3.9 too
+        for i, address in enumerate(addresses):
             name = found[i] if i < len(found) else ''
             if name and not name.startswith('0x'):
                 names[address] = name

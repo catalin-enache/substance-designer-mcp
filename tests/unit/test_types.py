@@ -19,6 +19,7 @@ from textwrap import dedent
 import pytest
 
 from conftest import ROOT
+from project_constants import MIN_PYTHON
 from server_tools.lifecycle import DESIGNER_APP
 
 
@@ -48,6 +49,15 @@ def test_mypy_strict_finds_nothing(tmp_path: Path) -> None:
 def test_mypy_finds_nothing_without_designer(tmp_path: Path) -> None:
     """A fresh clone on a machine without Designer (REVIEW.md TST-131): sd and PySide6 are Any there."""
     _assert_mypy_finds_nothing(tmp_path, {})
+
+
+def test_mypy_checks_as_the_minimum_python() -> None:
+    """Every file, the scripts a user starts included, uses what the minimum Python has (DECISIONS.md, Project rules)."""
+    import configparser
+
+    config = configparser.ConfigParser()
+    config.read(os.path.join(ROOT, 'mypy.ini'), encoding='utf-8')
+    assert config['mypy']['python_version'] == '%d.%d' % MIN_PYTHON
 
 
 def _assert_mypy_finds_nothing(tmp_path: Path, packages: dict[str, str]) -> None:

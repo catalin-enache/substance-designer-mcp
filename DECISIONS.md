@@ -49,14 +49,19 @@ entry, takes the user (the `address-review` skill, **Recording decisions**).
   manifest asks for 16.0.0, so code needn't work on an older Designer or its older Python.
   Reopen if: the user wants older versions supported. (The user's decision, 2026-11-03.)
 
-- **The standalone scripts, and the modules they import, need Python 3.9 at the oldest.** `install.py`,
-  `uninstall.py`, `client/sd_run.py`, `scripts/` and the modules they import (`project_constants.py`,
-  `designer_preferences.py`) may evaluate what Python 3.9 has, such as `list['Json']` in a module-level alias, so on
-  Python 3.8 they fail at import. Python 3.8 is past its end of life, `/usr/bin/python3` was 3.9.6 on the Mac this
-  was decided on, and `uninstall.py` already needed 3.9. `tests/unit/test_old_python.py` runs them on a Python 3.9
-  when one is installed.
-  Reopen if: a system this project supports ships an older `python3`, or the user wants 3.8 supported. (The user's
-  decision, 2026-11-17.)
+- **Every Python file runs only on Python 3.12 or later; the scripts a user starts stay readable by an older Python,
+  so that they refuse it with a message.** The server's venv and every test run on 3.12, and the code uses what 3.12
+  has, the scripts and the modules they import included. The scripts a user starts (`install.py`, `uninstall.py`,
+  `client/sd_run.py`, `scripts/`) check `sys.version_info` before any other import. So an older `python3` (a stock
+  Mac's is 3.9) prints "Python 3.12+ is required (found 3.9.6)" instead of a traceback. Python reads a whole file before
+  it runs the first line, so those five files leave out the syntax added after 3.9, such as `type` statements and
+  `match`; ruff checks most of it (`ruff.toml`), and `tests/unit/test_old_python.py`'s run on a real Python 3.9, where
+  one is installed, the rest. They may still call anything 3.12 has. The same test checks the refusal.
+  `mcp_server/server.py` checks the same way, for a venv an older Python made. `uninstall.py` removes the venv, so it
+  should run on a system Python 3.12 or later, not the venv's (it says so when it does).
+  Reopen if: a system this project supports can't install Python 3.12, or Designer's own Python falls below the
+  server's minimum. (The user's decision, 2026-11-17; it replaces "the standalone scripts need Python 3.9 at the
+  oldest".)
 
 - **Linux is not a target: nothing is fixed, tested or reviewed for it.** The project will never run on Linux, so a
   review raises nothing about it: no finding about code paths, platform guards, tests or docs that would only matter

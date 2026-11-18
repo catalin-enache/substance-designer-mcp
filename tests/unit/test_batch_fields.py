@@ -244,3 +244,10 @@ def test_no_warning_without_a_rename_of_an_existing_output(
 def test_only_a_change_of_case_still_warns(helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]) -> None:
     helpers.set_output_tags(outputs_graph(), _node(OUTPUT, 'old'), 'OLD', None, None, warn_rename=True)
     assert 'Tell the user' in capsys.readouterr().out
+
+
+def test_a_bad_position_is_said_as_the_json_sent(helpers: types.ModuleType) -> None:
+    """add_comment's position reaches the helpers as a tuple, the tool's type (REVIEW.md SRV-177): the refusal says it as
+    the agent sent it, a list (REVIEW.md HLP-188)."""
+    with pytest.raises(RuntimeError, match=r'not \[1e\+31, 20\.0\]$'):
+        helpers._position((1e31, 20.0))

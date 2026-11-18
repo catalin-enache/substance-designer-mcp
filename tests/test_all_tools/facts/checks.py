@@ -378,7 +378,7 @@ async def run(ctx: Ctx) -> None:
         check(
             F,
             'anisotropic noise streaks run horizontally by default',
-            along_y > 2 * along_x,
+            bool(along_y > 2 * along_x),
             'mean step along x %.2f, along y %.2f' % (along_x, along_y),
         )
     else:
