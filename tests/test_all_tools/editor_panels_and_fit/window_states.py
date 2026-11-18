@@ -489,11 +489,11 @@ _SWITCHED = dedent("""
     _MacWindow.active = lambda self: bool(_active)
     _real_set_up = _3d_set_up
     def _3d_set_up(*args):
-        run = _real_set_up(*args)
+        set_up = _real_set_up(*args)
         def started(*given):
             _active.append(True)
-            run(*given)
-        return started
+            return set_up(*given)
+        return _SetUp(started, set_up.may_change)
     _real_render = _3d_render
     def _3d_render(mw):
         print('RENDER ' + state())

@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import io
+import math
 from types import ModuleType, SimpleNamespace
 
 import numpy as np
@@ -90,7 +91,9 @@ def test_the_difference_of_two_renders(renders: ModuleType) -> None:
     a = _checker(8)
     assert renders.difference(a, a.copy()) == 0.0
     assert renders.difference(a, _checker(16)) > 20
-    assert renders.difference(a, a[:-1]) == 255.0
+    # two sizes: NaN, which no comparison passes (REVIEW.md TST-540: 255 passed every "the render changed"; TST-544: a
+    # value from 2 to 3 passed the test's own comparisons)
+    assert math.isnan(renders.difference(a, a[:-1]))
 
 
 def _shot(a: 'np.ndarray[tuple[int, int], np.dtype[np.float64]]') -> SimpleNamespace:  # a CallToolResult
@@ -113,7 +116,7 @@ def test_a_failed_shot_is_said_whole_on_a_line_of_its_own(
 
 
 def test_two_shots_of_two_sizes_are_said(renders: ModuleType, capsys: pytest.CaptureFixture[str]) -> None:
-    # the other way difference() gives 255.0
+    # the other way difference() says two sizes: it gives NaN
     renders.say_failed('the set-up check', _shot(_checker(8)), _shot(_checker(8)[:-1]))
     assert capsys.readouterr().out == '      the set-up check: the shots are of two sizes: 80x80, 80x79 px\n'
 
@@ -154,7 +157,8 @@ def _shots_in_turn(
     async def no_pause(seconds: float) -> None:
         pauses.append(seconds)
 
-    monkeypatch.setattr(asyncio, 'sleep', no_pause)
+    # setitem: PyCharm can't resolve 'sleep' through asyncio's star re-export of asyncio.tasks (AGENTS.md, PyCharm)
+    monkeypatch.setitem(vars(asyncio), 'sleep', no_pause)
     return c, calls, pauses
 
 

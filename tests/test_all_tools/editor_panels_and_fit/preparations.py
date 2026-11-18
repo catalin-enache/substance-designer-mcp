@@ -1,7 +1,7 @@
 """What editor_panels_and_fit's checks read: the self-test graph in the editor (no Home screen; the selection is read
 from its view), with nodes spread apart and a frame around two of them: fitting the view to one item must leave a node
-out of view, and fitting the whole graph must show every frame whole. Then the 3D view's checks' graph, a checker in two
-outputs (VIEW3D_GRAPH), left closed."""
+out of view, and fitting the whole graph must show every frame whole. Then the 3D view's checks' graphs, left closed: a
+checker in two outputs (VIEW3D_GRAPH), and one colour in two outputs, no pattern (VIEW3D_PLAIN)."""
 
 from test_all_tools.common import TEST_GRAPH, Ctx, Ops, prepared_call, refs
 
@@ -37,6 +37,8 @@ async def prepare(ctx: Ctx) -> None:
     if not ctx.was_running:  # the 3D view's checks, which use it, skip in the user's Designer
         await prepared_call(c, 'create_graph', {'name': VIEW3D_GRAPH, 'size_log2': 9})  # not opened: the editor stays
         await prepared_call(c, 'apply_edits', {'graph': VIEW3D_GRAPH, 'ops': CHECKER_OPS})
+        await prepared_call(c, 'create_graph', {'name': VIEW3D_PLAIN, 'size_log2': 9})
+        await prepared_call(c, 'apply_edits', {'graph': VIEW3D_PLAIN, 'ops': PLAIN_OPS})
 
 
 VIEW3D_GRAPH = 'mcp_selftest_view3d'  # the 3D view checks' own

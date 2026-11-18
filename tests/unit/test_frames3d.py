@@ -195,7 +195,9 @@ def test_the_3d_shot_waits_on_the_view_not_a_fixed_time() -> None:
     # poll every 100 ms where none exists, never a time measured here
     for part in ('shot3d', 'view3d', 'frames3d'):
         text = _source(part)
-        assert not re.findall(r'_settle\(\s*(?!0\.1\b)[\w.]+\s*\)', text), part  # _tiling_spin's 100 ms polls stay
+        assert not re.findall(r'_settle\(\s*(?!0\.1\b)[\w.]+\s*\)', text), (
+            part
+        )  # _panel_field's and _switched's 100 ms polls stay
         assert 'time.sleep(' not in text, part
         for name in ('DRAW_WAIT', 'VIEW_TURN', 'DRAG_PAUSE', 'WHEEL_PAUSE'):
             assert name not in text, (part, name)

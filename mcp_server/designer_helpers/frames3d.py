@@ -82,7 +82,10 @@ So the waits (_Frames):
   there, and set_3d_view raised after switching the mesh (REVIEW.md HLP-170).
 """
 
+from types import TracebackType
+
 from .core import Callable, QtGui, QtWidgets, cast
+from .screenshots import _3d_render
 from .waits import TICK, _event_signal, _settle, _until, _unwatch
 
 SAMPLES = 8  # the count a settled view is waited for: the Rasterizer's at rest; the GPU Pathtracer counts on
@@ -340,3 +343,31 @@ class _Frames:
                 seen = True
             elif seen:
                 return
+
+
+def _frames_of(mw: QtWidgets.QMainWindow, viewport: QtWidgets.QWidget) -> _Frames:
+    """The 3D `viewport`'s frames, watched from now (_Frames); where no count shows, the renders compared are taken
+    from Designer's main window `mw` (_3d_render). The 3D shot and the 3D view's set-up watch the view this way."""
+    return _Frames(viewport, lambda: _3d_render(mw))
+
+
+class _Waiting:
+    """`with _Waiting(watched) as waiting:` around a change: on leaving, the change is waited for on `watched`, the view
+    restarting and settling since a mark taken as the `with` starts (_Frames.settled). A step of the 3D view's set-up waits this
+    way (view3d.py). Inside, the step records the change once made, so an error in its wait can say it was set
+    (REVIEW.md HLP-200). `waiting.needed` set False skips the wait, for a change the view takes as none (REVIEW.md
+    HLP-201). An error inside skips it too."""
+
+    def __init__(self, watched: _Frames) -> None:
+        self.watched = watched
+        self.needed = True
+        self.since = watched.mark()
+
+    def __enter__(self) -> '_Waiting':
+        return self
+
+    def __exit__(
+        self, kind: type[BaseException] | None, error: BaseException | None, trace: TracebackType | None
+    ) -> None:
+        if kind is None and self.needed:
+            self.watched.settled(self.since)

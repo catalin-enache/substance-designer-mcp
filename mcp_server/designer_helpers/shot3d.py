@@ -6,8 +6,8 @@ Measured on macOS in a Designer an agent started (2026-11-13 and 2026-11-14), by
 drag and comparing its renders. The self-test's editor_panels_and_fit re-measures the first point (minimized and
 hidden; covered by a window of Designer's own, it says what it saw) and the second, but for its time, the identical
 render and the window never shown. It also
-re-measures drags reaching the camera off screen, the top-level window and the page as macOS minimizes it, AppKit's
-notifications coming once the state each wait looks at has changed, and the last point. The rest was measured once.
+re-measures drags reaching the camera off screen, the top-level window and the page as macOS minimizes it, and AppKit's
+notifications coming once the state each wait looks at has changed. The rest was measured once.
 
 - The 3D view's render (Copy Render to Clipboard) is the last frame the view drew while Designer's main window isn't
   on screen: minimized, fully covered by another window (Designer's own or another app's), or Designer hidden. A
@@ -68,7 +68,6 @@ notifications coming once the state each wait looks at has changed, and the last
   front again only once the wait's limit has passed, not after a time measured here.
 - Two renders of an unchanged view are identical, pixel for pixel. A pan, an orbit or a zoom changes the render, and
   so does another mesh: Plane and Plane (hi-res), from the top, differ by 0.005 grey levels on average.
-- The 3D view's Scene menu checks the mesh it shows (_mesh_shown).
 
 Only the main window is looked at: a 3D View panel floating in a window of its own wasn't measured. Elsewhere than
 macOS nothing was measured: the window is left as it is, and the shot taken as before.
@@ -77,22 +76,23 @@ macOS nothing was measured: the window is left as it is, and the shot taken as b
 import contextlib
 from collections.abc import Iterator
 
-from .core import Callable, Kept, QtCore, QtGui, QtWidgets, Sequence, _main_window, _menu, cast
-from .editor import _process_events
-from .frames3d import _Frames, _viewport
+from .core import Callable, QtCore, QtGui, QtWidgets, Sequence, _main_window, cast
+from .frames3d import _Frames, _frames_of, _viewport
 from .mac_window import _mac_window, _MacWindow, _wait_unhidden, _wait_unlisted
 from .screenshots import _3d_dock, _3d_render
-from .view3d import MESHES, _3d_set_up, _menu_action
+from .view3d import _3d_set_up
 from .waits import _event_signal, _until, _unwatch
 
 ON_SCREEN_WAIT = 3.0  # s at most for Designer's window to be on screen once shown, a safety net: about 0.3 s measured
-RETAKES = 3  # renders taken again while identical to the one before a set-up that moved the camera or switched the mesh
+RETAKES = 3  # renders taken again while identical to the one before a set-up that changed what the view shows
 BRINGS = 3  # times one look puts the window on screen, when it goes off screen again as the view draws (HLP-163)
 WINDOW = "Designer's window: "
 STALE = (
-    '3D render: identical to the render before the set-up, though the set-up moved the camera or switched the mesh. '
+    '3D render: identical to the render before the set-up, though the set-up moved the camera, switched the mesh, or '
+    'changed the tiling or the light. '
     'The 3D view may not have been drawn. Shoot again with no set-up before judging it: pan, orbit and zoom move the '
-    'camera from where it is. With no mesh in view, a pan or zoom changes nothing'
+    'camera from where it is. With no mesh in view, a pan or zoom changes nothing, and a tiling changes nothing on a '
+    'material with no pattern'
 )
 TRANSPARENT = (0.0, True)  # a window's opacity, and whether the mouse goes through it (_MacWindow.appearance)
 OPAQUE = (1.0, False)
@@ -364,19 +364,6 @@ def _on_screen(mw: QtWidgets.QMainWindow, frames: _Frames) -> Iterator[_Screen]:
         raise
 
 
-def _mesh_shown(mw: QtWidgets.QMainWindow, keep: list[Kept]) -> str | None:
-    """The mesh the 3D view shows: the one checked in its Scene menu (MESHES); None if none is."""
-    bar = _3d_dock(mw).findChildren(QtWidgets.QMenuBar)[0]
-    keep.append(bar)
-    menu = _menu(_menu_action(bar, keep, 'Scene'))
-    keep.append(menu)
-    menu.aboutToShow.emit()
-    _process_events()
-    names = [a.text().replace('&', '') for a in menu.actions() if a.isChecked()]
-    shown = [name for name in names if name in MESHES]
-    return shown[0] if shown else None
-
-
 def shoot_3d(
     out_path: str,
     graph: str | None = None,
@@ -386,24 +373,28 @@ def shoot_3d(
     tiling: float | None = None,
     orbit: Sequence[float] | None = None,  # a tuple from screenshot_designer (REVIEW.md HLP-188)
     pan: Sequence[float] | None = None,
+    environment: str | None = None,
+    environment_rotation: float | None = None,
+    environment_exposure: float | None = None,
 ) -> None:
     """screenshot_designer('3d'): the 3D view set up when anything is given (_3d_set_up, set_3d_view's steps), then its
     render saved to `out_path`, with Designer's window on screen throughout (_on_screen, looked at again before each
     set-up step and render). What _3d_set_up checks, and a 3D View panel not shown, is refused first, before the window changes
     (REVIEW.md HLP-127). What the steps find as they go is refused after, the window's lines in the error: with mesh=
-    and tiling=, the new mesh's material; with graph=, its row in the Explorer. After a set-up that moved the camera (orbit, pan, zoom) or switched the mesh, a render
-    identical to the one before it is taken again, at most RETAKES times, each once the view drew another frame, then
-    said (STALE): the view may not have been drawn. It isn't taken again once the view draws no frame within
-    NO_RESTART (_Frames.next_frame; off screen, at once). A view or a graph may already be what is shown, so they are
-    no sign. Each wait is on the view's frames, watched from before the window is put on screen until the render
+    and tiling=, the new mesh's material; with graph=, its row in the Explorer; with the environment, its fields in the
+    Parameters panel and a map the 3D view doesn't take. After a set-up that changed what the view shows (the camera
+    moved, the mesh switched, the tiling or the light changed: the set-up's run says), a render identical to the one
+    before it is taken again, at most RETAKES times, each once the view drew another frame, then said (STALE): the view
+    may not have been drawn. It isn't taken again once the view draws no frame within NO_RESTART (_Frames.next_frame;
+    off screen, at once). A view or a graph may already be what is shown, so they are no sign; nor are a value shown
+    already or a map asked again, which the set-up says changed nothing. Each wait is on the view's frames, watched from before the window is put on screen until the render
     (frames3d.py; REVIEW.md HLP-148)."""
-    given = bool(graph or mesh or view or zoom or tiling is not None or orbit or pan)
-    set_up = _3d_set_up(graph, mesh, view, zoom, tiling, orbit, pan) if given else None
+    light = (environment, environment_rotation, environment_exposure)
+    given = bool(graph or mesh or view or zoom or orbit or pan) or any(v is not None for v in (tiling, *light))
+    set_up = _3d_set_up(graph, mesh, view, zoom, tiling, orbit, pan, *light) if given else None
     mw = _main_window()
-    dock = _3d_dock(mw)
-    keep: list[Kept] = [mw, dock]
-    moving = bool(orbit or pan or zoom) or (mesh is not None and mesh != _mesh_shown(mw, keep))
-    frames = _Frames(_viewport(dock), lambda: _3d_render(mw))
+    dock = _3d_dock(mw)  # held: without, the viewport's wrapper went stale
+    frames = _frames_of(mw, _viewport(dock))
     try:
         with _on_screen(mw, frames) as screen:
 
@@ -411,13 +402,16 @@ def shoot_3d(
                 screen.again()
                 return _3d_render(mw)
 
-            before = render() if moving else None
+            # a set-up that may change what the view shows: a render before it, compared once it says it did
+            before = render() if set_up is not None and set_up.may_change else None
+            changed = False
             if set_up is not None:
                 # before each step, the window put on screen again if it went off, as before a render: a camera's
                 # turn is watched on screen (REVIEW.md HLP-158, the user's choice)
-                set_up(screen.again, frames)
+                changed = set_up(screen.again, frames)
             image = render()
-            for _ in range(RETAKES if before is not None else 0):
+            compared = before is not None and changed
+            for _ in range(RETAKES if compared else 0):
                 if image != before or not frames.next_frame():
                     break
                 image = render()
@@ -426,5 +420,5 @@ def shoot_3d(
     if not image.save(out_path):
         raise RuntimeError('could not save the 3D render')
     print("3d render %dx%d (the clipboard's text put back)" % (image.width(), image.height()))
-    if before is not None and image == before:
+    if compared and image == before:
         print(STALE)

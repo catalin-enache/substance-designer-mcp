@@ -7,6 +7,7 @@ import contextlib
 import sys
 import types
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, NoReturn, cast
 from unittest import mock
@@ -516,6 +517,7 @@ class Frames:
         self.abort_at = 0
         self.closed = False
         self.settled_since: list[int] = []  # the marks settled() waited from
+        self.settle_error = ''  # settled() raising a RuntimeError of this text, when not empty
         self._waits = 0
 
     def _wait(self, what: str) -> None:
@@ -529,6 +531,8 @@ class Frames:
 
     def settled(self, since: int) -> None:
         self.settled_since.append(since)
+        if self.settle_error:
+            raise RuntimeError(self.settle_error)
         self._wait('settled')
 
     def moved(self, since: int) -> None:
@@ -545,9 +549,12 @@ class Frames:
         self.closed = True
 
 
+MAPS = {'corsica_beach': '/maps/corsica_beach.exr', 'studio': '/maps/studio.hdr'}  # Designer's environment maps, faked
+
+
 class Designer:
     """set_3d_view's Designer, faked: its panels (`hidden` ones not visible), the 3D view's menus (each path looked up
-    and each triggered recorded), and one graph with `outputs` outputs."""
+    and each triggered recorded), its environment maps (MAPS), and one graph with `outputs` outputs."""
 
     def __init__(
         self,
@@ -558,6 +565,7 @@ class Designer:
         tools: tuple[str, ...] = ('Scene Browser', 'Selection', 'Camera', 'Light'),
     ) -> None:
         self.events: list[tuple[str, tuple[str, ...]]] = []  # ('lookup' or 'trigger', the menu path or step)
+        self.checked: set[tuple[str, ...]] = set()  # the menu paths whose action is checked, as a mesh shown is
         self.order: list[str] = []
         self.tool = tool  # the 3D view's toolbar's tool selected: Camera or Light, one group
         widgets = qt('QtWidgets')
@@ -584,7 +592,9 @@ class Designer:
 
         def menu_action(bar: 'QtWidgets.QMenuBar', keep: list['Kept'], *path: str) -> SimpleNamespace:
             self.events.append(('lookup', path))
-            return SimpleNamespace(trigger=lambda: self.events.append(('trigger', path)))
+            return SimpleNamespace(
+                trigger=lambda: self.events.append(('trigger', path)), isChecked=lambda: path in self.checked
+            )
 
         vars(helpers)['_visible_dock'] = visible_dock
         vars(helpers)['_menu_action'] = menu_action
@@ -617,12 +627,36 @@ class Designer:
         )
 
         def set_tiling(
-            params: 'QtWidgets.QDockWidget', bar: 'QtWidgets.QMenuBar', value: float, keep: list['Kept']
-        ) -> str:
+            params: 'QtWidgets.QDockWidget',
+            bar: 'QtWidgets.QMenuBar',
+            value: float,
+            keep: list['Kept'],
+            watched: Frames,
+        ) -> tuple[str, bool]:
+            since = watched.mark()  # as the real one waits for its change from right before it (REVIEW.md HLP-195)
             self.events.append(('trigger', ('tiling', str(value))))
-            return 'tiling %g' % value
+            watched.settled(since)
+            return 'tiling %g' % value, True
 
         vars(helpers)['_set_tiling'] = set_tiling
+        vars(helpers)['_environment_maps'] = lambda: dict(MAPS)
+
+        def set_environment(
+            params: 'QtWidgets.QDockWidget',
+            bar: 'QtWidgets.QMenuBar',
+            viewport: 'QtWidgets.QWidget',
+            name: str | None,
+            rotation: float | None,
+            exposure: float | None,
+            keep: list['Kept'],
+            watched: Frames,
+        ) -> tuple[str, bool]:
+            since = watched.mark()  # as the real one waits for each change from right before it (REVIEW.md HLP-192)
+            self.events.append(('trigger', ('environment', str(name), str(rotation), str(exposure))))
+            watched.settled(since)
+            return cast(str, helpers._environment_said(name, rotation, exposure)), True
+
+        vars(helpers)['_set_environment'] = set_environment
         self.frames = Frames(self.events)
         frames = self.frames
 
@@ -641,6 +675,11 @@ class Designer:
 
     def triggered(self) -> list[tuple[str, ...]]:
         return [path for kind, path in self.events if kind == 'trigger']
+
+    def looked_up_first(self) -> list[tuple[str, ...]]:
+        """The menu paths looked up before the first change."""
+        kinds = [kind for kind, _ in self.events]
+        return [path for kind, path in self.events[: kinds.index('trigger')]]
 
     def _tool(self, name: str) -> SimpleNamespace:
         """A toolbar action; Camera and Light are one exclusive group, as in Designer."""
@@ -671,8 +710,10 @@ def test_a_graph_with_fewer_than_two_outputs_is_refused_before_the_panels_are_lo
     [
         (('parameters',), {'mesh': 'Plane', 'view': 'Top', 'tiling': 2.0}, 'Parameters panel'),
         (('explorer',), {'mesh': 'Plane', 'graph': 'g'}, 'Explorer panel'),
+        (('parameters',), {'mesh': 'Plane', 'environment_rotation': 0.0}, 'environment_rotation= goes through the Par'),
+        (('parameters',), {'tiling': 2.0, 'environment': 'studio'}, 'tiling= and environment= go through the Par'),
     ],
-    ids=['tiling', 'graph'],
+    ids=['tiling', 'graph', 'environment', 'both'],
 )
 def test_a_panel_it_needs_is_checked_before_anything_changes(
     helpers: types.ModuleType, hidden: tuple[str, ...], options: View3dOptions, said: str
@@ -695,9 +736,486 @@ def test_the_menu_entries_it_needs_are_looked_up_before_anything_changes(
     # with mesh=, the material is the new mesh's, read once it shows (REVIEW.md HLP-114)
     designer = Designer(helpers)
     helpers.set_3d_view(mesh=mesh, view='Top', tiling=2.0)
-    first = [path for kind, path in designer.events[: [kind for kind, _ in designer.events].index('trigger')]]
+    first = designer.looked_up_first()
     assert {('Camera', 'Top'), ('Camera', 'Frame'), materials} <= set(first)
     assert mesh is None or ('Scene', mesh) in first
+
+
+def test_an_unknown_environment_is_refused_before_anything_changes_naming_the_maps(helpers: types.ModuleType) -> None:
+    designer = Designer(helpers)
+    with pytest.raises(RuntimeError, match=r"^unknown environment 'Studio'; Designer has corsica_beach, studio$"):
+        helpers.set_3d_view(mesh='Plane', environment='Studio')
+    assert designer.order == [] and designer.events == []
+
+
+def test_the_environments_menu_entry_is_looked_up_before_anything_changes(helpers: types.ModuleType) -> None:
+    designer = Designer(helpers)
+    helpers.set_3d_view(mesh='Plane', environment_exposure=1.0)
+    assert ('Environment', 'Edit properties') in designer.looked_up_first()
+
+
+@pytest.mark.parametrize(
+    'name, rotation, exposure, said',
+    [
+        ('studio', 90.0, 1.0, 'environment studio, rotation 90 degrees, exposure 1'),
+        (None, 0.0, None, 'environment rotation 0 degrees'),
+        (None, None, -0.25, 'environment exposure -0.25'),
+        ('corsica_beach', None, None, 'environment corsica_beach'),
+    ],
+)
+def test_the_environment_is_said_with_what_was_given(
+    helpers: types.ModuleType, name: str | None, rotation: float | None, exposure: float | None, said: str
+) -> None:
+    assert helpers._environment_said(name, rotation, exposure) == said
+
+
+class MapField:
+    """The Environment field of the Parameters panel, faked: the slots connected to its valueChanged() signal, which
+    the fake drop emits; `signals`: whether it has that signal (index 33 in Designer's meta-object, measured)."""
+
+    def __init__(self, signals: bool = True) -> None:
+        self.slots: list[Callable[[], object]] = []
+        self.signals = signals
+
+    def metaObject(self) -> SimpleNamespace:
+        return SimpleNamespace(
+            indexOfSignal=lambda signature: 33 if self.signals and signature == 'valueChanged()' else -1
+        )
+
+
+class Flag:
+    """A QTimer used as a flag, faked: started by the signal it is connected to."""
+
+    def __init__(self, parent: object = None) -> None:
+        self.active = False
+
+    def setSingleShot(self, single: bool) -> None:
+        pass
+
+    def setInterval(self, ms: int) -> None:
+        pass
+
+    def start(self) -> None:
+        self.active = True
+
+    def isActive(self) -> bool:
+        return self.active
+
+
+def _connect(sender: MapField, signal: str, receiver: Flag, member: str) -> None:
+    """QObject.connect of a signal to a receiver's slot, both by signature, faked for a MapField's valueChanged() and a
+    Flag's start(): a C++ slot, so no Python runs as the signal comes (REVIEW.md HLP-150)."""
+    assert (signal, member) == ('valueChanged()', 'start()'), (signal, member)
+    sender.slots.append(receiver.start)
+
+
+# the maps' files, by size in bytes: the smallest isn't the first (REVIEW.md TST-538)
+SIZES = {'airport': 1000, 'corsica_beach': 10, 'studio': 500}
+
+
+def _drops(
+    helpers: types.ModuleType,
+    folder: Path,
+    shown: str,
+    taken: Callable[[str], bool] = lambda name: True,
+    signals: bool = True,
+    answers: list[bool] | None = None,
+) -> list[str]:
+    """The maps _drop_map drops when asked for studio, by name, faked: Designer's maps are SIZES' files in `folder`, and
+    each one `taken` takes becomes the one `shown`, signalled by the field when it changes, as in Designer (the module
+    docstring); `signals`: whether the field has that signal. What _drop_map returns goes in `answers`, when given."""
+    maps = {name: str(folder / (name + '.exr')) for name in SIZES}
+    for name, path in maps.items():
+        Path(path).write_bytes(b'x' * SIZES[name])
+    dropped: list[str] = []
+    state = {'shown': shown}
+
+    def drop(viewport: 'QtWidgets.QWidget', path: str) -> None:
+        name = Path(path).stem
+        dropped.append(name)
+        if taken(name) and name != state['shown']:
+            state['shown'] = name
+            for slot in field.slots:
+                slot()
+
+    field = MapField(signals)
+    vars(helpers)['_drop'] = drop
+    vars(helpers)['_environment_maps'] = lambda: dict(maps)
+    qt_core = qt('QtCore')
+    qt_core.SIGNAL = qt_core.SLOT = lambda signature: signature
+    qt_core.QObject.connect = _connect
+    qt_core.QTimer = Flag
+    answer = vars(helpers)['_drop_map'](object(), field, 'studio')
+    if answers is not None:
+        answers.append(answer)
+    return dropped
+
+
+def test_a_map_dropped_is_taken_once_its_field_says_it_changed(helpers: types.ModuleType, tmp_path: Path) -> None:
+    answers: list[bool] = []
+    assert _drops(helpers, tmp_path, shown='corsica_beach', answers=answers) == ['studio']
+    assert answers == [True]  # the map changed
+
+
+def test_the_map_already_shown_is_dropped_again_after_the_smallest_other(
+    helpers: types.ModuleType, tmp_path: Path
+) -> None:
+    # no change, no signal: another map dropped first tells it from a drop not taken (the module docstring). The
+    # smallest file, as Designer loads it within the drop
+    answers: list[bool] = []
+    assert _drops(helpers, tmp_path, shown='studio', answers=answers) == ['studio', 'corsica_beach', 'studio']
+    assert answers == [False]  # the map asked again: the render as before
+
+
+def test_the_map_dropped_first_is_said_before_its_drop(
+    helpers: types.ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # REVIEW.md HLP-191: an abort right after it left the 3D view on a map neither the user nor the call asked for,
+    # with only the environment asked for said
+    def aborted(name: str) -> bool:
+        if name == 'corsica_beach':
+            raise KeyboardInterrupt('an abort as the other map is dropped')
+        return True
+
+    with pytest.raises(KeyboardInterrupt):
+        _drops(helpers, tmp_path, shown='studio', taken=aborted)
+    assert capsys.readouterr().out == '3D view, setting: environment corsica_beach first, then studio again\n'
+
+
+def test_a_drop_the_3d_view_doesnt_take_is_an_error(helpers: types.ModuleType, tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match=r'^the 3D view took no environment map dropped on it$'):
+        _drops(helpers, tmp_path, shown='studio', taken=lambda name: False)
+
+
+def test_the_map_not_taken_back_after_another_says_the_one_shown(helpers: types.ModuleType, tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match=r"^the 3D view didn't take studio again: it shows corsica_beach$"):
+        _drops(helpers, tmp_path, shown='studio', taken=lambda name: name == 'corsica_beach')
+
+
+def test_an_environment_field_with_no_valuechanged_is_refused_before_any_drop(
+    helpers: types.ModuleType, tmp_path: Path
+) -> None:
+    # REVIEW.md HLP-189: no flag would ever start, so the maps dropped were taken unseen, and the error said none was
+    def none(name: str) -> NoReturn:  # a BaseException, which the refusal expected doesn't catch
+        pytest.fail('%s dropped' % name)
+
+    with pytest.raises(
+        RuntimeError, match=r'^the Environment field has no valueChanged\(\) signal, which says a map was taken$'
+    ):
+        _drops(helpers, tmp_path, shown='corsica_beach', taken=none, signals=False)
+
+
+def test_a_field_with_fewer_spin_boxes_than_asked_is_refused_naming_it(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-191: a bare IndexError named no field. The panel holds the field, built with one spin box
+    field = SimpleNamespace(objectName=lambda: '12-dome_rotation_angle', findChildren=lambda kind: [Spin()])
+    with pytest.raises(
+        RuntimeError,
+        match=r"^the environment's Rotation Angle has no spin box 2 in the Parameters panel \(it has 1\)$",
+    ):
+        helpers._panel_spin(
+            SimpleNamespace(findChildren=lambda kind: [field]),
+            'dome_rotation_angle',
+            "the environment's Rotation Angle",
+            [],
+            1,
+        )
+
+
+def test_the_environment_said_is_what_its_spin_boxes_show(helpers: types.ModuleType) -> None:
+    # REVIEW.md TST-538: the rotation goes to the Degrees spin box, the second; the line says what the spin boxes show
+    qt('QtCore').QMetaObject.invokeMethod.return_value = True
+    spins = {('dome_rotation_angle', 1): Spin(45.0), ('intensity', 0): Spin(1.25)}
+    asked: list[tuple[str, int]] = []
+    dropped: list[str] = []
+
+    def field(params: 'QtWidgets.QDockWidget', name: str, what: str, keep: list['Kept'], spins: int = 1) -> MapField:
+        asked.append((name, spins))
+        return MapField()
+
+    def spin(params: 'QtWidgets.QDockWidget', name: str, what: str, keep: list['Kept'], index: int = 0) -> Spin:
+        asked.append((name, index))
+        return spins[name, index]
+
+    vars(helpers)['_menu_action'] = lambda bar, keep, *path: SimpleNamespace(trigger=lambda: None)
+    vars(helpers)['_panel_field'] = field
+    vars(helpers)['_panel_spin'] = spin
+    vars(helpers)['_drop_map'] = lambda viewport, field, name: dropped.append(name)
+    vars(helpers)['_parameters_back'] = lambda: 'the Parameters panel back on g'
+    said, changed = helpers._set_environment(panel('g'), object(), object(), 'studio', 90.0, 1.0, [], Frames([]))
+    assert said == 'environment studio, rotation 45 degrees, exposure 1.25 (the Parameters panel back on g)'
+    assert changed  # values committed
+    assert asked == [('environment_texture_name', 0), ('dome_rotation_angle', 1), ('intensity', 0)]
+    assert dropped == ['studio']
+    assert spins['dome_rotation_angle', 1].set == [90.0] and spins['intensity', 0].set == [1.0]
+
+
+def _panel_steps(helpers: types.ModuleType) -> Designer:
+    """set_3d_view's Designer, faked, with the real steps through the Parameters panel (_set_tiling, _set_environment):
+    each change of the tiling or the environment recorded in its events as ('change', (what,)), the Parameters panel's
+    fields faked, each spin box showing 2.5."""
+    real = helpers._set_tiling, helpers._set_environment
+    designer = Designer(helpers)
+    vars(helpers)['_set_tiling'], vars(helpers)['_set_environment'] = real
+    vars(helpers)['_in_properties'] = lambda params, show, setting, properties: setting()
+    vars(helpers)['_panel_field'] = lambda params, name, what, keep, spins=1: MapField()
+    vars(helpers)['_panel_spin'] = lambda params, name, what, keep, index=0: Spin()
+
+    def drop_map(viewport: 'QtWidgets.QWidget', field: MapField, name: str) -> bool:
+        designer.events.append(('change', ('map', name)))
+        return True  # taken at its first drop
+
+    vars(helpers)['_drop_map'] = drop_map
+
+    def commit(spin: Spin, value: float, what: str) -> None:
+        designer.events.append(('change', (what,)))
+        spin.shows = value  # taken
+
+    vars(helpers)['_commit'] = commit
+    return designer
+
+
+@pytest.mark.parametrize(
+    'options, changed',
+    [
+        ({'tiling': 2.0}, 1),
+        # REVIEW.md HLP-192: one wait, from before the map's drop, ended before the exposure's change was drawn: the
+        # view was back at rest between the changes
+        ({'environment': 'studio', 'environment_rotation': 90.0, 'environment_exposure': 1.0}, 3),
+    ],
+    ids=['tiling', 'environment'],
+)
+def test_each_change_through_the_parameters_panel_is_waited_for_from_just_before_it(
+    helpers: types.ModuleType, options: View3dOptions, changed: int
+) -> None:
+    designer = _panel_steps(helpers)
+    helpers.set_3d_view(**options)
+    changes = [i for i, (kind, _) in enumerate(designer.events) if kind == 'change']
+    waits = [i for i, (kind, _) in enumerate(designer.events) if kind == 'wait']
+    # the fake's mark is the index the next event gets: each change marked right before it, and waited for after it
+    assert len(changes) == changed and designer.frames.settled_since == changes, designer.events
+    assert waits == [i + 1 for i in changes], designer.events
+
+
+@pytest.mark.parametrize(
+    'options, shown',
+    [
+        # REVIEW.md HLP-195: committed again, its wait ran to its limit (1.5 s measured), the view drawing nothing
+        ({'tiling': 2.0}, {('$tiling', 0): 2.0}),
+        (
+            {'environment_rotation': 90.0, 'environment_exposure': 1.0},
+            {('dome_rotation_angle', 1): 90.0, ('intensity', 0): 1.0},
+        ),
+    ],
+    ids=['tiling', 'environment'],
+)
+def test_a_value_the_parameters_panel_shows_already_is_neither_committed_nor_waited_for(
+    helpers: types.ModuleType, options: View3dOptions, shown: dict[tuple[str, int], float]
+) -> None:
+    designer = _panel_steps(helpers)
+    vars(helpers)['_panel_spin'] = lambda params, name, what, keep, index=0: Spin(shown[name, index])
+    helpers.set_3d_view(**options)
+    assert [e for e in designer.events if e[0] in ('change', 'wait')] == [], designer.events
+
+
+@pytest.mark.parametrize(
+    'options, shown, changed',
+    [
+        ({'tiling': 2.0}, None, True),
+        ({'tiling': 2.0}, 2.0, False),
+        ({'environment_exposure': 1.0}, None, True),
+        ({'environment_exposure': 1.0}, 1.0, False),
+        # REVIEW.md TST-552: 0 is a value set, not one left out
+        ({'environment_rotation': 0.0}, None, True),
+        ({'environment_exposure': 0.0}, None, True),
+        ({'mesh': 'Sphere'}, None, True),
+        ({'orbit': [90.0, 0.0]}, None, True),
+        ({'zoom': 2}, None, True),
+        ({'view': 'Top'}, None, False),
+        ({'graph': 'g'}, None, False),
+    ],
+    ids=[
+        'a tiling',
+        'a tiling shown already',
+        'an exposure',
+        'an exposure shown already',
+        'a rotation of 0',
+        'an exposure of 0',
+        'a mesh switch',
+        'an orbit',
+        'a zoom',
+        'a view',
+        'a graph',
+    ],
+)
+def test_a_set_up_says_whether_it_changed_what_the_view_shows(
+    helpers: types.ModuleType, options: View3dOptions, shown: float | None, changed: bool
+) -> None:
+    # the user's ask (2026-11-18): the shot compares its render with the one before only after such a change, the light
+    # and the tiling as the camera. A view or a graph may be what is shown already, so they are no sign
+    _panel_steps(helpers)
+    if shown is not None:
+        vars(helpers)['_panel_spin'] = lambda params, name, what, keep, index=0: Spin(shown)
+    assert helpers._3d_set_up(**options)(None, None) is changed
+
+
+@pytest.mark.parametrize(
+    'options, shown, may_change',
+    [
+        ({'orbit': [90.0, 0.0]}, False, True),
+        ({'zoom': 2}, False, True),
+        ({'mesh': 'Sphere'}, False, True),
+        ({'mesh': 'Sphere'}, True, False),
+        ({'tiling': 2.0}, False, True),
+        ({'environment_exposure': 1.0}, False, True),
+        ({'environment': 'studio'}, False, True),
+        ({'view': 'Top'}, False, False),
+        ({'graph': 'g'}, False, False),
+    ],
+    ids=[
+        'an orbit',
+        'a zoom',
+        'a mesh switch',
+        'a mesh shown',
+        'a tiling',
+        'an exposure',
+        'a map',
+        'a view',
+        'a graph',
+    ],
+)
+def test_a_set_up_says_beforehand_whether_it_may_change_what_the_view_shows(
+    helpers: types.ModuleType, options: View3dOptions, shown: bool, may_change: bool
+) -> None:
+    # a 3D shot takes a render before such a set-up, to compare with (shot3d.py)
+    designer = Designer(helpers)
+    if shown:
+        designer.checked.add(('Scene', 'Sphere'))
+    assert helpers._3d_set_up(**options).may_change is may_change
+
+
+@pytest.mark.parametrize(
+    'taken, changed', [(True, True), (False, False)], ids=['taken at its first drop', 'asked again']
+)
+def test_a_map_changes_what_the_view_shows_only_when_taken_at_its_first_drop(
+    helpers: types.ModuleType, taken: bool, changed: bool
+) -> None:
+    # asked again, the map shown is dropped after another: the render comes back as it was
+    _panel_steps(helpers)
+    vars(helpers)['_drop_map'] = lambda viewport, field, name: taken
+    assert helpers._3d_set_up(environment='studio')(None, None) is changed
+
+
+def test_a_map_asked_again_isnt_waited_for(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-201: dropped back after another, the map shown restarted nothing, and its wait ran to its limit
+    # (0.95 s measured)
+    designer = _panel_steps(helpers)
+    vars(helpers)['_drop_map'] = lambda viewport, field, name: False
+    helpers.set_3d_view(environment='studio')
+    assert [e for e in designer.events if e[0] == 'wait'] == [], designer.events
+
+
+def test_a_mesh_shown_already_is_neither_picked_again_nor_waited_for(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # REVIEW.md HLP-195: picked again, it restarted nothing, and its wait ran to its limit (1.0 s measured)
+    designer = Designer(helpers)
+    designer.checked.add(('Scene', 'Sphere'))
+    helpers.set_3d_view(mesh='Sphere')
+    assert [e for e in designer.events if e[0] in ('trigger', 'wait')] == [], designer.events
+    assert '3D view: Sphere\n' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    'options, said',
+    [({'tiling': 2.0}, 'tiling 2'), ({'environment_rotation': 90.0}, 'rotation 90 degrees')],
+    ids=['tiling', 'environment'],
+)
+def test_a_wait_failing_after_a_commit_says_what_was_set(
+    helpers: types.ModuleType, options: View3dOptions, said: str
+) -> None:
+    designer = _panel_steps(helpers)
+    designer.frames.settle_error = 'the view took no frame'
+    with pytest.raises(RuntimeError) as raised:
+        helpers.set_3d_view(**options)
+    assert str(raised.value).startswith('the view took no frame;') and said in str(raised.value), raised.value
+
+
+@pytest.mark.parametrize(
+    'options, said',
+    [
+        ({'mesh': 'Sphere'}, 'Sphere'),
+        ({'graph': 'g'}, "graph g's outputs on the mesh"),
+        ({'view': 'Top'}, 'view Top, framed'),  # an error in Frame's wait: the fake's moved() doesn't raise
+        ({'environment': 'studio'}, 'environment studio'),
+    ],
+    ids=['a mesh', 'a graph', 'a view', 'a map'],
+)
+def test_a_wait_failing_after_a_steps_change_says_it_was_set(
+    helpers: types.ModuleType, options: View3dOptions, said: str
+) -> None:
+    # REVIEW.md HLP-200: each step was said once its wait ended, so an error in that wait left out the change made
+    designer = _panel_steps(helpers)
+    designer.frames.settle_error = 'the view took no frame'
+    with pytest.raises(RuntimeError) as raised:
+        helpers.set_3d_view(**options)
+    assert str(raised.value).startswith('the view took no frame;') and said in str(raised.value), raised.value
+
+
+def test_an_error_after_the_maps_drop_says_the_environment_set_so_far(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-193: the 3D view showed the map, and the error said only that the rotation's spin box was missing
+    _panel_steps(helpers)
+
+    def missing(params: 'QtWidgets.QDockWidget', name: str, what: str, keep: list['Kept'], index: int = 0) -> NoReturn:
+        raise RuntimeError('%s has no spin box 2 in the Parameters panel (it has 1)' % what)
+
+    vars(helpers)['_panel_spin'] = missing
+    with pytest.raises(RuntimeError) as raised:
+        helpers.set_3d_view(environment='studio', environment_rotation=90.0)
+    assert str(raised.value) == (
+        "the environment's Rotation Angle has no spin box 2 in the Parameters panel (it has 1); environment studio set"
+    )
+
+
+@pytest.mark.parametrize(
+    'step, shows',
+    [('_set_tiling', "the 3D material's properties"), ('_set_environment', "the environment's properties")],
+)
+def test_with_no_graph_in_the_editor_the_panel_is_said_to_show_what_was_set(
+    helpers: types.ModuleType, step: str, shows: str
+) -> None:
+    # REVIEW.md HLP-190: the environment's step said the panel showed the 3D material's properties
+    qt('QtCore').QMetaObject.invokeMethod.return_value = True
+    vars(helpers)['_current_graph'] = lambda: None
+    vars(helpers)['_menu_action'] = lambda bar, keep, *path: SimpleNamespace(trigger=lambda: None)
+    vars(helpers)['_material'] = lambda bar, keep: 'Default'
+    vars(helpers)['_panel_spin'] = lambda params, name, what, keep, index=0: Spin()
+    if step == '_set_tiling':
+        said, _ = helpers._set_tiling(panel(), object(), 2.0, [], Frames([]))
+    else:
+        said, _ = helpers._set_environment(panel(), object(), object(), None, None, 1.0, [], Frames([]))
+    assert said.endswith(' (the Parameters panel shows %s)' % shows), said
+
+
+def test_the_parameters_panel_is_turned_back_when_setting_the_environment_fails(helpers: types.ModuleType) -> None:
+    # as after the tiling (the module docstring): it showed the environment, turned to it by Edit properties
+    events: list[str] = []
+    vars(helpers)['_menu_action'] = lambda bar, keep, *path: SimpleNamespace(trigger=lambda: events.append(path[0]))
+    vars(helpers)['_panel_field'] = lambda params, name, what, keep, spins=1: MapField()
+
+    def failing(viewport: 'QtWidgets.QWidget', field: MapField, name: str) -> None:
+        raise RuntimeError('the 3D view took no environment map dropped on it')
+
+    vars(helpers)['_drop_map'] = failing
+    vars(helpers)['_switched'] = lambda params, shown: events.append('switched')
+
+    def parameters_back() -> str:
+        events.append('back')
+        return 'the Parameters panel back on g'
+
+    vars(helpers)['_parameters_back'] = parameters_back
+    with pytest.raises(RuntimeError, match='took no environment map'):
+        helpers._set_environment(panel('g'), object(), object(), 'studio', 90.0, None, [], Frames([]))
+    assert events == ['Environment', 'switched', 'back']
 
 
 def test_tiling_with_a_mesh_doesnt_count_the_materials_of_the_mesh_it_replaces(helpers: types.ModuleType) -> None:
@@ -758,53 +1276,24 @@ def test_the_cameras_turn_is_watched_with_designers_window_on_screen(helpers: ty
     # REVIEW.md HLP-158 (the user's choice, 2026-11-16): off screen the view draws no frame, nothing says the turn
     # ended, and Frame at once cancels it. Set up on its own, the viewpoint and Frame run with Designer's window on
     # screen, transparent, as the 3D shot shows it (_on_screen); in a shot, the window is on screen already
-    designer = Designer(helpers)
-
-    def again() -> None:  # _Screen.again: the window put on screen again if it went off, the view waited for there
-        designer.events.append(('screen', ('again',)))
-
-    @contextlib.contextmanager
-    def on_screen(mw: 'QtWidgets.QMainWindow', frames: Frames) -> Iterator[SimpleNamespace]:
-        assert frames is designer.frames
-        designer.events.append(('screen', ('on screen',)))
-        try:
-            yield SimpleNamespace(again=again)
-        finally:
-            designer.events.append(('screen', ('put back',)))
-
-    vars(helpers)['_on_screen'] = on_screen
+    designer = _watched_on_screen(helpers)
     if shot:
-        helpers._3d_set_up(mesh='Plane', view='Top')(again, designer.frames)
+        helpers._3d_set_up(view='Top')(lambda: designer.events.append(('screen', ('again',))), designer.frames)
     else:
-        helpers.set_3d_view(mesh='Plane', view='Top')
+        helpers.set_3d_view(view='Top')
     seen = [path if kind == 'trigger' else path[0] for kind, path in designer.events if kind != 'lookup']
     # REVIEW.md HLP-163: off screen nothing says the turn ended, so moved() ends there; the look after it puts the
     # window back on screen and waits for the view there, before Frame
     turn = [('Camera', 'Top'), 'moved', 'again', ('Camera', 'Frame'), 'settled']
     if shot:
-        assert seen == ['again', ('Scene', 'Plane'), 'settled', 'again', *turn], seen
+        assert seen == ['again', *turn], seen
     else:
-        assert seen == [('Scene', 'Plane'), 'settled', 'on screen', *turn, 'put back'], seen
+        assert seen == ['on screen', *turn, 'put back'], seen
 
 
-@pytest.mark.parametrize(
-    'options, moves',
-    [
-        ({'orbit': [90.0, 0.0]}, True),
-        ({'pan': [0.25, 0.0]}, True),
-        ({'zoom': 2}, True),
-        ({'mesh': 'Sphere', 'orbit': [90.0, 0.0]}, True),
-        ({'mesh': 'Sphere', 'view': 'Top'}, False),
-    ],
-    ids=['orbit', 'pan', 'zoom', 'a mesh and an orbit', 'no move'],
-)
-def test_a_set_up_that_moves_the_camera_runs_with_designers_window_on_screen(
-    helpers: types.ModuleType, options: View3dOptions, moves: bool
-) -> None:
-    # REVIEW.md HLP-168 (the user's choice, 2026-11-16): off screen, the same moves from the same start came out
-    # differently between runs (a pan 68.5 grey levels apart in 1 of 2); on screen, as a 3D shot sets up, they repeated
-    # exactly. So a set-up that moves the camera runs whole with the window on screen, on that watch, each step after
-    # the shot's look (again); one that doesn't stays off screen but for a viewpoint's turn (HLP-158)
+def _watched_on_screen(helpers: types.ModuleType) -> Designer:
+    """set_3d_view's Designer, faked, with the window put on screen (_on_screen) recorded in its events: ('screen',
+    ('on screen',)), the shot's look before each step ('screen', ('again',)), ('screen', ('put back',))."""
     designer = Designer(helpers)
 
     def again() -> None:
@@ -820,15 +1309,60 @@ def test_a_set_up_that_moves_the_camera_runs_with_designers_window_on_screen(
             designer.events.append(('screen', ('put back',)))
 
     vars(helpers)['_on_screen'] = on_screen
+    return designer
+
+
+@pytest.mark.parametrize(
+    'options, shown',
+    [
+        # REVIEW.md HLP-168 (the user's choice, 2026-11-16): off screen, the same moves from the same start came out
+        # differently between runs (a pan 68.5 grey levels apart in 1 of 2); on screen they repeated exactly
+        ({'orbit': [90.0, 0.0]}, True),
+        ({'pan': [0.25, 0.0]}, True),
+        ({'zoom': 2}, True),
+        ({'mesh': 'Sphere', 'orbit': [90.0, 0.0]}, True),
+        # REVIEW.md HLP-196, HLP-197 (the user's choices, 2026-11-18): off screen, graph='s Explorer menu unhid a hidden
+        # Designer and left it up, and a tiling after a mesh switch, in that call or the next, had its field deleted
+        ({'graph': 'g'}, True),
+        ({'mesh': 'Sphere'}, True),
+        ({'mesh': 'Sphere', 'tiling': 2.0}, True),
+        # none of these: off screen, but for a viewpoint's turn (HLP-158)
+        ({'view': 'Top'}, False),
+        ({'tiling': 2.0}, False),
+        ({'environment_exposure': 1.0}, False),
+    ],
+    ids=[
+        'orbit',
+        'pan',
+        'zoom',
+        'a mesh and an orbit',
+        'graph',
+        'a mesh',
+        'a mesh and a tiling',
+        'a view',
+        'a tiling',
+        'an exposure',
+    ],
+)
+def test_a_set_up_that_moves_the_camera_puts_outputs_on_or_switches_the_mesh_runs_with_designers_window_on_screen(
+    helpers: types.ModuleType, options: View3dOptions, shown: bool
+) -> None:
+    designer = _watched_on_screen(helpers)
     helpers.set_3d_view(**options)
     seen = [path if kind == 'trigger' else path[0] for kind, path in designer.events if kind != 'lookup']
-    if moves:
-        assert seen[0] == 'on screen' and seen[-1] == 'put back' and seen.count('on screen') == 1, seen
-        moved = [i for i, step in enumerate(seen) if isinstance(step, tuple) and step[0] in ('drag', 'wheel')]
-        assert moved and 'again' in seen[: moved[0]], seen
-    else:  # only the turn on screen, its own (HLP-158)
-        assert seen[0] == ('Scene', 'Sphere') and seen.index('on screen') > 0, seen
+    if shown:  # whole, the shot's look before each step
+        assert seen[:2] == ['on screen', 'again'] and seen[-1] == 'put back' and seen.count('on screen') == 1, seen
+    else:
+        assert seen[:2] != ['on screen', 'again'] and seen.count('on screen') == ('view' in options), seen
     assert designer.frames.closed
+
+
+def test_a_mesh_shown_already_with_a_tiling_runs_off_screen(helpers: types.ModuleType) -> None:
+    # no switch: nothing for the view to take before the tiling (HLP-195 skips the mesh step)
+    designer = _watched_on_screen(helpers)
+    designer.checked.add(('Scene', 'Sphere'))
+    helpers.set_3d_view(mesh='Sphere', tiling=2.0)
+    assert ('screen', ('on screen',)) not in designer.events, designer.events
 
 
 @pytest.mark.parametrize(
@@ -842,8 +1376,9 @@ def test_a_set_up_that_moves_the_camera_runs_with_designers_window_on_screen(
         ({'orbit': [90.0, 0.0]}, [('drag', 'left', '-200', '0'), 'taken', 'settled']),
         ({'zoom': 2}, [('wheel', '2'), 'taken', 'taken', 'settled']),
         ({'tiling': 2.0}, [('tiling', '2.0'), 'settled']),
+        ({'environment': 'studio'}, [('environment', 'studio', 'None', 'None'), 'settled']),
     ],
-    ids=['mesh', 'graph', 'view', 'orbit', 'zoom', 'tiling'],
+    ids=['mesh', 'graph', 'view', 'orbit', 'zoom', 'tiling', 'environment'],
 )
 def test_each_step_waits_for_the_3d_view_to_take_it(
     helpers: types.ModuleType, options: View3dOptions, waits: list[tuple[str, ...] | str]
@@ -876,23 +1411,30 @@ def test_an_api_error_after_a_change_says_what_was_set(helpers: types.ModuleType
     assert str(raised.value) == 'the API refused; the 3D view was already set: Plane'
 
 
-def test_an_abort_escaping_the_tiling_turns_the_panel_back(helpers: types.ModuleType) -> None:
-    # REVIEW.md HLP-118: one landing on _set_tiling's finally's first line skips its turn-back; the abort's handler, run
+@pytest.mark.parametrize(
+    'step, options',
+    [('_set_tiling', {'tiling': 2.0}), ('_set_environment', {'environment_rotation': 90.0})],
+    ids=['tiling', 'environment'],
+)
+def test_an_abort_escaping_a_step_through_the_parameters_panel_turns_it_back(
+    helpers: types.ModuleType, step: str, options: View3dOptions
+) -> None:
+    # REVIEW.md HLP-118: one landing on the step's finally's first line skips its turn-back; the abort's handler, run
     # untraced, turns it back
     Designer(helpers)
     back: list[str] = []
 
-    def aborted(params: 'QtWidgets.QDockWidget', bar: 'QtWidgets.QMenuBar', value: float, keep: list['Kept']) -> str:
-        raise KeyboardInterrupt('an abort as the tiling ends')
+    def aborted(*args: object) -> str:
+        raise KeyboardInterrupt('an abort as the step ends')
 
     def parameters_back() -> str:
         back.append('back')
         return 'the Parameters panel back on g'
 
-    vars(helpers)['_set_tiling'] = aborted
+    vars(helpers)[step] = aborted
     vars(helpers)['_parameters_back'] = parameters_back
     with pytest.raises(KeyboardInterrupt):
-        helpers.set_3d_view(tiling=2.0)
+        helpers.set_3d_view(**options)
     assert back == ['back']
 
 
@@ -930,12 +1472,16 @@ def test_an_error_after_a_change_says_what_was_set(helpers: types.ModuleType) ->
     assert str(raised.value) == "the Explorer's menu for graph g didn't open; the 3D view was already set: Plane"
 
 
+EVERY_OPTION = ('g', 'Plane', 'Top', 2, 2.0, [90.0, 30.0], [0.25, -0.4], 'studio', 90.0, 1.0)
+
+
 def test_the_line_says_what_was_set(helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]) -> None:
     Designer(helpers)
-    helpers.set_3d_view('g', 'Plane', 'Top', 2, 2.0, [90.0, 30.0], [0.25, -0.4])
+    helpers.set_3d_view(*EVERY_OPTION)
     assert capsys.readouterr().out.splitlines()[-1] == (
         "3D view: Plane, graph g's outputs on the mesh, view Top, framed, orbit 90 degrees right, 30.1 up, "
-        'pan 0.25 of the view right, 0.401 down, +2 wheel steps, tiling 2'
+        'pan 0.25 of the view right, 0.401 down, +2 wheel steps, tiling 2, '
+        'environment studio, rotation 90 degrees, exposure 1'
     )
 
 
@@ -943,7 +1489,7 @@ def test_each_step_is_said_before_its_change(helpers: types.ModuleType) -> None:
     # REVIEW.md HLP-119: an abort anywhere after a change finds it said; one before it finds the step said as begun
     designer = Designer(helpers)
     vars(helpers)['print'] = lambda line: designer.events.append(('print', (line,)))
-    helpers.set_3d_view('g', 'Plane', 'Top', 2, 2.0, [90.0, 30.0], [0.25, -0.4])
+    helpers.set_3d_view(*EVERY_OPTION)
     said = [(kind, path) for kind, path in designer.events if kind in ('print', 'trigger')]
     assert said == [
         ('print', ('3D view, setting: Plane',)),
@@ -963,11 +1509,14 @@ def test_each_step_is_said_before_its_change(helpers: types.ModuleType) -> None:
         ('trigger', ('wheel', '2')),
         ('print', ('3D view, setting: tiling 2',)),
         ('trigger', ('tiling', '2.0')),
+        ('print', ('3D view, setting: environment studio, rotation 90 degrees, exposure 1',)),
+        ('trigger', ('environment', 'studio', '90.0', '1.0')),
         (
             'print',
             (
                 "3D view: Plane, graph g's outputs on the mesh, view Top, framed, orbit 90 degrees right, 30.1 up, "
-                'pan 0.25 of the view right, 0.401 down, +2 wheel steps, tiling 2',
+                'pan 0.25 of the view right, 0.401 down, +2 wheel steps, tiling 2, '
+                'environment studio, rotation 90 degrees, exposure 1',
             ),
         ),
     ]
@@ -977,11 +1526,11 @@ def test_the_set_up_runs_the_shots_look_at_the_active_app_before_each_step(helpe
     # REVIEW.md HLP-136: the 3D shot's look whether the user made Designer the active app (shot3d.py), before each step
     designer = Designer(helpers)
     vars(helpers)['print'] = lambda line: designer.events.append(('print', (line,)))
-    run = helpers._3d_set_up('g', 'Plane', 'Top', 2, 2.0, [90.0, 30.0], [0.25, -0.4])
+    run = helpers._3d_set_up(*EVERY_OPTION)
     run(lambda: designer.events.append(('between', ())), designer.frames)
     said = [event for event in designer.events if event[0] in ('print', 'between')]
     steps = [i for i, (kind, line) in enumerate(said) if kind == 'print' and line[0].startswith('3D view, setting: ')]
-    assert len(steps) == 7 and all(said[i - 1] == ('between', ()) for i in steps)
+    assert len(steps) == 8 and all(said[i - 1] == ('between', ()) for i in steps)
 
 
 @pytest.mark.parametrize(
@@ -1273,14 +1822,17 @@ def test_the_mouse_events_the_helpers_send_are_marked_for_the_guard_while_sent(
 
 
 class Spin:
-    def __init__(self) -> None:
+    """A spin box of the Parameters panel, faked: the values set, and the one it `shows`, maybe not what was asked."""
+
+    def __init__(self, shows: float = 2.5) -> None:
         self.set: list[float] = []
+        self.shows = shows
 
     def setValue(self, value: float) -> None:
         self.set.append(value)
 
     def value(self) -> float:
-        return 2.5  # what the spin box holds, maybe not what was asked
+        return self.shows
 
 
 def _tiling(helpers: types.ModuleType, spin: 'Callable[[QtWidgets.QDockWidget, list[Kept]], Spin]') -> list[str]:
@@ -1303,6 +1855,38 @@ def panel(title: str = 'Material "Default" - Rasterizer') -> SimpleNamespace:
     return SimpleNamespace(windowTitle=lambda: title)
 
 
+def test_a_turn_back_failing_after_a_value_was_set_says_it_was_set(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-204: the turn-back's error replaced what the setting returned, so it left the value set out
+    vars(helpers)['_switched'] = lambda params, shown: None
+
+    def back() -> NoReturn:
+        raise RuntimeError('the graph in the editor is gone')
+
+    vars(helpers)['_parameters_back'] = back
+    with pytest.raises(RuntimeError) as raised:
+        helpers._in_properties(panel(), lambda: None, lambda: ('tiling 2', True), "the 3D material's properties")
+    assert str(raised.value) == 'the graph in the editor is gone; tiling 2 set', raised.value
+
+
+def test_a_turn_back_failing_after_the_setting_failed_keeps_the_settings_error(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-206: the turn-back's error replaced the setting's, which said what was set
+    vars(helpers)['_switched'] = lambda params, shown: None
+
+    def back() -> NoReturn:
+        raise RuntimeError('the graph in the editor is gone')
+
+    def setting() -> NoReturn:
+        raise RuntimeError('the view took no frame; tiling 2 set')
+
+    vars(helpers)['_parameters_back'] = back
+    with pytest.raises(RuntimeError) as raised:
+        helpers._in_properties(panel(), lambda: None, setting, "the 3D material's properties")
+    assert str(raised.value) == (
+        'the view took no frame; tiling 2 set; and turning the Parameters panel back failed: the graph in the editor is'
+        ' gone'
+    ), raised.value
+
+
 def test_the_parameters_panel_is_turned_back_when_the_tiling_fails(helpers: types.ModuleType) -> None:
     # REVIEW.md HLP-107: after Edit properties, the panel showed the 3D material
     def missing(params: 'QtWidgets.QDockWidget', keep: list['Kept']) -> NoReturn:
@@ -1310,7 +1894,7 @@ def test_the_parameters_panel_is_turned_back_when_the_tiling_fails(helpers: type
 
     back = _tiling(helpers, missing)
     with pytest.raises(RuntimeError, match='Tiling'):
-        helpers._set_tiling(panel(), object(), 2.0, [])
+        helpers._set_tiling(panel(), object(), 2.0, [], Frames([]))
     assert back == ['back']
 
 
@@ -1323,7 +1907,7 @@ def test_the_parameters_panel_is_turned_back_when_edit_properties_raises(helpers
 
     vars(helpers)['_menu_action'] = lambda bar, keep, *path: SimpleNamespace(trigger=aborted)
     with pytest.raises(KeyboardInterrupt):
-        helpers._set_tiling(panel(), object(), 2.0, [])
+        helpers._set_tiling(panel(), object(), 2.0, [], Frames([]))
     assert back == ['back']
 
 
@@ -1346,7 +1930,7 @@ def test_the_parameters_panel_is_turned_back_once_it_shows_the_material(helpers:
 
     vars(helpers)['_parameters_back'] = parameters_back
     with pytest.raises(KeyboardInterrupt):
-        helpers._set_tiling(params, object(), 2.0, [])
+        helpers._set_tiling(params, object(), 2.0, [], Frames([]))
     assert seen == ['Material "Default" - Rasterizer']
 
 
@@ -1356,7 +1940,7 @@ def test_the_wait_for_the_panel_to_switch_ends(helpers: types.ModuleType) -> Non
     vars(helpers)['_settle'] = lambda seconds: waited.__setitem__(0, waited[0] + 1)
     back = _tiling(helpers, lambda params, keep: Spin())
     qt('QtCore').QMetaObject.invokeMethod.return_value = True
-    helpers._set_tiling(panel(), object(), 2.0, [])
+    helpers._set_tiling(panel(), object(), 2.0, [], Frames([]))
     assert back == ['back'] and waited[0] <= 10
 
 
@@ -1365,7 +1949,7 @@ def test_a_tiling_the_spin_box_didnt_take_is_an_error(helpers: types.ModuleType)
     qt('QtCore').QMetaObject.invokeMethod.return_value = False
     back = _tiling(helpers, lambda params, keep: Spin())
     with pytest.raises(RuntimeError, match="Tiling didn't take 2"):
-        helpers._set_tiling(panel(), object(), 2.0, [])
+        helpers._set_tiling(panel(), object(), 2.0, [], Frames([]))
     assert back == ['back']
 
 
@@ -1374,8 +1958,54 @@ def test_the_tiling_said_is_the_spin_boxs(helpers: types.ModuleType) -> None:
     qt('QtCore').QMetaObject.invokeMethod.return_value = True
     spin = Spin()
     _tiling(helpers, lambda params, keep: spin)
-    assert helpers._set_tiling(panel(), object(), 2.0, []) == 'tiling 2.5 (the Parameters panel back on g)'
+    assert helpers._set_tiling(panel(), object(), 2.0, [], Frames([])) == (
+        'tiling 2.5 (the Parameters panel back on g)',
+        True,
+    )
     assert spin.set == [2.0]
+
+
+class Rebuilt(Spin):
+    """A spin box Designer deletes as it rebuilds the Parameters panel right after its commit: read after it, it
+    raises, as PySide does."""
+
+    def value(self) -> float:
+        if self.set:
+            raise RuntimeError('Internal C++ object (PySide6.QtWidgets.QDoubleSpinBox) already deleted.')
+        return self.shows
+
+
+def test_a_value_committed_is_read_back_from_the_panel_designer_rebuilt(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-198: off screen, in a Designer whose view never drew, Designer rebuilt the panel as the first tiling
+    # was committed: the commit was taken (the panel then read 2), and reading the old spin box back raised
+    qt('QtCore').QMetaObject.invokeMethod.return_value = True
+    # REVIEW.md TST-551: found again, it shows another value than the one asked, so the line can only come from it
+    found = iter([Rebuilt(1.0), Spin(2.5)])
+    _tiling(helpers, lambda params, keep: next(found))
+    assert helpers._set_tiling(panel(), object(), 2.0, [], Frames([])) == (
+        'tiling 2.5 (the Parameters panel back on g)',
+        True,
+    )
+
+
+def test_a_value_committed_but_not_found_again_is_said_committed(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-200: the spin box deleted after its commit and not found again, the error left out the value
+    # committed
+    qt('QtCore').QMetaObject.invokeMethod.return_value = True
+    looks = [Rebuilt(1.0)]
+
+    def find(params: 'QtWidgets.QDockWidget', keep: list['Kept']) -> Spin:
+        if looks:
+            return looks.pop()
+        raise RuntimeError("the 3D material's Tiling wasn't found in the Parameters panel")
+
+    _tiling(helpers, find)
+    with pytest.raises(RuntimeError) as raised:
+        helpers._set_tiling(panel(), object(), 2.0, [], Frames([]))
+    assert str(raised.value) == (
+        "the 3D material's Tiling wasn't found in the Parameters panel; the 3D material's Tiling committed to 2, not read"
+        ' back'
+    ), raised.value
 
 
 def test_tries_failing_for_different_reasons_say_each_one(helpers: types.ModuleType) -> None:

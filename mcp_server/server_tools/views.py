@@ -14,6 +14,10 @@ from .output import _load_8bit
 
 # screenshot_designer('3d', zoom=...): wheel steps either way (their size: designer_helpers/view3d.py)
 ZOOM_STEPS = 30
+# screenshot_designer('3d', environment_rotation=..., environment_exposure=...): degrees and Exposure either way, the
+# tool's own limits (Designer's fields: designer_helpers/view3d.py)
+ENVIRONMENT_ROTATION = 180
+ENVIRONMENT_EXPOSURE = 10
 # the lines of a 3D shot that come beside its image, in the order printed: what was done to Designer's window, what was
 # set up, and a render that may not have followed the set-up (designer_helpers/shot3d.py)
 WINDOW = "Designer's window: "
@@ -64,6 +68,9 @@ def screenshot_designer(
     tiling: float | None = None,
     orbit: NoneIfEmpty[XY] = None,
     pan: NoneIfEmpty[XY] = None,
+    environment: str | None = None,
+    environment_rotation: float | None = None,
+    environment_exposure: float | None = None,
 ) -> list[str | Image]:
     """Capture Designer's own UI (never other apps): panel = window, graph, 2d, 3d, explorer,
     parameters, library or console. Shows what the user sees (node layout, 2D view, properties).
@@ -73,9 +80,9 @@ def screenshot_designer(
     3D area doesn't show the render. The 3D view draws only while Designer's window is on screen: on macOS '3d'
     puts a minimized, covered or hidden window there for the shot, transparent so the user doesn't see it, never
     taking focus, then puts it back as it was, and says so. It is left up if the user switched to Designer during
-    the shot and Designer is still the app in front as it ends. After a set-up that moved the camera or switched the
-    mesh, a render identical to the one before is said: shoot again with no set-up (pan, orbit and zoom move from
-    where the camera is).
+    the shot and Designer is still the app in front as it ends. After a set-up that moved the camera, switched the
+    mesh, or changed the tiling or the light, a render identical to the one before is said: shoot again with no set-up
+    (pan, orbit and zoom move from where the camera is).
     '3d' can set up the view first and says what it set (stopped partway, the steps it began); it stays set, for
     later shots and in the user's view:
     graph puts that graph's outputs on the mesh, selecting it in the Explorer (outputs added to the graph open
@@ -86,6 +93,11 @@ def screenshot_designer(
     sideways, in fractions of the view at that point (nearer parts move more); zoom: wheel steps from where the camera
     is then, about 1.1x closer each (negative: away), so after pan it comes closer to what is in the middle; tiling:
     how often the material repeats on the mesh (the user's Parameters panel then shows the graph in the editor).
+    The light: environment is one of Designer's environment maps (its Library's HDRI environments, such as
+    studio_white_soft_light or studio_black_soft_light; an unknown name lists them); environment_rotation: the angle
+    in degrees it is set to around the mesh, -180 to 180 (not added to the angle before, unlike orbit);
+    environment_exposure: its Exposure, -10 to 10, higher brighter (Designer starts at 0). These go through the
+    Parameters panel, as tiling does.
     crop: [left, top, right, bottom] as fractions 0-1 of the panel, applied before max_size.
     An image costs about width x height / 750 tokens (1000 x 700 is about 930), so keep
     max_size small and crop to what you need."""
@@ -99,6 +111,10 @@ def screenshot_designer(
         'tiling': tiling,
         'orbit': orbit if orbit and any(orbit) else None,  # 0 both ways: nothing to set, as zoom=0
         'pan': pan if pan and any(pan) else None,
+        'environment': environment,
+        # values Designer's fields are set to, 0 included: unlike a turn, pan or zoom of 0, not nothing to do
+        'environment_rotation': environment_rotation,
+        'environment_exposure': environment_exposure,
     }
     given = [name for name, value in options.items() if value not in (None, '')]
     if given and panel != '3d':
@@ -115,12 +131,25 @@ def screenshot_designer(
         raise ToolError(
             'pan is [right, up] in fractions of the view, each -1 to 1 (negative: left, down), not %r' % list(pan)
         )
+    if environment_rotation is not None and not abs(environment_rotation) <= ENVIRONMENT_ROTATION:
+        raise ToolError(
+            'environment_rotation is in degrees, -%d to %d, not %r'
+            % (ENVIRONMENT_ROTATION, ENVIRONMENT_ROTATION, environment_rotation)
+        )
+    if environment_exposure is not None and not abs(environment_exposure) <= ENVIRONMENT_EXPOSURE:
+        raise ToolError(
+            "environment_exposure is the environment's Exposure, -%d to %d (Designer starts at 0), not %r"
+            % (ENVIRONMENT_EXPOSURE, ENVIRONMENT_EXPOSURE, environment_exposure)
+        )
     tmp_dir = tempfile.mkdtemp(prefix='sd_shot_')
     out_path = os.path.join(tmp_dir, 'shot.png')
     call = 'save_screenshot(%r, %r)' % (panel, out_path)
     if panel == '3d':  # Designer's window on screen through the set-up and the render (designer_helpers/shot3d.py)
-        setup = (graph or None, mesh or None, view or None, zoom, tiling, options['orbit'], options['pan'])  # '': none
-        call = 'shoot_3d(%r, %r, %r, %r, %r, %r, %r, %r)' % (out_path, *setup)
+        setup = (  # '': none
+            *(out_path, graph or None, mesh or None, view or None, zoom, tiling, options['orbit'], options['pan']),
+            *(environment or None, environment_rotation, environment_exposure),
+        )
+        call = 'shoot_3d(%s)' % ', '.join(map(repr, setup))
     try:
         text = _bridge(_helpers_call(call), timeout=120 if given else 60)
         lines = text.splitlines()

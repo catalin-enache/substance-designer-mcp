@@ -913,7 +913,8 @@ class Render:
 class Shot:
     """shoot_3d's Designer, faked: the renders it gives in turn (the last one again once they run out), the mesh shown,
     and what happened, in order, the frames' waits included. The set-up's checks are the real argument checks
-    (_set_up_checked); `refused` is raised by the rest of them. `drawing`: whether the view draws a next frame."""
+    (_set_up_checked); `refused` is raised by the rest of them. `drawing`: whether the view draws a next frame.
+    `changed`: what the set-up's run says, whether it changed what the view shows."""
 
     def __init__(
         self,
@@ -922,6 +923,7 @@ class Shot:
         mesh: str = 'Plane',
         refused: str | None = None,
         drawing: bool = True,
+        changed: bool = True,
     ) -> None:
         self.events: list[str] = []
         self.frames = Frames(log=self.events, drawing=drawing)
@@ -945,37 +947,54 @@ class Shot:
             yield self.screen
             self.events.append('put back')
 
-        def set_up(  # shoot_3d passes every argument, in order: graph, mesh, view, zoom, tiling, orbit, pan
+        def set_up(  # shoot_3d passes every argument, in order: graph, mesh, view, zoom, tiling, orbit, pan, environment,
+            # environment_rotation, environment_exposure
             *args: *tuple[
-                str | None, str | None, str | None, int, float | None, Sequence[float] | None, Sequence[float] | None
+                str | None,
+                str | None,
+                str | None,
+                int,
+                float | None,
+                Sequence[float] | None,
+                Sequence[float] | None,
+                str | None,
+                float | None,
+                float | None,
             ],
-        ) -> Callable[[Callable[[], None] | None, Frames | None], None]:
-            checked(*args[:3])
+        ) -> object:
+            checked(*args[:3], args[7])
             if refused:
                 raise RuntimeError(refused)
 
-            def run(between: Callable[[], None] | None, frames: Frames | None) -> None:
+            def run(between: Callable[[], None] | None, frames: Frames | None) -> bool:
                 self.given = (between, frames)
                 self.events.append('set up %r' % (args,))
+                return changed
 
-            return run
+            # whether it may change what the view shows, as _3d_set_up says: the camera moved, the mesh switched, the
+            # tiling or the light given
+            _, shown, _, zoom, tiling, orbit, pan, *light = args
+            may_change = bool(zoom or orbit or pan) or (shown is not None and shown != mesh)
+            return helpers._SetUp(run, may_change or any(v is not None for v in (tiling, *light)))
 
         vars(helpers)['_3d_render'] = render
         vars(helpers)['_on_screen'] = on_screen
         vars(helpers)['_3d_dock'] = lambda mw: object()
         vars(helpers)['_viewport'] = lambda dock: 'the viewport'
         vars(helpers)['_Frames'] = lambda viewport, render: self.frames
-        vars(helpers)['_mesh_shown'] = lambda mw, keep: mesh
         vars(helpers)['_3d_set_up'] = set_up
+        vars(helpers)['_environment_maps'] = lambda: {'studio': '/maps/studio.hdr'}
         vars(helpers)['find_graph'] = lambda name: SimpleNamespace(
             getIdentifier=lambda: name, getOutputNodes=lambda: [object()] * (1 if name == 'one' else 2)
         )
 
 
 STALE = (
-    '3D render: identical to the render before the set-up, though the set-up moved the camera or switched the mesh. '
+    '3D render: identical to the render before the set-up, though the set-up moved the camera, switched the mesh, or '
+    'changed the tiling or the light. '
     'The 3D view may not have been drawn. Shoot again with no set-up before judging it: pan, orbit and zoom move the '
-    'camera from where it is. With no mesh in view, a pan or zoom changes nothing'
+    'camera from where it is. With no mesh in view, a pan or zoom changes nothing, and a tiling changes nothing on a '
+    'material with no pattern'
 )
 
 
@@ -998,7 +1017,7 @@ def test_a_render_identical_after_a_pan_is_taken_again_until_it_differs(
         'on screen',
         'again',
         'render A',  # before the set-up
-        'set up (None, None, None, 0, None, None, [0.25, 0.0])',
+        'set up (None, None, None, 0, None, None, [0.25, 0.0], None, None, None)',
         'again',
         'render A',
         'next frame',
@@ -1050,8 +1069,8 @@ def test_a_set_up_that_moves_the_camera_or_switches_the_mesh_is_compared(
 
 @pytest.mark.parametrize(
     'options',
-    [{'graph': 'g'}, {'view': 'Top'}, {'tiling': 2.0}, {'mesh': 'Plane'}, {}],
-    ids=['graph', 'view', 'tiling', 'the mesh shown', 'nothing'],
+    [{'graph': 'g'}, {'view': 'Top'}, {'mesh': 'Plane'}, {}],
+    ids=['graph', 'view', 'the mesh shown', 'nothing'],
 )
 def test_a_shot_that_needs_no_comparison_takes_one_render(
     helpers: types.ModuleType, capsys: pytest.CaptureFixture[str], options: View3dOptions
@@ -1061,6 +1080,50 @@ def test_a_shot_that_needs_no_comparison_takes_one_render(
     helpers.shoot_3d('out.png', **options)
     assert [e for e in shot.events if e.startswith('render')] == ['render A']
     assert not [line for line in capsys.readouterr().out.splitlines() if line.startswith('3D render: ')]
+    assert len([e for e in shot.events if e.startswith('set up')]) == (1 if options else 0)
+
+
+LIGHT_OR_TILING = [
+    {'tiling': 2.0},
+    {'environment': 'studio'},
+    {'environment_rotation': 0.0},
+    {'environment_exposure': 0.0},
+]
+LIGHT_OR_TILING_IDS = ['tiling', 'environment', 'rotation 0', 'exposure 0']
+
+
+@pytest.mark.parametrize('options', LIGHT_OR_TILING, ids=LIGHT_OR_TILING_IDS)
+def test_a_render_identical_after_the_tiling_or_the_light_changed_is_taken_again_then_said(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str], options: View3dOptions
+) -> None:
+    # the user's ask (2026-11-18): the light and the tiling settled as the camera is, a render that didn't follow their
+    # change taken again, then said, as after a pan (REVIEW.md HLP-148)
+    shot = Shot(helpers, 'A', 'A', 'A', 'A', 'A')
+    helpers.shoot_3d('out.png', **options)
+    assert shot.events.count('render A') == 2 + helpers.RETAKES  # before, after, then each retake
+    assert STALE in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('options', LIGHT_OR_TILING, ids=LIGHT_OR_TILING_IDS)
+def test_a_tiling_or_a_light_that_changed_nothing_isnt_compared(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str], options: View3dOptions
+) -> None:
+    # a value shown already, or a map asked again: the set-up says it changed nothing, and an identical render is no
+    # sign of a stale one. Each is set up all the same, a rotation or exposure of 0 too: Designer's fields are set to it
+    shot = Shot(helpers, 'A', changed=False)
+    helpers.shoot_3d('out.png', **options)
+    assert [e for e in shot.events if e.startswith('render')] == ['render A', 'render A']  # before, then after
+    assert not [line for line in capsys.readouterr().out.splitlines() if line.startswith('3D render: ')]
+    assert len([e for e in shot.events if e.startswith('set up')]) == 1
+
+
+def test_the_environment_is_given_to_the_set_up_in_its_order(helpers: types.ModuleType) -> None:
+    # REVIEW.md TST-547: the rotation and the exposure swapped reached the set-up with no unit test failing
+    shot = Shot(helpers, 'A')
+    helpers.shoot_3d('out.png', environment='studio', environment_rotation=90.0, environment_exposure=1.0)
+    assert [e for e in shot.events if e.startswith('set up')] == [
+        "set up (None, None, None, 0, None, None, None, 'studio', 90.0, 1.0)"
+    ]
 
 
 def test_without_options_nothing_is_set_up(helpers: types.ModuleType) -> None:
@@ -1075,6 +1138,7 @@ def test_without_options_nothing_is_set_up(helpers: types.ModuleType) -> None:
         ({'mesh': 'Teapot'}, "unknown mesh 'Teapot'"),
         ({'view': 'Diagonal'}, "unknown view 'Diagonal'"),
         ({'graph': 'one'}, 'graph one has one output'),
+        ({'environment': 'Studio'}, "unknown environment 'Studio'"),  # REVIEW.md TST-547
     ],
 )
 def test_a_set_up_refused_doesnt_touch_the_window(helpers: types.ModuleType, options: View3dOptions, said: str) -> None:

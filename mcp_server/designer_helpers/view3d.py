@@ -1,13 +1,15 @@
 """The 3D view set up before screenshot_designer('3d') renders it: a graph's outputs on its mesh, the mesh, the
-viewpoint, the camera turned and panned, the zoom and the tiling (ROADMAP items 7 and 74). Designer's API has none of it
+viewpoint, the camera turned and panned, the zoom, the tiling and the environment (ROADMAP items 7, 73 and 74).
+Designer's API has none of it
 (sd, Designer 16), so this drives the view's own menus and widgets, as measured in a Designer an agent started
 (2026-11-12; the self-test's editor_panels_and_fit checks what the tool relies on, lifecycle the first point below):
 
 - Designer builds the 3D view's menu bar and viewport once a graph is opened (before, its dock has neither).
 - The 3D view's menu bar: Scene lists the meshes (MESHES, among other entries), Camera the viewpoints (VIEWS) and
   Frame. Their actions trigger from code once the menu's aboutToShow has filled it, as the screenshot's Copy Render
-  does. The camera turns to a viewpoint over a moment, and a Frame triggered at once cancels the turn, so Frame waits
-  for the turn to end (_Frames.moved: frames3d.py).
+  does. Scene checks the mesh the view shows: the mesh step reads the action of the mesh asked, and skips a mesh
+  checked already. The camera turns to a viewpoint over a moment, and a Frame triggered at once cancels the turn, so
+  Frame waits for the turn to end (_Frames.moved: frames3d.py).
 - Zoom: wheel events on the viewport (the visible Alg::Gui3D::ViewportWidget), taken as from the mouse although the
   view is GPU-drawn: about 1.11x a step closer, 1.09x a step away, from wherever the camera is. Sent back to back,
   some are dropped, so each waits for the view to take the one before (_Frames.taking: frames3d.py).
@@ -71,16 +73,35 @@ viewpoint, the camera turned and panned, the zoom and the tiling (ROADMAP items 
   Its spin box takes a value only through its own valueChanged() signal (neither setValue, Return, nor its slider's
   or editor's signals reach the material). The panel is then turned back to the graph in the editor by opening that
   graph again, once it shows the material: turned back before, the switch to the material came after.
+- The environment, the light around the mesh, is shown in the Parameters panel by Environment > Edit properties, and
+  turned back as after the tiling (measured 2026-11-18; the self-test's designer fact checks the fields, the commit,
+  the map's signals, a drop or an enter and a move alone, the unwrapped rotation and the reset). Its fields are found
+  by the end of their object name, after a '-' (the numbers before change):
+  - `intensity`: Exposure, one spin box, 0 by default.
+  - `dome_rotation_angle`: Rotation Angle, two spin boxes, Turns then Degrees. A value isn't wrapped: 1.75 turns
+    stays 630 degrees.
+  - `environment_texture_name`: the map, with no editor in the panel (0 px high; its menu offers only a reset).
+  A spin box takes a value as Tiling's does, only through its own valueChanged(). A map is set by a drag of its file
+  onto the viewport, as from the Library's 3D view > HDRI environments, which lists Designer's own maps
+  (_environment_maps). The drag is entered, moved, then dropped: a drop alone, or an enter and a move, did nothing. It
+  is taken with Designer hidden too, though the drop reads as not accepted. The Environment field then signals
+  valueChanged() at once, within the drop, unless the map was the one shown, which changes nothing and signals
+  nothing. So when no signal comes, another map is dropped, then the one asked for again, each to be signalled:
+  dropped back to back, the second stays (the renders matched to 0.0 grey levels). The view then restarted nothing
+  within NO_RESTART (watched once), so the step doesn't wait for it: the render after is the one before (the
+  self-test's shown-already check; REVIEW.md HLP-201). A drop keeps the rotation and the exposure. Environment > Reset Environment puts the rotation and the exposure back to 0, and changes the map.
 - What is set stays: for the next shots, and in the user's 3D view.
 """
 
 from .core import (
+    _APP,
     APIException,
     Callable,
     Kept,
     QtCore,
     QtGui,
     QtWidgets,
+    SDApplicationPath,
     SDSBSCompGraph,
     Sequence,
     _current_graph,
@@ -90,12 +111,13 @@ from .core import (
     _ui_mgr,
     cast,
     find_graph,
+    os,
     sys,
 )
 from .editor import _process_events, _wheel
-from .frames3d import _Frames, _viewport
+from .frames3d import _Frames, _frames_of, _viewport, _Waiting
 from .mac_window import _MacWindow
-from .screenshots import _PANEL_AREAS, _3d_dock, _3d_render, _visible_dock
+from .screenshots import _PANEL_AREAS, _3d_dock, _visible_dock
 from .shot3d import _on_screen
 from .waits import _settle
 
@@ -116,6 +138,9 @@ VIEWS = ('Default', 'Front', 'Right', 'Back', 'Left', 'Top', 'Bottom')
 VIEW_OUTPUTS = 'View Outputs In 3D View'
 MENU_GUARD = 5000  # ms the Explorer's context menu may stay open
 MENU_TRIES = 3  # times the Explorer's context menu is opened when something closes it before its action is picked
+# a flag's interval (_drop_map): it never runs out within a call, its timeout connected to nothing
+FLAG_MS = 24 * 3600 * 1000
+SETTING = '3D view, setting: '  # a step said before its change (set_3d_view's docstring); the server collects these
 ORBIT_ACROSS = 0.45  # degrees the camera turns a pixel dragged across (the module docstring)
 ORBIT_UP = 0.35  # degrees a pixel dragged up or down
 PAN_WIDTH = 356  # pixels dragged a view's width panned, at the point the camera looks at
@@ -415,23 +440,90 @@ def _menu_once(tree: QtWidgets.QTreeView, at: QtCore.QPoint, keep: list[Kept]) -
     return state, held
 
 
-def _tiling_spin(params: QtWidgets.QDockWidget, keep: list[Kept]) -> QtWidgets.QDoubleSpinBox:
-    """The 3D material's Tiling spin box in the Parameters panel `params`, once Edit properties has shown it there."""
+def _panel_field(
+    params: QtWidgets.QDockWidget, name: str, what: str, keep: list[Kept], spins: int = 1
+) -> QtWidgets.QWidget:
+    """The field `name` of the Parameters panel `params` once the panel built it, with at least `spins` spin boxes. A
+    field is found by its object name, or by the end of it after a '-' (the environment's: the module docstring).
+    Refused after 3 s, `what` naming the field."""
+    fields: list[QtWidgets.QWidget] = []
     for _ in range(30):  # the panel builds its fields over a few event loops
         _settle(0.1)
-        fields = [w for w in params.findChildren(QtWidgets.QWidget) if w.objectName() == '$tiling']
-        spins = fields[0].findChildren(QtWidgets.QDoubleSpinBox) if fields else []
-        if spins:
-            keep.append(spins[0])
-            return spins[0]
-    raise RuntimeError("the 3D material's Tiling wasn't found in the Parameters panel")
+        fields = [
+            w
+            for w in params.findChildren(QtWidgets.QWidget)
+            if w.objectName() == name or w.objectName().endswith('-' + name)
+        ]
+        if fields and len(fields[0].findChildren(QtWidgets.QDoubleSpinBox)) >= spins:
+            keep.append(fields[0])
+            return fields[0]
+    if fields:  # REVIEW.md HLP-191: a bare IndexError named no field
+        found = len(fields[0].findChildren(QtWidgets.QDoubleSpinBox))
+        raise RuntimeError('%s has no spin box %d in the Parameters panel (it has %d)' % (what, spins, found))
+    raise RuntimeError("%s wasn't found in the Parameters panel" % what)
 
 
-def _parameters_back() -> str:
-    """The Parameters panel turned back to the graph in the editor (the module docstring); what it shows."""
+def _panel_spin(
+    params: QtWidgets.QDockWidget, name: str, what: str, keep: list[Kept], index: int = 0
+) -> QtWidgets.QDoubleSpinBox:
+    """The `index`-th spin box of the field `name` of the Parameters panel `params` (_panel_field), in the order the
+    panel made them."""
+    spin = _panel_field(params, name, what, keep, index + 1).findChildren(QtWidgets.QDoubleSpinBox)[index]
+    keep.append(spin)
+    return spin
+
+
+def _tiling_spin(params: QtWidgets.QDockWidget, keep: list[Kept]) -> QtWidgets.QDoubleSpinBox:
+    """The 3D material's Tiling spin box in the Parameters panel `params`, once Edit properties has shown it there."""
+    return _panel_spin(params, '$tiling', "the 3D material's Tiling", keep)
+
+
+def _commit(spin: QtWidgets.QDoubleSpinBox, value: float, what: str) -> None:
+    """`value` set in the Parameters panel's `spin` and taken through the spin box's own valueChanged(), with no
+    argument: QDoubleSpinBox's valueChanged(double) doesn't take it (the module docstring); Designer's events then run.
+    Refused when the spin box has no such signal, `what` naming its field."""
+    spin.setValue(value)
+    # PySide takes the name as str (its stubs say bytes, which it refuses); False: no such signal, nothing taken
+    if not QtCore.QMetaObject.invokeMethod(
+        spin,
+        'valueChanged',
+        QtCore.Qt.ConnectionType.DirectConnection,  # type: ignore[call-overload]
+    ):
+        raise RuntimeError("%s didn't take %g: its spin box has no valueChanged()" % (what, value))
+    _process_events()
+
+
+def _commit_change(
+    find: Callable[[], QtWidgets.QDoubleSpinBox], value: float, what: str, watched: _Frames
+) -> tuple[float, tuple[int, int] | None]:
+    """`value` committed to the Parameters panel's spin box that `find` gives (_commit), unless it shows the value
+    already: the panel shows the values set, so it would change nothing the view draws, and a wait for it would run to
+    its limit (REVIEW.md HLP-195). Returns the value the spin box shows, and the mark on `watched` taken right before
+    the commit, to wait from (REVIEW.md HLP-192); None with no commit. The value is read from the spin box `find` gives
+    again when Designer rebuilt the panel within the commit, deleting the first: it is taken all the same (REVIEW.md
+    HLP-198). If that second look refuses, the refusal is raised again with "...; <what> committed to <value>, not
+    read back" (REVIEW.md HLP-200)."""
+    spin = find()
+    if spin.value() == value:
+        return value, None
+    since = watched.mark()
+    _commit(spin, value, what)
+    try:
+        return spin.value(), since
+    except RuntimeError:  # PySide's "Internal C++ object ... already deleted"
+        try:
+            return find().value(), since
+        except (Exception, APIException) as e:  # the sd API's error is a BaseException too
+            # committed all the same: said, as an error after a change says what was set (REVIEW.md HLP-200)
+            raise RuntimeError('%s; %s committed to %g, not read back' % (e, what, value)) from e
+
+
+def _parameters_back() -> str | None:
+    """The Parameters panel turned back to the graph in the editor (the module docstring), said: 'the Parameters panel
+    back on g'. None with no graph in the editor: the panel is left on what it shows."""
     current = _current_graph()
     if current is None:
-        return "the Parameters panel shows the 3D material's properties"
+        return None
     _ui_mgr().openResourceInEditor(current)
     _process_events()
     return 'the Parameters panel back on %s' % current.getIdentifier()
@@ -447,28 +539,204 @@ def _switched(params: QtWidgets.QDockWidget, shown: str) -> None:
         _settle(0.1)
 
 
-def _set_tiling(params: QtWidgets.QDockWidget, bar: QtWidgets.QMenuBar, value: float, keep: list[Kept]) -> str:
-    """The 3D material's tiling, through the Parameters panel `params`, which is turned back to the graph in the editor
-    once it shows the material, even when setting the tiling fails (the module docstring); what was set."""
+def _with_set(error: BaseException, said: str) -> RuntimeError:
+    """`error` again, followed by what was set before it: 'error; tiling 2 set'. An error after a change says what was
+    set (set_3d_view's docstring)."""
+    return RuntimeError('%s; %s set' % (error, said))
+
+
+def _in_properties(
+    params: QtWidgets.QDockWidget,
+    show: Callable[[], None],
+    setting: Callable[[], tuple[str, bool]],
+    properties: str,
+) -> tuple[str, bool]:
+    """`setting` run once `show` turned the Parameters panel `params` to `properties` (a menu's Edit properties).
+    The panel is turned back to the graph in the editor once it shows them, even when `show` or `setting` fails (the
+    module docstring). Returns what `setting` returns: what it set, with what the panel then shows ('tiling 2 (the
+    Parameters panel back on g)', or with no graph in the editor 'tiling 2 (the Parameters panel shows the 3D
+    material's properties)'), and whether it changed what the view shows. An error turning the panel back once
+    `setting` returned is raised again with what it set (REVIEW.md HLP-204). One after `setting` failed keeps
+    `setting`'s error, which may say what was set, with the turn-back's after it (REVIEW.md HLP-206)."""
     shown = params.windowTitle()
-    try:  # Edit properties included: an abort landing as it is triggered, or right after
-        _menu_action(bar, keep, 'Materials', _material(bar, keep), 'Edit properties').trigger()
-        spin = _tiling_spin(params, keep)
-        spin.setValue(value)
-        # the spin box's own valueChanged(), no argument: QDoubleSpinBox's valueChanged(double) doesn't commit. PySide
-        # takes the name as str (its stubs say bytes, which it refuses); False: no such signal, nothing committed
-        if not QtCore.QMetaObject.invokeMethod(
-            spin,
-            'valueChanged',
-            QtCore.Qt.ConnectionType.DirectConnection,  # type: ignore[call-overload]
-        ):
-            raise RuntimeError("the 3D material's Tiling didn't take %g: its spin box has no valueChanged()" % value)
-        _process_events()
-        tiling = spin.value()
+    said: str | None = None
+    failed: Exception | APIException | None = None  # the setting's own error
+    try:  # `show` included: an abort landing as Edit properties is triggered, or right after
+        show()
+        said, changed = setting()
+    except (Exception, APIException) as e:  # the sd API's error is a BaseException too
+        failed = e
+        raise
     finally:
-        _switched(params, shown)
-        panel = _parameters_back()
-    return 'tiling %g (%s)' % (tiling, panel)
+        try:
+            _switched(params, shown)
+            panel = _parameters_back()
+        except (Exception, APIException) as e:
+            if said is not None:
+                raise _with_set(e, said) from e
+            if failed is not None:
+                raise RuntimeError('%s; and turning the Parameters panel back failed: %s' % (failed, e)) from e
+            raise
+    return '%s (%s)' % (said, panel or 'the Parameters panel shows ' + properties), changed
+
+
+def _set_tiling(
+    params: QtWidgets.QDockWidget, bar: QtWidgets.QMenuBar, value: float, keep: list[Kept], watched: _Frames
+) -> tuple[str, bool]:
+    """The 3D material's tiling, through the Parameters panel `params`, which is turned back to the graph in the editor
+    once it shows the material, even when setting the tiling fails (_in_properties); what was set, and whether it
+    changed (a tiling shown already isn't committed: _commit_change). Its change is waited for on `watched`, and an
+    error in that wait says the tiling was set."""
+
+    def setting() -> tuple[str, bool]:
+        shown, since = _commit_change(lambda: _tiling_spin(params, keep), value, "the 3D material's Tiling", watched)
+        said = 'tiling %g' % shown
+        if since is not None:
+            try:
+                watched.settled(since)
+            except (Exception, APIException) as e:  # the sd API's error is a BaseException too
+                raise _with_set(e, said) from e
+        return said, since is not None
+
+    return _in_properties(
+        params,
+        lambda: _menu_action(bar, keep, 'Materials', _material(bar, keep), 'Edit properties').trigger(),
+        setting,
+        "the 3D material's properties",
+    )
+
+
+def _environment_maps() -> dict[str, str]:
+    """Designer's own environment maps, which its Library lists under 3D view > HDRI environments: each file's name
+    without its extension, to its path, in alphabetical order whatever the case."""
+    folder = os.path.join(_APP.getPath(SDApplicationPath.DefaultResourcesDir), 'view3d', 'maps')
+    names = sorted(os.listdir(folder), key=str.lower)
+    return {os.path.splitext(name)[0]: os.path.join(folder, name) for name in names}
+
+
+def _environment_said(name: str | None, rotation: float | None, exposure: float | None) -> str:
+    """The environment set, as said: 'environment studio, rotation 90 degrees, exposure 1', with what is given."""
+    said = [name] if name is not None else []
+    said += ['rotation %g degrees' % rotation] if rotation is not None else []
+    said += ['exposure %g' % exposure] if exposure is not None else []
+    return 'environment ' + ', '.join(said)
+
+
+def _drop(viewport: QtWidgets.QWidget, path: str) -> None:
+    """The file `path` dragged onto the middle of the 3D `viewport`, as from the Library: entered, moved, dropped (the
+    module docstring)."""
+    data = QtCore.QMimeData()
+    data.setUrls([QtCore.QUrl.fromLocalFile(path)])
+    at = QtCore.QPoint(viewport.width() // 2, viewport.height() // 2)
+    link = QtCore.Qt.DropAction.LinkAction
+    none, plain = QtCore.Qt.MouseButton.NoButton, QtCore.Qt.KeyboardModifier.NoModifier
+    app = QtWidgets.QApplication
+    app.sendEvent(viewport, QtGui.QDragEnterEvent(at, link, data, none, plain))
+    app.sendEvent(viewport, QtGui.QDragMoveEvent(at, link, data, none, plain))
+    app.sendEvent(viewport, QtGui.QDropEvent(QtCore.QPointF(at), link, data, none, plain))
+
+
+def _drop_map(viewport: QtWidgets.QWidget, field: QtWidgets.QWidget, name: str) -> bool:
+    """Designer's environment map `name` (_environment_maps) dropped on the 3D `viewport`, and taken; whether the map
+    changed: taken at its first drop. Dropped again after another, it was the one shown, and the view shows it as
+    before. The Environment
+    `field` of the Parameters panel signals each change of map (valueChanged()), within the drop. With no signal, the
+    map was the one shown, or the drop wasn't taken: Designer's smallest other map is dropped, as Designer loads it
+    within the drop, then `name` again, each to be signalled (the module docstring). Refused otherwise: when the other
+    map isn't taken, and when `name` isn't taken back after it, saying the other is shown; and before any drop when the
+    field has no valueChanged().
+
+    The signal starts a flag, a timer of the drop's own: a C++ slot, so no Python runs as it comes, and a disconnect an
+    abort skips leaves no function connected (REVIEW.md HLP-150). The flags' parent is held by this frame alone, and
+    their connections go with it."""
+    # the field's own signal, looked up first: without it no flag would ever start, though each drop changes the map
+    # (REVIEW.md HLP-189)
+    if field.metaObject().indexOfSignal('valueChanged()') < 0:
+        raise RuntimeError('the Environment field has no valueChanged() signal, which says a map was taken')
+    maps = _environment_maps()
+    owner = QtCore.QObject()
+
+    def dropped(map_name: str) -> bool:
+        """The map `map_name` dropped: whether the field signalled a change within the drop."""
+        flag = QtCore.QTimer(owner)
+        flag.setSingleShot(True)
+        flag.setInterval(FLAG_MS)
+        # the field's own signal, which PySide's stubs don't know: connected by its signature
+        QtCore.QObject.connect(field, QtCore.SIGNAL('valueChanged()'), flag, QtCore.SLOT('start()'))
+        _drop(viewport, maps[map_name])
+        return flag.isActive()
+
+    if dropped(name):
+        return True
+    other = min((n for n in maps if n != name), key=lambda n: os.path.getsize(maps[n]))
+    # said before its drop, as set_3d_view's steps are: an abort right after leaves the 3D view on it (REVIEW.md HLP-191)
+    print(SETTING + 'environment %s first, then %s again' % (other, name))
+    if not dropped(other):
+        raise RuntimeError('the 3D view took no environment map dropped on it')
+    if not dropped(name):
+        raise RuntimeError("the 3D view didn't take %s again: it shows %s" % (name, other))
+    return False
+
+
+def _set_environment(
+    params: QtWidgets.QDockWidget,
+    bar: QtWidgets.QMenuBar,
+    viewport: QtWidgets.QWidget,
+    name: str | None,
+    rotation: float | None,
+    exposure: float | None,
+    keep: list[Kept],
+    watched: _Frames,
+) -> tuple[str, bool]:
+    """The 3D view's environment, through the Parameters panel `params` as Environment > Edit properties shows it:
+    Designer's map `name` dropped on `viewport` (_drop_map), then the rotation in degrees and the exposure, each given
+    or None. Each change is waited for on `watched` from right before it (_commit_change): one wait from before the
+    first ended before the last was drawn, the view back at rest between them (REVIEW.md HLP-192). The panel is turned
+    back to the graph in the editor once it shows the environment, even when a step fails
+    (_in_properties). Returns what was set, the values as the spin boxes then show them, and whether it changed what the
+    view shows: a map changed, or a value committed; an error after a change says what was set (REVIEW.md HLP-193)."""
+
+    def setting() -> tuple[str, bool]:
+        name_set: str | None = None
+        rotation_set: float | None = None
+        exposure_set: float | None = None
+        changed = False  # what the view shows: a map changed, or a value committed
+        try:
+            if name is not None:
+                field = _panel_field(params, 'environment_texture_name', 'the Environment field', keep, spins=0)
+                with _Waiting(watched) as waiting:
+                    # asked again, the map shown is dropped back after another: the view restarts nothing, and the
+                    # wait would run to its limit (REVIEW.md HLP-201)
+                    waiting.needed = changed = _drop_map(viewport, field, name)
+                    name_set = name  # before its wait: an error there says the map was set (REVIEW.md HLP-200)
+            if rotation is not None:
+                turned = "the environment's Rotation Angle"
+                rotation_set, committed = _commit_change(  # said before its wait
+                    lambda: _panel_spin(params, 'dome_rotation_angle', turned, keep, 1), rotation, turned, watched
+                )  # Degrees
+                if committed is not None:
+                    changed = True
+                    watched.settled(committed)
+            if exposure is not None:
+                brightened = "the environment's Exposure"
+                exposure_set, committed = _commit_change(
+                    lambda: _panel_spin(params, 'intensity', brightened, keep), exposure, brightened, watched
+                )
+                if committed is not None:
+                    changed = True
+                    watched.settled(committed)
+        except (Exception, APIException) as e:  # the sd API's error is a BaseException too
+            if (name_set, rotation_set, exposure_set) == (None, None, None):
+                raise
+            raise _with_set(e, _environment_said(name_set, rotation_set, exposure_set)) from e
+        return _environment_said(name_set, rotation_set, exposure_set), changed
+
+    return _in_properties(
+        params,
+        lambda: _menu_action(bar, keep, 'Environment', 'Edit properties').trigger(),
+        setting,
+        "the environment's properties",
+    )
 
 
 def _navigation_tools(dock: QtWidgets.QDockWidget, keep: list[Kept]) -> tuple[QtGui.QAction, QtGui.QAction]:
@@ -606,14 +874,18 @@ def _drag(
         viewport.removeEventFilter(guard)
 
 
-def _set_up_checked(graph: str | None, mesh: str | None, view: str | None) -> SDSBSCompGraph | None:
+def _set_up_checked(
+    graph: str | None, mesh: str | None, view: str | None, environment: str | None = None
+) -> SDSBSCompGraph | None:
     """The graph `graph` names (None without one), once what the arguments alone rule out is refused: a mesh or view
-    the 3D view's menus don't have (MESHES, VIEWS), and a graph with fewer than two outputs. Nothing in Designer's UI
-    is looked at or changed."""
+    the 3D view's menus don't have (MESHES, VIEWS), an environment map Designer doesn't have (_environment_maps), and a
+    graph with fewer than two outputs. Nothing in Designer's UI is looked at or changed."""
     if mesh is not None and mesh not in MESHES:
         raise RuntimeError('unknown mesh %r; the 3D view has %s' % (mesh, ', '.join(MESHES)))
     if view is not None and view not in VIEWS:
         raise RuntimeError('unknown view %r; the 3D view has %s' % (view, ', '.join(VIEWS)))
+    if environment is not None and environment not in (maps := _environment_maps()):
+        raise RuntimeError('unknown environment %r; Designer has %s' % (environment, ', '.join(maps)))
     g = find_graph(graph) if graph else None
     if g is not None:
         outputs = len(g.getOutputNodes())
@@ -627,6 +899,19 @@ def _set_up_checked(graph: str | None, mesh: str | None, view: str | None) -> SD
     return g
 
 
+class _SetUp:
+    """A set-up _3d_set_up checked: called with `between` and `frames`, it runs its steps (its `run`) and returns whether
+    it changed what the view shows. `may_change`: whether it may, known before it runs (the camera moved, the mesh
+    switched, the tiling or the light given), so a 3D shot takes a render before it to compare with (shot3d.py)."""
+
+    def __init__(self, run: Callable[[Callable[[], None] | None, _Frames | None], bool], may_change: bool) -> None:
+        self.run = run
+        self.may_change = may_change
+
+    def __call__(self, between: Callable[[], None] | None, frames: _Frames | None = None) -> bool:
+        return self.run(between, frames)
+
+
 def _3d_set_up(
     graph: str | None = None,
     mesh: str | None = None,
@@ -635,18 +920,24 @@ def _3d_set_up(
     tiling: float | None = None,
     orbit: Sequence[float] | None = None,
     pan: Sequence[float] | None = None,
-) -> Callable[[Callable[[], None] | None, _Frames | None], None]:
+    environment: str | None = None,
+    environment_rotation: float | None = None,
+    environment_exposure: float | None = None,
+) -> _SetUp:
     """set_3d_view checked, changing nothing: what the arguments rule out, the graph, the panels, the menu entries and
     the tools it needs, an orbit or pan of less than a pixel's drag; refused here (shoot_3d calls it before it puts
-    Designer's window on screen: REVIEW.md HLP-127). Returns its steps, to run: set_3d_view's docstring. They run
-    `between`, when given, before each step: the 3D shot's look whether the user made Designer the active app, which
-    also puts the window on screen again if it went off screen (shot3d.py; REVIEW.md HLP-136, HLP-158). Run without a
-    watch, the viewpoint's turn and Frame run with the window on screen, transparent (_on_screen): off screen nothing
-    says the turn ended (frames3d.py; REVIEW.md HLP-158). A caller giving its watch keeps the window on screen itself,
-    and passes its look as `between`: the shot, or set_3d_view with a move (REVIEW.md HLP-168, HLP-174). The same look
-    runs after the turn, before Frame (REVIEW.md HLP-163). Each step waits for the 3D view to take it on the watch of
-    its frames they are given, or on one of their own (frames3d.py; REVIEW.md HLP-148)."""
-    g = _set_up_checked(graph, mesh, view)
+    Designer's window on screen: REVIEW.md HLP-127). Returns its steps, to run: set_3d_view's docstring. Given a
+    watch, they run `between`, when given, before each step and after the viewpoint's turn, before Frame: the 3D
+    shot's look whether the user made Designer the active app, which also puts the window on screen again if it went
+    off screen (shot3d.py; REVIEW.md HLP-136, HLP-158, HLP-163). The shot gives its watch of the view's frames and its
+    look, and keeps the window on screen itself (REVIEW.md HLP-174). Run without a watch, as set_3d_view runs them, the
+    steps of a set-up that moves the camera, puts a graph's outputs on the mesh or switches the mesh run with the
+    window on screen, transparent (_on_screen; REVIEW.md HLP-168, HLP-196, HLP-197), its own look in place of
+    `between`. In any other set-up, only the viewpoint's turn and Frame do: off screen nothing says the turn ended
+    (frames3d.py; REVIEW.md HLP-158). Each step waits for the 3D view to take it on the watch of its frames they are
+    given, or on one of their own (frames3d.py; REVIEW.md HLP-148)."""
+    g = _set_up_checked(graph, mesh, view, environment)
+    lit = environment is not None or environment_rotation is not None or environment_exposure is not None
     mw = _main_window()
     keep: list[Kept] = [mw]
     dock = _3d_dock(mw)
@@ -666,26 +957,68 @@ def _3d_set_up(
         camera, light = _navigation_tools(dock, keep)
     tree = _explorer_tree(mw, keep) if g is not None else None
     params = None
-    if tiling is not None:
+    # the options set through the Parameters panel, as given
+    paneled = [
+        name + '='
+        for name, value in (
+            ('tiling', tiling),
+            ('environment', environment),
+            ('environment_rotation', environment_rotation),
+            ('environment_exposure', environment_exposure),
+        )
+        if value is not None
+    ]
+    if paneled:
         params = _visible_dock(mw, _PANEL_AREAS['parameters'])
         if params is None:
-            raise RuntimeError("tiling= goes through the Parameters panel, which isn't visible (Windows > Parameters)")
+            *rest, last = paneled
+            options, verb = ('%s and %s' % (', '.join(rest), last), 'go') if rest else (last, 'goes')
+            raise RuntimeError(
+                "%s %s through the Parameters panel, which isn't visible (Windows > Parameters)" % (options, verb)
+            )
         keep.append(params)
     needed: list[tuple[str, ...]] = [('Scene', mesh)] if mesh is not None else []
     if view is not None:
         needed += [('Camera', view), ('Camera', 'Frame')]
     if tiling is not None:  # with mesh=, the new mesh's material, read as it shows (_set_tiling)
         needed.append(('Materials',) if mesh is not None else ('Materials', _material(bar, keep), 'Edit properties'))
-    for path in needed:
-        _menu_action(bar, keep, *path)  # there; looked up again as it is used, after the mesh may have changed
+    if lit:
+        needed.append(('Environment', 'Edit properties'))
+    for entry in needed:
+        _menu_action(bar, keep, *entry)  # there; looked up again as it is used, after the mesh may have changed
+    # what runs whole on screen when run on its own (run); a mesh checked in the Scene menu is shown already
+    switching = mesh is not None and not _menu_action(bar, keep, 'Scene', mesh).isChecked()
+    on_screen = moving or g is not None or switching
 
-    def run(between: Callable[[], None] | None, frames: _Frames | None = None) -> None:
+    def run(between: Callable[[], None] | None, frames: _Frames | None) -> bool:
+        """The set-up's steps (steps). Given `frames`, the watch of a caller keeping the window on screen (the
+        shot's), they run on it, `between` before each. Run on its own, with no `frames`, a set-up that moves the
+        camera, puts a graph's outputs on the mesh or switches the mesh runs whole with Designer's window on screen,
+        transparent and click-through, as a 3D shot sets up (_on_screen; set_3d_view's docstring). Before each step,
+        the look that puts the window on screen again runs instead of `between`. Any other set-up runs off screen, but
+        for a viewpoint's turn, `between` before each step. Returns whether it changed what the view shows (steps)."""
+        if frames is not None:
+            return steps(between, frames, True)
+        watched = _frames_of(mw, viewport)
+        try:
+            if not on_screen:
+                return steps(between, watched, False)
+            with _on_screen(mw, watched) as screen:
+                # before each step, the window put on screen again if it went off
+                return steps(screen.again, watched, True)
+        finally:
+            watched.close()
+
+    def steps(between: Callable[[], None] | None, watched: _Frames, kept: bool) -> bool:
         """The set-up's steps, checked by _3d_set_up, `between` run before each. Each waits for the 3D view to take
-        it on `frames`, the watch of a caller keeping the window on screen (the shot's, or set_3d_view's with a move),
-        or on one of its own (frames3d.py; REVIEW.md HLP-174)."""
-        watched = frames if frames is not None else _Frames(viewport, lambda: _3d_render(mw))
+        it on `watched`, the caller's watch of its frames or run's own (frames3d.py; REVIEW.md HLP-174). `kept`:
+        whether Designer's window is kept on screen meanwhile, by the caller (the shot's) or by run; if not, a
+        viewpoint's turn puts it on screen itself. Returns whether it changed what the view shows: the camera moved,
+        the mesh switched, the tiling or the light changed (a value committed, a map taken at its first drop). A view
+        or a graph may be what is shown already, so they don't count (shoot_3d's retakes)."""
         done: list[str] = []
-        tiling_begun = False  # an abort's handler then turns the Parameters panel back
+        changed = False
+        panel_begun = False  # the tiling or the environment begun: an abort's handler turns the Parameters panel back
         switched = False  # the Light tool was selected, the Camera tool selected for the drags and the wheel
         pressed: Pressed = []  # a drag's button down: _drag's own record
 
@@ -694,105 +1027,116 @@ def _3d_set_up(
             HLP-119). `between` runs first."""
             if between is not None:
                 between()
-            print('3D view, setting: ' + step)
+            print(SETTING + step)
             return step
 
         try:
-            try:
-                if mesh is not None:
-                    step = begin(mesh)
-                    since = watched.mark()
-                    _menu_action(bar, keep, 'Scene', mesh).trigger()
-                    watched.settled(since)
-                    done.append(step)
-                if g is not None:
-                    step = begin("graph %s's outputs on the mesh" % g.getIdentifier())
-                    since = watched.mark()
+            if mesh is not None:
+                step = begin(mesh)
+                picked = _menu_action(bar, keep, 'Scene', mesh)
+                with _Waiting(watched) as waiting:
+                    # checked, it is shown already: picked again, it restarts nothing, and the wait would run to its
+                    # limit (REVIEW.md HLP-195)
+                    waiting.needed = changed = not picked.isChecked()
+                    if changed:
+                        picked.trigger()
+                    done.append(step)  # before its wait: an error there says the step was set (REVIEW.md HLP-200)
+            if g is not None:
+                step = begin("graph %s's outputs on the mesh" % g.getIdentifier())
+                with _Waiting(watched):
                     g.compute()  # its outputs ready for the mesh
                     # the Explorer's tree was found above, as g was given
                     _apply_outputs(cast(QtWidgets.QTreeView, tree), g, keep)
-                    watched.settled(since)
-                    done.append(step)
-                if view is not None:
-                    step = begin('view %s, framed' % view)
+                    done.append(step)  # before its wait (REVIEW.md HLP-200)
+            if view is not None:
+                step = begin('view %s, framed' % view)
 
-                    # off screen nothing says the camera's turn ended (frames3d.py): set up on its own, the window is
-                    # shown for it, transparent, as the 3D shot shows it; in a shot it is on screen already, looked at
-                    # before each step (`between`; REVIEW.md HLP-158, the user's choice)
-                    def turn(look: Callable[[], None] | None) -> None:
-                        since = watched.mark()
-                        _menu_action(bar, keep, 'Camera', view).trigger()
-                        watched.moved(since)  # Frame at once cancels the camera's turn
-                        # off screen meanwhile, moved() ended there: the look puts the window on screen again and
-                        # waits for the view to settle there, which it does once the turn ends (REVIEW.md HLP-163)
-                        if look is not None:
-                            look()
-                        since = watched.mark()
-                        _menu_action(bar, keep, 'Camera', 'Frame').trigger()
-                        watched.settled(since)
-
-                    if frames is None:
-                        with _on_screen(mw, watched) as screen:
-                            turn(screen.again)
-                    else:
-                        turn(between)
-                    done.append(step)
-                if camera is not None and light is not None:  # moving: looked up above
-                    switched = light.isChecked()  # read before the change: an abort landing on it finds none
-                    # each option's moves are marked after its look (begin), which may put the window on screen again
-                    # and wait for the view's restart: from a mark before it, that restart ended the moves' wait
-                    # (REVIEW.md HLP-161). The last option's mark is the one waited from
-                    try:
-                        if switched:
-                            camera.trigger()
-                            _process_events()
-                        if orbit_drags:
-                            step = begin('orbit ' + _directions(turned, ' degrees'))
-                            since = watched.mark()
-                            for dx, dy in orbit_drags:
-                                _drag(viewport, QtCore.Qt.MouseButton.LeftButton, dx, dy, pressed, watched.taking)
-                            done.append(step)
-                        if pan_drags:
-                            step = begin('pan ' + _directions(panned, ' of the view'))
-                            since = watched.mark()
-                            for dx, dy in pan_drags:
-                                _drag(viewport, QtCore.Qt.MouseButton.MiddleButton, dx, dy, pressed, watched.taking)
-                            done.append(step)
-                        if zoom:
-                            step = begin('%+d wheel steps' % zoom)
-                            since = watched.mark()
-                            _wheel(viewport, zoom, watched.taking)
-                            done.append(step)
-                    finally:
-                        _tool_back(light, switched)
-                    watched.settled(since)
-                if tiling is not None:
-                    begin('tiling %g' % tiling)
-                    tiling_begun = True
+                # off screen nothing says the camera's turn ended (frames3d.py): set up on its own, the window is
+                # shown for it, transparent, as the 3D shot shows it; in a shot it is on screen already, looked at
+                # before each step (`between`; REVIEW.md HLP-158, the user's choice)
+                def turn(look: Callable[[], None] | None) -> None:
                     since = watched.mark()
-                    # the Parameters panel was found above, as tiling was given
-                    done.append(_set_tiling(cast(QtWidgets.QDockWidget, params), bar, tiling, keep))
-                    watched.settled(since)
-                print('3D view: ' + ', '.join(done))
-            except (Exception, APIException) as e:  # the sd API's error is a BaseException too
-                if not done:
-                    raise
-                raise RuntimeError('%s; the 3D view was already set: %s' % (e, ', '.join(done))) from e
-            except (
-                BaseException
-            ):  # an abort (the plugin's ScriptAborted): its steps said as begun; this handler runs untraced
-                for button, x, y in pressed:  # one landing on a drag's finally skipped its release
-                    _release(viewport, button, x, y)
-                if light is not None:  # or the Light tool's way back
-                    _tool_back(light, switched)
-                if tiling_begun:  # one landing on _set_tiling's finally's first line skipped its turn-back
-                    _parameters_back()
-                raise
-        finally:
-            if frames is None:
-                watched.close()
+                    _menu_action(bar, keep, 'Camera', view).trigger()
+                    done.append('view %s' % view)  # before the waits: an error there says it (REVIEW.md HLP-200)
+                    watched.moved(since)  # Frame at once cancels the camera's turn
+                    # off screen meanwhile, moved() ended there: the look puts the window on screen again and
+                    # waits for the view to settle there, which it does once the turn ends (REVIEW.md HLP-163)
+                    if look is not None:
+                        look()
+                    with _Waiting(watched):
+                        _menu_action(bar, keep, 'Camera', 'Frame').trigger()
+                        done[-1] = step  # framed
 
-    return run
+                if kept:
+                    turn(between)
+                else:
+                    with _on_screen(mw, watched) as screen:
+                        turn(screen.again)
+            if camera is not None and light is not None:  # moving: looked up above
+                switched = light.isChecked()  # read before the change: an abort landing on it finds none
+                # each option's moves are marked after its look (begin), which may put the window on screen again
+                # and wait for the view's restart: from a mark before it, that restart ended the moves' wait
+                # (REVIEW.md HLP-161). The last option's mark is the one waited from
+                try:
+                    if switched:
+                        camera.trigger()
+                        _process_events()
+                    changed = True  # moving: a drag or a wheel step follows
+                    if orbit_drags:
+                        step = begin('orbit ' + _directions(turned, ' degrees'))
+                        since = watched.mark()
+                        for dx, dy in orbit_drags:
+                            _drag(viewport, QtCore.Qt.MouseButton.LeftButton, dx, dy, pressed, watched.taking)
+                        done.append(step)
+                    if pan_drags:
+                        step = begin('pan ' + _directions(panned, ' of the view'))
+                        since = watched.mark()
+                        for dx, dy in pan_drags:
+                            _drag(viewport, QtCore.Qt.MouseButton.MiddleButton, dx, dy, pressed, watched.taking)
+                        done.append(step)
+                    if zoom:
+                        step = begin('%+d wheel steps' % zoom)
+                        since = watched.mark()
+                        _wheel(viewport, zoom, watched.taking)
+                        done.append(step)
+                finally:
+                    _tool_back(light, switched)
+                watched.settled(since)
+            if tiling is not None:
+                begin('tiling %g' % tiling)
+                panel_begun = True
+                # the Parameters panel was found above, as tiling was given; its change is waited for in the step
+                said, tiled = _set_tiling(cast(QtWidgets.QDockWidget, params), bar, tiling, keep, watched)
+                done.append(said)
+                changed |= tiled
+            if lit:
+                light_set = (environment, environment_rotation, environment_exposure)
+                begin(_environment_said(*light_set))
+                panel_begun = True
+                # the Parameters panel was found above, as the environment was given; each change is waited for
+                # in the step, from right before it (REVIEW.md HLP-192)
+                panel = cast(QtWidgets.QDockWidget, params)
+                said, lit_changed = _set_environment(panel, bar, viewport, *light_set, keep, watched)
+                done.append(said)
+                changed |= lit_changed
+            print('3D view: ' + ', '.join(done))
+            return changed
+        except (Exception, APIException) as e:  # the sd API's error is a BaseException too
+            if not done:
+                raise
+            raise RuntimeError('%s; the 3D view was already set: %s' % (e, ', '.join(done))) from e
+        except (
+            BaseException
+        ):  # an abort (the plugin's ScriptAborted): its steps said as begun; this handler runs untraced
+            for button, x, y in pressed:  # one landing on a drag's finally skipped its release
+                _release(viewport, button, x, y)
+            if light is not None:  # or the Light tool's way back
+                _tool_back(light, switched)
+            if panel_begun:  # one landing on _set_tiling's or _set_environment's finally skipped its turn-back
+                _parameters_back()
+            raise
+
+    return _SetUp(run, moving or switching or tiling is not None or lit)
 
 
 def set_3d_view(
@@ -803,28 +1147,28 @@ def set_3d_view(
     tiling: float | None = None,
     orbit: Sequence[float] | None = None,
     pan: Sequence[float] | None = None,
+    environment: str | None = None,
+    environment_rotation: float | None = None,
+    environment_exposure: float | None = None,
 ) -> None:
     """Set up the 3D view as the user sees it too: `graph`'s outputs on the mesh, the mesh (MESHES), the viewpoint
     (VIEWS, then framed), the camera turned `orbit` [right, up] degrees around the point it looks at and moved `pan`
-    [right, up] fractions of the view sideways, `zoom` wheel steps closer (negative: away), in that order, and the
-    material's tiling. The graph, the panels, the menu entries and the tools it needs are checked before anything
+    [right, up] fractions of the view sideways, `zoom` wheel steps closer (negative: away), in that order, the
+    material's tiling, then the environment: one of Designer's maps (_environment_maps), its rotation in degrees and its
+    exposure. The graph, the panels, the menu entries and the tools it needs are checked before anything
     changes (with mesh=, the new mesh's material once it shows). Prints '3D view, setting: <step>' before each change,
     so an abort leaves the steps it began said; an error after a change says what was set; then one line,
     '3D view: ...', of what it set. Where the view shows no count (Display > Samples off), each step's wait on screen
     compares renders, taken through the clipboard: only the user's clipboard text is put back, as for a 3D screenshot
     (DECISIONS.md; REVIEW.md HLP-152). Off screen it takes none (REVIEW.md HLP-170).
-    With orbit, pan or zoom, the whole set-up runs with Designer's window on screen, transparent and click-through, as a
-    3D screenshot sets up (_on_screen): off screen, the same moves came out differently between runs (frames3d.py;
-    REVIEW.md HLP-168, the user's choice). Without, only a viewpoint's turn runs on screen (_3d_set_up)."""
-    set_up = _3d_set_up(graph, mesh, view, zoom, tiling, orbit, pan)  # checked first, the window not changed yet
-    if not (orbit or pan or zoom):
-        set_up(None, None)
-        return
-    mw = _main_window()
-    dock = _3d_dock(mw)  # held: without, the viewport's wrapper went stale (as in shoot_3d)
-    frames = _Frames(_viewport(dock), lambda: _3d_render(mw))
-    try:
-        with _on_screen(mw, frames) as screen:
-            set_up(screen.again, frames)  # before each step, the window put on screen again if it went off
-    finally:
-        frames.close()
+    The whole set-up runs with Designer's window on screen, transparent and click-through, as a 3D screenshot sets up
+    (_on_screen), when it does any of these (the user's choices; DECISIONS.md):
+    - orbit, pan or zoom: off screen, the same moves came out differently between runs (frames3d.py; REVIEW.md
+      HLP-168);
+    - graph: off screen, the Explorer's menu unhid a hidden Designer and left it up (REVIEW.md HLP-196);
+    - a mesh switch: off screen, its step ends before the view took the switch, and a tiling set after it, in the same
+      call or the next, had its field deleted as it was set (REVIEW.md HLP-197).
+    Otherwise only a viewpoint's turn runs on screen (_3d_set_up)."""
+    _3d_set_up(  # checked first, the window not changed yet
+        graph, mesh, view, zoom, tiling, orbit, pan, environment, environment_rotation, environment_exposure
+    )(None, None)

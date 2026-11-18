@@ -32,6 +32,8 @@ REFUSED = [
     ('screenshot_designer', {'panel': '3d', 'tiling': INF}, 'tiling'),
     ('screenshot_designer', {'panel': '3d', 'orbit': [INF, 0]}, 'orbit[0]'),
     ('screenshot_designer', {'panel': '3d', 'pan': [0, NAN]}, 'pan[1]'),
+    ('screenshot_designer', {'panel': '3d', 'environment_rotation': INF}, 'environment_rotation'),
+    ('screenshot_designer', {'panel': '3d', 'environment_exposure': NAN}, 'environment_exposure'),
 ]
 
 

@@ -1,5 +1,5 @@
-"""screenshot_designer's 3D view options (ROADMAP items 7 and 74): what the server refuses before reaching Designer, and how it
-calls the helpers. Driving the 3D view itself is checked live (editor_panels_and_fit)."""
+"""screenshot_designer's 3D view options (ROADMAP items 7, 73 and 74): what the server refuses before reaching Designer,
+and how it calls the helpers. Driving the 3D view itself is checked live (editor_panels_and_fit)."""
 
 import asyncio
 import os
@@ -51,6 +51,9 @@ OPTIONS: dict[str, Json] = {
     'tiling': 2.0,
     'orbit': [90.0, -30.0],
     'pan': [0.25, 0.5],
+    'environment': 'studio',
+    'environment_rotation': 90.0,
+    'environment_exposure': 1.0,
 }
 
 
@@ -85,6 +88,17 @@ def test_3d_options_need_the_3d_panel(monkeypatch: pytest.MonkeyPatch, temp_fold
         ('pan', [1.5, 0.0], r'pan is \[right, up\] in fractions of the view.*not \[1\.5, 0\.0\]'),
         ('pan', [0.0, -1.01], r'pan is \[right, up\] in fractions of the view'),
         # orbit [90] or [1, 2, 3], pan [0.5]: their schemas refuse them (test_server.py, REVIEW.md SRV-177)
+        ('environment_rotation', 180.5, r'environment_rotation is in degrees, -180 to 180, not 180\.5'),
+        ('environment_rotation', -181.0, 'environment_rotation is in degrees'),
+        ('environment_rotation', float('nan'), 'environment_rotation'),
+        # REVIEW.md SRV-183: "0 by default" read as its value when left out
+        (
+            'environment_exposure',
+            10.5,
+            r"environment_exposure is the environment's Exposure, -10 to 10 \(Designer starts at 0\), not 10\.5",
+        ),
+        ('environment_exposure', -11.0, 'environment_exposure is'),
+        ('environment_exposure', float('nan'), 'environment_exposure'),
     ],
 )
 def test_options_out_of_range_are_refused(
@@ -108,7 +122,39 @@ def test_the_3d_view_is_set_up_and_shot_in_one_helper_call(
     _shoot({'panel': '3d', **OPTIONS})
     assert len(sent) == 1
     shot = os.path.join(temp_folders[-1], 'shot.png')
-    assert _call(sent[0]) == "shoot_3d(%r, 'g', 'Plane', 'Top', 2, 2.0, (90.0, -30.0), (0.25, 0.5))" % shot
+    assert _call(sent[0]) == (
+        "shoot_3d(%r, 'g', 'Plane', 'Top', 2, 2.0, (90.0, -30.0), (0.25, 0.5), 'studio', 90.0, 1.0)" % shot
+    )
+
+
+@pytest.mark.parametrize(
+    'option, value',
+    [
+        # the rotation and the exposure are values Designer's fields are set to, 0 included: unlike a turn, pan or zoom
+        # of 0, not nothing to do
+        ('environment_rotation', 0.0),
+        ('environment_exposure', 0.0),
+        # the limits taken (REVIEW.md TST-538: only values past them were tried)
+        ('environment_rotation', 180.0),
+        ('environment_rotation', -180.0),
+        ('environment_exposure', 10.0),
+        ('environment_exposure', -10.0),
+    ],
+)
+def test_an_environment_value_is_sent_as_given(
+    monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], option: str, value: float
+) -> None:
+    sent = _bridge(monkeypatch, temp_folders)
+    _shoot({'panel': '3d', option: value})
+    rotation, exposure = (value, None) if option == 'environment_rotation' else (None, value)
+    shot = os.path.join(temp_folders[-1], 'shot.png')
+    assert _call(sent[0]) == 'shoot_3d(%r, None, None, None, 0, None, None, None, None, %r, %r)' % (
+        shot,
+        rotation,
+        exposure,
+    )
+    with pytest.raises(ToolError, match=r"panel='3d'"):
+        _shoot({'panel': 'graph', option: value})
 
 
 def _plain(panel: str, folders: list[str]) -> str:
@@ -116,7 +162,7 @@ def _plain(panel: str, folders: list[str]) -> str:
     save_screenshot."""
     shot = os.path.join(folders[-1], 'shot.png')
     if panel == '3d':
-        return 'shoot_3d(%r, None, None, None, 0, None, None, None)' % shot
+        return 'shoot_3d(%r, None, None, None, 0, None, None, None, None, None, None)' % shot
     return 'save_screenshot(%r, %r)' % (panel, shot)
 
 
@@ -150,7 +196,7 @@ FRONT = (
     'covered'
 )
 BACK = "Designer's window: put back behind the window that was in front of it"
-STALE = '3D render: identical to the render before the set-up, though the set-up moved the camera or switched the mesh.'
+STALE = '3D render: identical to the render before the set-up, though the set-up moved the camera, switched the mesh, or changed the tiling or the light.'
 
 
 def test_what_was_done_to_designers_window_and_a_stale_render_come_beside_the_image(
@@ -181,8 +227,16 @@ def test_a_shot_that_failed_says_what_was_done_to_designers_window(
 @pytest.mark.parametrize('panel', ['3d', 'graph'])
 @pytest.mark.parametrize(
     'option, value',
-    [('orbit', [0.0, 0.0]), ('pan', [0.0, 0.0]), ('zoom', 0), ('graph', ''), ('mesh', ''), ('view', '')],
-    ids=['orbit', 'pan', 'zoom', 'graph', 'mesh', 'view'],
+    [
+        ('orbit', [0.0, 0.0]),
+        ('pan', [0.0, 0.0]),
+        ('zoom', 0),
+        ('graph', ''),
+        ('mesh', ''),
+        ('view', ''),
+        ('environment', ''),
+    ],
+    ids=['orbit', 'pan', 'zoom', 'graph', 'mesh', 'view', 'environment'],
 )
 def test_a_turn_pan_or_zoom_of_zero_or_an_empty_name_sets_nothing_up(
     monkeypatch: pytest.MonkeyPatch,

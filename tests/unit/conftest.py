@@ -110,6 +110,9 @@ class View3dOptions(TypedDict, total=False):
     tiling: float | None
     orbit: Sequence[float] | None  # a tuple from screenshot_designer (REVIEW.md HLP-188)
     pan: Sequence[float] | None
+    environment: str | None
+    environment_rotation: float | None
+    environment_exposure: float | None
 
 
 # What builtins.open takes as its file: typeshed's FileDescriptorOrPath, which exists for the checker only.

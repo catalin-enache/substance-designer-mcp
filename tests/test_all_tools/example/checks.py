@@ -103,7 +103,7 @@ async def run(ctx: Ctx) -> None:
                 },
             )
         )
-        outs = dict(re.findall(r'(\w+)=(\d+)', t))
+        outs: dict[str, str] = dict(re.findall(r'(\w+)=(\d+)', t))
         t = text(await designer_script(c, 'example/output_usage', graph=EXAMPLE_GRAPH, node=outs.get('basecolor', '0')))
         check('designer facts', 'output usages read back (baseColor RGBA sRGB)', 'USAGE=baseColor RGBA sRGB' in t, t)
         t = text(

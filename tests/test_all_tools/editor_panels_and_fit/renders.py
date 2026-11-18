@@ -95,13 +95,15 @@ def _row_transitions(row: 'np.ndarray[tuple[int], np.dtype[np.float64]]') -> int
 def difference(
     a: 'np.ndarray[tuple[int, int], np.dtype[np.float64]]', b: 'np.ndarray[tuple[int, int], np.dtype[np.float64]]'
 ) -> float:
-    """The mean absolute difference in grey levels of two renders of one size; 255 for two sizes."""
-    return float(np.abs(a - b).mean()) if a.shape == b.shape else 255.0
+    """The mean absolute difference in grey levels of two renders of one size. NaN for two sizes: no comparison with
+    it holds, so neither a change nor its absence passes (REVIEW.md TST-540: 255 passed every "the render changed").
+    min() and max() may drop a NaN: compare with the difference itself."""
+    return float(np.abs(a - b).mean()) if a.shape == b.shape else float('nan')
 
 
 def say_failed(what: str, *shots: CallToolResult) -> None:
     """Prints, each on a line of its own, why a shot failed, or the sizes of two images of two sizes (difference()'s
-    255.0): a check's detail is cut at 150 characters (common.check; REVIEW.md TST-334)."""
+    NaN): a check's detail is cut at 150 characters (common.check; REVIEW.md TST-334)."""
     for i, r in enumerate(shots, 1):
         if not is_image(r):
             print(

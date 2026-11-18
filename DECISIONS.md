@@ -257,15 +257,16 @@ entry, takes the user (the `address-review` skill, **Recording decisions**).
   the text comes back. The self-test's clipboard checks keep only the user's text too. README says so. The user's
   decision, 2026-11-10.
   Reopen if: the user wants the whole clipboard kept, or the text is seen not to come back.
-- **After setting the 3D view's tiling, the Parameters panel goes back to the graph in the editor, not to the node that
-  was selected.** `screenshot_designer('3d', tiling=...)` sets the tiling through the Parameters panel, then turns the
-  panel back to the graph in the editor (how, as measured: `designer_helpers/view3d.py`). Turning it back to a
-  selected node would take a click on that node in the user's graph view, since the API can't show a node in the panel
-  (GUIDE.md, Designer UI). Nothing in the graph changes, and one click on the node shows its parameters again. The
-  user's decision, 2026-11-12.
+- **After setting the 3D view's tiling or environment, the Parameters panel goes back to the graph in the editor, not
+  to the node that was selected.** `screenshot_designer('3d', tiling=...)` and its environment options set them
+  through the Parameters panel, then turn the panel back to the graph in the editor (how, as measured:
+  `designer_helpers/view3d.py`). Turning it back to a selected node would take a click on that node in the user's
+  graph view, since the API can't show a node in the panel (GUIDE.md, Designer UI). Nothing in the graph changes, and
+  one click on the node shows its parameters again. The user's decision, 2026-11-12, for the tiling; widened to the
+  environment at their request, 2026-11-18.
   Reopen if: the user wants the selected node back, or the API gains a way to show a node in the Parameters panel.
-- **A 3D screenshot puts Designer's window on screen transparent, then back as it was.** The 3D view doesn't draw
-  off screen, but it draws in a transparent window in front (`designer_helpers/shot3d.py`). So a minimized, covered
+- **A 3D screenshot, and `set_3d_view` where it can't work off screen, put Designer's window on screen transparent, then
+  back as it was.** The 3D view doesn't draw off screen, but it draws in a transparent window in front (`designer_helpers/shot3d.py`). So a minimized, covered
   or hidden window is brought in front, transparent and click-through, for the shot. Then it is minimized again, put
   back behind the window that covered it, or hidden again, and made opaque. The user chose this over refusing the
   shot on 2026-11-13, first with the window brought up visibly ("Restore: un-minimize your window, take the shot ...
@@ -280,8 +281,15 @@ entry, takes the user (the `address-review` skill, **Recording decisions**).
   it opens, and on macOS click-through too (`designer_helpers/view3d.py`). Whether a click would reach the menu while
   it is only transparent couldn't be measured without clicking on the user's screen; the user chose click-through
   ("Make it click-through (Recommended)", 2026-11-14).
+  `set_3d_view` run on its own does the same for camera moves, `graph=` and a mesh switch (`designer_helpers/view3d.py`);
+  otherwise only a viewpoint's turn runs on screen. Off screen, the same moves came out differently between runs, the
+  Explorer's menu that `graph=` opens unhid a hidden Designer and left it up, and a tiling set after a mesh switch, in
+  the same call or the next, had its field deleted as it was set. The user chose this over refusing those set-ups, for
+  the moves on 2026-11-16 ("Show the window (Recommended)"), and for `graph=` and a mesh switch on 2026-11-18 ("Show the
+  window (Recommended)", then "Any mesh switch (Recommended)").
   Reopen if: the user sees the window during a shot, wants it left up or the shot refused, sees an app under it pause
-  during a shot, or showing it makes Designer the active app.
+  during a shot, or showing it makes Designer the active app; or a way is found to run those set-ups off screen as
+  they come out on screen.
 - **Why `open_graph`'s wheel steps once did nothing is unknown, and isn't being chased.** It happened in one self-test
   run of four. Not reproduced: 200 wheel steps and 40 fits in a fresh Designer gave no stuck step, idle and under
   load. `_fit_view_to` no longer reports such a view as fitted, and gives the view's size and whether Designer's

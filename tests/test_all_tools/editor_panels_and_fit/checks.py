@@ -8,6 +8,8 @@ import sys
 from collections.abc import Callable
 from textwrap import dedent
 
+from mcp.types import CallToolResult
+
 from test_all_tools import common, window_server
 from test_all_tools.common import (
     ABORT_AT,
@@ -27,7 +29,6 @@ from test_all_tools.common import (
 from test_all_tools.editor_panels_and_fit import popups, window_states
 from test_all_tools.editor_panels_and_fit.preparations import (
     CHECKER_OPS,
-    PLAIN_OPS,
     VIEW3D_ADDED,
     VIEW3D_GRAPH,
     VIEW3D_PLAIN,
@@ -226,14 +227,14 @@ async def check_orbit_turns_the_camera_around_what_it_looks_at(ctx: Ctx) -> None
         check(
             'screenshot_designer',
             'orbit= from Front: 90 degrees %s is the %s view' % (way, view),
-            near < min(3.0, 0.5 * far) and said is not None and abs(float(said.group(1)) - 90) <= 0.5,
+            near < 3.0 and near < 0.5 * far and said is not None and abs(float(said.group(1)) - 90) <= 0.5,
             '%.2f from %s, %.2f from %s | %s' % (near, view, far, beside, text(r).strip()),
         )
     near, far = difference(grey(both), grey(one)), difference(grey(both), grey(up))
     check(
         'screenshot_designer',
         'orbit=[90, 90] from Front, two turns in one call, is [0, 90] from Right',
-        near < min(3.0, 0.5 * far),
+        near < 3.0 and near < 0.5 * far,
         '%.2f from [0, 90] from Right, %.2f from [0, 90] from Front | %s' % (near, far, text(both).strip()),
     )
 
@@ -419,7 +420,11 @@ async def check_a_drag_turns_the_camera_alike_with_selection_on(ctx: Ctx) -> Non
     check(
         'designer facts',
         "with the 3D view's Selection toggle on, a turn and a pan come out alike and the Parameters panel is kept",
-        'SELECTION=True' in selection and near < min(3.0, 0.5 * far) and 0.24 <= moved <= 0.26 and panel == panel_after,
+        'SELECTION=True' in selection
+        and near < 3.0
+        and near < 0.5 * far
+        and 0.24 <= moved <= 0.26
+        and panel == panel_after,
         '%.2f from Right, %.2f from Front; panned %.3f | %s | %s (was %s)'
         % (near, far, moved, selection.strip(), panel_after.strip(), panel.strip()),
     )
@@ -472,7 +477,7 @@ async def check_the_users_mouse_doesnt_stop_a_turn_or_pan(ctx: Ctx) -> None:
     check(
         'screenshot_designer',
         "the user's mouse moving in a drag doesn't stop orbit=",
-        'HOVERED' in turned_said and near < min(3.0, 0.5 * far),
+        'HOVERED' in turned_said and near < 3.0 and near < 0.5 * far,
         '%.2f from Right, %.2f from Front | %s' % (near, far, turned_said.strip()[-90:]),
     )
     moved = moved_left(grey(small), grey(panned))
@@ -539,9 +544,7 @@ async def check_opening_the_editors_graph_again_leaves_the_outputs_on_the_mesh(c
     if ctx.was_running:
         skip('designer facts', "opening the editor's graph again doesn't put its outputs on the mesh", USERS_3D_VIEW)
         return
-    await prepared_call(c, 'create_graph', {'name': VIEW3D_PLAIN, 'size_log2': 9})
-    await prepared_call(c, 'apply_edits', {'graph': VIEW3D_PLAIN, 'ops': PLAIN_OPS})
-    await prepared_call(c, 'open_graph', {'graph': VIEW3D_PLAIN})
+    await prepared_call(c, 'open_graph', {'graph': VIEW3D_PLAIN})  # built by the preparation
     r = await with_checker(c, {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH, 'tiling': 1.0})
     seen = transitions(grey(r)) if is_image(r) else 0
     check(
@@ -549,6 +552,45 @@ async def check_opening_the_editors_graph_again_leaves_the_outputs_on_the_mesh(c
         "opening the editor's graph again doesn't put its outputs on the mesh",
         seen >= 6 and 'back on %s' % VIEW3D_PLAIN in text(r),
         '%d dark-light changes across the plane | %s' % (seen, text(r)),
+    )
+
+
+async def check_a_tiling_on_a_material_with_no_pattern_is_said_to_change_nothing(ctx: Ctx) -> None:
+    """On a Plane from the Top, VIEW3D_PLAIN's outputs on it (one colour, built by the preparation), the render at
+    tiling 2 is the render at tiling 1 (designer facts), and the 3D shot's line on a render identical after a set-up
+    names that case (designer_helpers/shot3d.py, STALE; REVIEW.md HLP-202: it said only that the view may not have been
+    drawn). The checker graph is put back on the mesh after, whatever failed. In a Designer the self-test started."""
+    c = ctx.c
+    fact = 'a tiling changes nothing a material with no pattern shows'
+    name = 'a render identical after a tiling is said to be one on a material with no pattern'
+    if ctx.was_running:
+        skip('designer facts', fact, USERS_3D_VIEW)
+        skip('screenshot_designer', name, USERS_3D_VIEW)
+        return
+    try:
+        before = await c('screenshot_designer', {**THREE_D, **TOP, 'graph': VIEW3D_PLAIN, 'tiling': 1.0})
+        after = await c('screenshot_designer', {**THREE_D, 'tiling': 2.0})
+    finally:
+        await c('screenshot_designer', {**THREE_D, 'graph': VIEW3D_GRAPH, 'tiling': 1.0})
+    if not (is_image(before) and is_image(after)):
+        check('designer facts', fact, False, 'a shot failed (below)')
+        check('screenshot_designer', name, False, 'a shot failed (below)')
+        say_failed(fact, before, after)
+        return
+    seen_before = grey(before)
+    apart = difference(seen_before, grey(after))
+    plain = transitions(seen_before)  # no pattern: VIEW3D_PLAIN's outputs reached the mesh (REVIEW.md TST-556)
+    check(
+        'designer facts',
+        fact,
+        apart == 0 and plain <= 2,
+        'the renders at tiling 1 and 2: %.2f grey levels apart; %d dark-light changes at tiling 1' % (apart, plain),
+    )
+    check(
+        'screenshot_designer',
+        name,
+        'a tiling changes nothing on a material with no pattern' in text(after),
+        text(after).strip()[-160:],
     )
 
 
@@ -697,13 +739,299 @@ async def check_a_material_the_mesh_doesnt_use_doesnt_stop_tiling(ctx: Ctx) -> N
     )
 
 
+# two of Designer's environment maps: one soft light on black, and a white studio in hard sunlight
+DARK, BRIGHT = 'studio_black_soft_light', 'studio_white_hard_sunlight'
+# the environment Designer starts with, put back after a check that changed it
+RESET_ENVIRONMENT = dedent("""
+    from PySide6 import QtWidgets
+    mw = _APP.getQtForPythonUIMgr().getMainWindow(); keep = [mw]
+    bar = _3d_dock(mw).findChildren(QtWidgets.QMenuBar)[0]; keep.append(bar)
+    _menu_action(bar, keep, 'Environment', 'Reset Environment').trigger()
+    _process_events()
+    print('ENVIRONMENT_RESET')""")
+
+
+async def check_the_environment_is_reset(ctx: Ctx, after: str) -> None:
+    """The environment Designer starts with, put back after the check `after` (RESET_ENVIRONMENT), and checked: the
+    category's later checks run in Designer's own light (REVIEW.md TST-545)."""
+    t = text(await ctx.c('execute_designer_code', {'code': ctx.helper_source + RESET_ENVIRONMENT}))
+    check('screenshot_designer', 'the environment is reset after %s' % after, 'ENVIRONMENT_RESET' in t, t)
+
+
+async def check_the_environment_is_set_as_measured(ctx: Ctx) -> None:
+    """What the environment options rely on, measured by a script of its own (editor_panels_and_fit/environment;
+    designer_helpers/view3d.py): the environment's fields found in the Parameters panel by the ends of their object
+    names; its Exposure 0 by default, and a value its spin box takes only through its own valueChanged(), the check of
+    the environment's options below running after; a map dropped on the 3D view signalled once
+    by the Environment field, the same map dropped again not at all, and the one before once again; a drop alone, or
+    an enter and a move, changing no map; 1.75 turns read as 630 degrees; Environment > Reset Environment putting the
+    rotation and the exposure back to 0 and changing the map (REVIEW.md TST-545, TST-546). In a Designer the self-test
+    started."""
+    c = ctx.c
+    name = "the 3D view's environment takes values and maps as measured"
+    if ctx.was_running:
+        skip('designer facts', name, USERS_3D_VIEW)
+        return
+    t = text(await designer_script(c, 'editor_panels_and_fit/environment', first=DARK, second=BRIGHT))
+    said: dict[str, str] = dict(re.findall(r'^(\w+)=(.*)$', t, re.M))
+    check(
+        'designer facts',
+        "the environment's fields are in the Parameters panel, by the ends of their object names",
+        said.get('FIELDS') == 'missing []',
+        said.get('FIELDS', t.strip()[-150:]),
+    )
+    check(
+        'designer facts',
+        "the environment's Exposure is 0 by default; its spin box takes a value only through its own valueChanged()",
+        said.get('BEFORE') == said.get('SET_ONLY') == '0' and said.get('COMMITTED') == '1.5',
+        'before %s, then 1.5 set alone: %s; committed: %s'
+        % (said.get('BEFORE'), said.get('SET_ONLY'), said.get('COMMITTED')),
+    )
+    check(
+        'designer facts',
+        'a map dropped on the 3D view is signalled once by the Environment field, the same map again not at all, the '
+        'one before once again',
+        said.get('SIGNALLED') == '1' and said.get('AGAIN') == '0' and said.get('BACK') == '1',
+        '%s signal(s), then %s for the same map, %s for the one before'
+        % (said.get('SIGNALLED'), said.get('AGAIN'), said.get('BACK')),
+    )
+    check(
+        'designer facts',
+        "a map's file dropped alone, or entered and moved alone, changes no map",
+        said.get('PARTIAL') == '0 0',
+        'signals: %s (dropped alone, entered and moved alone)' % said.get('PARTIAL'),
+    )
+    check(
+        'designer facts',
+        "the environment's Rotation Angle isn't wrapped: 1.75 turns reads 630 degrees",
+        said.get('TURNS') == '630',
+        'degrees: %s' % said.get('TURNS'),
+    )
+    check(
+        'designer facts',
+        'Environment > Reset Environment puts the rotation and the exposure back to 0, and changes the map',
+        said.get('RESET') == '0 0' and said.get('RESET_MAP') == '1',
+        'degrees and exposure after: %s; the map shown before, dropped after: %s signal(s)'
+        % (said.get('RESET'), said.get('RESET_MAP')),
+    )
+
+
+async def check_the_environment_turns_brightens_and_changes_the_light(ctx: Ctx) -> None:
+    """environment= drops one of Designer's maps on the 3D view; environment_rotation= sets its angle and
+    environment_exposure= its Exposure, through the Parameters panel, which is back on the graph in the editor after
+    (designer_helpers/view3d.py). On a sphere from the Front, under a map with one soft light (DARK): turned 90
+    degrees, the render changes; set to 90 degrees again, the angle shown, it stays and is said set (the angle set, not
+    added, is a unit test's: test_the_environment_said_is_what_its_spin_boxes_show; REVIEW.md SRV-181, TST-551); at
+    exposure 2 it is brighter; under another map (BRIGHT) it changes. The map shown, asked again, is said set and the
+    render stays: it is dropped again after another (the module docstring). The rotation and the exposure then set
+    again to what they were before the drops, the render stays: a drop keeps them (REVIEW.md TST-539). The environment
+    is reset after, whatever failed."""
+    c = ctx.c
+    name = 'environment, environment_rotation and environment_exposure set the light'
+    if ctx.was_running:
+        skip('screenshot_designer', name, USERS_3D_VIEW)
+        return
+    try:
+        # one shot, not with_checker's: its count of the checker's squares is for a plane from the top
+        sphere = await c('screenshot_designer', {**THREE_D, 'mesh': 'Sphere', 'view': 'Front', 'graph': VIEW3D_GRAPH})
+        light: dict[str, str | float] = {'environment': DARK, 'environment_rotation': 0.0, 'environment_exposure': 0.0}
+        first = await c('screenshot_designer', {**THREE_D, **light})
+        turned = await c('screenshot_designer', {**THREE_D, 'environment_rotation': 90.0})
+        turned_again = await c('screenshot_designer', {**THREE_D, 'environment_rotation': 90.0})
+        brighter = await c('screenshot_designer', {**THREE_D, 'environment_exposure': 2.0})
+        other = await c('screenshot_designer', {**THREE_D, 'environment': BRIGHT})
+        again = await c('screenshot_designer', {**THREE_D, 'environment': BRIGHT})
+        set_again = await c(
+            'screenshot_designer', {**THREE_D, 'environment_rotation': 90.0, 'environment_exposure': 2.0}
+        )
+        panel = text(await designer_script(c, 'editor_panels_and_fit/parameters_panel'))
+    finally:
+        await check_the_environment_is_reset(ctx, 'the check of the light')
+    shots = [sphere, first, turned, turned_again, brighter, other, again, set_again]  # the set-up's too (TST-548)
+    if not all(is_image(r) for r in shots):
+        check('screenshot_designer', name, False, 'a shot failed (below)')
+        say_failed(name, *shots)
+        return
+    greys = {id(r): grey(r) for r in shots}  # each shot decoded once
+
+    def sized(a: CallToolResult, b: CallToolResult) -> bool:
+        """Whether two of the shots are of one size; their sizes said when not."""
+        if greys[id(a)].shape != greys[id(b)].shape:
+            say_failed(name, a, b)
+            return False
+        return True
+
+    def apart(a: CallToolResult, b: CallToolResult) -> float:
+        """difference() of two of the shots: NaN for two sizes, said."""
+        sized(a, b)
+        return difference(greys[id(a)], greys[id(b)])
+
+    moved = apart(first, turned)
+    check(
+        'screenshot_designer',
+        'environment_rotation turns the light: the render changes',
+        moved >= 3,
+        'mean difference %.1f grey levels, turned 90 degrees' % moved,
+    )
+    stayed = apart(turned, turned_again)
+    check(
+        'screenshot_designer',
+        'environment_rotation set to the angle shown: said set, and the render stays',
+        stayed < 2 and 'rotation 90 degrees (' in text(turned_again),
+        'mean difference %.1f grey levels | %s' % (stayed, text(turned_again)),
+    )
+    # two sizes: NaN, as difference() gives (REVIEW.md TST-544: the background's share of the image changes)
+    gained = (
+        float(greys[id(brighter)].mean() - greys[id(turned_again)].mean())
+        if sized(brighter, turned_again)
+        else float('nan')
+    )
+    check(
+        'screenshot_designer',
+        'environment_exposure 2 brightens the render',
+        gained >= 3,
+        '%+.1f grey levels on average from exposure 0' % gained,
+    )
+    changed = apart(brighter, other)
+    check(
+        'screenshot_designer',
+        'environment changes the map: the render changes',
+        changed >= 5,
+        'mean difference %.1f grey levels from %s to %s' % (changed, DARK, BRIGHT),
+    )
+    kept = apart(other, again)
+    check(
+        'screenshot_designer',
+        'environment of the map shown is set again: said, and the render stays',
+        kept < 2 and '3D view: environment %s (' % BRIGHT in text(again),
+        'mean difference %.1f grey levels | %s' % (kept, text(again)),
+    )
+    held = apart(again, set_again)
+    check(
+        'screenshot_designer',
+        'a map dropped keeps the rotation and the exposure: set to them again after, the render stays',
+        held < 2,
+        'mean difference %.1f grey levels' % held,
+    )
+    m = re.search(r'PANEL=(.*)\|EDITOR=(.*)', panel)
+    said = 'environment %s, rotation 0 degrees, exposure 0 (' % DARK
+    check(
+        'screenshot_designer',
+        'the environment set is said; the Parameters panel back on the graph in the editor',
+        said in text(first) and m is not None and m.group(1) == m.group(2),
+        '%s | %s' % (text(first), panel.strip()),
+    )
+
+
+# 3D shots, saved alike (a tool's shot is shrunk to max_size, a render saved by shoot_3d isn't: REVIEW.md TST-423): a
+# sphere from the Front under DARK at 0 and 0, then the whole environment set in one shot with nothing after its last
+# change, as with no graph in the editor (the Parameters panel turned back by nothing, and seen switched at once), then
+# the view as it settled, with no set-up
+NOTHING_AFTER = dedent("""
+    shoot_3d(%r, mesh='Sphere', view='Front', environment=%r, environment_rotation=0.0, environment_exposure=0.0)
+    _turned_back = _parameters_back
+    def _parameters_back():
+        return None
+    def _switched(params, shown):
+        return None
+    try:
+        shoot_3d(%r, environment=%r, environment_rotation=90.0, environment_exposure=2.0)
+    finally:
+        _turned_back()
+    shoot_3d(%r)""")
+
+
+async def check_a_3d_shot_setting_the_whole_environment_waits_for_its_last_change(ctx: Ctx) -> None:
+    """A 3D shot setting the map, the rotation and the exposure in one call renders the view once its last change is
+    drawn: the shot matches one taken after it with no set-up. Nothing follows the last change here, as with no graph
+    in the editor (NOTHING_AFTER): one wait, from before the map's drop, ended before the exposure's change was drawn,
+    the view back at rest between the changes (REVIEW.md HLP-192: 1.20 and 1.78 grey levels apart, measured). The
+    environment is reset after, whatever failed. In a Designer the self-test started."""
+    c = ctx.c
+    name = 'a 3D shot setting the map, the rotation and the exposure waits for the last change'
+    if ctx.was_running:
+        skip('screenshot_designer', name, USERS_3D_VIEW)
+        return
+    base = os.path.join(ctx.scratch, 'environment_at_rest.png')
+    path, after = os.path.join(ctx.scratch, 'whole_environment.png'), os.path.join(ctx.scratch, 'settled.png')
+    try:
+        code = ctx.helper_source + NOTHING_AFTER % (base, DARK, path, BRIGHT, after)
+        t = text(await c('execute_designer_code', {'code': code}))
+    finally:
+        await check_the_environment_is_reset(ctx, 'the shot setting the whole environment')
+    if not (os.path.exists(path) and os.path.exists(after)):
+        check('screenshot_designer', name, False, 'a shot failed (below)')
+        print('      %s: %s' % (name, ' / '.join(t.strip().splitlines()[-3:])))
+        return
+    apart = difference(grey_file(path), grey_file(after))
+    check(
+        'screenshot_designer',
+        name,
+        apart < 0.5 and "exposure 2 (the Parameters panel shows the environment's properties)" in t,
+        'mean difference %.2f grey levels from the view settled after | %s' % (apart, t.strip()[-120:]),
+    )
+
+
+# a 3D shot given a mesh, a tiling and an environment's values, then the same again, its set-up's waits on the 3D view's
+# frames counted (WAITS=); the tiling put back to 1 after
+SHOWN_ALREADY = dedent("""
+    import os
+    folder = %r
+    shown = dict(mesh='Sphere', tiling=2.0, environment=%r, environment_rotation=90.0, environment_exposure=1.0)
+    shoot_3d(os.path.join(folder, 'first.png'), **shown)
+    _waits = []
+    _settled = _Frames.settled
+    def _counted(self, since):
+        _waits.append(since)
+        _settled(self, since)
+    _Frames.settled = _counted
+    try:
+        shoot_3d(os.path.join(folder, 'again.png'), **shown)
+    finally:
+        _Frames.settled = _settled
+        set_3d_view(tiling=1.0)  # no mesh switch: off screen, as HLP-197 needs one
+    print('WAITS=' + str(len(_waits)))""")
+
+
+async def check_values_a_3d_set_up_finds_shown_already_take_no_wait(ctx: Ctx) -> None:
+    """A mesh the 3D view shows already, a tiling and an environment's rotation and exposure the Parameters panel
+    shows already, and the map shown, are said set, with no wait on the 3D view's frames: picked, committed or dropped
+    back again, they restart nothing, so their waits ran to their limit (REVIEW.md HLP-195: 1.0 s for the mesh, 1.5 s
+    for the tiling, measured; HLP-192 for the environment; HLP-201: 0.95 s for the map). The second shot's render is
+    the first's: taken with no wait, it isn't one the view was still drawing. The environment is reset after, whatever
+    failed. In a Designer the self-test started."""
+    c = ctx.c
+    name = 'values a 3D set-up finds shown already are said set, with no wait'
+    if ctx.was_running:
+        skip('screenshot_designer', name, USERS_3D_VIEW)
+        return
+    try:
+        t = text(await c('execute_designer_code', {'code': ctx.helper_source + SHOWN_ALREADY % (ctx.scratch, DARK)}))
+    finally:
+        await check_the_environment_is_reset(ctx, 'the values shown already')
+    # each shot's line: the mesh, the tiling, then the environment, each with the Parameters panel turned back
+    said = re.findall(
+        r'^3D view: Sphere, tiling 2 \(.*\), environment %s, rotation 90 degrees, exposure 1 \(' % DARK, t, re.M
+    )
+    waits = re.search(r'^WAITS=(\d+)$', t, re.M)
+    paths = [os.path.join(ctx.scratch, f) for f in ('first.png', 'again.png')]
+    apart = difference(grey_file(paths[0]), grey_file(paths[1])) if all(map(os.path.exists, paths)) else float('nan')
+    check(
+        'screenshot_designer',
+        name,
+        waits is not None and waits.group(1) == '0' and len(said) == 2 and apart == 0,
+        'waits: %s; %d of 2 lines said; the renders %.2f grey levels apart | %s'
+        % (waits and waits.group(1), len(said), apart, t.strip()[-90:]),
+    )
+
+
 # a shot's window put on screen and back (_on_screen) with Designer hidden, aborted at the first of __LINES__ it reaches
 # (common.ABORT_AT). The windows' looks are given back by the snippet, only once Designer is hidden again, so none shows
 # opaque on the user's screen whatever the abort left
 SHOT_ABORTED = dedent("""
     mw = _APP.getQtForPythonUIMgr().getMainWindow(); keep = [mw]
     mac = _mac_window(mw)
-    frames = _Frames(_viewport(_3d_dock(mw)), lambda: _3d_render(mw))
+    frames = _frames_of(mw, _viewport(_3d_dock(mw)))
     looks, first = _Screen.unfade, _Screen.opaque_first
     screens = []
     _Screen.unfade = lambda self: screens.append(self)
@@ -767,7 +1095,7 @@ FRAMES = dedent("""
     count = lambda: _samples([label.text() for label in labels])
     read = []  # (kind, the count read), each event
     spy = _event_signal(viewport, ('Paint', 'UpdateRequest'), lambda kind: read.append((kind, count())))
-    frames = _Frames(viewport, lambda: _3d_render(mw))
+    frames = _frames_of(mw, viewport)
     mac = _mac_window(mw)
     handle = mw.windowHandle()
     reading = []  # the stretch read with the window on screen, while it is (watched)
@@ -1651,50 +1979,64 @@ async def check_a_3d_shot_makes_designers_window_opaque_at_once_once_designer_is
         print("      the shot's lines: %s" % (' / '.join(lines) or ' / '.join(t.strip().splitlines()[-3:])))
 
 
-# shoot_3d with a pan, the image removed
-PAN = dedent("""
+# a 3D shot with the set-up SET_UP, its render deleted
+SHOT_WITH = dedent("""
     import os, tempfile
     out = os.path.join(tempfile.mkdtemp(prefix='mcp_selftest_'), 'shot.png')
-    shoot_3d(out, pan=[0.25, 0.0])
+    shoot_3d(out, **SET_UP)
     os.remove(out)
     os.rmdir(os.path.dirname(out))
 """)
 # Designer's window left as it is by the shot: no _MacWindow, as elsewhere than macOS
 AS_IT_IS = '_mac_window = lambda mw: None\n'
+# each set-up whose stale render is said: what, its values shot on screen, then shot minimized, and its said line
+STALE_SET_UPS = (
+    ('a pan', {'pan': [0.25, 0.0]}, {'pan': [0.25, 0.0]}, 'pan 0.25 of the view right'),
+    # the user's ask (2026-11-18): the light settled as the camera is; each a change from the value before
+    ('an exposure change', {'environment_exposure': 1.0}, {'environment_exposure': 2.0}, 'exposure 2 ('),
+)
 
 
-async def check_a_render_that_didnt_follow_a_pan_is_said(ctx: Ctx) -> None:
-    """A render identical to the one before a pan is said, after its retakes (designer_helpers/shot3d.py, STALE; REVIEW.md
-    SRV-146): with Designer's window minimized and left so, the render is the view's last frame (covered, it was drawn
-    in some Designers launch_designer opened: REVIEW.md TST-433). On screen the pan changes the render, and nothing is
-    said: Designer's QImage compares pixels. macOS only (the window minimized through _MacWindow), in a Designer the
-    self-test started."""
+async def check_a_render_that_didnt_follow_a_set_up_is_said(ctx: Ctx) -> None:
+    """A render identical to the one before a pan, or before an exposure change, is said, after its retakes
+    (designer_helpers/shot3d.py, STALE; REVIEW.md SRV-146): with Designer's window minimized and left so, the render is
+    the view's last frame (covered, it was drawn in some Designers launch_designer opened: REVIEW.md TST-433). On
+    screen the change changes the render, and nothing is said: Designer's QImage compares pixels. The environment is
+    reset after, whatever failed. macOS only (the window minimized through _MacWindow), in a Designer the self-test
+    started."""
     c = ctx.c
     if ctx.was_running or sys.platform != 'darwin':
-        skip(
-            'screenshot_designer',
-            "3d: a render that didn't follow a pan",
-            USERS_3D_VIEW if ctx.was_running else 'macOS only',
-        )
+        for what, _, _, _ in STALE_SET_UPS:
+            skip(
+                'screenshot_designer',
+                "3d: a render that didn't follow %s" % what,
+                USERS_3D_VIEW if ctx.was_running else 'macOS only',
+            )
         return
     await with_checker(c, {**THREE_D, **TOP, 'graph': VIEW3D_GRAPH, 'zoom': -4})
-    # on screen as the shot puts it: a window over Designer's would leave the render stale (REVIEW.md TST-390)
-    on = text(await c('execute_designer_code', {'code': ctx.helper_source + PAN}))
     try:
-        put = window_states.put('minimized')
-        off = text(await c('execute_designer_code', {'code': ctx.helper_source + put + AS_IT_IS + PAN}))
+        for what, on_screen, minimized, said in STALE_SET_UPS:
+            # on screen as the shot puts it: a window over Designer's would leave the render stale (REVIEW.md TST-390)
+            code = ctx.helper_source + 'SET_UP = %r\n' % on_screen + SHOT_WITH
+            on = text(await c('execute_designer_code', {'code': code}))
+            try:
+                put = window_states.put('minimized')
+                code = ctx.helper_source + put + AS_IT_IS + 'SET_UP = %r\n' % minimized + SHOT_WITH
+                off = text(await c('execute_designer_code', {'code': code}))
+            finally:
+                await at_rest(c, ctx.helper_source)
+            said_on, said_off = ('3D render: identical' in t for t in (on, off))
+            check(
+                'screenshot_designer',
+                "3d: a render that didn't follow %s is said; one that did isn't" % what,
+                said_off and not said_on and said in off,
+                'said with the window minimized: %s; on screen: %s' % (said_off, said_on),
+            )
+            if not said_off or said_on:  # a check's detail is cut at 150 characters (REVIEW.md TST-334)
+                for label, t in (('on screen', on), ('minimized', off)):
+                    print('      %s: %s' % (label, ' / '.join(t.strip().splitlines()[-3:])))
     finally:
-        await at_rest(c, ctx.helper_source)
-    said_on, said_off = ('3D render: identical' in t for t in (on, off))
-    check(
-        'screenshot_designer',
-        "3d: a render that didn't follow a pan is said; one that did isn't",
-        said_off and not said_on and 'pan 0.25 of the view right' in off,
-        'said with the window minimized: %s; on screen: %s' % (said_off, said_on),
-    )
-    if not said_off or said_on:  # a check's detail is cut at 150 characters (REVIEW.md TST-334)
-        for label, t in (('on screen', on), ('minimized', off)):
-            print('      %s: %s' % (label, ' / '.join(t.strip().splitlines()[-3:])))
+        await check_the_environment_is_reset(ctx, 'the stale renders')
 
 
 NOT_JUDGED = 'Designer became the active app during the shot, which leaves its window up (REVIEW.md TST-399)'
@@ -2002,7 +2344,7 @@ async def check_a_viewpoint_set_off_screen_is_turned_with_designers_window_on_sc
 # window once it had). Run after WHO (window_owner.py)
 SHOWN_FROM_HIDDEN = dedent("""
     mw = _APP.getQtForPythonUIMgr().getMainWindow()
-    frames = _Frames(_viewport(_3d_dock(mw)), lambda: _3d_render(mw))
+    frames = _frames_of(mw, _viewport(_3d_dock(mw)))
     mac = _mac_window(mw)
     handle = mw.windowHandle()
     exposed, lost = [False], [0]  # exposed once, then no longer: covered
@@ -2098,24 +2440,24 @@ FIRST_SHOT = dedent("""
 
 
 # set_3d_view with no move, off screen, in a Designer whose 3D view never drew: the count the overlay showed first
-# (COUNT_BEFORE), then the mesh set up, Sphere, then Plane; no graph's outputs, which a later check puts on the mesh
+# (COUNT_BEFORE), then the tiling set to 2, then back to 1; no graph's outputs, which a later check puts on the mesh
 # itself
 NEVER_DREW = dedent("""
     mw = _APP.getQtForPythonUIMgr().getMainWindow()
     watch = _Frames(_viewport(_3d_dock(mw)), lambda: None)
     print('COUNT_BEFORE=%r' % (watch.count(),))
     watch.close()
-    set_3d_view(mesh='Sphere')
-    set_3d_view(mesh='Plane')""")
+    set_3d_view(tiling=2.0)
+    set_3d_view(tiling=1.0)""")
 
 
 async def check_set_3d_view_sets_up_a_view_that_never_drew(ctx: Ctx) -> None:
     """set_3d_view with no move, off screen, in a Designer launch_designer opened hidden, whose 3D view never drew: the
-    mesh is switched to Sphere, then to Plane, and the steps' waits take no render, which such a view doesn't give
+    tiling is set to 2, then back to 1, and the steps' waits take no render, which such a view doesn't give
     (designer_helpers/frames3d.py; REVIEW.md HLP-170: it raised "the 3D view did not produce a render" after switching
-    the mesh). Skipped when a count shows before: the view drew already. run() takes it before any 3D shot. macOS
-    only, in a Designer the self-test started."""
-    what = 'set_3d_view sets the mesh up off screen in a Designer whose 3D view never drew'
+    the mesh, which now runs on screen: DECISIONS.md). Skipped when a count shows before: the view drew already. run()
+    takes it before any 3D shot. macOS only, in a Designer the self-test started."""
+    what = 'set_3d_view sets the tiling up off screen in a Designer whose 3D view never drew'
     if ctx.was_running or sys.platform != 'darwin':
         skip('screenshot_designer', what, USERS_3D_VIEW if ctx.was_running else 'macOS only')
         return
@@ -2127,7 +2469,7 @@ async def check_set_3d_view_sets_up_a_view_that_never_drew(ctx: Ctx) -> None:
     check(
         'screenshot_designer',
         what,
-        not r.is_error and '3D view: Sphere' in said and '3D view: Plane' in said,
+        not r.is_error and '3D view: tiling 2 (' in said and '3D view: tiling 1 (' in said,
         said.strip()[-200:],
     )
 
@@ -2204,7 +2546,7 @@ SHOWN_FROM_LOWER = dedent("""
     dock = _3d_dock(mw)  # held: without, the viewport's wrapper went stale
     viewport = _viewport(dock)
     mac = _MacWindow(mw)
-    frames = _Frames(viewport, lambda: _3d_render(mw))
+    frames = _frames_of(mw, viewport)
     read = []  # each try: (the count as Designer was hidden, the count as the show's wait ended)
     try:
         with _on_screen(mw, frames) as screen:
@@ -2284,15 +2626,60 @@ async def check_set_3d_view_moves_the_camera_as_a_3d_shots_set_up_does(ctx: Ctx)
     )
 
 
+# mesh switches, a tiling in a call of its own after one, then a mesh switch and a tiling in one call
+MESH_THEN_TILING = dedent("""
+    set_3d_view(mesh='Plane')
+    set_3d_view(mesh='Sphere')
+    set_3d_view(tiling=2.0)
+    set_3d_view(mesh='Plane', tiling=3.0)
+""")
+
+
+async def check_set_3d_view_shows_the_window_for_graph_and_a_mesh_switch(ctx: Ctx) -> None:
+    """set_3d_view run on its own with Designer hidden puts the window on screen for graph=, and for a mesh switch, then
+    hides it again, each said set: off screen, graph='s Explorer menu unhid Designer and left it up, and a tiling set
+    after a mesh switch, in that call or the next, had its field deleted as it was set (REVIEW.md HLP-196, HLP-197; the
+    user's choices, 2026-11-18). From Designer hidden at rest; the tiling put back to 1 after. macOS only, in a Designer
+    the self-test started."""
+    c = ctx.c
+    name = "set_3d_view shows Designer's window for %s, and hides it again"
+    if ctx.was_running or sys.platform != 'darwin':
+        skip(
+            'screenshot_designer', name % 'graph= and a mesh switch', USERS_3D_VIEW if ctx.was_running else 'macOS only'
+        )
+        return
+    await at_rest(c, ctx.helper_source)
+    for what, code, done in (
+        ('graph=', 'set_3d_view(%r)\n' % VIEW3D_GRAPH, ["3D view: graph %s's outputs on the mesh" % VIEW3D_GRAPH]),
+        ('a mesh switch, then a tiling', MESH_THEN_TILING, ['3D view: tiling 2 (', '3D view: Plane, tiling 3 (']),
+    ):
+        try:
+            t = text(await c('execute_designer_code', {'code': ctx.helper_source + code + window_states.read()}))
+        finally:
+            await at_rest(c, ctx.helper_source)
+        hidden = window_states.states(t).get('STATE', {}).get('hidden')
+        check(
+            'screenshot_designer',
+            name % what,
+            all(line in t for line in done) and SHOWN['hidden'] in t and hidden == 'True',
+            'hidden after: %s | %s' % (hidden, ' / '.join(t.strip().splitlines()[-3:])),
+        )
+    await c('execute_designer_code', {'code': ctx.helper_source + 'set_3d_view(tiling=1.0)'})
+
+
+# the meshes whose Scene action is checked, read as the set-up's mesh step reads the action of the mesh asked
 SHOWN_MESH = dedent("""
-    mw = _APP.getQtForPythonUIMgr().getMainWindow()
-    print('SHOWN=%s' % _mesh_shown(mw, [mw]))
+    from PySide6 import QtWidgets
+    mw = _APP.getQtForPythonUIMgr().getMainWindow(); keep = [mw]
+    bar = _3d_dock(mw).findChildren(QtWidgets.QMenuBar)[0]; keep.append(bar)
+    print('SHOWN=%s' % ', '.join(m for m in MESHES if _menu_action(bar, keep, 'Scene', m).isChecked()))
 """)
 
 
 async def check_the_3d_views_scene_menu_checks_the_mesh_shown(ctx: Ctx) -> None:
     """The 3D view's Scene menu checks the mesh the view shows: after Sphere, then Plane, each is the one checked
-    (designer facts: shot3d.py's _mesh_shown reads it, to tell a mesh switched from the one shown; REVIEW.md TST-391).
+    (designer facts: view3d.py's mesh step reads the action of the mesh asked, to skip one shown already; REVIEW.md
+    TST-391, HLP-195, HLP-199).
     In a Designer the self-test started."""
     c = ctx.c
     if ctx.was_running:
@@ -2313,11 +2700,19 @@ async def check_the_3d_views_scene_menu_checks_the_mesh_shown(ctx: Ctx) -> None:
 
 
 async def check_the_3d_view_refuses_what_it_cant_show(ctx: Ctx) -> None:
-    """A mesh or view the 3D view's menus don't have, and a graph with one output (Designer would ask which channel to
-    show it in), are refused before anything changes, so these run in the user's Designer too."""
+    """A mesh or view the 3D view's menus don't have, an environment map Designer doesn't have, and a graph with one
+    output (Designer would ask which channel to show it in), are refused before anything changes, so these run in the
+    user's Designer too."""
     c = ctx.c
     t = text(await c('screenshot_designer', {**THREE_D, 'mesh': 'Teapot'}))
     check('screenshot_designer', 'an unknown mesh is refused, naming the meshes', 'Teapot' in t and 'Torus' in t, t)
+    t = text(await c('screenshot_designer', {**THREE_D, 'environment': 'Studio'}))
+    check(
+        'screenshot_designer',
+        "an environment map Designer doesn't have is refused, naming its maps",
+        "unknown environment 'Studio'" in t and DARK in t and 'corsica_beach' in t,
+        t[-150:],
+    )
     t = text(await c('screenshot_designer', {**THREE_D, 'view': 'Diagonal'}))
     check('screenshot_designer', 'an unknown view is refused, naming the views', 'Diagonal' in t and 'Bottom' in t, t)
     t = text(await c('screenshot_designer', {**THREE_D, 'graph': TEST_GRAPH}))  # its one output (preparations.py)
@@ -2730,7 +3125,12 @@ async def run(ctx: Ctx) -> None:
         await check_graph_finds_its_row_in_a_collapsed_package(ctx)
         await check_a_set_up_checks_what_it_needs_first_and_says_what_it_set(ctx)
         await check_opening_the_editors_graph_again_leaves_the_outputs_on_the_mesh(ctx)
+        await check_a_tiling_on_a_material_with_no_pattern_is_said_to_change_nothing(ctx)  # on its plain graph
         await check_a_material_the_mesh_doesnt_use_doesnt_stop_tiling(ctx)
+        await check_the_environment_is_set_as_measured(ctx)
+        await check_the_environment_turns_brightens_and_changes_the_light(ctx)
+        await check_a_3d_shot_setting_the_whole_environment_waits_for_its_last_change(ctx)
+        await check_values_a_3d_set_up_finds_shown_already_take_no_wait(ctx)
         await check_an_abort_putting_a_shots_window_back_still_hides_designer_again(ctx)
         await check_the_3d_views_frames_say_when_it_has_drawn(ctx)
         await check_a_hidden_designers_window_is_brought_in_front_for_a_3d_shot_once_its_unhide_took(ctx)
@@ -2738,6 +3138,7 @@ async def run(ctx: Ctx) -> None:
         await check_a_watch_of_the_3d_views_frames_dropped_without_close_goes_at_once(ctx)
         await check_a_3d_shots_window_shown_again_mid_accumulation_waits_for_the_count_at_rest(ctx)
         await check_set_3d_view_moves_the_camera_as_a_3d_shots_set_up_does(ctx)
+        await check_set_3d_view_shows_the_window_for_graph_and_a_mesh_switch(ctx)
         await check_the_minimized_way_shows_none_of_designers_windows_as_its_window_flies_to_the_dock(ctx)
         await check_a_timer_goes_with_the_parent_its_function_held(ctx)
         await check_the_3d_view_isnt_drawn_while_designers_window_is_off_screen(ctx)
@@ -2748,7 +3149,7 @@ async def run(ctx: Ctx) -> None:
         await check_wheel_steps_sent_as_designers_window_goes_off_screen_are_all_taken(ctx)
         await check_a_3d_shot_puts_designers_window_on_screen_without_taking_focus(ctx)
         await check_a_3d_shot_keeps_designers_window_transparent_and_click_through_while_off_screen(ctx)
-        await check_a_render_that_didnt_follow_a_pan_is_said(ctx)
+        await check_a_render_that_didnt_follow_a_set_up_is_said(ctx)
         await check_a_covered_window_goes_back_behind_its_cover_or_stays_in_front_once_the_cover_is_gone(ctx)
         await check_a_refused_3d_set_up_leaves_designers_window_as_it_was(ctx)
         await check_a_plain_3d_shot_shows_a_change_made_while_designers_window_was_off_screen(ctx)
