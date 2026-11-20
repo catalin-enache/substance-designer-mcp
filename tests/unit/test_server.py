@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from docs_text import guide_md, read
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.types import CallToolResult
@@ -27,11 +28,6 @@ from conftest import (
 from project_constants import Json
 
 SERVER = os.path.join(ROOT, 'mcp_server', 'server.py')
-
-
-def _read(*parts: str) -> str:
-    with open(os.path.join(ROOT, *parts), encoding='utf-8') as f:
-        return f.read()
 
 
 async def _list_tools() -> tuple[str, dict[str, str]]:
@@ -66,7 +62,7 @@ def test_server_starts_and_points_to_the_guide() -> None:
 
 def test_readme_tool_count_and_table() -> None:
     _, tools = _tools()
-    readme = _read('README.md')
+    readme = read('README.md')
     assert '## Tools (%d)' % len(tools) in readme
     assert 'Defines the %d tools' % len(tools) in readme
     table = readme.split('## Tools', 1)[1].split('\n## ', 1)[0]
@@ -77,8 +73,8 @@ def test_readme_tool_count_and_table() -> None:
 def test_readme_lists_every_category_the_self_test_runs() -> None:
     # the names --only takes (README, Self-test): one row each, no other
     categories = {p.parent.name for p in Path(SELFTEST_DIR).glob('*/checks.py')}
-    section = _read('README.md').split('### The categories', 1)[-1].split('\n## ', 1)[0].split('\n### ', 1)[0]
-    listed = re.findall(r'^\| `(\w+)` \|', section, re.M)
+    section = read('README.md').split('### The categories', 1)[-1].split('\n## ', 1)[0].split('\n### ', 1)[0]
+    listed: list[str] = re.findall(r'^\| `(\w+)` \|', section, re.M)
     assert len(listed) == len(set(listed)) and set(listed) == categories, sorted(categories ^ set(listed))
 
 
@@ -429,8 +425,8 @@ def test_run_designer_script_args_leave_the_script_text_alone(monkeypatch: pytes
 
 def test_the_fallback_client_sends_no_args() -> None:
     """GUIDE.md: a script reading ARGS runs through the MCP tool, not client/sd_run.py (REVIEW.md SRV-62)."""
-    assert 'ARGS' not in _read('client', 'sd_run.py')
-    assert 'no `ARGS`' in _read(os.path.join('mcp_server', 'GUIDE.md'))
+    assert 'ARGS' not in read('client', 'sd_run.py')
+    assert 'no `ARGS`' in guide_md()
 
 
 # The JSON parameters' schemas, as agents saw them before the parameters were typed as pydantic's JsonValue, which

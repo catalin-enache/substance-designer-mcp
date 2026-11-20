@@ -22,7 +22,7 @@ def _timer() -> mock.MagicMock:
 
 
 def test_the_windows_are_closed_once_the_reply_is_sent_not_after_a_time(helpers: types.ModuleType) -> None:
-    # it closed them 300 ms after the call returned, so the bridge could still reply: a time (AGENTS.md)
+    # it closed them 300 ms after the call returned, so the bridge could still reply: a time (`.claude/rules/waits.md`)
     handed: list[Callable[[], object]] = []  # what the helper handed _after_reply; its result is dropped
     vars(helpers)['_after_reply'] = handed.append  # the plugin's, in the job's scope
     _timer().singleShot.reset_mock()

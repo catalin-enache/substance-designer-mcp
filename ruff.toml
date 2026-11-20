@@ -3,7 +3,9 @@
 #   mcp_server/venv/bin/ruff format .     format
 target-version = "py312"  # the server's minimum Python (ROADMAP item 105)
 line-length = 120
-extend-exclude = ["mcp_server/venv", ".claude/skills/mcp-builder"]  # the last: Anthropic's skill, vendored
+# .claude/skills/mcp-builder: Anthropic's skill, vendored. .claude/worktrees: Claude Code's worktrees, copies of every
+# module (tests/unit/test_lint.py; mypy.ini skips them too)
+extend-exclude = ["mcp_server/venv", ".claude/skills/mcp-builder", ".claude/worktrees"]
 
 [lint]
 select = [

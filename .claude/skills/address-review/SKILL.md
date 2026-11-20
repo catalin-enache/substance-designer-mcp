@@ -1,14 +1,14 @@
 ---
 name: address-review
-description: 'Use when asked to fix, address or work through findings in REVIEW.md (one entry, a group, or "the next items"), or when the user decides on a finding. Each finding is handled test first: a test that fails and so confirms the bug (a live self-test check in a scratch run, never the whole suite), then the fix, then the test passing; a finding whose test passes without a fix is answered as false. Either way the entry is checked off in REVIEW.md with a resolution line; what the user decides, if a reviewer could raise it again, goes in DECISIONS.md.'
+description: 'Use when asked to fix, address or work through findings in REVIEW.md (one entry, a group, or "the next items"), or when the user decides on a finding. Each finding is handled test first: a test that fails and so confirms the bug (a live self-test check in a scratch run, never the whole suite), then the fix, then the test passing; a finding whose test passes without a fix is answered as false. Either way the lead checks the entry off in REVIEW.md with the resolution reported, once its evidence holds; what the user decides, if a reviewer could raise it again, goes in DECISIONS.md.'
 ---
 
 # Addressing review findings
 
 `REVIEW.md` (repo root, tracked in git) holds the findings; its format is the `project-code-review`
 skill's `TEMPLATE.md`. This skill is how to resolve them. The test-first rule itself is in
-AGENTS.md ("Fix issues test first"); this is the procedure. `REVIEW.md` is the memory per branch: agents that review
-and agents that address findings talk through it, as in a PR review.
+AGENTS.md ("Start with the tests, always (TDD)"); this is the procedure. `REVIEW.md` is the memory per branch: the lead
+writes it from the reviewers' and the developer's reports, as in a PR review.
 
 ## Pick the work
 
@@ -17,8 +17,8 @@ and agents that address findings talk through it, as in a PR review.
   **Reopen if** now holds, and ask.
 - An ID cited somewhere but missing from `REVIEW.md` was usually removed by a cleanup;
   `python3 scripts/review_lookup.py <ID>` gets the entry from git.
-- Take the entries the user names, or the open ones in the review log's suggested order, most
-  severe first. Group related entries (same file, same cause). The findings worked on together share their test runs
+- Take the entries named (by the user, or by the lead's brief), or the open ones in the review log's suggested order,
+  most severe first. Group related entries (same file, same cause). The findings worked on together share their test runs
   (**All the findings' tests first, run together**, below): each finding gets its own test and its own fix, but not runs of its own.
 - Read each entry, and the code at its location, before writing anything. The location may have
   moved since the review; find it by the quoted code.
@@ -27,7 +27,9 @@ and agents that address findings talk through it, as in a PR review.
 
 Before changing anything, show the user the plan, one finding at a time: the finding in plain words, then how you plan
 to fix or answer it. Say where a measurement could change the plan. Then wait for the user's answer, unless they have
-already said to go ahead without one.
+already said to go ahead without one. During the lead's loop this step is skipped: by the developer, whose brief is the
+plan, and by the lead fixing findings itself, since the loop runs without asking (the `project-code-review` skill, step
+7). It applies when the user asks for findings to be fixed outside the loop.
 
 ## All the findings' tests first, run together
 
@@ -44,8 +46,8 @@ addressed in one go (the ones the user named, or the batch in the plan) are hand
    finding's live checks in one scratch script (`alone.run` first; load the `live-check` skill). Read each failure (steps 1 and 2). A test that passes, or fails for
    another reason, was written wrong, unless the finding is false (step 2): fix it and run again, before any fix.
 4. **Measure with a scratch probe** what a fix needs measured in Designer first (step 3): temporary code of your own,
-   in the same Designer, the way the `project-code-review` skill's lead agent probes. What it measures goes in
-   GUIDE.md or the module's docstring, as AGENTS.md's table says, with a "designer facts" check, run in the scratch run like the others.
+   in the same Designer, as the `live-check` skill's **How a probe runs** says. What it measures goes in
+   GUIDE.md or the module's docstring, as the table in `.claude/rules/docs.md` says, with a "designer facts" check, run in the scratch run like the others.
 5. **Fix everything** (step 3 for each finding), then run the same unit tests and scratch script again (step 4), until
    every test passes.
 
@@ -66,7 +68,7 @@ addressed in one go (the ones the user named, or the batch in the plan) are hand
     - keep the test as a guard;
     - write down why it doesn't happen, with the evidence (the passing test, the docs or
       behaviour that explain it);
-    - resolve the entry as *not a bug* or *not reproducible* and check it.
+    - report the entry's resolution as *not a bug* or *not reproducible* (step 7).
 
    If the code path is real but can't be triggered, a small defensive change is fine; say so.
 3. **Fix the code**, as small as it can be, in the style of the code around it. Two things first,
@@ -76,7 +78,7 @@ addressed in one go (the ones the user named, or the batch in the plan) are hand
       behaves (inheritance, seeds, function graphs, shutdown, the UI), first measure every case the
       code distinguishes (the node and the graph, each inheritance mode, with and without a render override...) in one
       scratch probe (**All the findings' tests first, run together**, point 4), record the measured table in
-      GUIDE.md or the module's docstring, as AGENTS.md's table says, with its "designer facts" check, then write the fix for that table. Never fix the one case in the finding and leave the next case
+      GUIDE.md or the module's docstring, as the table in `.claude/rules/docs.md` says, with its "designer facts" check, then write the fix for that table. Never fix the one case in the finding and leave the next case
       for the next review.
     - **Fix the pattern, not the instance.** Search for every other place with the same pattern:
       the other callers of the helper, the same check or message elsewhere, the sibling tool or
@@ -85,16 +87,16 @@ addressed in one go (the ones the user named, or the batch in the plan) are hand
       resolution, so the next reviewer can see the scope.
 4. **Run the tests again: they must pass.** Only the tests added or modified for the group's findings, never the whole
    suites, which run only when the user asks (AGENTS.md, Running the tests):
-    - the unit tests by name, always with lint and types:
-      `mcp_server/venv/bin/python -m pytest tests/unit/test_x.py::test_name tests/unit/test_lint.py tests/unit/test_types.py`;
+    - the unit tests by name, always with lint and types, and the docs tests with any change of Markdown, a comment
+      or a docstring: the commands are in `.claude/rules/python.md` and `.claude/rules/docs-tests.md`;
     - the live checks in the group's scratch script. Plugin changes only reach Designer after `install.py` and a
       restart of the Designer the scratch runs use, which an agent started: `alone.close()`, and the next run starts
       one (the `live-check` skill); say that you did.
 
    A scratch run proves a check in its own environment; if the full run the user asks for later shows it failing
-   there, the finding is open again: uncheck it, add a note under its resolution saying what failed (the entry's
-   earlier text stays), fix it, and add the new resolution below the note.
-5. **Update the docs** the change touches, as AGENTS.md's "Keeping the docs current" table says:
+   there, the finding is open again. The lead unchecks it and adds a note under its resolution saying what failed (the
+   entry's earlier text stays). The developer fixes it, and the lead adds the new resolution below the note.
+5. **Update the docs** the change touches, as the "Keeping the docs current" table of `.claude/rules/docs.md` says:
    tool docstrings, GUIDE.md facts, README.md. Add a new sentence only when an agent or a user
    needs it to act, and make it say exactly what its check measures, no more. Every claim is
    something the next review audits against its test: a third of the links in REVIEW.md's
@@ -108,18 +110,19 @@ addressed in one go (the ones the user named, or the batch in the plan) are hand
       a comparison that any rule would satisfy, hashes of data that differs run to run;
     - the test leaves state behind for later checks, or cleans up only when every step succeeds (no `finally`);
     - an older test no longer guards what it was written for, because the fix changed the order;
-    - a comment, docstring, AGENTS.md, GUIDE.md or README.md sentence the fix made untrue, a name or path in DECISIONS.md it made stale, or a new
-      sentence that claims more than the test measures.
+    - a comment, a docstring, or a sentence of AGENTS.md, a rule or skill AGENTS.md points to, GUIDE.md or README.md
+      that the fix made untrue, a name or path in DECISIONS.md it made stale, or a new sentence that claims more than
+      the test measures.
       Adjust what you find, then step back and review the adjusted change the same way, again and
       again, until a fresh look finds nothing a reviewer could report. Only then go on.
       When a sentence claims more than its test measures, prefer narrowing the sentence to writing a
       stronger test, unless the extra claim is something an agent needs in order to act. For an entry
-      marked generation 3 or later (`project-code-review`, Follow-up chains), narrowing the claim is
+      marked generation 3 or later (`.claude/agents/reviewer.md`, Follow-up chains), narrowing the claim is
       the fix. Don't add a new check for it.
-7. **Mark the entry in `REVIEW.md`:**
-    - check its box: `- [ ]` becomes `- [x]`;
-    - add a resolution under it: **Resolution: done**, *not a bug*, *not reproducible* or *won't
-      fix*. It starts with one of these wordings, and details can follow. Don't record a commit: branches are squashed into main, so a hash stops resolving. It answers:
+7. **Report the resolution, for the lead to assess and write in `REVIEW.md`** (the `project-code-review` skill,
+   Resolving). Once it holds, the lead checks the box (`- [ ]` becomes `- [x]`) and adds the resolution under it.
+    - The resolution: **Resolution: done**, *not a bug*, *not reproducible*, *won't fix* or *moved to ROADMAP.md*.
+      It starts with one of these wordings, and details can follow. Don't record a commit: branches are squashed into main, so a hash stops resolving. It answers:
         - **Test:** which test reproduced it (or showed it doesn't happen), and how it failed (a live check: in its
           scratch run);
         - **Cause** (when fixed): why the code failed, the root cause rather than the symptom (for
@@ -129,8 +132,34 @@ addressed in one go (the ones the user named, or the batch in the plan) are hand
         - **Also covered** (when fixed): the same pattern searched for elsewhere, where, and what
           was found (fixed too, or not affected and why);
         - **Why not** (when false): why it doesn't happen, with the evidence;
-    - update the status table (open and resolved counts per severity). *Won't fix* needs the user's agreement; ask
-      before using it, then record it (below).
+    - The lead updates the status table (open and resolved counts per severity).
+    - **Won't fix is the user's decision** (the user, 2026-11-20). The developer may propose one in its report, and
+      the lead may propose one itself. The lead judges every proposal, its own included, against these criteria,
+      which must all hold:
+        - **The finding is real,** settled by reading or a probe. A false finding is *not a bug* or *not
+          reproducible* instead.
+        - **Fixing it is never worth it, not just "not now".** One of these applies:
+            - the fix costs far more than the harm: a rare defect with a small effect, against much more code, a new
+              moving part or slower runs;
+            - the fix goes against a choice of the user's;
+            - it can't be fixed from this project: it is Designer's or Claude Code's own behaviour, and stating the
+              limit where agents read it is all that can be done.
+        - **It isn't work for later.** Work worth doing one day is a ROADMAP.md item instead, which closes the finding
+          (**Moved to ROADMAP.md**, below).
+
+      When **Fixing it is never worth it** fails, or the lead is unsure whether it holds, the finding is fixed, or moved
+      to ROADMAP.md (below). A fix closes it for good, while a won't fix adds a DECISIONS.md entry that every later
+      review checks. When all hold,
+      the lead tells the user at once, and the loop stops until they answer (the `delegate` skill, The loop is the
+      lead's), since the finding stays open. The lead uses *won't fix* only once the user agrees, then records it
+      (below).
+    - **Moved to ROADMAP.md is the user's decision too** (the user, 2026-11-20). It closes a real finding whose fix is
+      work worth doing one day, outside the branch's scope. A leftover in the branch's own code is fixed in the branch
+      instead (the `delegate` skill, The loop is the lead's). The developer may propose the item in its report, and the
+      lead may propose one itself. The lead asks the user at once, as for a won't fix, since the finding stays open
+      until they answer. Once the user approves the item, the lead adds it to ROADMAP.md, citing the finding's ID, so
+      `scripts/review_lookup.py` finds the entry after a cleanup. Then the lead checks the entry with
+      `**Resolution: moved to ROADMAP.md** (item N, the user, <date>)`.
 
 ## Recording decisions
 
@@ -138,20 +167,19 @@ addressed in one go (the ones the user named, or the batch in the plan) are hand
 the whole project, where they can't, so only what is settled goes there, and only what a reviewer could plausibly
 raise again:
 
-- **What the user decides goes in now, if a reviewer could raise it again:** their answer when asked to decide on a
+- **What the user decides goes in, if a reviewer could raise it again:** their answer when asked to decide on a
   finding, or what they say about one unprompted: won't fix, a rule to follow from now on, one option out of several,
-  how something should work. A choice that a rule in AGENTS.md or the code's comments already answer stays in
-  `REVIEW.md` and the code. It can come with a fix: a rule chosen over closing a finding as won't fix is both. Keep the
-  entry to the decision, the reason the user gave or agreed to in a few words, the date and the reopen condition.
-- **A false finding is proposed now, if a reviewer could raise it again:** a *not a bug* or *not reproducible* answer
-  you reached alone, also when a defensive change came with it. In your report (**After a group**),
-  propose its entry to the user, and add it once they approve. Any other false finding stays in `REVIEW.md` only.
-  A cleanup of `REVIEW.md` moves nothing to `DECISIONS.md`, so this is the time.
+  how something should work. A choice that AGENTS.md, a rule or skill AGENTS.md points to, or the code's comments
+  already answer stays in `REVIEW.md` and the code. It can come with a fix: a rule chosen over closing a finding as
+  won't fix is both. Keep the entry to the decision, the reason the user gave or agreed to in a few words, the date
+  and the reopen condition. A cleanup of `REVIEW.md` moves nothing to `DECISIONS.md`, so this is the time.
+- **A false finding stays in `REVIEW.md` only** (the user, 2026-11-20). A *not a bug* or *not reproducible* answer is
+  a review's finding that didn't hold, not a decision, so it gets no `DECISIONS.md` entry. If a reviewer raises it
+  again after a cleanup, the test kept as its guard (step 2) is the evidence that settles it again.
 
 For what goes in:
 
-- **Add it** in the same change as the `REVIEW.md` resolution, in the section it belongs to, in the format
-  that file's introduction gives.
+- **Add it** in the section it belongs to, in the format that file's introduction gives.
 - **Names and paths are yours to keep current:** when a change renames or moves the code or test an entry points at,
   update the entry. Changing what was decided, or removing an entry, takes the user. Never leave two entries that
   contradict each other.
@@ -161,11 +189,15 @@ For what goes in:
 
 ## After a group
 
-- Report to the user per finding: the test, how it failed, the fix, and the result (a live check: in its scratch
-  run); say plainly which findings were false and why.
-- Commit only when the user asks (AGENTS.md), with `REVIEW.md` and any `DECISIONS.md` change in the same
-  commit as the fixes they record.
-- New problems found along the way go into `REVIEW.md` as new entries (the `project-code-review`
-  skill's rules: append, the next free ID, update the header's **Last used**), not silently fixed.
-- Work for later that isn't a finding (a follow-up, an idea): propose it to the user for `ROADMAP.md` in the same
-  report, and add it once they approve. A cleanup of `REVIEW.md` moves nothing there.
+- Report per finding its resolution (step 7) and the result (a live check: in its scratch run); say plainly which
+  findings were false and why.
+- The lead commits (AGENTS.md), with `REVIEW.md` in the same commit as the fixes it records.
+- New problems found along the way are reported with their evidence, not silently fixed. The lead settles each (the
+  `project-code-review` skill, Who settles what), then writes it as a new entry (that skill's rules: append, the next
+  free ID, the header's **Last used**) or rejects it. Every developer run gets a row in the table by model, with its
+  cost, and its new findings count there (TEMPLATE.md, Reviews by model).
+- Work for later that isn't a finding (a follow-up, an idea): propose it to the user for `ROADMAP.md` in your report.
+  A leftover in the branch's own code is reported for a fix in the branch instead (the `delegate` skill, The loop is
+  the lead's). The lead asks the user about the proposals when the reviews look converged, unless the next step needs
+  the answer first (the `delegate` skill, The loop is the lead's), and adds what they approve. A cleanup
+  of `REVIEW.md` moves nothing there.

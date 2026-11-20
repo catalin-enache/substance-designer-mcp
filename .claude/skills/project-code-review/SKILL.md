@@ -1,6 +1,6 @@
 ---
 name: project-code-review
-description: Use when asked to review this repository (the whole project or an area of it) and record the findings in REVIEW.md. Covers splitting the review by area, verifying findings, and writing them in the template's format (severity sections, one checkbox entry each, appended, never replacing earlier findings). Fixing findings is the address-review skill.
+description: Use to review this repository and record the findings in REVIEW.md, after a step of the lead's loop, or a group of small steps (the `delegate` skill), or when the user asks for a review of the whole project or an area of it. Covers splitting the review by area, verifying findings, and writing them in the template's format (severity sections, one checkbox entry each, appended, never replacing earlier findings). Fixing findings is the address-review skill.
 ---
 
 # Project code review
@@ -10,11 +10,12 @@ Findings live in `REVIEW.md` in the repo root, tracked in git. Its format is
 `code-review` skill reviews a diff (uncommitted changes, a branch, a PR); use this skill for a
 review of code that isn't a diff, and whenever findings are to be recorded in `REVIEW.md`.
 
-`REVIEW.md` is the **memory per branch**: reviewers and the agents addressing findings talk through it, as in a PR
-review, so it usually lasts as long as a branch. `DECISIONS.md` is the memory for the whole project.
+`REVIEW.md` is the **memory per branch**: the lead writes it from the reviewers' and the developer's reports, as in a
+PR review, so it usually lasts as long as a branch. `DECISIONS.md` is the memory for the whole project.
 
 **A review runs no tests,** neither the unit tests nor the live self-test: reviewers read the code and the tests and
-assess them. Tests are run only by the agent that changes the code, at the points AGENTS.md (Running the tests) sets. A review
+assess them. Tests are run by the agent that changes the code and, for the final check, by the `runner` agent, at the
+points AGENTS.md (Running the tests) sets. A review
 through the built-in `/code-review` runs none either, and when its findings are to be recorded, suspicions it can't
 settle by reading are settled as in step 4 before anything goes in `REVIEW.md`.
 Whether a test fails without its fix and passes with it is judged by reading it, or, where reading can't settle it,
@@ -24,63 +25,84 @@ with a scratch probe (below); never by running the test.
 suspicions: they read, quote the code and say what would settle each one, and they don't probe Designer. The lead agent
 (the one running this skill) assesses every report and settles each suspicion as right or wrong, by reading the code,
 or, where reading can't settle it (whether a defect bites in Designer, whether a test or a fix holds up there), with a
-**scratch probe**: temporary code of its own, run in Designer. Only suspicions settled as right go in `REVIEW.md`.
+**scratch probe**: temporary code written for it, run in Designer (**Who settles what** says who writes and runs it).
+Only suspicions settled as right go in `REVIEW.md`.
 Reviewers don't probe: the lead agent settles every suspicion anyway, so it would have to read each reviewer's probe
-closely and often run it again (ROADMAP item 48, won't do). The lead agent's probes run one at a time in one Designer,
-since probes sharing one get in each other's way: a cancel drops every queued job, graphs with the same name are refused
-as ambiguous, one probe's leftovers change what another measures, and a crash or a quit ends everyone's work.
-- **Where it runs:** one Designer an agent started (`launch_designer`), never the user's, with the probes run one at a
-  time. If the user's Designer is open, ask them to close it: a probe's leftovers or crash would land in their work.
-  Close the agent's
-  Designer when the review is done (GUIDE.md, the rules).
-- **What it touches:** a new package of its own, with a graph name no other probe uses, unloaded at the end, never the
-  user's packages; GUIDE.md's rules apply (no Undo, no hot reload of the plugin).
-- **Where the code lives:** outside the repo (the session's scratchpad or a temp folder), run with
-  `run_designer_script`, `execute_designer_code` or `client/sd_run.py`, and deleted afterwards. The session's own tools
-  run the server and helpers as they were when the session connected: a probe of the branch's changes to
-  `server_tools/` or the helpers goes through a fresh server (an MCP session of its own, as `alone.py` opens) or after
-  `/mcp` reconnects. `client/sd_run.py` sends only the probe's own code.
-- **Outside Designer:** a suspicion about pure-Python code that reading can't settle gets a scratch probe too, plain
-  Python run from the scratchpad, with the same rules (not a test, never committed). It is not a test and is
-  never committed: the agent addressing the finding writes the real test.
-- **What goes in the entry:** the probe in short and what it measured, in the scenario, so the agent addressing the
-  finding can start its test from it.
+closely and often run it again (ROADMAP item 48, won't do). Probes sharing a Designer get in each other's way: a cancel
+drops every queued job, graphs with the same name are refused as ambiguous, one probe's leftovers change what another
+measures, and a crash or a quit ends everyone's work. So a Designer runs one probe at a time. On macOS, a review's
+probes may be split across runners, each with a port and a Designer of its own, as the self-test's pool runs its
+categories (the user, 2026-11-19).
+**Who settles what** (the user, 2026-11-19). In a review, this list decides who probes, over AGENTS.md's
+"Keep it yourself":
+
+- **The lead agent keeps the judgment:** whether a suspicion is a defect, its severity, and whether DECISIONS.md
+  settles it. It reads the lines each suspicion quotes itself.
+- **It also keeps the probes only the main session can run:** what its hooks do, what its own tools return to it,
+  such as Read's output or a TaskStop, and what a subagent is given or can do. Only the lead can start an agent for
+  such a probe: the runner has no Agent tool.
+- **Every other probe goes to the `runner` agent,** gathered in one brief per runner (the `delegate` skill, Which
+  agent for what). The
+  lead writes each probe or gives its outline: what to build, what to measure, which result settles it. Each Designer
+  runs one probe at a time (above). The runner returns the code of each probe it wrote from an outline,
+  with what each probe measured. The lead reads that code, then what it measured, before settling the suspicion: the
+  reason reviewers don't probe applies to the runner's probes too.
+- **The developer settles nothing here.** When it addresses a finding, its failing test checks the finding again
+  (the `address-review` skill, step 2). A new problem it reports is settled as a reviewer's suspicion is. If the lead
+  and the developer disagree, they debate it (SendMessage), then the lead writes it or rejects it.
+
+**How a probe runs,** whoever runs it, is in the `live-check` skill, which the runner loads.
 
 **Not verified is only for what can't be checked here,** never a way around a probe. If a scratch probe could check a
-suspicion, the lead agent writes it and runs it: the suspicion becomes a finding or is dropped. Only when a limitation makes that
+suspicion, the lead agent has it run (**Who settles what**): the suspicion becomes a finding or is dropped. Only when a limitation makes that
 impossible (another OS, a race that won't reproduce on demand, hardware or a Designer version that isn't here) does it
 go in the review log's entry under **Not verified**, not in a section of findings: the suspicion, what was tried, the
 limitation, and what would check it. Code that is long or tedious to probe is not a limitation.
 
 ## Scope
 
+- **A round of the lead's loop** reviews the change since the last review. The lead commits before each review, so
+  the round's diff runs between two commits: `git diff <last> <this> -- . ':(exclude)PLAN.md'`, from the commit the
+  last review saw to the one made for this review. The review log's **Scope** names both (TEMPLATE.md). The lead may
+  group small consecutive steps of PLAN.md into one review, so that a review is neither bloated nor trivially small:
+  it judges the size (the user, 2026-11-19).
 - **"This branch against main"** (or any branch against another) means **only the diff**:
-  `git diff main...<branch>`, the changed lines and what they directly affect. Give reviewers the
-  diff hunks, not whole files to sweep for unrelated issues, and re-assess (step 2) only the
-  REVIEW.md resolutions whose fix is in that diff.
+  `git diff main...<branch> -- . ':(exclude)PLAN.md' ':(exclude)REVIEW.md'`, the changed lines and what they directly
+  affect. With the branch checked out,
+  `git diff $(git merge-base main HEAD) -- . ':(exclude)PLAN.md' ':(exclude)REVIEW.md'` and `git status --short` add
+  its uncommitted work and new files. REVIEW.md is read as the record (step 1), not as a change: in the whole
+  branch's diff it would be the whole file. A round's diff keeps it, as its newly checked entries are the resolutions
+  step 2 rechecks.
+- Either way, each reviewer's brief names the command that prints its diff, and the reviewer reads the diff from it:
+  no pasted hunks, and no whole files to sweep for unrelated issues. Every diff command leaves PLAN.md out, and a
+  PLAN.md that `git status --short` lists is never read (`.claude/agents/reviewer.md`, Review blind). Only the
+  REVIEW.md resolutions whose fix is in that diff are rechecked (step 2).
 - **A whole-project review**, or an area of it, only when the user asks for that.
 
 ## REVIEW.md: append or create
 
 - **If `REVIEW.md` exists:** keep everything in it. Append each new finding at the end of the
   severity section it belongs to (High, Medium-high, Medium, Low-medium, Low), add an entry to
-  the review log and update the status table and the header's **Last used**. Never delete, reorder or rewrite existing entries. Only
+  the review log and the round's rows to the table under `## Reviews by model` (step 6), and update the status table
+  and the header's **Last used**. Never delete, reorder or rewrite existing entries. Only
   the user starts a cleanup of `REVIEW.md`, by asking for one explicitly (the `cleanup-review` skill);
   never truncate it on your own.
 - **If it doesn't exist:** create it from [TEMPLATE.md](TEMPLATE.md) (keep the explanations and
   the five severity sections, drop the example entries), restore its **Last used** from git history
   (**Numbering a new finding**), then add the findings the same way.
 
+Each finding is one entry starting with a checkbox: unchecked while open, checked once fixed or answered (not a bug,
+not reproducible, won't fix, moved to ROADMAP.md), with a resolution line giving the evidence, and no commit hash
+(branches are squashed into main).
+
 ## Findings no longer in REVIEW.md
 
 An ID cited in code, tests or docs but missing from `REVIEW.md` was usually removed by a cleanup. That alone isn't a
 dangling reference, so don't report it. When you need the entry, run `python3 scripts/review_lookup.py HLP-56`, from
 any folder of the repo. It prints the entry whether it is still in the file or was removed. If it can't, it says why:
-the ID never existed, a squash lost it, or the clone is shallow. In a full clone, that makes the citation a broken
-reference or a lost finding; say which you can tell.
-
-An old resolution's commit hash may no longer resolve, because branches are squashed into main. That isn't a
-finding either, and new resolutions don't record one.
+the ID never existed, a squash lost it, or the clone is shallow. `.claude/agents/reviewer.md` (Before reviewing) says
+what a reviewer reports of that, and of an old resolution's commit hash that no longer resolves. New resolutions
+record no commit hash, because branches are squashed into main.
 
 ## Numbering a new finding
 
@@ -112,112 +134,105 @@ a new finding that names the decision by its title and gives the evidence. Name 
 line of the review log, with the decision's title. An answer in `REVIEW.md` can be questioned (step 2); an entry in
 `DECISIONS.md` can't, beyond its **Reopen if**. A review never edits or removes a decision on its own (**Resolving**, below).
 
-1. **Read the existing `REVIEW.md`**, if there is one, before reviewing any code. If it
-   doesn't exist, create it as **REVIEW.md: append or create** says, with its counters restored.
-   Otherwise read every entry, open and resolved, and note down for yourself what is already
-   known, so nothing is reported twice:
-   - each finding: its ID, title and location, whether it is open or resolved, and for resolved
-     ones how (done, and the cause and fix; not a bug or not reproducible, and why not);
-   - the review log's "checked and found fine" notes, which needn't be redone.
-   Use these notes when judging findings:
-   - **Open** finding seen again: not a new entry; at most a note under the existing one if
-     there is something new to add (another scenario, a better location).
-   - **Done** finding: report it only if the bug is back (a regression), as a new entry that
-     names the old ID and what brought it back.
-   - **Not a bug / not reproducible** finding: don't raise the same finding again. Questioning its answer,
-     with a reason or new evidence, is step 2.
-2. **Assess the resolved entries in scope** (yourself, by reading, and with a scratch probe where reading can't settle
-   it, as in step 4) (all of them for a whole-project review; for a branch, those whose fix is in the diff): does each resolution hold up?
-   - **Done:** does the fix address the cause it names, or only the symptom? Read the code at the
-     fix and check, by reading it, that the test it names exists, would fail without the fix, and would pass with it. A live
-     check is seen failing and passing in the addressing agent's scratch run, which the resolution reports; don't report
-     it as not yet run in the whole suite, which runs only when the user asks (DECISIONS.md, Project rules). Is
-     the fix reasonable in scope (not too broad, nothing it should also have covered left out)?
-     Check its **Also covered** list (address-review, step 3): a place with the same pattern that
-     the list misses is the follow-up finding; one the list explains needs no new entry.
-   - **Not a bug / not reproducible:** is the "why not" convincing, and is its evidence still true
-     of the current code (the guard test still there and still testing it, read as above, the behaviour it relies on
-     unchanged)?
-   - **Won't fix:** does the reason still apply? An answer also in `DECISIONS.md` follows the next point instead.
-   - **Decisions** whose code is in scope: does the entry's **Reopen if** hold now, and do the code and
-     tests it names still exist? A condition that holds is a finding; a name that went stale is a Low one. Don't
-     reargue the reason: that is what an answer still in `REVIEW.md` is open to, not an entry here.
-   If a resolution isn't satisfactory, don't uncheck or rewrite the old entry: add a new finding
-   (next free ID, in the severity it deserves) that names the old ID and says what is wrong with
-   the resolution, and add one line under the old entry, if it is still in the file: "Questioned by <new ID> (<date>)". Give
-   the reviewers these assessments too, so they look at the questioned fixes. Follow-up findings
-   have their own rules: see **Follow-up chains** below.
-3. **Split the work by area** and give each reviewer (a subagent, changing nothing in the repo) one area: the files
-   to read in full, AGENTS.md and `mcp_server/GUIDE.md` as context, what to look for (correctness, data safety, security,
-   misreported results, docs that contradict the code, and types, in the functions a branch's diff adds or changes,
-   their lines it leaves as they were too, or anywhere in a whole-project review: an `Any`, or a `dict`, `list` or `tuple` whose items' types say less than is known, where a
-   more specific type fits, as AGENTS.md's typing rules say, the more specific the better: one finding per pattern with
-   every location and the type each should have, Low unless the vague type hides a defect, which then sets the
-   severity; an `Any` marked as an exception with its reason, as those rules say, is not reported unless
-   the reason doesn't hold or a narrower type does fit), that they run no tests and don't probe Designer (above), and the report format: severity, file and
-   line, one-sentence defect, concrete scenario, suggested fix, and whether reading settles it or what would (a
-   probe's outline: what to build, what to measure, what result would prove it). Reviewers must quote
-   the code for every finding, and drop only what reading disproves: a suspicion reading can't settle is reported,
-   with its probe's outline, never dropped for lack of proof (the lead agent settles it, step 4). A defect that recurs (the same
-   pattern in several places) is **one** finding listing every location, not one finding per round:
-   reviewers search for the other instances before reporting. Give each reviewer the notes from
-   steps 1 and 2 for its area (known findings with their status and resolution, and what was found
-   fine), with the same rules, so they don't report them again. Tell each reviewer to read
-   `DECISIONS.md` and apply the rule above, and that an ID missing from `REVIEW.md` isn't a finding in
-   itself (**Findings no longer in REVIEW.md**).
-4. **Settle every suspicion yourself** (**Every finding is settled before it is written**, above): read the
-   code at each one; probe in Designer, one at a time, those reading can't settle. Mark each finding *confirmed* or
-   *measured*, drop the ones settled as wrong (the review log's entry says which, and why), and put the ones a
-   limitation keeps from being checked under **Not verified**. Merge duplicates (one entry; mention that two reviewers
-   found it), and check every finding against `DECISIONS.md` and the notes from steps 1 and 2 once more before
-   writing it.
+1. **The reviewers read the existing `REVIEW.md`** before reviewing any code, so that nothing is reported twice, as
+   their rules say (`.claude/agents/reviewer.md`, Before reviewing). If it doesn't exist, the lead creates it first, as
+   **REVIEW.md: append or create** says, with its counters restored.
+2. **The reviewers recheck the resolved entries in scope** by reading (all of them for a whole-project review; for a
+   branch or a round, those whose fix is in the diff), as their rules say (`.claude/agents/reviewer.md`, Rechecking a
+   resolution), and the lead settles what they report as in step 4. If a resolution isn't satisfactory, don't uncheck
+   or rewrite the old entry: add a new finding (next free ID, in the severity it deserves) that names the old ID and
+   says what is wrong with the resolution, and add one line under the old entry, if it is still in the file:
+   `Questioned by <new ID> (<date>)`. Follow-up findings have their own rules: see **Follow-up chains** below.
+3. **Split the work by area** and start one reviewer per area as the `reviewer` agent. Its file,
+   `.claude/agents/reviewer.md`, holds its tools and its own rules: that it only reads, what it may run, what it reads
+   first, what it looks for, how it rechecks a resolution, rates a finding and marks a follow-up's generation, and how
+   it reports. The brief doesn't send it to this skill. Give each reviewer:
+   - its area: the files to read in full, or for a branch or a round the command that prints its diff (**Scope**);
+   - for a step of PLAN.md, or a group of steps, each step's text as the user approved it, taken from the first commit
+     of PLAN.md that holds it, and quoted whole and word for word. PLAN.md changes after the approval, and the lead's
+     notes join the step there. The user's later instructions that change a step join it, each quoted word for word
+     with its date. Where two texts differ, the later one stands. The brief gives the user's approved text and later
+     instructions, never the lead's account or its view of how well it was done. The reviewer still never opens PLAN.md, which holds that account and the decisions the lead
+     took alone. A step that does less than its text promises is a finding like any other, which the lead settles
+     (step 4);
+   - `mcp_server/GUIDE.md` as context. AGENTS.md is loaded for it already: the brief adds only what the `delegate`
+     skill says;
+   - what to look for beyond its rules, if anything;
+   - the findings in its area, by ID, whose resolutions it rechecks (step 2), and the review log's notes on what was
+     found fine, so it doesn't report them again;
+   - the generation of each finding that questions a resolution (**Follow-up chains**).
+4. **Settle every suspicion yourself** (**Every finding is settled before it is written**, above), the developer's
+   new problems included (**Who settles what**): read the lines each one quotes; probe those reading can't settle, as
+   **Who settles what** says. Mark each finding *confirmed* or *measured*, drop the ones settled as wrong (the review log's entry says
+   which, and why), and put the ones a limitation keeps from being checked under **Not verified**. Merge duplicates
+   into one entry, its title line naming both reviewers and their models, and check every finding against
+   `DECISIONS.md` and the `REVIEW.md` entries it touches once more before writing it.
 5. **Write** each new finding as one entry in its severity section, after the entries already
    there, using the next free ID for its area (**Numbering a new finding**). Five severities, from high to low: **High,
-   Medium-high, Medium, Low-medium, Low**. Never delete, reorder or rewrite existing entries; if a
+   Medium-high, Medium, Low-medium, Low**. Its title line ends with who found it and the model that agent ran on
+   (TEMPLATE.md, **Found by.**): a reviewer; for a new problem, the developer, or the runner whose probe found it; or
+   the lead itself. Never delete, reorder or rewrite existing entries; if a
    new finding changes the picture of an old one, add a note under the old entry.
 6. **Log the review**: append an entry to the review log (date, scope, how, resolutions
    assessed and which were questioned, findings added, suggested order, simplifications, what was
-   checked and found fine), and update the
-   status table.
-7. Report the totals and the most severe new findings to the user; the file has the rest. A review that finds
-   nothing new says so: the work is then ready for the final check (both suites in full), which runs only when the user
-   asks for it (AGENTS.md, Running the tests).
-8. **Propose to the user, in the same report,** what the review brings up for later and for good:
-   - a `ROADMAP.md` item for each simplification or follow-up worth doing later;
-   - a `DECISIONS.md` entry only for an answer that would stop reviewers raising the same finding again.
+   checked and found fine), add the round's rows to the table under `## Reviews by model`, and update its **Total** row
+   (TEMPLATE.md; the user, 2026-11-20). Then update the status table.
+7. **Go on with the loop** (the `delegate` skill, The loop is the lead's): give the new findings to the developer, then review
+   its fixes, without asking the user. What counts is the findings, not the number of review rounds. A few Low
+   findings is about 5 to 7 at most. The reviews run in this flow (the user, 2026-11-20):
+   - **For each step, or group of small steps:** the developer implements it, and a Sonnet round reviews the step's
+     diff, every reviewer on its file's model. The developer fixes the findings, and a Sonnet round reviews the fixes,
+     until a Sonnet round's new findings are only a few Low ones, or none. The developer fixes those few. The step's
+     reviews are then done, and the loop goes on with the next step.
+   - **After the last step:** an Opus round, the lead passing `model: opus` on each Agent call, reviews "the entire
+     branch diff against main". When it finds more than a few Low ones, or any above Low, the developer fixes them,
+     and Opus rounds review the fixes until one finds only a few Low ones, or none, which the developer fixes. Then an
+     Opus round reviews the entire branch again. When that round finds more than a few Low ones, or any above Low, the
+     Opus rounds on its fixes run again, then a round of the entire branch.
+   - **The reviews converge** when an Opus round of the entire branch finds only a few Low ones, or none, the first
+     such round included: a review whose new findings are only a few Low ones, the first review included, says the
+     reviews look converged, and so does a review with no findings (the user, 2026-11-19). The developer fixes those
+     few. Then the lead tells the user the reviews converged, with the totals and the most severe findings, and from
+     PLAN.md the decisions waiting and those it took alone, which the user agrees with or not. It also recaps the won't
+     fixes the user agreed during the loop, and the findings they moved to ROADMAP.md: each was asked at once (the
+     `address-review` skill, step 7), so none is still open.
+
+   The user decides: another round, or the final check (AGENTS.md, Running the tests) and then the squash merge.
+8. **Propose to the user** what the review brings up for later and for good, in the report saying the reviews look
+   converged, or at once when the next step needs it (the `delegate` skill, The loop is the lead's). Until then it
+   waits in PLAN.md, Waiting for the user:
+   - a `ROADMAP.md` item for each simplification or follow-up worth doing later. A leftover in the branch's own code
+     is fixed in the branch instead (the `delegate` skill, The loop is the lead's);
+   - a `DECISIONS.md` entry only for a decision of the user's that would stop reviewers raising the same finding
+     again, never for a false finding (the `address-review` skill, Recording decisions);
+   - the reviewers' **Unspecified** items, what no doc decides (`.claude/agents/reviewer.md`): the user decides each,
+     or leaves it open. The review log lists them.
 
    Add each once the user approves it. A cleanup of `REVIEW.md` moves nothing to either file (the `cleanup-review`
    skill), so this is the time.
 
 ## Follow-up chains
 
-Every fix here adds a test and often a sentence in the docs. The next review then finds the test
-weaker than the sentence, or a leftover in the test, and the fix for that adds another test and
-another sentence. Left alone, this runs round after round on wording and test precision long after
-the code defects are gone. Before 2a107b3, the seed chain HLP-22 → HLP-24 → HLP-25 → TST-39 →
-TST-40 → TST-44 → TST-48 ran seven generations, and the library-refusal message
-HLP-10 → HLP-14 → HLP-18 → HLP-20 → TST-26 → TST-27 ran six. So:
+A finding that questions a resolution starts or extends a chain, and why chains grow is in the reviewer's rules
+(`.claude/agents/reviewer.md`, Follow-up chains). Before 2a107b3, the seed chain HLP-22 → HLP-24 → HLP-25 → TST-39 →
+TST-40 → TST-44 → TST-48 ran seven generations, and the library-refusal message HLP-10 → HLP-14 → HLP-18 → HLP-20 →
+TST-26 → TST-27 ran six. So those rules mark each such finding with its generation, and limit what a late one's fix
+may do. The lead settles and writes what the reviewers report by those rules:
 
-- **Mark the chain.** A finding that questions a resolution puts `follows <old ID>, generation N`
-  in its title line (the old entry's own generation plus one; a finding that follows none is
-  generation 1).
-- **Generation 3 or later, Low or Low-medium, and only about tests or docs** (a check that measures
-  less than its sentence says, a stale comment, a docstring that says too much): the suggested fix
-  makes the claim smaller. Delete or narrow the sentence, or drop the extra assertion. It never
-  adds a check or makes one stronger. Say so in the entry's **Fix**.
-- **A leftover in a test that no later check depends on** (a temporary node, a value not put back)
-  isn't an entry. Add a note under the entry whose fix added that test ("Note (<date>): ...") and
-  mention it in the review log. Notes aren't open work.
-- **A defect in the tools' code** (a wrong or misreported result, lost or changed user work, a
-  hang, a security hole, a broken install) is always an entry, at any generation.
-- In the review log, give the longest chain still growing and its generation, so the user can see
-  whether reviews are converging.
+- the mark in the finding's title line (TEMPLATE.md), and its **Fix** within what its generation allows, saying so;
+- a leftover in a test that no later check depends on as a note under the entry whose fix added that test
+  (`Note (<date>): ...`), mentioned in the review log, never as an entry. Notes aren't open work;
+- in the review log, the longest chain still growing and its generation, so the user can see whether reviews are
+  converging.
 
 ## Resolving
 
 Fixing or answering findings is the `address-review` skill (`.claude/skills/address-review/`):
-test first, then the fix, then the entry checked off with a resolution line and the status table
-updated.
+test first, then the fix, which the developer reports. The lead assesses each reported resolution as it settles a new
+problem (step 4). Once its evidence holds, the lead writes the resolution line, checks the entry off and updates the
+status table. After each developer run, the lead adds its row to the table under `## Reviews by model` and updates
+the **Total** row (TEMPLATE.md, Reviews by model). A resolution whose evidence doesn't hold goes back to the developer.
+The next review rechecks it (step 2).
 
 When the user decides on a finding during a review, or you ask them to, record it in `DECISIONS.md` as
 that skill's **Recording decisions** says.

@@ -251,7 +251,8 @@ def _connected_nodes(fg: SDGraph) -> list[SDNode]:
 
 def _delete_function(node: SDSBSCompNode, prop: SDProperty) -> None:
     """Delete a parameter's function graph. On a $ parameter that also switches its inheritance
-    back to the node's default (measured on all six on a levels node and `$outputsize` on an instance node, tests/test_all_tools/facts/designer_scripts/function_states.py), so the inheritance is put back; the caller sets the value after it."""
+    back to the node's default (measured on all six on a levels node and `$outputsize` on an instance node, tests/test_all_tools/facts/designer_scripts/function_states.py), so the inheritance is put back; the caller sets the value after it.
+    Neither inheritance call raised in any of those cases, so neither has a guard (REVIEW.md HLP-207)."""
     method = node.getPropertyInheritanceMethod(prop) if prop.getId().startswith('$') else None
     node.deletePropertyGraph(prop)
     if method is not None:

@@ -604,6 +604,8 @@ class _Server:
         self.waker.delay.stop()  # a wake on its way
         with contextlib.suppress(RuntimeError, TypeError):
             self.timer.timeout.disconnect()
+        # On macOS, close() alone woke a blocked accept(), and the port could be bound at once (measured without this
+        # shutdown). The shutdown is a defence for platforms where close() doesn't; none was measured
         try:
             self.sock.shutdown(socket.SHUT_RDWR)  # wakes a blocked accept(), so the port is released
         except OSError:

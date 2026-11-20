@@ -17,8 +17,9 @@ from pathlib import Path
 from textwrap import dedent
 
 import pytest
+from docs_text import repo_files
 
-from conftest import ROOT
+from conftest import ROOT, mypy_config, mypy_files
 from project_constants import MIN_PYTHON
 from server_tools.lifecycle import DESIGNER_APP
 
@@ -53,11 +54,26 @@ def test_mypy_finds_nothing_without_designer(tmp_path: Path) -> None:
 
 def test_mypy_checks_as_the_minimum_python() -> None:
     """Every file, the scripts a user starts included, uses what the minimum Python has (DECISIONS.md, Project rules)."""
-    import configparser
+    assert mypy_config()['python_version'] == '%d.%d' % MIN_PYTHON
 
-    config = configparser.ConfigParser()
-    config.read(os.path.join(ROOT, 'mypy.ini'), encoding='utf-8')
-    assert config['mypy']['python_version'] == '%d.%d' % MIN_PYTHON
+
+def test_mypy_reaches_the_python_files_in_hidden_folders() -> None:
+    """mypy's search of `files = .` skips every folder whose name starts with a dot, such as `.claude`, so mypy.ini
+    names each such folder that holds Python files (`.claude/hooks`). It doesn't name all of `.claude`: Claude Code
+    makes its worktrees in `.claude/worktrees/`, each with a copy of every module, and mypy stops on the duplicates
+    (REVIEW.md TST-558)."""
+    named = [entry.rstrip('/') + '/' for entry in mypy_files() if entry != '.']
+    assert [entry for entry in named if '.claude/worktrees/'.startswith(entry)] == []
+    excluded = re.compile(mypy_config()['exclude'])
+    hidden = [
+        path
+        for path in (name.replace(os.sep, '/') for name in repo_files())
+        if path.endswith('.py')
+        and any(part.startswith('.') for part in path.split('/')[:-1])
+        and not excluded.search(path)
+    ]
+    assert '.claude/hooks/large_reads.py' in hidden
+    assert [path for path in hidden if not path.startswith(tuple(named))] == []
 
 
 def _assert_mypy_finds_nothing(tmp_path: Path, packages: dict[str, str]) -> None:
@@ -109,7 +125,7 @@ _ANY_PROBE = dedent("""\
     c: Callable[..., int] = len  # reported
     d = cast(Any, 1)  # reported
     Pair = tuple[str, Any]  # reported
-    e: Any = 1  # type: ignore[explicit-any]  # the mark AGENTS.md asks for
+    e: Any = 1  # type: ignore[explicit-any]  # the mark `.claude/rules/python.md` asks for
     f = json.loads('1')
     g = defaultdict[str, Any](int)  # an Any inside an expression (REVIEW.md TST-497)
 
@@ -125,7 +141,7 @@ _ANY_PROBE = dedent("""\
 
 def test_mypy_refuses_an_explicit_any(tmp_path: Path) -> None:
     """mypy.ini's disallow_any_explicit (ROADMAP item 99): mypy reports an Any written in an annotation, a signature, a
-    cast or a type alias, the ... of Callable[..., T] included. AGENTS.md's mark silences one, on a function's def
+    cast or a type alias, the ... of Callable[..., T] included. `.claude/rules/python.md`'s mark silences one, on a function's def
     line. mypy doesn't report an Any inside an expression, nor one that comes in implicitly."""
     probe = tmp_path / 'probe.py'
     probe.write_text(_ANY_PROBE, encoding='utf-8')

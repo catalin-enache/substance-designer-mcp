@@ -13,6 +13,7 @@ from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, Unpack
 
 import pytest
+from docs_text import flat
 from selftest_fakes import fresh, tool_result
 
 import project_constants
@@ -496,7 +497,7 @@ def test_every_quit_lifecycle_makes_is_a_watched_step() -> None:
     shutdown = run.rindex("'lifecycle/hold_thread_pool'", 0, calls[-1])
     assert run.rfind('watch.step(', 0, shutdown) > run.rfind('check(', 0, shutdown)
     unwatched = [
-        run[at : at + 50].replace('\n', ' ')
+        flat(run[at : at + 50])
         for at in calls
         if run.rfind('watch.step(', 0, at) < max(run.rfind('check(', 0, at), run.rfind('check(\n', 0, at))
     ]

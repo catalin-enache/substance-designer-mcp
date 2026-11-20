@@ -1,5 +1,6 @@
 """Waiting in Designer for something to happen: woken by the callbacks that say it did, looking again every TICK ms
-where none comes, with a limit in case it never does (AGENTS.md: callbacks first, never a time measured here)."""
+where none comes, with a limit in case it never does (`.claude/rules/waits.md`: callbacks first, never a time
+measured here)."""
 
 from .core import Callable, Protocol, QtCore, Sequence, _qt_app, cast
 
@@ -15,7 +16,7 @@ class _EventSpy(Protocol):
 
 def _settle(seconds: float) -> None:
     """Let Designer process its events for `seconds`. A wait for something to happen goes through _until instead
-    (AGENTS.md)."""
+    (`.claude/rules/waits.md`)."""
     import time
 
     app = _qt_app()

@@ -99,7 +99,7 @@ def test_designer_still_the_active_app_after_is_said(
 
 
 def test_the_hide_and_the_show_are_waited_for_on_callbacks_not_a_fixed_time(helpers: types.ModuleType) -> None:
-    # REVIEW.md SRV-150: 1.0 s after the hide and 1.0 s after the show, whatever macOS did (AGENTS.md: callbacks, never
+    # REVIEW.md SRV-150: 1.0 s after the hide and 1.0 s after the show, whatever macOS did (`.claude/rules/waits.md`: callbacks, never
     # a time measured here). The show is woken by AppKit's notification that Designer was unhidden, which came with
     # macOS no longer saying it hidden (shot3d.py's module docstring; ROADMAP item 101): Qt's expose events came before
     # the unhide took in one probe and after it in another (REVIEW.md HLP-160)

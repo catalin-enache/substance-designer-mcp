@@ -45,7 +45,7 @@ There are two programs, plus Designer's own command-line tools:
 | Part | Runs where | What it does |
 |---|---|---|
 | **sd_claude_bridge_kve plugin** (`plugin/sd_claude_bridge_kve`) | Inside Designer, loaded at startup | A small, generic script runner. It listens on `127.0.0.1:9877`, checks that each request is signed with the secret token, queues the Python code it receives, runs it on Designer's main thread (the only place the `sd` API may be used), and sends back the printed output or the error. It also enforces timeouts, answers `status` / `cancel` while a script runs, and knows nothing about MCP or the individual tools. |
-| **MCP server** (`mcp_server/server.py`, the entry point; the code in `mcp_server/server_tools/`) | Its own process, started by Claude Code | Defines the 35 tools Claude sees, one module per area (`core.py`: configuration, the bridge connection and the tool decorator; `edits.py`, `views.py`, `output.py`...: the tools). Its instructions to Claude are one short paragraph (MCP clients cut long ones; the limit is in [AGENTS.md](AGENTS.md), Working on this project): leave the Designer tools alone unless you ask for Designer work, and right before the first Designer tool call, call `get_guide()`, which returns the core of [mcp_server/GUIDE.md](mcp_server/GUIDE.md) (`get_guide('scripting')`, the sd API and Qt part, before writing raw code). Sessions started for other things never load the guide. Each tool does one or more of: send Python code to the plugin (most tools), run Designer's command-line tools (`render_sbs`, `sbsar_info`), or do the work itself outside Designer (decoding pixels, building preview images, comparing `.sbs` files, reading the log, editing files for portals). |
+| **MCP server** (`mcp_server/server.py`, the entry point; the code in `mcp_server/server_tools/`) | Its own process, started by Claude Code | Defines the 35 tools Claude sees, one module per area (`core.py`: configuration, the bridge connection and the tool decorator; `edits.py`, `views.py`, `output.py`...: the tools). Its instructions to Claude are one short paragraph (MCP clients cut long ones; the limit is in [`.claude/rules/designer-code.md`](.claude/rules/designer-code.md)): leave the Designer tools alone unless you ask for Designer work, and right before the first Designer tool call, call `get_guide()`, which returns the core of [mcp_server/GUIDE.md](mcp_server/GUIDE.md) (`get_guide('scripting')`, the sd API and Qt part, before writing raw code). Sessions started for other things never load the guide. Each tool does one or more of: send Python code to the plugin (most tools), run Designer's command-line tools (`render_sbs`, `sbsar_info`), or do the work itself outside Designer (decoding pixels, building preview images, comparing `.sbs` files, reading the log, editing files for portals). |
 | **Designer helpers** (`mcp_server/designer_helpers/`) | Sent to Designer with each request | The library of functions that actually do the work inside Designer: describing nodes, editing graphs, computing previews, layout, exposing inputs and so on. One file per area (`edits.py`, `editor.py`, `screenshots.py`...), joined into one script in the order of `PARTS` in its `__init__.py`, so they share one namespace. Each part imports what it uses from the others (`from .core import ...`) so editors see where names come from; those lines are dropped when the parts are joined. It's re-sent with every call, so updating it never needs a Designer restart. |
 | **sbscooker / sbsrender** | Separate processes | Designer's own tools for compiling a saved `.sbs` into `.sbsar` and rendering its outputs, independently of the open Designer. |
 | **CLI client** (`client/sd_run.py`) | Your terminal | The same connection to the plugin without MCP, for running scripts by hand. |
@@ -293,7 +293,7 @@ the self-test exercises every tool and parameter and passes every `apply_edits` 
 Designer's own `sd` API and PySide6 stubs when Designer is installed, and runs Ruff
 (`ruff.toml`): lint rules, and every file formatted. While working, run the tests you added or changed, always with
 the lint and type checks; run them all as the final check, before merging into `main`, except for a change of docs
-alone, which runs the docs tests (AGENTS.md, Running the tests):
+alone, which runs the docs tests (`.claude/rules/docs-tests.md`):
 
 ```bash
 mcp_server/venv/bin/pip install -r mcp_server/requirements-dev.txt   # pytest, mypy and ruff
@@ -321,6 +321,24 @@ then doesn't read (measured: 14 of `QtWidgets`' 193 classes found). The rest is 
 To check it, change a `'quote'` to `"quote"` and press ⌥⌘L (Code → Reformat File): Ruff turns it
 back to single quotes. Lint fixes beyond imports (such as `raise ... from e`) show as warnings with
 a quick fix (⌥⏎), or apply them all with `ruff check --fix .`.
+
+### Claude Code's hooks in this repository
+
+The committed `.claude/settings.json` registers hooks for every Claude Code session opened in this repository, yours
+included (`.claude/hooks/large_reads.py`). They keep large reads out of the main session's context, and let a
+subagent's calls through:
+
+- a read, or a `cat`, `head`, `tail` or `sed -n` command, that would return more than a size limit is refused, with a
+  message saying how to read less;
+- the main session's web fetches and searches are refused: the project's `analyst` agent makes them;
+- a large Bash output, and many reading calls in one turn, get a note suggesting the `analyst`.
+
+The same settings save a long output of a Bash command that succeeds to a file, and show the session a preview
+(`bashOutputMaxChars`). The limits and the rules are in the docstring of `.claude/hooks/large_reads.py`. The hooks run
+on `mcp_server/venv`'s Python, so they let every call through until `install.py` has made it. To turn every hook off
+for yourself only, put `{"disableAllHooks": true}` in `.claude/settings.local.json` and keep that file out of git
+(Claude Code's docs: hooks, Disable or remove hooks). It doesn't reach hooks an organization deploys through managed
+settings.
 
 ## Configuration (optional environment variables)
 

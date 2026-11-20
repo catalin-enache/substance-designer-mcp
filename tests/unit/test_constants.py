@@ -3,9 +3,9 @@ Designer loads by name). A rename = change PLUGIN, rename the folders, and these
 anything left over."""
 
 import os
-import subprocess
 
 import pytest
+from docs_text import repo_files
 
 from conftest import ROOT
 from project_constants import PLUGIN, PLUGIN_DIR, PLUGIN_PACKAGE_DIR, TOKEN_FILE
@@ -33,30 +33,10 @@ def test_plugin_takes_its_name_from_its_folder(monkeypatch: pytest.MonkeyPatch) 
     assert module.NAME == PLUGIN and module.TOKEN_FILE == TOKEN_FILE
 
 
-def _repo_files() -> list[str]:
-    """The repo's files: git's list (tracked and untracked, not ignored), or without git (a zip
-    download, no git installed) a walk of the tree minus the venv and caches: a failed git used
-    to give an empty list, and the scan below passed checking nothing (REVIEW.md TST-96)."""
-    try:
-        listed = subprocess.run(
-            ['git', 'ls-files', '--cached', '--others', '--exclude-standard'], cwd=ROOT, capture_output=True, text=True
-        )
-        if listed.returncode == 0 and listed.stdout.split():
-            return listed.stdout.split()
-    except OSError:
-        pass
-    skip = {'.git', 'venv', '__pycache__', '.mypy_cache', '.ruff_cache', '.pytest_cache'}
-    found = []
-    for folder, dirs, files in os.walk(ROOT):
-        dirs[:] = [d for d in dirs if d not in skip]
-        found += [os.path.relpath(os.path.join(folder, f), ROOT) for f in files]
-    return found
-
-
 def test_no_code_spells_out_the_name() -> None:
     offenders = []
     scanned = 0
-    for rel in _repo_files():
+    for rel in repo_files():
         if rel == 'project_constants.py' or not rel.endswith(('.py', '.json', '.txt', '.cfg', '.toml', '.ini')):
             continue
         path = os.path.join(ROOT, rel)
@@ -70,7 +50,11 @@ def test_no_code_spells_out_the_name() -> None:
 
 
 def test_docs_mention_the_current_name() -> None:
-    for doc in ('README.md', 'AGENTS.md', os.path.join('mcp_server', 'GUIDE.md')):
+    for doc in (
+        'README.md',
+        os.path.join('.claude', 'rules', 'designer-code.md'),
+        os.path.join('mcp_server', 'GUIDE.md'),
+    ):
         with open(os.path.join(ROOT, doc), encoding='utf-8') as f:
             text = f.read()
         assert PLUGIN in text and os.path.basename(TOKEN_FILE) in text, doc

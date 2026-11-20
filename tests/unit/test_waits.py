@@ -1,5 +1,5 @@
 """Code waits for the callback that says a thing happened, polls every 100 ms only where none exists, and never waits a
-time measured here (AGENTS.md, Wait for callbacks; REVIEW.md SRV-150, TST-421). Read in the tools, the plugin, the
+time measured here (`.claude/rules/waits.md`; REVIEW.md SRV-150, TST-421). Read in the tools, the plugin, the
 helpers, the client, the examples and the self-test, their snippets of Designer code included: every sleep, every
 _settle, every `.start(...)` given a time and every single-shot timer after a number, written on one line, is a poll of
 POLL_S or TICK, or one of the waits listed here, each with the reason it stays (REVIEW.md TST-426: a timer started at a
@@ -47,7 +47,7 @@ STAYS: dict[tuple[str, str], tuple[int, str]] = {
     (PLUGIN_FILE, 'delay.start(ms)'): (
         1,
         'WAKE_DELAY_MS between two jobs: DECISIONS.md, "No job starts sooner than 30 ms after the one before ended"; '
-        'the wait rule in AGENTS.md, added after it, contradicts it, and the user decides which stands',
+        "the wait rule's named exception (`.claude/rules/waits.md`; the user, 2026-11-20)",
     ),
     ('mcp_server/designer_helpers/waits.py', 'end.start(int(limit * 1000)'): (1, "the wait's limit, a safety net"),
     ('mcp_server/designer_helpers/view3d.py', 'timers[-1].start(after)'): (
@@ -60,7 +60,8 @@ STAYS: dict[tuple[str, str], tuple[int, str]] = {
     ),
     ('mcp_server/designer_helpers/quit.py', 'singleShot(300'): (
         1,
-        "an older plugin's close, one without _after_reply, until Designer restarts (REVIEW.md SRV-151)",
+        "an older plugin's close, one without _after_reply, until Designer restarts (REVIEW.md SRV-151); the wait "
+        "rule's named exception (`.claude/rules/waits.md`; the user, 2026-11-20)",
     ),
     # the check's subject: a job holding the bridge, the main thread or the thread pool, a slow shutdown, a timer's
     # firings counted
@@ -81,8 +82,14 @@ STAYS: dict[tuple[str, str], tuple[int, str]] = {
     ('tests/test_all_tools/editor_panels_and_fit/checks.py', '_settle(0.3)'): (1, "a timer's firings counted"),
     ('tests/test_all_tools/editor_panels_and_fit/window_states.py', 'tick.start(100)'): (1, "until()'s poll"),
     # the click and window-under facts time macOS's covered state on purpose (REVIEW.md TST-412)
-    ('tests/test_all_tools/editor_panels_and_fit/window_states.py', '_settle(0.5)'): (2, 'the click fact'),
-    ('tests/test_all_tools/editor_panels_and_fit/window_states.py', '_settle(1.0)'): (3, 'the window-under fact'),
+    ('tests/test_all_tools/editor_panels_and_fit/window_states.py', '_settle(0.5)'): (
+        2,
+        "the click fact; the wait rule's named exception (`.claude/rules/waits.md`; the user, 2026-11-20)",
+    ),
+    ('tests/test_all_tools/editor_panels_and_fit/window_states.py', '_settle(1.0)'): (
+        3,
+        "the window-under fact; the wait rule's named exception (`.claude/rules/waits.md`; the user, 2026-11-20)",
+    ),
 }
 
 
@@ -134,7 +141,7 @@ def test_a_wait_on_macoss_hidden_or_minimized_flag_wakes_on_appkits_notification
 
 
 def test_the_polls_look_every_100_ms() -> None:
-    # AGENTS.md: a state no callback says is looked at every 100 ms; the helpers' TICK isn't read here
+    # `.claude/rules/waits.md`: a state no callback says is looked at every 100 ms; the helpers' TICK isn't read here
     from selftest_fakes import fresh
 
     from conftest import server

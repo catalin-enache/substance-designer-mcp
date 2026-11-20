@@ -1,9 +1,9 @@
 # DECISIONS.md: what is already settled
 
-This is the memory for the whole project, for all time. `REVIEW.md` is the memory per branch, where agents that review
-and agents that address findings talk to each other; its history stays in git.
+This is the memory for the whole project, for all time. `REVIEW.md` is the memory per branch, which the lead writes
+from the reviewers' and the developer's reports; its history stays in git.
 
-Won't-fix items, project rules and not-a-bug answers that a reviewer could plausibly raise again.
+Won't-fix items and project rules that a reviewer could plausibly raise again.
 A finding that contradicts an entry here is dropped, unless the entry's **Reopen if** holds; then it
 is a new finding that names the entry and the evidence. Unlike an answer in `REVIEW.md`, an entry can't be questioned
 any other way.
@@ -13,33 +13,23 @@ test or doc it concerns. Entries don't cite review findings. "The user" is named
 says so. Measured Designer behaviour lives in `GUIDE.md` or the module's docstring; an entry links to it rather than repeating it.
 
 An entry is a bold one-line decision, then the reason, then `Reopen if: <condition>.`, with who decided and
-when if the user did. An entry comes from a decision of the user's, on a finding or about the project, or from a
-not-a-bug or not-reproducible answer the user approved when it was proposed, during a review or while the findings were
-addressed. Only what would stop reviewers raising the same finding again goes in. A cleanup of `REVIEW.md` adds
+when if the user did. An entry comes from a decision of the user's, on a finding or about the project. A false
+finding (not a bug, not reproducible) is no decision and stays in `REVIEW.md` (the user, 2026-11-20). Only what would
+stop reviewers raising the same finding again goes in. A cleanup of `REVIEW.md` adds
 nothing here. Agents may update the names and paths an entry points at; changing what was decided, or removing an
-entry, takes the user (the `address-review` skill, **Recording decisions**).
+entry, takes the user (the `address-review` skill (`.claude/skills/address-review/SKILL.md`), **Recording decisions**).
 
 ## Project rules
 
 - **The full suites run only when the user asks; while working, only the tests added or modified run, always with lint
-  and types, a live check in a scratch run.** The full suites took about 12 minutes when this was decided; on macOS both now take
-  about 4 minutes, with four Designers at once (10.5 one at a time: `tests/test_all_tools/workers.py`), still longer than the tests of
-  one change. No agent starts a whole run of either suite on its own, not for TDD, not after a fix, not
-  between reviews: when a review finds nothing, it says the work is ready, and the user asks for the final check (both
-  suites in full, before merging into `main`) when they say the work is done. Lint and types (`test_lint.py`,
-  `test_types.py`) run with every test run, whichever tests it has. TDD stays: a new or changed live self-test check, which lives in
-  the suite as a function its category's `run(ctx)` calls, is seen failing and then passing by calling that same
-  function from a scratch script (`tests/test_all_tools/alone.py`, or one written from zero where it falls short), in
-  an environment built for it, with a fresh MCP server, in a Designer an
-  agent started; the few checks a scratch run can't prove wait for the full run (the `live-check` skill lists them). A check proven
-  in a scratch run can still pass or fail in the full run (the pool) because of what differs there (no category sees another's state, but
-  other Designers start, quit and work beside it, the unit suite runs at the same time, and its Designer was just
-  started: the `live-check` skill); the user accepts that the full run is what shows it. When the final check fails, the failing tests run on
-  their own until they pass (a live check in a scratch run), and then the user asks for the suites that failed again.
-  When only unit tests failed, the live self-test runs again only if the fixes touch code it reaches (the `live-check` skill lists
-  it); its pass is for the code as it was. (The user's choice, 2026-11-06.) Docs changed alone run the doc tests instead (AGENTS.md, Running the tests).
-  Only the agent changing the code runs tests; a review runs none, and judges the tests by reading them, its lead
-  agent checking in Designer with scratch probes what reading can't settle.
+  and types, a live check in a scratch run.** The full suites take longer than the tests of one change (their times:
+  `tests/test_all_tools/workers.py`). No agent starts a whole run of either suite on its own, not for TDD, not after a
+  fix, not between reviews: when the reviews look converged, the lead says so, and the user decides: another round, or
+  the final check (both suites in full, before merging into `main`) when they say the work is done. Lint and types
+  (`test_lint.py`, `test_types.py`) run with every test run, whichever tests it has. Docs changed alone run the doc
+  tests instead (`.claude/rules/docs-tests.md`). Tests run at two stages: an agent's own tests while working, and the
+  full suites at the end, which the `runner` agent runs (the user, 2026-11-19). How each stage runs: AGENTS.md,
+  Running the tests, and the `live-check` skill (`.claude/skills/live-check/SKILL.md`).
   A change not having run the full suites, before the user asks for them, is not a finding; a branch merged without
   them passing is.
   Reopen if: the full suites become fast enough to run after every change, or a break found only in the full run cost
@@ -52,16 +42,12 @@ entry, takes the user (the `address-review` skill, **Recording decisions**).
 - **Every Python file runs only on Python 3.12 or later; the scripts a user starts stay readable by an older Python,
   so that they refuse it with a message.** The server's venv and every test run on 3.12, and the code uses what 3.12
   has, the scripts and the modules they import included. The scripts a user starts (`install.py`, `uninstall.py`,
-  `client/sd_run.py`, `scripts/`) check `sys.version_info` before any other import. So an older `python3` (a stock
-  Mac's is 3.9) prints "Python 3.12+ is required (found 3.9.6)" instead of a traceback. Python reads a whole file before
-  it runs the first line, so those five files leave out the syntax added after 3.9, such as `type` statements and
-  `match`; ruff checks most of it (`ruff.toml`), and `tests/unit/test_old_python.py`'s run on a real Python 3.9, where
-  one is installed, the rest. They may still call anything 3.12 has. The same test checks the refusal.
-  `mcp_server/server.py` checks the same way, for a venv an older Python made. `uninstall.py` removes the venv, so it
-  should run on a system Python 3.12 or later, not the venv's (it says so when it does).
+  `client/sd_run.py`, `scripts/`) are started with whatever `python3` is installed. Run on an older `python3`, such
+  as a stock Mac's 3.9, they print "Python 3.12+ is required (found 3.9.6)" instead of a traceback. How the scripts do it:
+  `.claude/rules/python.md`, Typing. `uninstall.py` removes the venv, so it should run on a system Python 3.12 or
+  later, not the venv's (it says so when it does).
   Reopen if: a system this project supports can't install Python 3.12, or Designer's own Python falls below the
-  server's minimum. (The user's decision, 2026-11-17; it replaces "the standalone scripts need Python 3.9 at the
-  oldest".)
+  server's minimum. (The user's decision, 2026-11-17.)
 
 - **Linux is not a target: nothing is fixed, tested or reviewed for it.** The project will never run on Linux, so a
   review raises nothing about it: no finding about code paths, platform guards, tests or docs that would only matter
@@ -94,6 +80,17 @@ entry, takes the user (the `address-review` skill, **Recording decisions**).
 - **During tests, no window of an agent's Designer comes in front of the user's windows unless a check needs it
   there.** It stops their work: "a deal breaker" (the user, 2026-11-15). Reopen if: the user asks for it.
 
+- **No agent has a write guard: what each may change rests on its instructions.** The `developer`'s job is changing
+  code, and the `runner` writes scratch scripts and probes, so a guard would block their work. The `analyst` and the
+  `reviewer` only read because their files tell them to, and no hook enforces it: "only instruct agents that only have
+  to read to do so, without having to enforce them by a limiting hook" (the user, 2026-11-19). A hook that let only
+  reading Bash commands through (`.claude/hooks/read_only_bash.py`) was dropped. Each of three reviews found another
+  shell form around it, and it cost more than it protected. `.claude/agents/developer.md` says it never commits, runs
+  no full suite and starts only `/simplify`'s cleanup agents and `analyst` agents; `.claude/agents/runner.md` says it changes none of the
+  repository's files; `analyst.md` and `reviewer.md` say they only read. A review doesn't report a missing guard, nor
+  the developer's Agent tool reaching every agent type.
+  Reopen if: an agent changes what its instructions forbid. (The user's decisions, 2026-11-18 and 2026-11-19.)
+
 ## Security
 
 - **Only the client is authenticated, not the plugin.** A program running as the same user could read
@@ -125,16 +122,6 @@ entry, takes the user (the `address-review` skill, **Recording decisions**).
   remains is a cryptic error, with nothing changed, on an id `search_nodes` never prints. Agreed with the
   user, 2026-11-02.
   Reopen if: such an id starts changing something, or `search_nodes` starts printing such ids.
-- **A definition's graph part can't leave its package. Not a bug.** `findResourceFromUrl` looks inside the
-  package it is called on; relative, absolute and `sbs://` paths found nothing when measured. Not checked:
-  what `newInstanceNode` does with a folder named as the graph.
-  Reopen if: the live check "a definition's graph stays in its package" fails, or there is new evidence.
-- **Loading and then unloading a package that is already a dependency loses nothing.** Not reproduced: measured
-  on Designer 16, it goes back to being a dependency, the instance still resolves, the graph computes and nothing
-  is marked modified. Not measured: the same check's path comparison on Windows. The self-test's subfolder check
-  (`tests/test_all_tools/safeguards/checks.py`) now runs only in a Designer it started, so neither case reaches the
-  user's session.
-  Reopen if: that check runs in the user's Designer again, or an unload is seen to lose work.
 - **`preview_node` and `node_stats` count as reads on a library graph.** Their temporary output node can leave the package
   marked modified, with its content unchanged, so closing Designer may ask about it. Saving is refused for library packages,
   so the way out is for the user to close Designer without saving it, after saving what they want to keep. The user's decision, 2026-11-04.
@@ -163,16 +150,9 @@ entry, takes the user (the `address-review` skill, **Recording decisions**).
   docstring. Only an instance a person made reaches it, as `add` instances only library graphs, and following the binding
   would widen the check again for that case. The user's decision, 2026-11-09.
   Reopen if: the tools become able to instance a user's own graph, or an agent is seen to build a wrong size this way.
-- **`_delete_function`'s inheritance calls have no guard** (`designer_helpers/graph_inputs.py`). Not
-  reproduced: neither call raised in any measured case, and a guard would be untested code.
-  Reopen if: a case that raises is measured.
 
 ## Bridge and quitting
 
-- **`stop()`'s `shutdown()` before `close()` is only a defence.** Not reproduced as a bound port: on macOS, with
-  that line removed, `close()` alone woke the blocked `accept()` and the port could be bound at once. The line is
-  for platforms where `close()` doesn't do that; none was measured.
-  Reopen if: `test_stop_answers_queued_clients_and_frees_the_port` fails, or a port stays bound on another platform.
 - **`quit_designer` repeats the whole protocol-mismatch message when it ends an agent's Designer whose plugin is
   another version.** Its advice ("quit_designer and launch_designer for one an agent started") then names the call that
   has just ended it; what it does is right (`server_tools/lifecycle.py`, `OTHER_PROTOCOL` in `server_tools/core.py`).
@@ -207,28 +187,20 @@ entry, takes the user (the `address-review` skill, **Recording decisions**).
   window.
 
 - **No job starts sooner than 30 ms after the one before ended, whatever starts it; a call after a pause starts at
-  once.** Started at once, a job found Designer not settled after the one before (a node measured right after the one
-  feeding it got no texture); 20 ms was enough where 5 ms wasn't (measured: `WAKE_DELAY_MS` in the plugin). Calls one after
-  the other take about 30 ms each instead of the poll's 85; a call after a pause doesn't wait. The tools' second compute
-  stays as a defence; the `measure` check that runs one compute is what fails without the wait. The user's choice,
-  2026-11-11, of three (keep the wake and retry, remove the wake, or wait a little), then of this wording, which says
-  what was measured.
+  once.** Started at once, a job found Designer not settled after the one before (measured: `WAKE_DELAY_MS` in the
+  plugin). Calls one after the other take about 30 ms each instead of the poll's 85; a call after a pause doesn't wait.
+  The tools' second compute stays as a defence; the `measure` check that runs one compute is what fails without the
+  wait. The user's choice, 2026-11-11, of three (keep the wake and retry, remove the wake, or wait a little).
   Reopen if: the wait shows too short (that check failing), or what Designer needs the moment for is found.
 
 - **On macOS, the server saves Designer's preferences plist as the first Designer an agent starts is started, and
   puts it back once no Designer runs.** No way to give a Designer a file of its own was found, and agents' Designers
-  changed the user's. `launch_designer` saves it; `quit_designer` puts it back once none runs, and so does the next
-  call finding none, for Designers that ended outside the tools, only within 6 hours of the copy (older, it is
-  dropped: the user may have worked since); never while one runs, nor once the user's own Designer ran since (the
-  file is left as theirs), and a launch after the user's run saves it again. A launch records the Designer it starts,
-  or ends it when it can't, before letting go of the lock the file is saved under, so that another launch, looking
-  under it for a Designer that appeared as it was starting one, never takes an agent's for the user's (one it can
-  neither record nor end counts as the user's, as its error says). The user's own Designer, an agent working in it
-  included, is never involved. How, as measured: `designer_preferences.py`; checked by the pool's
-  `workers.check_the_preferences`. The user's choices, 2026-11-13: in the server rather than only in the self-test;
-  then the 6 hours, and saving again after their run; then the record written under that lock rather than the look
-  made only after a put-back; then a Designer that can't be recorded ended under that lock, one that can be neither
-  recorded nor ended counting as the user's.
+  changed the user's (measured: `designer_preferences.py`). The user made these choices on 2026-11-13, one after the
+  other. First, this is done in the server rather than only in the self-test. Then a copy left by Designers that ended
+  outside the tools is put back only within 6 hours, and the file is saved again after the user's own Designer ran.
+  Then a launch records the Designer it starts under the lock the file is saved under, rather than a look made only
+  after a put-back. Last, a Designer that can't be recorded is ended under that lock, and one that can be neither
+  recorded nor ended counts as the user's.
   Reopen if: Designer gains a way to keep its preferences elsewhere, a put-back loses a change of the user's, or
   holding the lock through the record or that end (up to about 10 s) makes launches side by side wait noticeably.
 
@@ -240,15 +212,8 @@ entry, takes the user (the `address-review` skill, **Recording decisions**).
   `lifecycle.check_launch_on_another_port`. The user's decision, 2026-11-12.
   Reopen if: the user wants agents' crash reports sent, or Designer gains a setting of its own for it.
 
-## Output, pixels, screenshots, the graph view, example
+## Output, screenshots and Designer's UI
 
-- **An unconnected output node computes an image and is exported.** Not reproduced as a skipped output. The
-  branch in `export_outputs` naming an output that computed no image is only a defence.
-  Reopen if: the check in `tests/test_all_tools/render/checks.py` (`mcp_empty`) fails.
-- **An empty clipboard gives empty mime data, not `None`.** Not reproduced as a bug: measured by a live check,
-  and Qt documents `None` only for a platform without that clipboard mode. The `None` check in
-  `designer_helpers/screenshots.py` is only a defence.
-  Reopen if: the "designer facts" check on the empty clipboard fails.
 - **The 3D screenshot puts back only the clipboard's text; the rest may be lost.** `screenshot_designer('3d')` goes
   through the clipboard and backs it up through Qt (`designer_helpers/screenshots.py`), which on macOS kept plain
   text and HTML and lost an image, rich text's RTF and an app's own data, and made several copied files one item (measured
@@ -266,40 +231,21 @@ entry, takes the user (the `address-review` skill, **Recording decisions**).
   environment at their request, 2026-11-18.
   Reopen if: the user wants the selected node back, or the API gains a way to show a node in the Parameters panel.
 - **A 3D screenshot, and `set_3d_view` where it can't work off screen, put Designer's window on screen transparent, then
-  back as it was.** The 3D view doesn't draw off screen, but it draws in a transparent window in front (`designer_helpers/shot3d.py`). So a minimized, covered
-  or hidden window is brought in front, transparent and click-through, for the shot. Then it is minimized again, put
-  back behind the window that covered it, or hidden again, and made opaque. The user chose this over refusing the
-  shot on 2026-11-13, first with the window brought up visibly ("Restore: un-minimize your window, take the shot ...
-  I'm fine with that", then "Bring forward, then back"). On 2026-11-14, once the transparent window was measured, they
-  chose "Invisible, all cases (Recommended)". If the user makes Designer the active app during the shot, it is left
-  on screen if Designer is still the active app as the shot ends; switched to and away again, it is put back as found
-  (the user's agreement, 2026-11-13; this wording, "Reword to match (Recommended)", 2026-11-14). While the window is
-  in front, transparent, the windows under it stay visible for macOS, measured with the window under it shown first.
-  A first measurement, with a window macOS had never shown, read them covered, and README said apps might pause
-  drawing them ("Document it (Recommended)", 2026-11-14); the user had that sentence removed once it was found wrong
-  ("Remove the sentence (Recommended)", 2026-11-14). The Explorer's menu that `graph=` opens is made transparent as
-  it opens, and on macOS click-through too (`designer_helpers/view3d.py`). Whether a click would reach the menu while
-  it is only transparent couldn't be measured without clicking on the user's screen; the user chose click-through
-  ("Make it click-through (Recommended)", 2026-11-14).
-  `set_3d_view` run on its own does the same for camera moves, `graph=` and a mesh switch (`designer_helpers/view3d.py`);
-  otherwise only a viewpoint's turn runs on screen. Off screen, the same moves came out differently between runs, the
-  Explorer's menu that `graph=` opens unhid a hidden Designer and left it up, and a tiling set after a mesh switch, in
-  the same call or the next, had its field deleted as it was set. The user chose this over refusing those set-ups, for
-  the moves on 2026-11-16 ("Show the window (Recommended)"), and for `graph=` and a mesh switch on 2026-11-18 ("Show the
-  window (Recommended)", then "Any mesh switch (Recommended)").
+  back as it was.** The 3D view doesn't draw off screen (how the shot works around it: `_Screen`,
+  `designer_helpers/shot3d.py`). The user chose a transparent, click-through window on screen over refusing the shot.
+  On 2026-11-13 they first chose the window brought up visibly. On 2026-11-14, once the transparent window was
+  measured, they chose it invisible in every case. If the user makes Designer the active app during the shot, it is
+  left on screen if Designer is still the active app as the shot ends; switched to and away again, it is put back as
+  found (the user's agreement, 2026-11-13; this wording, 2026-11-14). README once said that apps under the window might pause drawing
+  them; the user had that sentence removed once it was found wrong (2026-11-14). The Explorer's menu that `graph=`
+  opens is click-through too on macOS, the user's choice of 2026-11-14: whether a click would reach the menu while it
+  is only transparent couldn't be measured without clicking on the user's screen (`designer_helpers/view3d.py`).
+  `set_3d_view` run on its own does the same for camera moves, `graph=` and any mesh switch; otherwise only a
+  viewpoint's turn runs on screen. Why: `set_3d_view`'s docstring, `designer_helpers/view3d.py`. The user chose this
+  over refusing those set-ups, for the moves on 2026-11-16, and for `graph=` and any mesh switch on 2026-11-18.
   Reopen if: the user sees the window during a shot, wants it left up or the shot refused, sees an app under it pause
   during a shot, or showing it makes Designer the active app; or a way is found to run those set-ups off screen as
   they come out on screen.
-- **Why `open_graph`'s wheel steps once did nothing is unknown, and isn't being chased.** It happened in one self-test
-  run of four. Not reproduced: 200 wheel steps and 40 fits in a fresh Designer gave no stuck step, idle and under
-  load. `_fit_view_to` no longer reports such a view as fitted, and gives the view's size and whether Designer's
-  window is active, so a later occurrence explains itself (`test_a_view_ignoring_the_wheel_isnt_reported_as_fitted`).
-  It stays a result, not an error, since the graph is open either way.
-  Reopen if: it happens again; that output is the evidence to start from.
-- **The example's unload and reload in one call is left as it is** (`examples/build_dwarf_trimsheet.py`). Not
-  reproduced: five re-runs with the previous build open in a tab caused no crash. The recorded crash needed a
-  new graph view being created while old ones were torn down, and this reload creates none.
-  Reopen if: a crash dump points at this reload.
 - **Renaming an existing output warns; it isn't refused.** Designer updates only the graphs open during the rename. One that
   was closed computes black, with no error, and the tools can't see it. So `apply_edits`' result tells the agent to tell the
   user, naming the repair (`set_output_tags`; `GUIDE.md`, Output nodes). The user chose this over refusing a rename or only

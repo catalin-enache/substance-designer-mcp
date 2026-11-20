@@ -1,6 +1,6 @@
 """The 3D view's frames, read from its overlay's sample count at each paint (designer_helpers/frames3d.py; REVIEW.md
 HLP-148): when a change shows, when the view has settled, when Designer shown again needed no new frames. And the
-shot's waits: on the view's callbacks, polled every 100 ms only where none comes, never a fixed time (AGENTS.md). The
+shot's waits: on the view's callbacks, polled every 100 ms only where none comes, never a fixed time (`.claude/rules/waits.md`). The
 live self-test re-measures the counts (editor_panels_and_fit's frames fact)."""
 
 import os
@@ -191,7 +191,7 @@ def _source(part: str) -> str:
 
 def test_the_3d_shot_waits_on_the_view_not_a_fixed_time() -> None:
     # REVIEW.md HLP-148: 0.5 s after the window came on screen, 0.5 to 1.0 s after each step, 0.2 s after each drag
-    # and wheel step, 0.5 s before each retake, whatever the view did meanwhile. AGENTS.md: callbacks first, then a
+    # and wheel step, 0.5 s before each retake, whatever the view did meanwhile. `.claude/rules/waits.md`: callbacks first, then a
     # poll every 100 ms where none exists, never a time measured here
     for part in ('shot3d', 'view3d', 'frames3d'):
         text = _source(part)
@@ -245,7 +245,7 @@ def test_a_wait_runs_no_python_in_a_slot(helpers: types.ModuleType) -> None:
 
 def test_no_wait_ends_on_a_quiet_spell() -> None:
     # REVIEW.md HLP-151: nothing drawn or asked for during TICK ended an accumulation and a show: a time measured here
-    # after a state (AGENTS.md)
+    # after a state (`.claude/rules/waits.md`)
     text = _source('frames3d')
     code = text[text.index('from .core') :]
     assert 'quiet' not in code and '_last' not in code  # the renders' own poll keeps its TICK

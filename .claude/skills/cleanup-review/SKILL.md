@@ -5,11 +5,12 @@ description: Use only when the user explicitly asks to clean up or truncate REVI
 
 # Cleaning up REVIEW.md
 
-`REVIEW.md` is the memory per branch, where reviewers and the agents addressing findings talk to each other.
+`REVIEW.md` is the memory per branch, which the lead writes from the reviewers' and the developer's reports.
 `DECISIONS.md` is the memory for the whole project. A cleanup usually comes once the branch is merged and no further
 reviews are needed, with every finding addressed, questioned ones included. Git history becomes the archive. The
-rule in AGENTS.md still stands: **only the user starts a cleanup, by asking for one explicitly.** A large file is no
-reason to start one; you may mention its size.
+rule in AGENTS.md still stands: **only the user starts a cleanup, by asking for one explicitly.** The lead then runs
+it. On a branch other than `main`, the user's request includes its commit. On `main`, the lead asks the user for the
+commit first (AGENTS.md). A large file is no reason to start one; you may mention its size.
 
 A cleanup moves nothing to `DECISIONS.md` or `ROADMAP.md`. What belongs in either was proposed to the user, and added
 once they approved it, during the reviews and while the findings were addressed (the `project-code-review` and
@@ -37,6 +38,9 @@ if that earlier commit, on main, has it. The steps below protect that.
    `follows <ID>` mark. Also keep any log entry that gives a suggested order for those open findings.
 5. **Update the status table:** set every Resolved count to 0, because the table counts only what is in the file, and the
    resolved entries are gone. Open counts don't change. `tests/unit/test_review_lookup.py` checks the table against the entries.
+6. **Empty the table under `## Reviews by model`** last: remove its rows, the **Total** row included. Its heading, its
+   explanation and the table's header row stay. Git history keeps the rows, and the user reads the table just before a
+   cleanup (the user, 2026-11-20).
 
 ## Leave alone
 
@@ -47,12 +51,13 @@ if that earlier commit, on main, has it. The steps below protect that.
 
 ## Checking
 
-6. **Before committing,** confirm that every open finding is still there, that **Last used** hasn't changed, and that every removed ID is in
-   `git show HEAD:REVIEW.md`. Run the tests that validate the docs (AGENTS.md, Running the tests).
-7. **Commit only if the user asks** (AGENTS.md), with only the changes to `REVIEW.md` in that commit.
+7. **Before committing,** confirm that every open finding is still there, that **Last used** hasn't changed, and that every removed ID is in
+   `git show HEAD:REVIEW.md`. Run the tests that validate the docs (`.claude/rules/docs-tests.md`).
+8. **Commit the cleanup,** with only the changes to `REVIEW.md` in that commit. On a branch, the user's request
+   includes it. On `main`, ask the user first.
    The lookup can't find a removal that isn't committed.
-8. **After the commit,** run `python3 scripts/review_lookup.py <ID>` for the first and last IDs you removed, each of which
+9. **After the commit,** run `python3 scripts/review_lookup.py <ID>` for the first and last IDs you removed, each of which
    must print its whole entry, and for an ID that never existed, which must say so. If the cleanup was on a branch,
    run these again once it is on main.
-9. **Report:** the file's size before and after, the entries removed and left open, and the lookup results, or that
+10. **Report:** the file's size before and after, the entries removed and left open, and the lookup results, or that
    they are still to run because nothing is committed yet.

@@ -816,7 +816,7 @@ def _still_starting(port: int) -> bool:
     return time.time() - written < STARTUP_LIMIT
 
 
-POLL_S = 0.1  # s between looks at a state whose change nothing says (AGENTS.md: callbacks first)
+POLL_S = 0.1  # s between looks at a state whose change nothing says (`.claude/rules/waits.md`)
 FORCE_WAIT_S = 5  # s a forced end waits for the process to exit after each signal: a limit, in case it never does
 
 

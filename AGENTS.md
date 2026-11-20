@@ -5,35 +5,33 @@ work, the `sd` API and Designer facts) is in [mcp_server/GUIDE.md](mcp_server/GU
 Read its rules before touching the bridge, the token or the plugin, or running anything against Designer, and its
 scripting part before writing code that runs inside Designer.
 
-Commit or push only when the user asks; the repository is public. **There is no CI and none is planned**: don't add
-GitHub Actions or other CI.
+Push, or merge into `main`, only when the user asks; the repository is public. The lead commits on a branch other than
+`main` as often as it sees fit, without asking, and before each review (the `project-code-review` skill, Scope). A
+commit to `main` waits for the user's request. No other agent commits (the user, 2026-11-19).
+**There is no CI and none is planned**: don't add GitHub Actions or other CI.
 
 ## Working on this project
 
 How the plugin, server, helpers and command-line tools fit together: README.md, **How it works**.
 
-**Navigating and checking code: PyCharm's MCP tools first** (`mcp__pycharm__*`, when PyCharm has this project open;
-it resolves Designer's `sd` and PySide6 through the repo's `.idea`): `search_symbol` to find a definition
-(`include_external` for Designer's and the libraries' code), `get_symbol_info` for a symbol's signature and docs,
-`analyze_calls` for callers and callees, `get_file_problems` or `lint_files` after an edit, `rename_refactoring` for a
-rename across files. Fall back to the command line (grep, `git grep`, reading files) only when they don't help enough:
-they aren't connected, a call refuses or finds nothing (`analyze_calls` takes only names it resolves), or you need
-every use of a name, which `search_symbol` doesn't give (it finds where a name is defined). mypy strict and ruff (the
-unit tests) stay the checks that count; PyCharm's inspections don't replace them.
+**Rules for some files only** are in `.claude/rules/`. Claude Code loads one, once per agent and again after a
+compaction, when a Read or a Write touches a file the rule's `paths:` match, or a Bash `cat`, `head`, `tail`, `sed -n`
+or `grep` prints its lines unpiped. A `wc -c`, a piped command and PyCharm's `read_file` load none (measured 2026-11-19
+and 2026-11-20; the compaction, 2026-11-20). So read the one for the files you work on:
 
-**Load the `mcp-builder` skill** (`.claude/skills/mcp-builder/`: Anthropic's, from `anthropics/skills` at `ca45fc4`,
-trimmed to its Python parts) before designing or changing tools (adding, merging or removing one, its parameters,
-description, errors or results), and for evaluations. Where it differs from this file, this file wins. Its defaults this
-project doesn't follow: comprehensive API coverage and service-prefixed names (few tools, unprefixed; node edits are
-`apply_edits` ops; a new capability is a parameter or op of an existing tool where it fits, else a new tool rather than
-an existing one complicated with completely different logic: ROADMAP.md "Fewer tools"); JSON results (they are compact
-text for agents); Pydantic input models (inputs are typed parameters). Its code is for mcp 1.x; this server runs mcp
-2.x (the note at the top of its `SKILL.md`).
-
-The server (`server_tools/core.py`) loads the guide from `mcp_server/GUIDE.md`: keep it there. Its
-instructions (`INSTRUCTIONS` in `server_tools/core.py`) must stay under 4,096 characters, and every tool but
-`cancel_designer_job` refuses to run until `get_guide()` has been called in the session, and the two code tools until
-`get_guide('scripting')` has too (unit tests check them).
+- `python.md`: every Python file (PyCharm's tools first for navigating and checking code, typing, `Any`, strings of
+  code, keeping each file to its main logic, `/simplify` once the tests pass, the commands after editing);
+- `docs.md`: every Markdown, Python and tool config file (where each kind of knowledge goes, keeping the docs current,
+  writing docs, docstrings and comments);
+- `docs-tests.md`: a change of Markdown, a comment or a docstring;
+- `unit-tests.md`: `tests/unit/`;
+- `waits.md`: the code that waits on Designer, Qt or the OS (callbacks, never measured times);
+- `designer-code.md`: the server, the helpers, the plugin and the bridge (the guide's file and the server's
+  instructions, the environment variables included);
+- `changing-tools.md`: the tools and the helpers (the `mcp-builder` skill, `.claude/skills/mcp-builder/`, before
+  designing or changing a tool, and its defaults this project doesn't follow);
+- `live-checks.md`: the live self-test (scratch runs, and the `live-check` skill, `.claude/skills/live-check/SKILL.md`);
+- `install.md`: the installer and the registration.
 
 **Every new feature or fix comes with a test, in the same change.** A tool, a parameter or a documented behaviour gets
 a check in the live self-test (`tests/test_all_tools/`, against the real Designer); pure-Python logic gets a unit test
@@ -53,188 +51,94 @@ a blind test and run it again before any fix, and say an issue that isn't real i
 changes no behaviour (a rename, a move) needs no new failing test: run the existing tests of the code it touches before
 and after; they must pass both times.
 
-**Wait for callbacks, never for measured times.** Code that waits for Designer, Qt or the OS waits for the callback
-that says the thing happened. That covers the tools, the helpers and the tests, for things like a window shown, the 3D
-view drawn, a menu open or a process gone. A callback can be a Qt signal, an event seen by an event filter, or a
-notification of the API.
-- **Hunt for one** when you don't know of any, before writing a wait. Look at the object's signals, at the events an
-  event filter logs as the thing happens, at what its widgets show (a label, a count), and at the API.
-- **Poll the state every 100 ms** only where no callback exists.
-- **Give either wait a limit,** so it ends if the callback never comes. The limit is a safety net, never the time the
-  wait is expected to take.
-- **Never wait a time measured here:** no fixed sleep, and no margin after a state. Another machine, or the same one
-  under another load, takes longer or shorter.
-
-Measuring what Designer does in each case still comes first (above): what happens, not how long it takes.
-
-**Simplify the change before reviewing it.** Once a change of code passes its tests, the agent that made it runs
-`/simplify` on it, once. `/simplify` is Claude Code's built-in skill. It reviews the diff for reuse, simplification,
-efficiency and altitude, then applies the fixes in this session. Skip a fix that goes against these rules or
-DECISIONS.md, or one that would only restyle a comment, docstring or doc. The fixes change no behaviour, so the rule for
-a rename or a move applies. Run the existing tests of the code they touch, with lint and types, before and after the
-fixes. They must pass both times. A change of docs alone skips this step, and so does a review.
-
 **Review your own work before calling it done**, as a reviewer, not its author: does it cover the neighbouring cases (a
 node as well as the graph, the other parameter, the other code path); would each test fail without the change it guards
 (not pass on state an earlier check left, a value already there, or a comparison any rule satisfies); does every test
 clean up on failure too; did the change weaken an older test; does any comment, docstring or doc say more than the code
 and tests show? Fix what you find and look again, until a fresh look finds nothing a reviewer could report.
 
-**Keep each file to its main logic.** Code that isn't what a file is about (the setup a test needs, a parser, a helper
-its reader doesn't need to follow the main flow) goes into a module of its own beside it, named for what it does
-(`preparations.py`, `parsing.py`), and is imported from there: a reader of a file meets its main logic first, not its
-scaffolding. It applies to new code and to code a change touches; a move alone changes no behaviour, so the existing
-tests of the code it touches run before and after and pass both times.
+**A branch's plan is in PLAN.md** (repo root), the lead's: the main session, which talks with the user. If it is
+there, read it before anything else, at the start of a session and after a compaction, and continue from it. How the
+lead writes it, keeps it current and ends it with the branch: the `delegate` skill. A subagent never writes PLAN.md. It
+reads it only when its brief names it, and a reviewer never: it holds the lead's own account of the work.
 
-**Reviews go in REVIEW.md** (repo root, committed with the changes it records). Three skills: `project-code-review`
-(`.claude/skills/project-code-review/`) for reviewing, its `TEMPLATE.md` the format; `address-review`
-(`.claude/skills/address-review/`) for fixing or answering findings test first and checking them off; `cleanup-review`
-(`.claude/skills/cleanup-review/`) for a cleanup the user asks for. REVIEW.md is the memory per branch: reviewers and
-the agents addressing findings talk through it, as in a PR review, and it can be cleaned up once the branch is merged,
-its history staying in git. DECISIONS.md is the memory for the whole project. The rules:
-
-- Five sections by severity, from high to low: High, Medium-high, Medium, Low-medium, Low.
-- Each finding is one entry starting with a checkbox: unchecked while open, checked once fixed or answered (not a bug,
-  not reproducible, won't fix), with a resolution line giving the evidence, and no commit hash (branches are squashed
-  into main).
-- A new review **appends** its findings to the sections they belong in, plus an entry in the review log; it never
-  replaces or rewrites what is there. A finding's number comes from the **Last used** line in the header, updated in
-  the same edit.
-- Only the user starts a cleanup of REVIEW.md, by asking for one explicitly; agents never truncate it on their own. A
-  removed finding stays findable in git: `python3 scripts/review_lookup.py <ID>`.
+**Reviews go in REVIEW.md** (repo root, committed with the changes it records), the memory per branch: the lead
+writes it from the reviewers' and the developer's reports. DECISIONS.md is the memory for the whole project. The
+skills hold its rules: `project-code-review` (`.claude/skills/project-code-review/`) to review, `address-review`
+(`.claude/skills/address-review/`) to fix or answer findings, and `cleanup-review` (`.claude/skills/cleanup-review/`)
+for a cleanup, which only the user starts, by asking for one explicitly.
 
 ### Running the tests
 
-**Only the agent that changes the code runs tests.** A review runs none, unit or live (the `project-code-review` skill
+**Tests run at two stages** (DECISIONS.md, Project rules). While working, the agent that changes the code runs the
+tests of its own work only: unit tests by name and scratch runs, never a full suite. At the end, the `runner` agent
+runs the full suites, the final check, when the user asks. A review runs none, unit or live (the `project-code-review` skill
 or the built-in `/code-review`): reviewers read the code and the tests and report what reading can't settle as a
 suspicion, with what would settle it; the agent leading the review settles each before anything is recorded, with
-scratch probes of its own, one at a time in one Designer an agent started (the `project-code-review` skill).
+scratch probes run as the `project-code-review` skill's **Who settles what** says.
 
 **The full suites run only when the user asks:** the whole unit suite (`pytest` with no test ids) and a whole run of the
 live self-test (`tests/test_all_tools`). Never start one on your own: not for TDD, not after a fix, not between
-reviews. When a review finds nothing, tell the user the work is ready for the final check: both suites in full, run when
-the user says the work is done, just before merging into `main`; both must pass (DECISIONS.md, Project rules). Which
-command for what the user asks:
-
-- **Both suites** (the final check included): `mcp_server/venv/bin/python tests/test_all_tools`. On macOS it runs every
-  category in a Designer of its own, several at once (`--workers N`; the pool's rules:
-  `tests/test_all_tools/workers.py`), with the whole unit suite beside them: one command for both. With a Designer of
-  the user's open it runs nothing and says so: ask them to save and close it. On Windows it makes one run instead,
-  leaving the unit suite out: run `pytest` at the same time, as a background command.
-- **The unit suite alone:** `mcp_server/venv/bin/python -m pytest`.
-- **The live suite alone:** `mcp_server/venv/bin/python tests/test_all_tools --no-unit`.
-- **Chosen categories** (macOS): `mcp_server/venv/bin/python tests/test_all_tools --only <category>...`, through the
-  pool with its safety checks, without the unit suite; not a final check, which stays a full run.
+reviews. When the reviews look converged, the user decides what comes next (the `project-code-review` skill, step 7).
+The final check is both suites in full, just before merging into `main`; both must pass (DECISIONS.md, Project rules).
+Docs changed alone run the docs tests instead, the final check included (`.claude/rules/docs-tests.md`). The command
+for each run the user asks for: the `live-check` skill (`.claude/skills/live-check/SKILL.md`), The suites.
 
 **Unit tests while working:** only those added or modified for the change (for a refactor, the existing tests of the
-code it touches), as often as useful. **Lint and types always run too** (about 10 s):
-`mcp_server/venv/bin/python -m pytest <test ids> tests/unit/test_lint.py tests/unit/test_types.py`, the test ids files
-or single tests (`tests/unit/test_x.py::test_name`). Docs changed alone (Markdown files, the skills included), in a
-commit or a whole branch, run only the tests that validate the docs, the final check included, with
-`tests/unit/test_lint.py tests/unit/test_types.py` added as always:
-`mcp_server/venv/bin/python -m pytest tests/unit/test_constants.py tests/unit/test_guide.py tests/unit/test_review_lookup.py tests/unit/test_server.py`
-(`test_review_lookup.py` fails if a test that reads a doc is missing from this command). After editing, run
-`mcp_server/venv/bin/ruff check --fix .` and `mcp_server/venv/bin/ruff format .` (`test_lint.py` runs `ruff check` and
-`ruff format --check`).
+code it touches), as often as useful. **Lint and types always run too**, and the docs tests with any change of
+Markdown, a comment or a docstring, alone or with code. The commands: `.claude/rules/python.md` and
+`.claude/rules/docs-tests.md`. The rules for Python and for the unit tests: `.claude/rules/python.md` and
+`.claude/rules/unit-tests.md`.
 
-**A unit test that depends on the system** says which systems it runs on, and skips elsewhere: a `skipif` on
-`sys.platform`, with the reason. Such a test sets the platform itself, uses what only Unix has (`fcntl`,
-`os.getuid`, `signal.SIGKILL`), or checks what only macOS does. `tests/unit/test_windows_simulation.py` runs the test
-files that mention the system, or a name Unix has and Windows lacks that this code uses, with the platform set to
-`win32` and those names taken away (`tests/unit/windows_simulation.py` lists them). It fails on a test that then fails
-unmarked, and on a `win32` case skipped. It simulates only those differences: a test that depends on Windows in another
-way shows only in a run there (ROADMAP item 18).
+### Delegating to subagents
 
-**Typing** (`test_types.py` runs mypy strict over every Python file). The helpers, the plugin and the example are
-checked against Designer's own `sd` package and PySide6 stubs (found in the Designer install) and run on Designer's
-Python 3.13, which evaluates annotations when a `def` runs: every name in an annotation there must exist at runtime
-(import real types, `from sd.api.sdnode import SDNode`, never only under `if TYPE_CHECKING:`), and no `from __future__
-import annotations` (the helpers are joined into one script, where it can't come first). Every other Python file
-needs Python 3.12 (`MIN_PYTHON` in `project_constants.py`), and mypy and ruff check the code as 3.12 (DECISIONS.md,
-Project rules). The scripts a user starts (`install.py`, `uninstall.py`, `client/sd_run.py`,
-`scripts/review_lookup.py`, `scripts/read_crash_dump.py`; `ENTRY_SCRIPTS` in `tests/unit/conftest.py`) run only on
-3.12 or later too, but are started with whatever `python3` is installed, a stock Mac's being 3.9. Each starts with
-`import sys` and a check of `sys.version_info` that refuses an older Python with a message, before any other import.
-`mcp_server/server.py` does too, for a venv an older Python made (`SERVER_SCRIPT`). Python reads a whole file before it
-runs the first line, so such a file stays readable by 3.9: it leaves out the syntax added after 3.9 (`type`
-statements, `def f[T]`, `match`), and may call anything 3.12 has. ruff checks most of that syntax (`ruff.toml`);
-`tests/unit/test_old_python.py` checks the refusal and, where a Python 3.9 is installed, the rest on it.
+The project's agents are defined in `.claude/agents/`. Each loads AGENTS.md and the user's memory index, `MEMORY.md`
+(not the memory files it links), but not the conversation. Each reports to the lead, which decides what comes next.
+The lead is the main session, the one that talks with the user. Of these agents, only the `developer` starts others:
+`/simplify`'s cleanup agents on its own change, and `analyst` agents for research or a web search. They report to the
+developer and start none (the user, 2026-11-19). In a subagent, the messages come from the agent that started it, not
+from the user. Where a file tells an agent to ask, tell or propose something to the user, a subagent reports it to the
+lead, which asks the user. Where this file, or a rule or skill it points to, waits for the user's word (the full
+suites, a decision), the lead waits for it before the brief, and the brief says the user gave it. The `runner` runs the
+full suites on such a brief without asking again.
 
-**The most specific type that fits; `Any` is the last resort.** mypy checks nothing through an `Any`, so before
-writing `Any` (or a `dict`, `list` or `tuple` whose items' types say less than is known: a
-record's `dict[str, object]` where a `TypedDict` fits; a bare one strict mypy refuses already) look for what the value
-really is: a type of the code it comes from (`SDNode`, `Reply`,
-`subprocess.CompletedProcess[str]`), a union of the few it can be, a `TypedDict` for a dict with known keys (a record,
-a reply, a worker's results), a `Protocol` for an object of which only some attributes are used, `Callable[[...], ...]`
-for a function, a `TypeVar` for a value passed through, `object` for one only stored, printed or compared, or for
-parsed JSON before it is checked (it makes the checks explicit). `Any` stays where nothing narrower is true or can be
-checked (a fake standing in for a type it can't subclass, what sd's own stubs leave untyped), marked as an exception
-with its reason: `# type: ignore[explicit-any]  # <reason>`, on the line mypy reports. For a function, that is its
-`def` line, even when the signature spans several lines. An `Any` so marked, with a reason that holds, is accepted.
-mypy refuses an `Any` written in an annotation, a signature, a `cast` or a type alias without the mark, the `...` of
-`Callable[..., T]` included (`disallow_any_explicit` in `mypy.ini`). It doesn't report an `Any` inside an expression,
-such as `defaultdict[str, Any](int)`, nor one that comes in implicitly, such as `json.loads`'s result
-(`tests/unit/test_types.py`), so look for those yourself. A function you change gets the same look: an `Any`,
-or a `dict`, `list` or `tuple` whose items' types say less than is known, that it holds and could be narrower is
-narrowed in the same change.
-Reviewers report what is left in the functions a branch's diff adds or changes, and anywhere in a whole-project review
-(the `project-code-review` skill).
+**The user's standing request is that the lead delegates by the `delegate` skill's table without asking first each
+time** (the user, 2026-11-18). Before an expensive or long unit starts, the lead still tells the user what it will
+cost, how long it will take and what comes back: from outside, a long silent run and a runaway one look the same.
 
-**Strings of code** (`tests/unit/test_selftest_safety.py` checks the self-test's and the server's modules). A string of
-several lines is written `dedent("""...""")` (`textwrap`), not joined pieces with `\n`; the server's own calls into the
-helpers are one-line strings by design. Tests that read source text match whitespace-tolerantly (`c\(\s*'tool'`), as
-formatting may split a call over lines.
+**The lead reads a thing itself when it knows in advance the output will be small:** a tiny file, a few known lines,
+an output capped in the call. When it can't tell the size in advance, it asks an `analyst`. An analyst for a tiny
+read costs more tokens than the context it saves (the user, 2026-11-19). **Keep it yourself:**
 
-**Live checks while working: a scratch run.** A new or changed check is seen failing, then passing, on its own in an
-environment built for it, with `alone.run` from a script in the session's scratchpad, never through a run of the whole
-suite. **Load the `live-check` skill before writing or running a live check, and for the final check:** it has
-`alone.run`, the order, what a scratch run can't prove, what to do when the final check fails, and the suites.
+- a handful of tool calls, or a lookup whose target is known;
+- the read a claim depends on: the lines it quotes, which are known and small. Also the one measurement that settles a
+  disagreement between two reports. The cost of reading is never a reason to skip it.
 
-### Keeping the docs current
+The lead never fetches or searches the web, even one known page: it always asks the `analyst` (the user,
+2026-11-19).
 
-README.md is for people, AGENTS.md for agents changing this project, `mcp_server/GUIDE.md` for agents driving Designer.
-With every change (a tool, a fix, a workaround, a fact learned about
-Designer), add a short note where it belongs, in the same change. Keep each fact in **one** place and link to it
-instead of copying it; fix or delete notes that turn out wrong rather than adding a contradicting one. One repeat is
-deliberate: the sentence saying what REVIEW.md and DECISIONS.md each remember.
+**Any other output of unknown size is capped in the call itself,** or measured first: a count (`grep -c`, `wc -l`),
+`head` or `tail`, `-q`, `--stat` or `--shortstat`, `git log --oneline -20`, a tool's own limit parameter, or `wc -c`
+before the read. When the answer needs more than that cap shows (many files, the history, a long log), ask the
+`analyst`. Monitor too: its events land in the lead's context, so the lead filters its command to the few lines it
+acts on. A log to read goes to the `analyst`, and waiting for an end is a background Bash that exits on it (the
+`delegate` skill, `.claude/skills/delegate/SKILL.md`, A long run).
 
-| Kind of knowledge | Where it goes |
-|---|---|
-| How to use the tools well, workflow, sd API / Designer pitfalls, verified facts | **`mcp_server/GUIDE.md`**, in the matching section: the core if an agent using only the tools needs it or every script hits it on the first try, otherwise under `# Scripting` |
-| How a tool works around Designer: what only whoever maintains it needs (would an agent using the tools act differently without it?) | The **docstring or comments of its module**, not the tool's docstring, which agents pay for; the guide keeps at most a line and the path |
-| A tool's parameters and behaviour | The tool's **docstring in its module of `mcp_server/server_tools/`**, the single source; don't repeat parameters in the guide |
-| Install, configuration, security, troubleshooting, anything a **person** needs | **README.md** |
-| Architecture: what the plugin, server, helpers and CLI tools each do | **README.md**, "How it works" |
-| How to deploy changes, diagnostics an **agent** needs | **AGENTS.md**, Deploying and diagnosing |
-| New or changed tool | Its entry and the tool count in README.md's Tools table, and checks in `tests/test_all_tools/` |
-| What is settled for the whole project that a reviewer could plausibly raise again: the user's won't fix, rule or choice; a not-a-bug or not-reproducible answer the user approved when it was proposed, during a review or while the findings were addressed | **DECISIONS.md** (read by the review skills; agents may update its names and paths, anything else takes the user) |
-| Work still to do, ideas, follow-ups | **ROADMAP.md** (check an item when done; checked items can be deleted later, git keeps the record) |
+**Hooks keep large reads out of the lead's context,** in every main session, and let a subagent's calls through. They
+refuse the lead's web fetches and searches, a read that returns over 20 KB, and a Bash command that would print over
+20 KB of files. They add a note to an output of 8,000 characters or more, and to the lead's 8th reading call of a turn,
+and each 8th after it. Their rules: the docstring of `.claude/hooks/large_reads.py`.
 
-Open work lives in [ROADMAP.md](ROADMAP.md): check it before proposing improvements, and add new ideas there.
+`.claude/settings.json` also caps a successful command's output at 10,000 characters (`bashOutputMaxChars`), in the
+subagents too: past it, the context gets the path of a file holding the whole output and a 2 KB preview, and the part
+needed is read from that file. A failing command's output isn't capped by it (`large_reads.py`'s docstring).
 
-### Writing docs and comments
-
-Docs, docstrings, comments and the lines the tools return are read by people and agents who didn't write the code,
-often in a hurry. Write them so that one reading, top to bottom, is enough:
-
-- **Subject and verb first.** Say who or what does what: "The first launch saves a copy of the file, unless one is
-  there already", not "Saved as the first Designer starts, unless one is there already: a copy of the file".
-- **One idea per sentence.** Split a sentence that chains clauses with colons or semicolons into several sentences, or
-  into a list.
-- **At most one parenthetical per sentence.** Give the others a sentence of their own, or drop them.
-- **Name what you mean.** Write "the copy" or "the user's Designer" instead of "it", "one" or "theirs" when the reader
-  would have to look back to know which.
-- **Plain words.** "If the start fails, a copy made for it is removed. A copy made again is kept", not "A copy made
-  here, not again, is removed when the start raises".
-- **The main point first.** A docstring opens with what the function does, returns and raises. Reasons, history and
-  REVIEW.md IDs come after that, or in a comment beside the line they explain.
-- **Lists for parallel cases.** Put three or more cases, steps or exceptions in a list, not in one long sentence.
-- **No filler.** Leave out "note that", "it's worth noting", "simply", and words that only add emphasis.
-
-Rewriting for style never changes what a sentence claims. Reviews check each claim against its test, so the new
-wording must say exactly what the old one did. This applies to the text you write or change. Don't rewrite untouched
-text only for its style: a rewrite can change a claim, and it adds noise to the diff. Reviews report a sentence only
-when it misleads, never for its style alone.
+**Before starting or resuming an agent, and before continuing the loop from PLAN.md (a session's start, a compaction),
+load the `delegate` skill** (`.claude/skills/delegate/SKILL.md`): which agent does what, the lead's loop from PLAN.md
+to the merge, what a brief holds, and how a changed agent file reaches the agents. Load it, like any skill, again
+before following it when its file may have changed, or a compaction came, since it was loaded: the copy in the context
+keeps the text as loaded, and a compaction may cut it short or drop it (Claude Code's docs, Skills, Skill content
+lifecycle).
 
 ### Deploying and diagnosing
 
@@ -244,53 +148,12 @@ when it misleads, never for its style alone.
 - **The `python3 ...` commands** in these docs and the skills need a `python3` of 3.12 or later (DECISIONS.md, Project
   rules); where it is older, each script says so. `mcp_server/venv/bin/python` runs them too, but `uninstall.py` should
   run on a system Python, as it removes the venv (it says so when it runs on the venv's; REVIEW.md INS-42).
-- **The helpers** (`mcp_server/designer_helpers/`) are parts joined into one script (README.md, How it works). A part
-  imports what it uses from other parts (`from .core import find_graph`), for PyCharm and readers; `part_source()` drops
-  those lines. `tests/unit/test_designer_helpers.py` fails on a missing, extra or misplaced import, a name no part
-  defines, and a part file not in `PARTS`. Code needing the helpers' text takes it from `designer_helpers.source()`,
-  never from one file.
-- **PyCharm** (the repo's `.idea` marks `client`, `mcp_server`, `tests` and `tests/unit` as source roots, also
-  Designer's own `sd` and PySide6 folders, which the interpreter `mcp_server/venv` lacks: README.md, Working in
-  PyCharm): tests patch a module loaded from its file with `monkeypatch.setitem(vars(module), 'NAME', value)`, not
-  `setattr` (PyCharm checks that name against the fixture and reports it missing); standard modules are patched
-  directly (`time`, not `server.time`).
-- **The server** (`mcp_server/server.py`) only starts it and re-exports the names of `mcp_server/server_tools/`, one
-  module per area (`core` holds the bridge and the `_tool` decorator; a new module goes into `MODULES` in its
-  `__init__.py`). Unit tests replace a name with `patch_server` (`tests/unit/conftest.py`), which patches every module
-  binding it: patching `server` alone doesn't reach the tools.
-- **How changes reach Designer:** `server.py`, `server_tools/`, `designer_helpers/` and `designer_preferences.py` changes
-  take effect when the MCP server restarts (helpers are re-sent with every call; the user reconnects in `/mcp`, or test with a fresh MCP client
-  such as the self-test). **Plugin** changes must be copied into Designer's plugin folder (re-run `install.py`; paths in
-  README.md, Install) and need a **Designer restart**: for a Designer an agent started, `quit_designer` then
-  `launch_designer` without asking (say that you did); for the user's, ask them to save, close and reopen it.
-- **The plugin's name** (`sd_claude_bridge_kve`, also its folder names and the token file
-  `~/.sd_claude_bridge_kve_token`) is defined once, in `project_constants.py`; the plugin takes it from its own folder.
-  To rename: change `PLUGIN` there, rename both `plugin/<name>` folders, update README.md, AGENTS.md and GUIDE.md, and add the old name
-  to `install.py`'s clean-up of old copies. `tests/unit/test_constants.py` fails on anything missed.
-- **Registration is per folder, never global, for now** (README.md, "Where the tools are available"; ROADMAP item 5
-  will make global registration the installer's choice): this repo's committed `.mcp.json`, or
-  `claude mcp add --scope local` in another folder. The installer never registers; it writes a user skill (`skill_text`
-  in `install.py`) telling sessions elsewhere how to register, and `uninstall.py` removes the skill, the plugin, the
-  token, every folder's local registration and a user-scope one (only entries running this repo's `server.py`).
-  `.mcp.json` must not contain `${`: Claude Code expands those itself (it once rewrote a shell default away), so its
-  `sh -c` command uses plain `$VARS` (`tests/unit/test_mcp_json.py`).
-- **The bridge protocol** is defined in the plugin's docstring. `server_tools/core.py`, `client/sd_run.py` and the
-  self-test's `raw_request` all speak it: change them together with the plugin, and raise `BRIDGE_PROTOCOL`
-  (`project_constants.py`) and the plugin's `PROTOCOL` with any change to it. Its messages' types (`Request`,
-  `Reply`, `Greeting`) are defined once, in `project_constants.py`; the plugin, which can't import it, has its own
-  `Reply` and reads requests as plain JSON.
-- Environment variables `SD_DESIGNER_BIN_DIR`, `SD_DESIGNER_APP`, `SD_DESIGNER_LOG`, `SD_SNAPSHOT_DIR`,
-  `SD_BRIDGE_PORT`: README.md, Configuration. A port change must reach the plugin (Designer's environment) and the
-  server alike.
-- **When a Designer crashed or hung:** a crash leaves a dump in that Designer's `Sentry-Crashpad/completed` (`pending`
-  while its upload waits; GUIDE.md, Several Designers). `python3 scripts/read_crash_dump.py [dump]` reads one (macOS
-  arm64; with no dump, the newest of any Designer's): the exception, the messages Crashpad kept (often an abort's
-  reason), the crashing thread's frames and Designer's log as it crashed. A crash can also open Adobe's crash window
-  on the user's screen and keep the crashed process until the window closes (ROADMAP item 95): close it for a Designer
-  an agent started. A Designer hung in its quit has its threads sampled before it is forced (macOS: `quit_designer`'s
-  or `launch_designer`'s result names the file; ROADMAP item 70). `alone.close()` names any dump its quit left.
-  On macOS, Designers an agent starts upload no crash reports from the moment `launch_designer` sees them answer
-  (DECISIONS.md, Bridge and quitting).
+- **The server, the helpers, the plugin and the bridge,** how a change reaches Designer, the guide's file, the server's
+  instructions and the environment variables included: `.claude/rules/designer-code.md`. **The installer and the
+  registration:** `.claude/rules/install.md`.
+- **An edited agent file, or an edited AGENTS.md,** and the agents it reaches: the `delegate` skill
+  (`.claude/skills/delegate/SKILL.md`).
+- **A Designer that crashed or hung:** the `live-check` skill (`.claude/skills/live-check/SKILL.md`).
 - **When tools fail:** match the symptom in README.md, Troubleshooting, and try `read_designer_log`. If Designer isn't
   running or answering, ask the user to open it, or to save, close and reopen it (in tests and work on this project,
   `launch_designer`). If the bridge accepts connections but never answers, or a tool is missing in Claude Code, only the

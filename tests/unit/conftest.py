@@ -1,6 +1,7 @@
 """Unit tests that run without Designer: import server.py and test its pure-Python parts."""
 
 import builtins
+import configparser
 import errno
 import json
 import os
@@ -215,6 +216,19 @@ VERSION_CHECKED = (*ENTRY_SCRIPTS, SERVER_SCRIPT)  # each checks the Python firs
 # what runs the suite's checks rather than being one: its own tool calls (launch_designer, quit_designer...) mustn't
 # count as the suite exercising a tool
 SELFTEST_RUNNERS = ('alone.py',)
+
+
+def mypy_config() -> configparser.SectionProxy:
+    """The [mypy] section of mypy.ini."""
+    config = configparser.ConfigParser()
+    config.read(os.path.join(ROOT, 'mypy.ini'), encoding='utf-8')
+    return config['mypy']
+
+
+def mypy_files() -> list[str]:
+    """The folders mypy.ini's `files` names, as written: `.`, and each hidden folder holding Python files of the
+    repository's own, which mypy's search of `.` skips (test_types.py)."""
+    return [entry.strip() for entry in mypy_config()['files'].split(',')]
 
 
 def selftest_check_sources() -> dict[str, str]:

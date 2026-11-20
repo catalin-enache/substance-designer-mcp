@@ -157,7 +157,7 @@ def _shots_in_turn(
     async def no_pause(seconds: float) -> None:
         pauses.append(seconds)
 
-    # setitem: PyCharm can't resolve 'sleep' through asyncio's star re-export of asyncio.tasks (AGENTS.md, PyCharm)
+    # setitem: PyCharm can't resolve 'sleep' through asyncio's star re-export of asyncio.tasks (`.claude/rules/unit-tests.md`)
     monkeypatch.setitem(vars(asyncio), 'sleep', no_pause)
     return c, calls, pauses
 

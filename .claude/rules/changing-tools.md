@@ -4,5 +4,15 @@ paths:
   - "mcp_server/designer_helpers/**/*"
 ---
 
-Before adding, merging or removing a tool, or changing its parameters, description, errors or results, load the
-`mcp-builder` skill (AGENTS.md).
+# Changing the tools
+
+(AGENTS.md, Working on this project, points here.)
+
+**Load the `mcp-builder` skill** (`.claude/skills/mcp-builder/`: Anthropic's, from `anthropics/skills` at `ca45fc4`,
+trimmed to its Python parts) before designing or changing tools (adding, merging or removing one, its parameters,
+description, errors or results), and for evaluations. Where it differs from AGENTS.md, a rule or skill AGENTS.md points
+to, or this file, they win. Its defaults this project doesn't follow: comprehensive API coverage and service-prefixed
+names (few tools, unprefixed; node edits are `apply_edits` ops; a new capability is a parameter or op of an existing
+tool where it fits, else a new tool rather than an existing one complicated with completely different logic: ROADMAP.md
+"Fewer tools"); JSON results (they are compact text for agents); Pydantic input models (inputs are typed parameters).
+Its code is for mcp 1.x; this server runs mcp 2.x (the note at the top of its `SKILL.md`).

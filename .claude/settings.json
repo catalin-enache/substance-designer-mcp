@@ -1,0 +1,56 @@
+{
+  "bashOutputMaxChars": 10000,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "WebFetch|WebSearch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "s=\"$CLAUDE_PROJECT_DIR/.claude/hooks/large_reads.py\"; [ -f \"$s\" ] || exit 0; p=\"$CLAUDE_PROJECT_DIR/mcp_server/venv/bin/python\"; [ -x \"$p\" ] || p=\"$CLAUDE_PROJECT_DIR/mcp_server/venv/Scripts/python.exe\"; [ -x \"$p\" ] || exit 0; \"$p\" \"$s\""
+          }
+        ]
+      },
+      {
+        "matcher": "Read|mcp__pycharm__read_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "s=\"$CLAUDE_PROJECT_DIR/.claude/hooks/large_reads.py\"; [ -f \"$s\" ] || exit 0; p=\"$CLAUDE_PROJECT_DIR/mcp_server/venv/bin/python\"; [ -x \"$p\" ] || p=\"$CLAUDE_PROJECT_DIR/mcp_server/venv/Scripts/python.exe\"; [ -x \"$p\" ] || exit 0; \"$p\" \"$s\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "s=\"$CLAUDE_PROJECT_DIR/.claude/hooks/large_reads.py\"; [ -f \"$s\" ] || exit 0; p=\"$CLAUDE_PROJECT_DIR/mcp_server/venv/bin/python\"; [ -x \"$p\" ] || p=\"$CLAUDE_PROJECT_DIR/mcp_server/venv/Scripts/python.exe\"; [ -x \"$p\" ] || exit 0; \"$p\" \"$s\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Read|mcp__pycharm__read_file|mcp__pycharm__search_text|mcp__pycharm__search_regex|mcp__pycharm__search_file|mcp__pycharm__search_symbol|mcp__pycharm__get_symbol_info|mcp__pycharm__analyze_calls|mcp__pycharm__list_directory_tree|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "s=\"$CLAUDE_PROJECT_DIR/.claude/hooks/large_reads.py\"; [ -f \"$s\" ] || exit 0; p=\"$CLAUDE_PROJECT_DIR/mcp_server/venv/bin/python\"; [ -x \"$p\" ] || p=\"$CLAUDE_PROJECT_DIR/mcp_server/venv/Scripts/python.exe\"; [ -x \"$p\" ] || exit 0; \"$p\" \"$s\""
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash|Read|mcp__pycharm__read_file|mcp__pycharm__search_text|mcp__pycharm__search_regex|mcp__pycharm__search_file|mcp__pycharm__search_symbol|mcp__pycharm__get_symbol_info|mcp__pycharm__analyze_calls|mcp__pycharm__list_directory_tree|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "s=\"$CLAUDE_PROJECT_DIR/.claude/hooks/large_reads.py\"; [ -f \"$s\" ] || exit 0; p=\"$CLAUDE_PROJECT_DIR/mcp_server/venv/bin/python\"; [ -x \"$p\" ] || p=\"$CLAUDE_PROJECT_DIR/mcp_server/venv/Scripts/python.exe\"; [ -x \"$p\" ] || exit 0; \"$p\" \"$s\""
+          }
+        ]
+      }
+    ]
+  }
+}

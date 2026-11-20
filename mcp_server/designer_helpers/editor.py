@@ -239,7 +239,8 @@ def _fit_view_to(
     _process_events()
     seen = view.mapToScene(viewport.rect()).boundingRect()
     # by what shows, not the padded area: an area in view at the smallest zoom (5 %) is fitted (REVIEW.md HLP-59).
-    # Once, a whole self-test run's wheel steps did nothing, cause unknown: the view's state is for that (HLP-56)
+    # Once, a whole self-test run's wheel steps did nothing, cause unknown: the view's state is for that (HLP-56).
+    # A view not fitted is a result, not an error: the graph is open either way
     state = "view %dx%d, Designer's window active: %s" % (
         viewport.width(),
         viewport.height(),

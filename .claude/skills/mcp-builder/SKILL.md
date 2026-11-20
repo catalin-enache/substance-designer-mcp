@@ -12,7 +12,7 @@ license: Complete terms in LICENSE.txt
 > (`mcp.server.fastmcp`): take the 2.x names from `mcp_server/server_tools/core.py`, and run the
 > evaluation scripts in a separate environment with `mcp<2` (`scripts/requirements.txt`), passing a
 > current model with `-m`. Design choices this project made against this guide's defaults are in its
-> AGENTS.md (the `mcp-builder` paragraph).
+> `.claude/rules/changing-tools.md`.
 
 ## Overview
 

@@ -1,11 +1,14 @@
 """The unit tests that depend on the system run only where it fits (REVIEW.md TST-508): run under
 windows_simulation.py, a test that can't run on Windows skips there rather than failing. Every test file that mentions
-the system is run so, but NOT_SIMULATED."""
+the system is run so, but NOT_SIMULATED. Under the simulation, a write in mode 'w', 'a' or 'x', without 'b' or '+',
+that gives no `newline` ends each line with '\\r\\n', as on Windows. A read-write mode ('+') is left as it is."""
 
 import os
 import re
 import subprocess
 import sys
+from pathlib import Path
+from textwrap import dedent
 
 import pytest
 from windows_simulation import NAMES, POSIX_ONLY
@@ -67,3 +70,46 @@ def test_the_tests_that_depend_on_the_system_skip_on_windows() -> None:
     # a case that sets Windows runs there: a mark on its whole test skipped it (REVIEW.md TST-510)
     skipped = re.findall(r'^tests/unit/(test_\w+\.py::\w+\[[^]]*\bwin32\b[^]]*\]) SKIPPED', done.stdout, re.M)
     assert not skipped, skipped
+
+
+# writes text through each way the code opens a file, under the simulation (argv: this folder, then the folder to
+# write in), then prints what a text-mode read gives back
+WRITES = dedent("""
+    import os
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, sys.argv[1])
+    import windows_simulation
+
+    windows_simulation.pytest_configure(None)
+    folder = Path(sys.argv[2])
+    (folder / 'write_text').write_text('a\\n', encoding='utf-8')
+    for mode in ('w', 'a', 'x', 'w+'):
+        with open(folder / mode, mode, encoding='utf-8') as f:
+            f.write('a\\n')
+    with os.fdopen(os.open(folder / 'fdopen', os.O_WRONLY | os.O_CREAT), 'w', encoding='utf-8') as f:
+        f.write('a\\n')
+    for name, newline in (('empty', ''), ('lf', '\\n')):
+        with open(folder / name, 'w', encoding='utf-8', newline=newline) as f:
+            f.write('a\\n')
+    with open(folder / 'binary', 'wb') as f:
+        f.write(b'a\\n')
+    print(repr((folder / 'w').read_text(encoding='utf-8')))
+""")
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='simulates Windows on macOS; on Windows the tests run as they are')
+def test_the_simulation_writes_text_as_windows_does(tmp_path: Path) -> None:
+    # a text-mode write turns each '\n' into '\r\n' on Windows, unless the call gives its own `newline`, and a text-mode
+    # read turns them back. The simulation leaves a read-write mode (`+`) as it is (`.claude/rules/unit-tests.md`)
+    done = subprocess.run(
+        [sys.executable, '-c', WRITES, HERE, str(tmp_path)], capture_output=True, text=True, timeout=LIMIT_S
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == "'a\\n'\n"
+    written = {path.name: path.read_bytes() for path in tmp_path.iterdir()}
+    assert written == {
+        **dict.fromkeys(('write_text', 'w', 'a', 'x', 'fdopen'), b'a\r\n'),
+        **dict.fromkeys(('empty', 'lf', 'binary', 'w+'), b'a\n'),
+    }

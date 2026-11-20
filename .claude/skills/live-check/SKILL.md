@@ -1,12 +1,13 @@
 ---
 name: live-check
-description: 'Use before writing, changing or running a live self-test check (tests/test_all_tools) or a scratch run with alone.run, for a "designer facts" check, and for the final check before merging into main or when it fails. Covers alone.run and each category''s own preparation, the order (fail, then pass), what a scratch run can''t prove, the suites, and Designer scripts versus inline snippets.'
+description: 'Use before writing, changing or running a live self-test check (tests/test_all_tools) or a scratch run with alone.run, for a "designer facts" check, for the final check before merging into main or when it fails, and for a Designer that crashed or hung. Covers alone.run and each category''s own preparation, the order (fail, then pass), what a scratch run can''t prove, how a scratch probe runs, a crash or a hung quit, the suites and their commands, and Designer scripts versus inline snippets.'
 ---
 
 # Live checks and the suites
 
-The hard rules (who runs tests, when the full suites run, the unit, lint, types and docs-only commands) are in
-`AGENTS.md`, Running the tests. This is the procedure for the live self-test, which runs against the real Designer.
+The hard rules (who runs tests, when the full suites run) are in `AGENTS.md`, Running the tests. The commands for
+the tests of a change are in `.claude/rules/python.md` and `.claude/rules/docs-tests.md`. This is the procedure for
+the live self-test, which runs against the real Designer, and the commands of the suites.
 
 **The check lives in the suite:** a function
 `async def check_<what>(ctx: Ctx)` of its category's `<category>/checks.py`, awaited by the category's `run(ctx)`; a scratch run calls
@@ -81,26 +82,79 @@ seen failing and passing):
 - **In the user's Designer,** only in a run there (Windows today): their graph back in the editor, and that it still
   runs with no new crash dump.
 
-**When the final check fails,** rerun only the failing tests until they pass: unit tests by name (the summary lists
+**How a probe runs,** whoever runs it. A scratch probe is a review's, settling a suspicion that reading can't (the
+`project-code-review` skill, Who settles what), or one measuring for a fix (the `address-review` skill, **All the
+findings' tests first, run together**, point 4):
+
+- **Where it runs:** a Designer an agent started (`launch_designer`), never the user's, one probe at a time in each.
+  If the user's Designer is open, ask them to close it: a probe's leftovers or crash would land in their work. Close
+  the agent's Designer when its work is done (GUIDE.md, the rules).
+- **What it touches:** a new package of its own, with a graph name no other probe uses, unloaded at the end, never the
+  user's packages; GUIDE.md's rules apply (no Undo, no hot reload of the plugin).
+- **Where the code lives:** outside the repo (the session's scratchpad or a temp folder), run with
+  `run_designer_script`, `execute_designer_code` or `client/sd_run.py`, and deleted afterwards. The session's own tools
+  reach only the Designer on the session's port. On a port of its own, a probe runs `client/sd_run.py` with
+  `SD_BRIDGE_PORT=<port>`, or goes through a fresh server on that port, as `alone.run(..., port=...)` opens. The
+  session's own tools also run the server and helpers as they were when the session connected: a probe of the
+  branch's changes to `server_tools/` or the helpers goes through a fresh server (an MCP session of its own, as
+  `alone.py` opens) or after `/mcp` reconnects.
+  `client/sd_run.py` sends only the probe's own code.
+- **How it waits:** as `.claude/rules/waits.md` says, for a callback, never for a time measured here. That rule loads
+  for no file in the scratchpad: read it.
+- **Outside Designer,** a review's probe: a suspicion about pure-Python code that reading can't settle gets a scratch
+  probe too, plain Python run from the scratchpad, with the same rules. It is not a test and is never committed: the
+  agent addressing the finding writes the real test.
+- **What goes in the entry,** for a review's probe: the probe in short and what it measured, in the scenario, so the
+  agent addressing the finding can start its test from it.
+
+**When the final check fails,** each failure goes in `REVIEW.md` (the user, 2026-11-19). The runner reports the
+failures, the lead writes each one, as a new finding or a reopened one (the `address-review` skill, step 4), and the
+developer fixes them. The developer reruns only the failing tests until they pass: unit tests by name (the summary lists
 them) with lint and types; a live check in a scratch run (failing only in the full run: run it beside other Designers, with
-`port=`, or in a Designer just started, `alone.close()` first). Then tell the user which suites failed; they ask for those again. When only unit
-tests failed, the live self-test needs to run again only if the fixes touch code it reaches (`mcp_server/` (not GUIDE.md alone, which is docs: AGENTS.md, Running the tests), `plugin/`,
-`client/`, `examples/`, `tests/test_all_tools/`, `project_constants.py`, `designer_preferences.py`): its pass was for the code as it was, so tell
-the user it must run again. Fixes only elsewhere (`tests/unit/`, `install.py`, `uninstall.py`, `scripts/`, the tool
+`port=`, or in a Designer just started, `alone.close()` first). Then the lead tells the user which suites failed, and
+recommends another review or those suites again, by the size of the fixes. The user decides. When only unit
+tests failed, the live self-test needs to run again only if the fixes touch code it reaches, a comment or a docstring
+included (`mcp_server/` (not GUIDE.md alone, which is docs: `.claude/rules/docs-tests.md`), `plugin/`,
+`client/`, `examples/`, `tests/test_all_tools/`, `project_constants.py`, `designer_preferences.py`): its pass was for the code as it was, so the
+lead tells the user it must run again. Fixes only elsewhere (`tests/unit/`, `install.py`, `uninstall.py`, `scripts/`, the tool
 configs) need only the unit suite again.
 
-**The suites.**
+**When a Designer crashed or hung:** a crash leaves a dump in that Designer's `Sentry-Crashpad/completed` (`pending`
+while its upload waits; GUIDE.md, Several Designers). `python3 scripts/read_crash_dump.py [dump]` reads one (macOS
+arm64; with no dump, the newest of any Designer's): the exception, the messages Crashpad kept (often an abort's
+reason), the crashing thread's frames and Designer's log as it crashed. A crash can also open Adobe's crash window
+on the user's screen and keep the crashed process until the window closes (ROADMAP item 95): close it for a Designer
+an agent started. A Designer hung in its quit has its threads sampled before it is forced (macOS: `quit_designer`'s
+or `launch_designer`'s result names the file; ROADMAP item 70). `alone.close()` names any dump its quit left.
+On macOS, Designers an agent starts upload no crash reports from the moment `launch_designer` sees them answer
+(DECISIONS.md, Bridge and quitting).
+
+**The suites.** They run only when the user asks (AGENTS.md, Running the tests). Which command for what the user
+asks:
+
+- **Both suites** (the final check included, but for docs changed alone: `.claude/rules/docs-tests.md`):
+  `mcp_server/venv/bin/python tests/test_all_tools`. On macOS it runs every category in a Designer of its own, several
+  at once (`--workers N`; the pool's rules: `tests/test_all_tools/workers.py`), with the whole unit suite beside them:
+  one command for both. With a Designer of the user's open it runs nothing and says so: ask them to save and close it.
+  On Windows it makes one run instead, leaving the unit suite out: run `pytest` at the same time, as a background
+  command.
+- **The unit suite alone:** `mcp_server/venv/bin/python -m pytest`.
+- **The live suite alone:** `mcp_server/venv/bin/python tests/test_all_tools --no-unit`.
+- **Chosen categories** (macOS): `mcp_server/venv/bin/python tests/test_all_tools --only <category>...`, through the
+  pool with its safety checks, without the unit suite; not a final check.
+
+What each suite is:
 
 - `mcp_server/venv/bin/python -m pytest`: unit tests, no Designer, about a minute (`pip install -r
   mcp_server/requirements-dev.txt` once). `test_types.py` runs mypy strict (`mypy.ini`) over every Python file:
-  annotate everything. (The typing rules: AGENTS.md, Running the tests.) `sd`'s modules star-import each
+  annotate everything. (The typing rules: `.claude/rules/python.md`.) `sd`'s modules star-import each
   other in cycles, so in the whole-repo run some sd return types come out `Any` (`no-any-return`): annotate the local
   (`node: SDNode = g.newNode(...)`). The formatter can move a trailing
   `# type: ignore` or `# noqa` off its line when it rewraps a statement (mypy then reports it): put it back.
-- `mcp_server/venv/bin/python tests/test_all_tools`: every tool over MCP against the real Designer. On macOS a pool,
-  each category in a Designer of its own, several at once, the whole unit suite beside them
-  (`tests/test_all_tools/workers.py`; its docstring has the rules); which command for what the user asks: AGENTS.md,
-  Running the tests. Its "designer facts" checks re-measure the Designer behaviour GUIDE.md or a module's docstring
+- `mcp_server/venv/bin/python tests/test_all_tools`: every tool over MCP against the real Designer
+  (the pool: `tests/test_all_tools/workers.py`). How it runs, and which command for what the user
+  asks: above.
+  Its "designer facts" checks re-measure the Designer behaviour GUIDE.md or a module's docstring
   states: add one with each new fact. One folder per category (`bridge/`, `params/`, `render/`...: its `run(ctx)` and checks in
   `checks.py`, the `prepare(ctx)` building what they read in `preparations.py`, the Designer scripts only it runs in
   `designer_scripts/`), shared helpers and snippets in `common.py`, and the index `__main__.py`, which runs the
@@ -115,8 +169,8 @@ configs) need only the unit suite again.
     `args`), so ruff and mypy check it; a script that raises fails the run. A shorter probe stays inline where the check
     reads it, as do snippets needing the helpers' text (`helpers_source()`: `run_designer_script` doesn't send them),
     strings that are what the test is about (`execute_designer_code`, its undo step and abort, the bridge, the plugin's
-    unit tests), and `common.py`'s clean-up and undo snippets, which guard the user's session. Strings of code: AGENTS.md,
-    Running the tests.
+    unit tests), and `common.py`'s clean-up and undo snippets, which guard the user's session. Strings of code:
+    `.claude/rules/python.md`.
   - A snippet that loads one of Designer's library packages stays inline, in a branch that runs only where the
     self-test started Designer (the `else` of `if was_running:`, or `if not was_running:`), never in a script: the unit
     test can't see a branch in another file, so it fails on a script naming both `loadUserPackage` and

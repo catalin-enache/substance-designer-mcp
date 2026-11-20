@@ -272,7 +272,7 @@ def test_the_dedent_rule_reads_every_module_of_both() -> None:
 
 
 def test_a_snippet_of_several_lines_is_written_with_dedent() -> None:
-    """dedent(\"\"\"...\"\"\"), not joined pieces with \\n (AGENTS.md, Running the tests): the self-test's modules and every module
+    """dedent(\"\"\"...\"\"\"), not joined pieces with \\n (`.claude/rules/python.md`): the self-test's modules and every module
     of the server. The scripts in designer_scripts/ are real files, and tests/unit isn't in the rule."""
     sources = _dedent_rule_sources()
     joined = ['%s:%d' % (name, line) for name, source in sources.items() for line in _joined_snippets(source)]

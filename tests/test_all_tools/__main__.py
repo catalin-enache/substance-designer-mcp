@@ -287,7 +287,7 @@ def main(argv: list[str] | None = None) -> None:
         '--only',
         nargs='+',
         metavar='CATEGORY',
-        help='those categories alone, through the pool (macOS), without the unit suite; the final check stays a full run',
+        help='those categories alone, through the pool (macOS), without the unit suite; not a final check',
     )
     parser.add_argument('--worker', choices=workers.names(), help=argparse.SUPPRESS)
     parser.add_argument('--results', help=argparse.SUPPRESS)

@@ -1,6 +1,7 @@
 """A finding removed from REVIEW.md by a cleanup stays findable in git (scripts/review_lookup.py), and the rules the
 review docs agree on."""
 
+import ast
 import os
 import re
 import shutil
@@ -10,6 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from docs_text import NOT_DOC_READERS, agent, bare_tags, flat, read, rule, skill, story_md
 
 from conftest import ROOT
 
@@ -54,11 +56,6 @@ needs_git = pytest.mark.skipif(shutil.which('git') is None, reason='needs git')
 needs_sh = pytest.mark.skipif(shutil.which('sh') is None or shutil.which('git') is None, reason='needs sh and git')
 
 
-def _read(path: str) -> str:
-    with open(os.path.join(ROOT, path), encoding='utf-8') as f:
-        return f.read()
-
-
 def _sh(script: str, cwd: Path) -> str:
     return subprocess.run(['sh', '-c', script], cwd=cwd, env=GIT_ENV, capture_output=True, text=True).stdout
 
@@ -92,7 +89,7 @@ def repo(tmp_path: Path) -> Path:
 
 @pytest.mark.parametrize('path', LOOKUP_DOCS)
 def test_every_doc_runs_the_script_and_copies_no_commands(path: str) -> None:
-    text = _read(path)
+    text = read(path)
     assert 'python3 scripts/review_lookup.py HLP-56' in text
     assert 'git log --format' not in text and 'git log -p' not in text and 'awk' not in text
 
@@ -177,18 +174,25 @@ def test_an_id_that_never_existed_prints_nothing(repo: Path) -> None:
 
 def _counter_problems(text: str) -> list[str]:
     """What is wrong with the header's **Last used** line, given the file's entries."""
-    lines = re.findall(r'(?m)^\*\*Last used:\*\* (.*)\.$', text)
+    lines: list[str] = re.findall(r'(?m)^\*\*Last used:\*\* (.*)\.$', text)
     if len(lines) != 1:
         return ['expected one **Last used** line, found %d' % len(lines)]
-    counters = {prefix: int(number) for prefix, number in re.findall(r'([A-Z]+)-(\d+)', lines[0])}
+    used: list[tuple[str, str]] = re.findall(r'([A-Z]+)-(\d+)', lines[0])
+    counters = {prefix: int(number) for prefix, number in used}
+    entries: list[tuple[str, str]] = re.findall(r'(?m)^- \[.\] \*\*([A-Z]+)-(\d+) ', text)
     problems = []
-    for prefix, number in re.findall(r'(?m)^- \[.\] \*\*([A-Z]+)-(\d+) ', text):
+    for prefix, number in entries:
         if int(number) > counters.get(prefix, -1):
             problems.append('%s-%s is above **Last used**' % (prefix, number))
-    for prefix in re.findall(r'\*\*([A-Z]{3})\*\* ', text.split('**Last used:**')[0].split('**IDs.**')[-1]):
+    for prefix in _prefixes(text):
         if prefix not in counters:
             problems.append('**IDs** names %s, which **Last used** lacks' % prefix)
     return problems
+
+
+def _prefixes(text: str) -> list[str]:
+    """The prefixes the header's **IDs** paragraph names, one ending a line too."""
+    return re.findall(r'\*\*([A-Z]{3})\*\*\s', text.split('**Last used:**')[0].split('**IDs.**')[-1])
 
 
 @pytest.mark.parametrize(
@@ -199,6 +203,8 @@ def _counter_problems(text: str) -> list[str]:
         ('**Last used:** HLP-80.\n\n- [ ] **HLP-81 · forgot the counter** · `a.py`\n', 'HLP-81 is above'),
         ('**Last used:** HLP-80.\n\n- [ ] **SRV-1 · new prefix, not added** · `a.py`\n', 'SRV-1 is above'),
         ('**IDs.** **PLG** plugin, **HLP** helpers.\n\n**Last used:** HLP-80.\n', 'names PLG'),
+        # a prefix ending a line, as **SRV** does in REVIEW.md, was skipped
+        ('**IDs.** **HLP** helpers, **SRV**\nthe server.\n\n**Last used:** HLP-80.\n', 'names SRV'),
     ],
 )
 def test_the_counter_check_catches(text: str, problem: str) -> None:
@@ -220,12 +226,17 @@ def test_the_counter_check_accepts(text: str) -> None:
 
 @pytest.mark.parametrize('path', ('REVIEW.md', os.path.join(SKILLS, 'project-code-review', 'TEMPLATE.md')))
 def test_the_header_counters_cover_every_finding(path: str) -> None:
-    assert _counter_problems(_read(path)) == []
+    assert _counter_problems(read(path)) == []
 
 
-@pytest.mark.parametrize('skill', REVIEW_SKILLS)
-def test_each_skill_uses_the_counters_and_not_the_old_command(skill: str) -> None:
-    text = _read(os.path.join(SKILLS, skill, 'SKILL.md'))
+def test_the_template_names_every_prefix_review_md_names() -> None:
+    # REVIEW.md TST-593: a REVIEW.md made from the template takes its **IDs**, and its **Last used** covers them
+    assert sorted(_prefixes(read(TEMPLATE))) == sorted(_prefixes(read('REVIEW.md')))
+
+
+@pytest.mark.parametrize('name', REVIEW_SKILLS)
+def test_each_skill_uses_the_counters_and_not_the_old_command(name: str) -> None:
+    text = skill(name)
     assert '**Last used**' in text
     assert 'Last numbers' not in text and "grep -oE '^- " not in text
 
@@ -329,21 +340,21 @@ def test_a_finding_lost_in_a_squash_prints_nothing_but_its_number_isnt_reused(tm
 @pytest.mark.parametrize(
     'path',
     (
-        'AGENTS.md',
+        os.path.join(SKILLS, 'project-code-review', 'SKILL.md'),  # the REVIEW.md rules moved out of AGENTS.md
         'REVIEW.md',
         os.path.join(SKILLS, 'project-code-review', 'TEMPLATE.md'),
-        os.path.join(SKILLS, 'project-code-review', 'SKILL.md'),
+        os.path.join('.claude', 'agents', 'reviewer.md'),  # the reviewer's rules moved out of the review skill
         os.path.join(SKILLS, 'address-review', 'SKILL.md'),
     ),
 )
 def test_the_docs_ask_for_not_reproducible(path: str) -> None:
-    head = _read(path).split('\n## Status')[0]  # REVIEW.md's old entries keep the wording they were written in
+    head = _header(read(path))  # REVIEW.md's old entries keep the wording they were written in
     assert 'not reproducible' in head and 'not reproduced' not in head.lower()
 
 
 @pytest.mark.parametrize('path', LOOKUP_DOCS)
 def test_the_docs_dont_say_empty_output_can_only_mean_one_thing(path: str) -> None:
-    assert 'nothing only' not in _read(path).replace('\n', ' ')
+    assert 'nothing only' not in flat(read(path))
 
 
 @pytest.mark.parametrize(
@@ -359,37 +370,352 @@ def test_the_docs_dont_say_empty_output_can_only_mean_one_thing(path: str) -> No
     ),
 )
 def test_the_docs_say_what_each_file_remembers(path: str) -> None:
-    assert 'memory per branch' in _read(path).replace('\n', ' ')
+    assert 'memory per branch' in flat(read(path))
 
 
 def test_decisions_says_it_is_the_memory_for_the_whole_project() -> None:
-    assert 'memory for the whole project' in _read('DECISIONS.md').replace('\n', ' ')
+    assert 'memory for the whole project' in flat(read('DECISIONS.md'))
 
 
 def test_decisions_and_roadmap_are_proposed_while_reviewing_and_addressing_never_at_a_cleanup() -> None:
     # the user's rule (2026-11-16): REVIEW.md is the memory per branch; what goes in DECISIONS.md (only what stops
     # reviewers raising the same finding again) or ROADMAP.md is proposed to them during the reviews and while the
     # findings are addressed, and added once they approve, never at a cleanup
-    project = _read(os.path.join(SKILLS, 'project-code-review', 'SKILL.md')).replace('\n', ' ')
-    address = _read(os.path.join(SKILLS, 'address-review', 'SKILL.md')).replace('\n', ' ')
-    cleanup = _read(os.path.join(SKILLS, 'cleanup-review', 'SKILL.md')).replace('\n', ' ')
+    project = flat(skill('project-code-review'))
+    address = flat(skill('address-review'))
+    cleanup = flat(skill('cleanup-review'))
     assert 'moves nothing to `DECISIONS.md` or `ROADMAP.md`' in cleanup
     assert 'Simplifications' not in cleanup and 'Resolution: ' not in cleanup, 'no search for what to move'
     assert 'The `cleanup-review` skill proposes' not in address
-    assert 'propose its entry to the user' in address and 'propose it to the user for `ROADMAP.md`' in address
+    assert 'moves nothing to `DECISIONS.md`, so this is the time' in address
+    assert 'propose it to the user for `ROADMAP.md`' in address
     assert '**Propose to the user' in project and 'a `ROADMAP.md` item' in project
-    for path in ('AGENTS.md', 'DECISIONS.md'):
-        assert 'at a cleanup' not in _read(path).replace('\n', ' '), path
+    # the docs table's row on DECISIONS.md moved to `.claude/rules/docs.md` (REVIEW.md TST-602)
+    for path in ('AGENTS.md', 'DECISIONS.md', os.path.join('.claude', 'rules', 'docs.md')):
+        assert 'at a cleanup' not in flat(read(path)), path
+    # REVIEW.md AGT-107: `docs.md`, which every agent loads, had it add new ideas to ROADMAP.md itself. It points to the
+    # skill by its path, as a reviewer has no Skill tool to load it
+    docs = flat(rule('docs.md'))
+    assert 'add new ideas there' not in docs
+    assert 'Propose new ideas to the user, who decides each one.' in docs
+    assert "as the `address-review` skill's After a group says (`.claude/skills/address-review/SKILL.md`)" in docs
+
+
+def test_roadmap_md_says_a_checked_items_figures_stay_as_they_were() -> None:
+    # the user, 2026-11-20: a checked item's figures aren't updated after. Its pointers and paths still are: the docs
+    # tests check them
+    introduction = flat(read('ROADMAP.md').split('\n## ', 1)[0])
+    said = "A checked item's figures (sizes, counts, times) are those of when it was checked, and aren't updated after."
+    assert '(git history keeps the record). ' + said in introduction
+
+
+def test_a_false_finding_gets_no_decisions_entry() -> None:
+    # the user's rule (2026-11-20): a not-a-bug or not-reproducible answer is a review's finding that didn't hold, not
+    # a decision, so it stays in REVIEW.md and nothing proposes it for DECISIONS.md
+    address = flat(skill('address-review'))
+    project = flat(skill('project-code-review'))
+    developer = flat(agent('developer'))
+    assert 'A false finding stays in `REVIEW.md` only' in address
+    assert 'propose its entry' not in address
+    assert 'never for a false finding' in project
+    assert 'entry for a false finding' not in developer
+    decisions = flat(read('DECISIONS.md'))
+    assert 'is no decision and stays in `REVIEW.md`' in decisions
+    for path in ('DECISIONS.md', os.path.join('.claude', 'rules', 'docs.md')):
+        text = flat(read(path))
+        assert 'not-a-bug answers' not in text and 'not-reproducible answer the user approved' not in text, path
+
+
+def test_a_finding_names_who_found_it_and_the_model_it_ran_on() -> None:
+    # the user, 2026-11-20: "in the reviews.md i want to know which model found what (logged with the finding)". Older
+    # entries don't have it, so REVIEW.md's aren't read here
+    text = read(TEMPLATE)
+    titles: list[str] = re.findall(r'(?m)^- \[.\] \*\*ID · .*$', text)
+    assert len(titles) == 2 and all(title.endswith('· found YYYY-MM-DD by `<who> (<model>)`') for title in titles), (
+        titles
+    )
+    template = flat(text)
+    for said in (
+        '`found 2026-11-20 by a reviewer (Sonnet)`',
+        '`by two reviewers (Opus, Sonnet)`',
+        "its file's, or the one the lead passed on the Agent call",
+        "Older entries don't have it",
+    ):
+        assert said in template, said
+    project = flat(skill('project-code-review'))
+    for said in (
+        'its title line naming both reviewers and their models',  # step 4
+        'Its title line ends with who found it and the model that agent ran on',  # step 5
+        'the developer, or the runner whose probe found it',
+    ):
+        assert said in project, said
+    assert 'mention that two reviewers found it' not in project
+
+
+def test_each_review_round_adds_its_rows_to_the_table_by_model() -> None:
+    # the user, 2026-11-20: "i also want to be logged in reviews how much time it took for the review to happen and how
+    # many tokens were spent", "i want a different table for that so that it is easy to see which model found how many
+    # bugs the time it took and the tokens spent", then "for each review round rows are added and filled in with values
+    # for that round and a last row with total, that last row will keep increasing the counts during the branch life"
+    text = read(TEMPLATE)
+    assert text.index('\n## Status\n') < text.index('\n## Reviews by model\n') < text.index('\n## Review log\n')
+    assert BY_MODEL_HEADER in text.splitlines()
+    template = flat(text)
+    for said in (
+        "the lead adds that round's rows, every column filled: one row per model that ran, and a `settling` row when "
+        'the lead used agents to settle suspicions',
+        'The last row is **Total**, which the lead updates after each round and each developer run to sum every row above it',
+        "counted from each finding's `found ... by <who> (<model>)`",
+        "the round's slowest agent of the row",
+        "the usage each agent's completion notice gives (its tokens and duration)",
+        "The lead's own share isn't in it",
+    ):
+        assert said in template, said
+    assert '**Cost:**' not in template, 'the table, not a field of each log entry'
+    project = flat(skill('project-code-review'))
+    assert "add the round's rows to the table under `## Reviews by model`, and update its **Total** row" in project
+    # REVIEW.md TST-624: the list of what a review adds to REVIEW.md has the rows too
+    assert "add an entry to the review log and the round's rows to the table under `## Reviews by model`" in project
+    # "at cleanup review the table will be cleaned at the end"
+    assert 'A cleanup empties the table at its end, and git keeps the rows' in template
+    cleanup = flat(skill('cleanup-review'))
+    assert '**Empty the table under `## Reviews by model`** last' in cleanup
+    assert "Its heading, its explanation and the table's header row stay" in cleanup
+
+
+def _by_model_rows(text: str) -> list[list[str]]:
+    """The rows of the table under `## Reviews by model`, each its cells, after the header row and the separator."""
+    section = re.search(r'(?ms)^## Reviews by model\n(.*?)(?=^## |\Z)', text)
+    lines: list[str] = [line for line in (section.group(1) if section else '').splitlines() if line.startswith('|')]
+    return [[cell.strip() for cell in line.strip('|').split('|')] for line in lines[2:]]
+
+
+def _number(cell: str) -> int | None:
+    """A cell of the table by model as a number: `**1,021,051**` is 1021051, `17 min` is 17. None for anything else."""
+    found = re.fullmatch(r'\**([\d,]+)( min)?\**', cell)
+    return int(found[1].replace(',', '')) if found else None
+
+
+def _findings(cell: str) -> tuple[int, dict[str, int]] | None:
+    """A findings cell of the table by model: its count, and the count of each severity in its brackets.
+    `**9 [1 Low-medium, 8 Low]**` gives 9 and {'Low-medium': 1, 'Low': 8}, and `0` gives 0 and {}. None for a cell in
+    another form: a severity unknown, out of order, of no finding or named twice."""
+    found = re.fullmatch(r'\**(\d+)(?: \[([^\]]+)\])?\**', cell)
+    if not found:
+        return None
+    brackets: str | None = found[2]
+    severities: dict[str, int] = {}
+    for part in brackets.split(', ') if brackets else []:
+        counted = re.fullmatch(r'([1-9]\d*) (\S+)', part)
+        if not counted or counted[2] not in SEVERITIES or counted[2] in severities:
+            return None
+        severities[counted[2]] = int(counted[1])
+    return (int(found[1]), severities) if list(severities) == sorted(severities, key=SEVERITIES.index) else None
+
+
+# the table by model's header row (the column Instances: the user, 2026-11-20)
+BY_MODEL_HEADER = '| Review | Model | Instances | Real findings | Found only by this model | Tokens | Time |'
+COLUMNS = [cell.strip() for cell in BY_MODEL_HEADER.strip('|').split('|')]
+# the columns the Total row sums, by their place in a row: numbers, and counts of findings by severity
+SUMMED = {column: COLUMNS[column] for column in (2, 5, 6)}
+FINDINGS = {column: COLUMNS[column] for column in (3, 4)}
+DEVELOPER = ' (developer)'  # ends the model of a developer run's row
+
+
+def _by_model_problems(text: str) -> list[str]:
+    """Where the table by model's last row isn't a Total summing the rows above it, each severity of the findings
+    included; where a findings cell's severities don't add up to its count; and a developer's row that counts other
+    than 1 instance. None for a table without rows: an older file, or one just cleaned up."""
+    rows = _by_model_rows(text)
+    if not rows:
+        return []
+    if rows[-1][0] != '**Total**':
+        return ['the last row is no **Total** row: %s' % rows[-1]]
+    problems = []
+    for column, name in SUMMED.items():
+        cells = [_number(row[column]) for row in rows]
+        numbers = [cell for cell in cells if cell is not None]
+        if len(numbers) < len(cells):
+            problems.append('%s: a cell that is no number: %s' % (name, [row[column] for row in rows]))
+        elif sum(numbers[:-1]) != numbers[-1]:
+            problems.append('%s: the rows sum to %d, the Total says %d' % (name, sum(numbers[:-1]), numbers[-1]))
+    for column, name in FINDINGS.items():
+        counts = [_findings(row[column]) for row in rows]
+        parsed = [count for count in counts if count is not None]
+        if len(parsed) < len(counts):
+            problems.append(
+                '%s: a cell that is no count of findings by severity: %s' % (name, [r[column] for r in rows])
+            )
+            continue
+        problems += [
+            '%s: %s: its severities sum to %d' % (name, row[column], sum(severities.values()))
+            for row, (count, severities) in zip(rows, parsed, strict=True)
+            if sum(severities.values()) != count
+        ]
+        *above, (total, severities) = parsed
+        summed = sum(count for count, _ in above)
+        if summed != total:
+            problems.append('%s: the rows sum to %d, the Total says %d' % (name, summed, total))
+        for severity in SEVERITIES:
+            summed, said = sum(counted.get(severity, 0) for _, counted in above), severities.get(severity, 0)
+            if summed != said:
+                problems.append("%s: the rows' %s sum to %d, the Total says %d" % (name, severity, summed, said))
+    problems += [
+        "%s: a developer's row counts 1 instance: %s" % (row[0], row)
+        for row in rows
+        if row[1].endswith(DEVELOPER) and _number(row[2]) != 1
+    ]
+    return problems
+
+
+BY_MODEL_SAMPLE = (
+    '## Reviews by model\n\n' + BY_MODEL_HEADER + '\n'
+    '|---|---|---|---|---|---|---|\n'
+    '| 2026-11-20, first | Opus | 4 | 8 [1 Medium, 7 Low] | 5 [1 Medium, 4 Low] | 1,021,051 | 17 min |\n'
+    '| 2026-11-20, first | Sonnet | 4 | 7 [2 Low-medium, 5 Low] | 4 [1 Low-medium, 3 Low] | 971,644 | 11 min |\n'
+    "| 2026-11-20, the first review's fixes | Opus (developer) | 1 | 2 [2 Low] | 2 [2 Low] | 412,300 | 9 min |\n"
+    '| 2026-11-20, second | Sonnet | 2 | 0 | 0 | 373,952 | 8 min |\n'
+    "| 2026-11-20, the second review's fixes | Opus (developer) | 1 | 0 | 0 | 158,200 | 4 min |\n"
+    '| **Total** | all | **12** | **17 [1 Medium, 2 Low-medium, 14 Low]** | **11 [1 Medium, 1 Low-medium, 9 Low]** '
+    '| **2,937,147** | **49 min** |\n'
+    '\n## Review log\n'
+)
+
+
+def test_the_table_by_models_total_sums_its_rows() -> None:
+    # REVIEW.md TST-623: the lead adds each round's rows and updates the Total by hand
+    assert _by_model_problems(BY_MODEL_SAMPLE) == []
+    assert _by_model_problems(read('REVIEW.md')) == []
+
+
+@pytest.mark.parametrize(
+    ('change', 'reported'),
+    [
+        (lambda s: s.replace('**2,937,147**', '**2,937,146**'), 'Tokens: the rows sum to 2937147'),
+        (
+            lambda s: s.replace('| 4 [1 Low-medium, 3 Low] |', '| 5 [1 Low-medium, 4 Low] |'),
+            'Found only by this model: the rows sum to 12',
+        ),
+        (lambda s: s.replace('| 17 min |', '| 17 minutes |'), 'Time: a cell that is no number'),
+        (lambda s: s.replace('| **Total** |', '| 2026-11-20, third |'), 'no **Total** row'),
+        # the user's severities in the findings cells (2026-11-20): each one's Total sums the rows' too
+        (
+            lambda s: s.replace('**17 [1 Medium, 2 Low-medium, 14 Low]**', '**17 [2 Medium, 1 Low-medium, 14 Low]**'),
+            "Real findings: the rows' Medium sum to 1, the Total says 2",
+        ),
+        (lambda s: s.replace('| 8 [1 Medium, 7 Low] |', '| 8 [1 Medium, 6 Low] |'), 'its severities sum to 7'),
+        (
+            lambda s: s.replace('| 2 [2 Low] | 2 [2 Low] |', '| 2 | 2 [2 Low] |'),
+            'Real findings: 2: its severities sum to 0',
+        ),
+        (lambda s: s.replace('7 [2 Low-medium, 5 Low]', '7 [5 Low, 2 Low-medium]'), 'no count of findings by severity'),
+        (lambda s: s.replace('8 [1 Medium, 7 Low]', '8 [1 Critical, 7 Low]'), 'no count of findings by severity'),
+        (lambda s: s.replace('8 [1 Medium, 7 Low]', '8 [0 High, 1 Medium, 7 Low]'), 'no count of findings by severity'),
+        (lambda s: s.replace('| 1 | 2 [2 Low] |', '| 2 | 2 [2 Low] |'), "a developer's row counts 1 instance"),
+    ],
+)
+def test_the_table_by_models_check_catches_a_slip(change: Callable[[str], str], reported: str) -> None:
+    assert change(BY_MODEL_SAMPLE) != BY_MODEL_SAMPLE, 'the sample must hold what this case changes'
+    assert any(reported in problem for problem in _by_model_problems(change(BY_MODEL_SAMPLE)))
+
+
+def test_the_table_by_model_has_the_developers_row_and_the_severities_in_its_cells() -> None:
+    # the user, 2026-11-20, on the findings the developer finds while fixing a round's: "yes, count them in a developer
+    # row". Then: "I'd like in the table with reviewers per model the findings to be grouped as 5 [3(low), 2(medium),
+    # e.t.c] inside the cell value". Then: "i want a row everytime a developer works", with its cost
+    text = read(TEMPLATE)
+    template = flat(text)
+    for said in (
+        'The developer gets a row for each run: every Agent call to a `developer`, and every resume of one with '
+        'SendMessage that ends in a report (the user, 2026-11-20)',
+        "Its **Review** names the work, such as `2026-11-20, the nineteenth review's fixes`",
+        'Its **Model** is `<model> (developer)`, such as `Opus (developer)`, and its **Instances** is 1',
+        # the user, 2026-11-20: "i think the Reviewers header in REVIEW table for reviewers should be called Instances"
+        '- **Instances:** how many agents the row counts.',
+        'Its two findings cells count the new problems it found that the lead settled as real, or `0` for none',
+        "Its **Tokens** and **Time** come from its completion notice, as a reviewer's do. For a resumed developer, the "
+        "Tokens are those its notice adds since that agent's previous notice, and the Time is that run's duration",
+        'A finding the runner or the lead found is recorded on its title line only, in no row',
+        'then in brackets the count of each severity among them, most severe first: `9 [1 Low-medium, 8 Low]`, or '
+        '`0` for none',
+        'The **Total** row sums each severity too',
+        'how many of those no other row of the round found, written the same way',
+    ):
+        assert said in template, said
+    assert 'A finding another agent found (the developer, the runner, the lead)' not in template
+    assert "are 0 and `0 min`, since the developer's run was the fixes'" not in template
+    # where the lead takes in a developer's report, it adds the run's row
+    assert 'Every developer run gets a row in the table by model, with its cost' in flat(skill('address-review'))
+    assert 'After each developer run, the lead adds its row to the table under `## Reviews by model`' in flat(
+        skill('project-code-review')
+    )
+    story = flat(story_md())
+    assert 'per review round and per developer run' in story
+    # REVIEW.md TST-637: and the files table's row on REVIEW.md
+    assert 'a table by model of the findings, tokens and time of each round and each developer run' in story
+    status = text.split('\n## Status\n', 1)[1].split('\n## ', 1)[0]
+    assert tuple(re.findall(r'(?m)^\| ([A-Z][\w-]*) \| \d', status)) == SEVERITIES, 'most severe first'
+
+
+def _header(markdown: str) -> str:
+    """The header of a REVIEW.md, or of the template: what comes before `## Status`."""
+    return markdown.split('\n## Status')[0]
+
+
+def _header_paragraphs(markdown: str) -> list[str]:
+    """The first word of each paragraph of a REVIEW.md's header, before `## Status`."""
+    return [part.split()[0] for part in _header(markdown).split('\n\n') if part.strip()]
+
+
+def _entry_titles(text: str) -> list[str]:
+    """The title line of each entry of a REVIEW.md."""
+    return re.findall(r'(?m)^- \[.\] \*\*[A-Z]+-\d+ .*$', text)
+
+
+def test_review_md_has_the_templates_new_paragraphs_where_the_template_puts_them() -> None:
+    # REVIEW.md TST-621, TST-623: its header is the template's, and the table by model's explanation too, in the
+    # template's order (REVIEW.md's older paragraphs keep their wording, so only these three are compared). The
+    # **IDs** paragraph is compared since the user's decision of 2026-11-20: AGT covers everything in `.claude/`, TST
+    # the tests and the docs outside it, and a finding over several files takes the prefix of its first location
+    template = read(TEMPLATE)
+    paragraphs = template.split('\n\n')
+    found_by = next(part for part in paragraphs if part.startswith('**Found by.**'))
+    ids = next(part for part in paragraphs if part.startswith('**IDs.**'))
+    assert '**AGT** everything in `.claude/`' in flat(ids) and 'takes the prefix of its first location' in flat(ids)
+    explanation = template.split('## Reviews by model\n\n', 1)[1].split('\n|---', 1)[0]  # the header row too
+    review = flat(read('REVIEW.md'))
+    marks = [flat(found_by), flat(ids), '## Status', '## Reviews by model', flat(explanation), '## Review log']
+    found = [review.find(mark) for mark in marks]
+    assert -1 not in found and found == sorted(found), list(zip(marks, found, strict=True))
+    # and every paragraph of the header in the template's order, by its first word: a paragraph put inside another,
+    # between a label and its list, shows as one more (REVIEW.md's paragraphs keep their own wording)
+    assert _header_paragraphs(read('REVIEW.md')) == _header_paragraphs(template)
+
+
+FINDER_FROM = '2026-11-20'  # the first day an entry's title line names who found it (the user)
+
+
+def test_every_entry_found_from_2026_11_20_names_who_found_it() -> None:
+    # REVIEW.md TST-623: older entries don't have it
+    titles = [re.search(r'· found (\S+)( by .+ \([^)]+\))?$', line) for line in _entry_titles(read('REVIEW.md'))]
+    assert None not in titles, 'an entry without its date'
+    assert [title[0] for title in titles if title and title[1] >= FINDER_FROM and not title[2]] == []
+
+
+def test_a_false_finding_is_reported_for_the_lead_to_check() -> None:
+    # REVIEW.md AGT-92, TST-615: only the lead writes REVIEW.md (the user, 2026-11-19), so step 2 has the developer
+    # report a false finding's resolution, and the lead checks the entry off (step 7)
+    address = flat(skill('address-review'))
+    assert "report the entry's resolution as *not a bug* or *not reproducible* (step 7)" in address
+    assert '*not reproducible* and check it' not in address
 
 
 def test_a_review_reads_decisions_first_then_review() -> None:
-    assert 'Read `DECISIONS.md` (repo root) first, then `REVIEW.md`.' in _read(
-        os.path.join(SKILLS, 'project-code-review', 'SKILL.md')
-    ).replace('\n', ' ')
+    assert 'Read `DECISIONS.md` (repo root) first, then `REVIEW.md`.' in flat(skill('project-code-review'))
 
 
 def test_the_cleanup_says_where_the_header_ends() -> None:
-    assert 'The header ends before `## Status`' in _read(os.path.join(SKILLS, 'cleanup-review', 'SKILL.md'))
+    assert 'The header ends before `## Status`' in skill('cleanup-review')
 
 
 def test_a_new_finding_must_move_the_counter(reviewed: Path) -> None:
@@ -419,10 +745,10 @@ def _delete_review(repo: Path) -> None:
 
 def _recreated(repo: Path) -> str:
     """REVIEW.md made from the template, with **Last used** set as the skill says."""
-    text = _read(TEMPLATE)
+    text = read(TEMPLATE)
     for found in _last_used(repo):
         prefix = found.split('-')[0]
-        assert '%s-0' % prefix in text or prefix not in ('PLG', 'SRV', 'HLP', 'INS', 'TST')
+        assert '%s-0' % prefix in text or prefix not in _prefixes(text)
         text = text.replace('%s-0' % prefix, found)
     return text
 
@@ -430,7 +756,7 @@ def _recreated(repo: Path) -> str:
 @needs_git
 def test_the_template_alone_would_reuse_numbers_after_a_deletion(reviewed: Path) -> None:
     _delete_review(reviewed)
-    (reviewed / 'REVIEW.md').write_text(_read(TEMPLATE), encoding='utf-8')
+    (reviewed / 'REVIEW.md').write_text(read(TEMPLATE), encoding='utf-8')
     assert [line.split(':')[0] for line in _counter_against_history(reviewed)] == ['HLP', 'TST']
 
 
@@ -439,7 +765,7 @@ def test_a_recreated_file_gets_its_counters_from_history(reviewed: Path) -> None
     _delete_review(reviewed)
     assert _last_used(reviewed) == ['HLP-81', 'TST-140']
     recreated = _recreated(reviewed)
-    assert '**Last used:** PLG-0, SRV-0, HLP-81, INS-0, TST-140.' in recreated
+    assert '**Last used:** PLG-0, SRV-0, HLP-81, INS-0, TST-140, AGT-0.' in recreated
     (reviewed / 'REVIEW.md').write_text(recreated, encoding='utf-8')
     assert _counter_against_history(reviewed) == []
 
@@ -492,7 +818,7 @@ def test_last_used_with_no_history_says_so(tmp_path: Path) -> None:
 def test_a_prefix_never_used_may_stay_at_zero(tmp_path: Path) -> None:
     """A new project's file made from the template: nothing used yet, and that is correct."""
     subprocess.run(['git', 'init', '-q'], cwd=tmp_path, env=GIT_ENV, check=True)
-    _commit(tmp_path, _read(TEMPLATE))
+    _commit(tmp_path, read(TEMPLATE))
     assert _counter_against_history(tmp_path) == []
 
 
@@ -556,50 +882,95 @@ def test_the_second_branch_renumbers_from_mains_counters(tmp_path: Path) -> None
     assert 'their finding' in _lookup(tmp_path, 'HLP-2') and 'my finding' in _lookup(tmp_path, 'HLP-3')
 
 
-DOC_TESTS = re.compile(r"""['"](?:AGENTS|GUIDE|README|ROADMAP|DECISIONS|REVIEW)\.md['"]""")
+# a test naming one of these docs, or a folder of .claude that holds docs (its skills, agents and rules), validates the
+# docs. The tests of .claude's hooks name .claude too, and validate code
+DOC_TESTS = re.compile(
+    r"""['"](?:AGENTS|GUIDE|README|ROADMAP|DECISIONS|REVIEW)\.md['"]"""
+    r"""|['"]\.claude['"],\s*['"](?:skills|agents|rules)['"]"""
+)
+
+
+def _reads_a_doc(source: str) -> bool:
+    """Whether the test file's `source` names a doc (DOC_TESTS), or imports from docs_text.py what reads one."""
+    return bool(DOC_TESTS.search(source)) or (
+        'docs_text' in source
+        and any(
+            (isinstance(node, ast.Import) and 'docs_text' in {alias.name for alias in node.names})
+            or (
+                isinstance(node, ast.ImportFrom)
+                and node.module == 'docs_text'
+                and bool({alias.name for alias in node.names} - NOT_DOC_READERS)
+            )
+            for node in ast.walk(ast.parse(source))
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    'source, reads',
+    [
+        ("Path(ROOT, 'AGENTS.md')", True),
+        ("os.path.join('.claude', 'skills')", True),
+        ('from docs_text import agents_md', True),
+        ('from docs_text import (\n    flat,\n    skill,\n)', True),
+        ('import docs_text', True),
+        ('from docs_text import flat, headings, repo_files, section', False),
+        ("Path(ROOT, 'mcp_server', 'server.py')", False),
+    ],
+)
+def test_a_test_that_reads_a_doc_is_found(source: str, reads: bool) -> None:
+    assert _reads_a_doc(source) == reads
 
 
 def test_the_docs_command_names_every_test_that_reads_a_doc() -> None:
-    """A commit of docs alone runs only these, so a new test reading a doc must join the list."""
+    """A commit of docs alone (`.claude/rules/docs-tests.md`) runs only these, so a new test reading a doc must join
+    the list."""
     unit = os.path.join(ROOT, 'tests', 'unit')
     reading = {
         name
         for name in os.listdir(unit)
-        if name.startswith('test_')
-        and name.endswith('.py')
-        and DOC_TESTS.search(_read(os.path.join('tests', 'unit', name)))
+        if name.startswith('test_') and name.endswith('.py') and _reads_a_doc(read('tests', 'unit', name))
     }
-    commands = re.findall(r'`mcp_server/venv/bin/python -m pytest (tests/unit/[^`]+)`', _read('AGENTS.md'))
-    assert len(commands) == 1, 'AGENTS.md should give the docs-only command once'
+    commands: list[str] = re.findall(
+        r'`mcp_server/venv/bin/python -m pytest (tests/unit/[^`]+)`', rule('docs-tests.md')
+    )
+    assert len(commands) == 1, 'the rule should give the docs command once'
     assert {os.path.basename(path) for path in commands[0].split()} == reading
 
 
 def test_the_wording_of_the_rules_agreed_on() -> None:
-    project = _read(os.path.join(SKILLS, 'project-code-review', 'SKILL.md')).replace('\n', ' ')
-    address = _read(os.path.join(SKILLS, 'address-review', 'SKILL.md')).replace('\n', ' ')
-    cleanup = _read(os.path.join(SKILLS, 'cleanup-review', 'SKILL.md')).replace('\n', ' ')
+    project = flat(skill('project-code-review'))
+    address = flat(skill('address-review'))
+    cleanup = flat(skill('cleanup-review'))
     for path in LOOKUP_DOCS:
-        text = _read(path).replace('\n', ' ')
+        text = flat(read(path))
         assert 'ever used twice' not in text, path
         assert 'Nothing lowers a committed number' in text, path
     assert 'merges second' in project and 'git diff main...HEAD' in project
-    assert 'also in `DECISIONS.md`' in project, 'an answer in both files follows the decision'
-    assert "don't raise the same finding again" in project
+    # an answer in both files follows the decision, and a false finding isn't raised again: the reviewer's own rules,
+    # in its file (test_agents.py)
+    # the user, 2026-11-19 (it replaces 2026-11-18's "all Low"): what counts is the findings, not the number of review
+    # rounds. Only a few Low findings, the first review included, or none, mean the reviews look converged, and the
+    # user decides on another round
+    assert 'What counts is the findings, not the number of review rounds' in project
+    assert 'new findings are only a few Low ones, the first review included, says the reviews look converged' in project
+    assert 'review with no findings (the user, 2026-11-19)' in project and 'second review' not in project
+    assert 'The user decides: another round, or the final check' in project
     assert 'in exactly these words' not in address and 'starts with' in address
     assert "and the entry's **Reopen if** doesn't hold" not in address, 'stop and ask whether it holds or not'
     assert 'tests that validate the docs' in cleanup
-    assert 'lookup' in _read('ROADMAP.md').split('## Review hotspots')[1].split('| Done |')[0]
+    assert 'lookup' in read('ROADMAP.md').split('## Review hotspots')[1].split('| Done |')[0]
 
 
 def test_the_wording_of_the_smaller_points_agreed_on() -> None:
-    agents = _read('AGENTS.md').replace('\n', ' ')
-    project = _read(os.path.join(SKILLS, 'project-code-review', 'SKILL.md')).replace('\n', ' ')
-    address = _read(os.path.join(SKILLS, 'address-review', 'SKILL.md')).replace('\n', ' ')
-    assert 'One repeat is deliberate' in agents
-    assert 'read by the review skills' in agents and 'both review skills' not in agents
+    docs = flat(rule('docs.md'))  # moved out of AGENTS.md
+    project = flat(skill('project-code-review'))
+    address = flat(skill('address-review'))
+    assert 'One repeat is deliberate' in docs
+    assert 'read by the review skills' in docs and 'both review skills' not in docs
     assert 'was usually removed by a cleanup' in project and 'was usually removed by a cleanup' in address
     for path in ('REVIEW.md', TEMPLATE):
-        assert 'was usually removed by one' in _read(path).replace('\n', ' '), path
+        assert 'was usually removed by one' in flat(read(path)), path
     assert 'never edits or removes a decision on its own' in project
     assert 'what the user decides, if a reviewer could raise it again, goes in DECISIONS.md' in address
 
@@ -610,7 +981,7 @@ def _used_twice(text: str) -> list[str]:
 
 
 def test_no_id_is_used_twice_in_review_md() -> None:
-    assert _used_twice(_read('REVIEW.md')) == []
+    assert _used_twice(read('REVIEW.md')) == []
 
 
 def test_the_twice_check_catches_a_repeat_and_accepts_no_findings() -> None:
@@ -620,12 +991,113 @@ def test_the_twice_check_catches_a_repeat_and_accepts_no_findings() -> None:
     assert _used_twice('# REVIEW.md\n') == [], 'a cleanup with no open findings leaves none'
 
 
+def _entries(text: str) -> dict[str, str]:
+    """The entries of a REVIEW.md by ID, each its whole text: its title line, up to the next entry or section."""
+    return {
+        found[1]: found[0]
+        for found in re.finditer(r'(?ms)^- \[.\] \*\*([A-Z]+-\d+) .*?(?=^- \[.\] \*\*|^## |\Z)', text)
+    }
+
+
+def _unquestioned(text: str) -> list[str]:
+    """The "Questioned by" lines a REVIEW.md lacks, each as `<old ID>: Questioned by <new ID>`. The title line of the
+    entry <new ID> follows <old ID> (`· follows X, generation N`, or several IDs joined by `, ` or ` and `), and the
+    entry <old ID> has no line `- Questioned by` naming <new ID> (the `project-code-review` skill, step 2). An old entry
+    a cleanup removed is skipped: there is nothing to add the line under."""
+    entries = _entries(text)
+    missing = []
+    for new, entry in entries.items():
+        follows = re.search(r'· follows ([A-Z]+-\d+(?:(?:, | and )[A-Z]+-\d+)*)', entry.partition('\n')[0])
+        for old in re.findall(r'[A-Z]+-\d+', follows[1]) if follows else ():
+            if old in entries and not re.search(r'(?m)^\s+- Questioned by .*\b%s\b' % new, entries[old]):
+                missing.append('%s: Questioned by %s' % (old, new))
+    return missing
+
+
+def test_every_entry_a_follow_up_questions_says_so() -> None:
+    # REVIEW.md TST-636: a reader of an old entry takes its resolution as standing, not seeing that a later finding
+    # questioned it. The message gives every missing line, as the list's diff shows only the first
+    missing = _unquestioned(read('REVIEW.md'))
+    assert not missing, '; '.join(missing)
+
+
+def test_the_questioned_check_catches_a_missing_line_and_skips_a_removed_entry() -> None:
+    text = (
+        '- [x] **HLP-1 · old** · `a`\n  - **Resolution: done.**\n  - Questioned by HLP-3, HLP-4 (2026-11-20).\n'
+        '- [x] **HLP-2 · another old one** · `b`\n\n'
+        '- [ ] **HLP-3 · new · follows HLP-1 and HLP-2, generation 2** · `c`\n'
+        '- [ ] **HLP-4 · newer · follows HLP-1, HLP-9, generation 2** · `d`\n'  # a cleanup removed HLP-9
+        '- [ ] **HLP-5 · The check follows HLP-2 in its own words** · `e`\n'  # no mark
+        '  - Questioned by HLP-6 (2026-11-20).\n'  # under another entry than the one HLP-6 follows
+        '\n## Low\n\n- [ ] **HLP-6 · last · follows HLP-2, generation 3** · `f`\n'
+    )
+    assert _unquestioned(text) == ['HLP-2: Questioned by HLP-3', 'HLP-2: Questioned by HLP-6']
+
+
+# the wordings a checked entry's resolution starts with (the `address-review` skill, step 7). The last one names the
+# ROADMAP.md item, the user and the date (the user, 2026-11-20)
+WORDINGS = ('done', 'not a bug', 'not reproducible', "won't fix", 'moved to ROADMAP.md')
+WORDED = re.compile(
+    r'\*\*Resolution: (?:%s)\*\*' % '|'.join(map(re.escape, WORDINGS[:-1]))
+    + r'|\*\*Resolution: %s\*\* \(item \d+, the user, \d{4}-\d{2}-\d{2}\)' % re.escape(WORDINGS[-1])
+)
+
+
+def _unworded(text: str) -> list[str]:
+    """The IDs of the checked entries of a REVIEW.md whose first resolution line starts with none of the wordings."""
+    unworded = []
+    for finding, entry in _entries(text).items():
+        resolution = re.search(r'\*\*Resolution\b', entry)
+        if entry.startswith('- [x] ') and not (resolution and WORDED.match(entry, resolution.start())):
+            unworded.append(finding)
+    return unworded
+
+
+def test_every_checked_entry_starts_its_resolution_with_a_wording() -> None:
+    # the user, 2026-11-20: a finding moved to ROADMAP.md is closed with the fifth wording, which names the item. The
+    # message gives every such entry, as the list's diff shows only the first
+    unworded = _unworded(read('REVIEW.md'))
+    assert not unworded, ', '.join(unworded)
+
+
+def test_the_template_gives_the_wordings_the_check_accepts() -> None:
+    # REVIEW.md TST-639: each in backticks, as GitHub drops a bare `<date>`
+    template = flat(read(TEMPLATE))
+    listed = ', '.join('`%s`' % wording for wording in (*WORDINGS[:-1], WORDINGS[-1] + ' (item N, the user, <date>)'))
+    assert 'with one of these wordings: %s.' % listed in template
+    assert '**Resolution: %s**' % ' | '.join(WORDINGS) in template
+
+
+def test_review_mds_header_writes_no_placeholder_github_drops() -> None:
+    # REVIEW.md TST-639: GitHub drops a tag it doesn't know, such as a bare `<date>`, so a placeholder of a tag's form
+    # goes in backticks. The template, with every other doc, is test_guide.py's; REVIEW.md's entries keep their wording
+    assert bare_tags(_header(read('REVIEW.md'))) == []
+
+
+def test_the_wording_check_catches_a_resolution_without_one() -> None:
+    text = (
+        '- [x] **HLP-1 · one** · `a`\n  - **Resolution: done** (2026-11-20).\n'
+        '- [x] **HLP-2 · two** · `b`\n  - **Resolution: not a bug** (2026-11-20).\n'
+        '- [x] **HLP-3 · three** · `c`\n  - **Resolution: not reproducible** (2026-11-20).\n'
+        "- [x] **HLP-4 · four** · `d`\n  - **Resolution: won't fix** (the user, 2026-11-20).\n"
+        '- [x] **HLP-5 · five** · `e`\n  - **Resolution: moved to ROADMAP.md** (item 112, the user, 2026-11-20).\n'
+        '- [x] **HLP-6 · no item named** · `f`\n  - **Resolution: moved to ROADMAP.md** (2026-11-20).\n'
+        '- [x] **HLP-7 · another word** · `g`\n  - **Resolution: fixed** (2026-11-20).\n'
+        '- [x] **HLP-8 · no resolution** · `h`\n  - **Defect.** It fails.\n'
+        '- [ ] **HLP-9 · open** · `i`\n'
+        '\n## Low\n\n- [x] **HLP-10 · last** · `j`\n  - **Resolution: done** (2026-11-20).\n'
+    )
+    assert _unworded(text) == ['HLP-6', 'HLP-7', 'HLP-8']
+
+
 def _cleaned_up(text: str) -> str:
-    """REVIEW.md as a cleanup with no open findings leaves it: the header kept, everything else gone."""
+    """REVIEW.md as a cleanup with no open findings leaves it: the header kept, the status table reset, the table by
+    model emptied to the template's section, everything else gone (the `cleanup-review` skill)."""
+    template = read(TEMPLATE)  # its status table counts nothing, and its table by model has no rows
     return (
         text[: text.index('## Status')]
-        + _status_table(dict.fromkeys(SEVERITIES, (0, 0)))
-        + '\n## Review log\n\n## High\n\n## Medium-high\n\n## Medium\n\n## Low-medium\n\n## Low\n'
+        + template[template.index('## Status\n') : template.index('## Review log\n')]
+        + '## Review log\n\n## High\n\n## Medium-high\n\n## Medium\n\n## Low-medium\n\n## Low\n'
     )
 
 
@@ -670,7 +1142,7 @@ def _status_problems(text: str) -> list[str]:
 
 
 def test_the_status_table_counts_the_entries_in_review_md() -> None:
-    assert _status_problems(_read('REVIEW.md')) == []
+    assert _status_problems(read('REVIEW.md')) == []
 
 
 def _sample_review(status: str) -> str:
@@ -713,31 +1185,55 @@ def test_the_status_check_catches_a_table_that_does_not_match(change: Callable[[
 
 def test_the_status_check_catches_resolved_counts_a_cleanup_left_behind() -> None:
     stale = _status_table({**dict.fromkeys(SEVERITIES, (0, 0)), 'Low': (0, 241)})
-    cleaned = _cleaned_up(_read('REVIEW.md'))
-    fresh = cleaned[cleaned.index('## Status') : cleaned.index('\n## Review log')]
+    cleaned = _cleaned_up(read('REVIEW.md'))
+    fresh = cleaned[cleaned.index('## Status') :].split('\n## ', 1)[0]
     assert any('Low:' in problem for problem in _status_problems(cleaned.replace(fresh, stale.rstrip('\n'))))
 
 
 def test_a_cleaned_up_file_passes_the_checks_on_the_file() -> None:
-    cleaned = _cleaned_up(_read('REVIEW.md'))
+    cleaned = _cleaned_up(read('REVIEW.md'))
     assert _used_twice(cleaned) == [] and _counter_problems(cleaned) == [] and _status_problems(cleaned) == []
+    assert _unquestioned(cleaned) == []
     assert 'python3 scripts/review_lookup.py HLP-56' in cleaned
+    # REVIEW.md TST-624: the cleanup leaves the table by model's section with its header row, and no rows
+    assert '\n## Reviews by model\n' in cleaned and _by_model_rows(cleaned) == []
 
 
 def test_resolutions_no_longer_record_commit_hashes() -> None:
     """Branches are squashed into main, so a branch commit's hash stops resolving."""
-    assert 'abc1234' not in _read(os.path.join(SKILLS, 'project-code-review', 'TEMPLATE.md'))
-    assert '`<commit>`' not in _read(os.path.join(SKILLS, 'project-code-review', 'TEMPLATE.md'))
-    assert 'uncommitted on' not in _read(os.path.join(SKILLS, 'address-review', 'SKILL.md'))
+    assert 'abc1234' not in read(TEMPLATE)
+    assert '`<commit>`' not in read(TEMPLATE)
+    assert 'uncommitted on' not in skill('address-review')
 
 
-@pytest.mark.parametrize('skill', REVIEW_SKILLS)
-def test_a_skills_description_is_one_valid_line(skill: str) -> None:
+def _skills(folder: str) -> list[str]:
+    """The names of the skills in `folder`: its folders, hidden ones left out, as in test_constants.py (TST-79)."""
+    return sorted(name for name in os.listdir(folder) if not name.startswith('.') and os.path.isdir(Path(folder, name)))
+
+
+def test_the_skills_are_the_folders_with_a_skill_md(tmp_path: Path) -> None:
+    # REVIEW.md TST-595: Finder writes .DS_Store into any folder it shows (TST-79), and a case of it reads
+    # `.DS_Store/SKILL.md`
+    copy = tmp_path / 'skills'
+    shutil.copytree(os.path.join(ROOT, SKILLS), copy)
+    (copy / '.DS_Store').write_bytes(b'')
+    assert _skills(str(copy)) == sorted(path.parent.name for path in copy.glob('*/SKILL.md'))
+
+
+@pytest.mark.parametrize('name', _skills(os.path.join(ROOT, SKILLS)))
+def test_a_point_of_a_skill_is_named_with_its_list(name: str) -> None:
+    # REVIEW.md TST-594: a skill numbers several lists, so a point's number follows the bold title of its list's section
+    text = flat(skill(name))
+    assert re.findall(r'\S+(?<!\*\*), point \d+', text) == []
+
+
+@pytest.mark.parametrize('name', _skills(os.path.join(ROOT, SKILLS)))
+def test_a_skills_description_is_one_valid_line(name: str) -> None:
     """Wrapped over two lines, the `: ` in address-review's description wasn't valid YAML, and the skill list
     fell back to the file's first heading, so agents no longer saw when to use the skill."""
-    head = _read(os.path.join(SKILLS, skill, 'SKILL.md')).split('---')[1]
+    head = skill(name).split('---')[1]
     line = next(line for line in head.splitlines() if line.startswith('description:'))
     value = line[len('description:') :].strip()
-    assert value, '%s: the description must stay on the one line' % skill
+    assert value, '%s: the description must stay on the one line' % name
     quoted = value[0] in '\'"' and value[-1] == value[0]
-    assert quoted or ': ' not in value, '%s: a description with ": " must be quoted' % skill
+    assert quoted or ': ' not in value, '%s: a description with ": " must be quoted' % name

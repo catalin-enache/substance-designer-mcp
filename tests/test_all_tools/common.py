@@ -53,7 +53,7 @@ SAVED_GRAPH = 'mcp_selftest_saved'  # create_graph(save_path=...)
 DUP_GRAPH = 'mcp_selftest_dup'  # two open graphs with the same identifier
 EXAMPLE_GRAPH = 'mcp_selftest_trimsheet'  # examples/build_dwarf_trimsheet.py, renamed
 PORT = int(os.environ.get('SD_BRIDGE_PORT', '9877'))
-POLL_S = 0.1  # s between looks at a state whose change nothing says (AGENTS.md: callbacks first)
+POLL_S = 0.1  # s between looks at a state whose change nothing says (`.claude/rules/waits.md`)
 END_WAIT_S = 5  # s a Designer the run left open may take to exit after SIGTERM: a limit, then SIGKILL
 # this process's whole environment: stdio_client passes a minimal one otherwise, without SD_BRIDGE_PORT, and the
 # server would listen for another port than PORT (REVIEW.md TST-153)
