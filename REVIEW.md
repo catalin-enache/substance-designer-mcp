@@ -50,8 +50,8 @@ of the repo. If it can't, it says why: the ID never existed, a squash lost it, o
 | Medium-high | 0 | 0 |
 | Medium | 0 | 0 |
 | Low-medium | 0 | 0 |
-| Low | 0 | 2 |
-| **Total** | **0** | **2** |
+| Low | 0 | 0 |
+| **Total** | **0** | **0** |
 
 ## Reviews by model
 
@@ -84,29 +84,8 @@ in it. A cleanup empties the table at its end, and git keeps the rows (the `clea
 
 | Review | Model | Instances | Real findings | Found only by this model | Tokens | Time |
 |---|---|---|---|---|---|---|
-| 2026-11-21, item 38's step (parameter descriptions) | Opus (developer) | 1 | 1 [1 Low] | 1 [1 Low] | 331,208 | 22 min |
-| 2026-11-21, the review of the whole branch | Opus | 1 | 1 [1 Low] | 1 [1 Low] | 184,998 | 11 min |
-| 2026-11-21, the review's fixes (AGT-124), and the descriptions' indentation | Opus (developer) | 1 | 0 | 0 | 154,555 | 8 min |
-| **Total** | | **3** | **2 [2 Low]** | **2 [2 Low]** | **670,761** | **41 min** |
 
 ## Review log
-
-### 2026-11-21: the parameter-descriptions branch, the whole branch against main
-
-- **Scope:** `git diff main...5636d56 -- . ':(exclude)PLAN.md' ':(exclude)REVIEW.md'`: ROADMAP item 38's step, the
-  four temporary-node reads' hints, and ROADMAP items 9 and 115.
-- **How:** one Opus reviewer, the claim being the step's text as the user approved it and the user's words of
-  2026-11-21 on the hints and on items 9 and 115, told to report only what has real value. The lead chose one round
-  for the whole branch, the step being the branch. No tests run; all settled by reading.
-- **Findings:** TST-694, Low, in the lead's ROADMAP text, fixed by the lead. AGT-124's pattern in two more places, a
-  note under it.
-- **Not a finding:** item 38's own row still gives its old approach; the lead checks it with a Done note before the
-  final check.
-- **Checked and found fine:** every split kept its meaning, rules across parameters staying in the docstrings; the
-  new texts against the code (`max_size`, `tile_size`, `lines`, `limit`, `file_format`, `name`, `port`, `spacing`);
-  the shared `Graph`, `Output` and `Port`; the two new tests read the real listing; `_PINNED`; the four reads' hints
-  and `_tool()`'s note; the docs.
-- **Converged:** one Low finding, the first Opus round of the whole branch.
 
 ---
 
@@ -119,25 +98,3 @@ in it. A cleanup empties the table at its end, and git keeps the rows (the `clea
 ## Low-medium
 
 ## Low
-
-- [x] **AGT-124 · The developer's triage names a tool's docstring but not its parameters' descriptions** · `.claude/agents/developer.md` (the list of layers a unit touches) · confirmed · found 2026-11-21 by the developer (Opus)
-  - **Defect.** "the tool, in `mcp_server/server_tools/`, and its docstring;": a parameter's meaning is now in its
-    annotation's `Field(description=...)` (`.claude/rules/docs.md`, the table), which the line doesn't name.
-  - **Scenario.** A developer triaging a change of a parameter lists the docstring only, and leaves the parameter's
-    description stale.
-  - **Fix.** Name the parameters' descriptions beside the docstring.
-  - Note (2026-11-21): the same list, naming docstrings only, is in `.claude/skills/address-review/SKILL.md`
-    (step 5: "tool docstrings, GUIDE.md facts, README.md") and `.claude/agents/developer.md` ("the modules'
-    docstrings"), found by a reviewer (Opus). The fix covers all three.
-  - **Resolution: done**, by the developer: `developer.md`'s triage names "its docstring and its parameters'
-    descriptions", its docs line "the parameters' descriptions", and `address-review`'s step 5 "tool docstrings and
-    parameters' descriptions". **Also covered:** `git grep -i docstring` over `.claude` and `docs`, and "its
-    docstring", "tool docstrings", "tool's docstring" in README.md, AGENTS.md, GUIDE.md and ROADMAP.md. The same list
-    was in `reviewer.md`, Cite the authority, and in `address-review`'s step 6, both fixed. Where Designer facts go
-    (`analyst.md`, `address-review`, `live-check`) is another list, left as it is.
-
-- [x] **TST-694 · ROADMAP item 9 says a tool of its own costs only the sessions that use it, true only with tool search** · ROADMAP.md, item 9 · confirmed · found 2026-11-21 by a reviewer (Opus)
-  - **Defect.** "a tool of its own costs only the sessions that use it": when tools load at the session's start, every
-    tool's description costs every session.
-  - **Fix.** Narrow the sentence to tool search.
-  - **Resolution: done**, by the lead: "when tools load through tool search, Claude Code's default on current models".
