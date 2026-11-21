@@ -1,11 +1,16 @@
 """The guide: get_guide and the designer://agents-guide resource."""
 
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.types import ToolAnnotations
 
 from .core import _agent_guide, _session, server
 
 
-@server.tool()
+@server.tool(
+    annotations=ToolAnnotations(
+        read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
+    )
+)
 def get_guide(part: str = 'core') -> str:
     """The guide for agents driving Substance Designer (GUIDE.md). `part='core'`: rules that protect the
     user's work, which tool to use when, verified facts. Call it right before the first Designer tool

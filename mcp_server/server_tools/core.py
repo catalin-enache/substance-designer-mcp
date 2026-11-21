@@ -20,6 +20,7 @@ from typing import Annotated, Literal, ParamSpec, TypeVar
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.types import ToolAnnotations
 from pydantic import BeforeValidator, JsonValue, WithJsonSchema
 
 PORT = int(os.environ.get('SD_BRIDGE_PORT', '9877'))
@@ -221,15 +222,30 @@ def _not_finite(value: JsonSent, where: str) -> tuple[str, float] | None:
 
 
 def _tool(
-    scripting: bool = False, gated: bool = True, finite: bool = True
+    *,
+    read_only: bool,
+    destructive: bool,
+    idempotent: bool,
+    open_world: bool,
+    scripting: bool = False,
+    gated: bool = True,
+    finite: bool = True,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """server.tool(), refusing to run until the guide was read: any tool until get_guide() was called and, with
     `scripting`, a tool that runs code the caller wrote until get_guide('scripting') was too, so that nothing reaches
     Designer first. `gated=False` for a tool that must always work. `finite`: a number that isn't (JSON's 1e999,
     Infinity, NaN, which the arguments' validation turns into inf and nan) is refused by where it is, since written
     into a helper call with %r it comes out as a name Designer doesn't know (REVIEW.md SRV-119); False for a tool that
-    sends its values as JSON."""
-    register = server.tool()
+    sends its values as JSON. `read_only`, `destructive`, `idempotent` and `open_world` are the tool's four MCP hints,
+    set as DECISIONS.md, Tool annotations, says."""
+    register = server.tool(
+        annotations=ToolAnnotations(
+            read_only_hint=read_only,
+            destructive_hint=destructive,
+            idempotent_hint=idempotent,
+            open_world_hint=open_world,
+        )
+    )
 
     def decorate(fn: Callable[P, R]) -> Callable[P, R]:
         signature = inspect.signature(fn)

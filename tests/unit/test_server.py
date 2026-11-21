@@ -12,7 +12,7 @@ import pytest
 from docs_text import guide_md, read
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
-from mcp.types import CallToolResult
+from mcp.types import CallToolResult, ToolAnnotations
 
 import designer_helpers
 from conftest import (
@@ -35,15 +35,23 @@ async def _list_tools() -> tuple[str, dict[str, str]]:
     async with stdio_client(params) as (r, w), ClientSession(r, w) as s:
         init = await s.initialize()
         tools = (await s.list_tools()).tools
-        global SCHEMAS, PROPERTIES
+        global SCHEMAS, PROPERTIES, ANNOTATIONS
         SCHEMAS = {t.name: set((t.input_schema or {}).get('properties', {})) for t in tools}
         PROPERTIES = {t.name: (t.input_schema or {}).get('properties', {}) for t in tools}
+        ANNOTATIONS = {t.name: _hints(t.annotations) for t in tools}
         return init.instructions or '', {t.name: t.description or '' for t in tools}
 
 
+Hints = tuple[bool | None, bool | None, bool | None, bool | None]  # readOnly, destructive, idempotent, openWorld
 TOOLS: tuple[str, dict[str, str]] | None = None
 SCHEMAS: dict[str, set[str]] = {}
 PROPERTIES: dict[str, dict[str, Json]] = {}  # each tool's parameters' JSON schemas
+ANNOTATIONS: dict[str, Hints] = {}  # each tool's four hints, as the client reads them
+
+
+def _hints(annotations: ToolAnnotations | None) -> Hints:
+    a = annotations or ToolAnnotations()
+    return a.read_only_hint, a.destructive_hint, a.idempotent_hint, a.open_world_hint
 
 
 def _tools() -> tuple[str, dict[str, str]]:
@@ -68,6 +76,57 @@ def test_readme_tool_count_and_table() -> None:
     table = readme.split('## Tools', 1)[1].split('\n## ', 1)[0]
     missing = [t for t in tools if '`%s`' % t not in table]
     assert not missing, 'tools missing from README Tools table: %s' % missing
+
+
+# Each tool's hints: (readOnlyHint, destructiveHint, idempotentHint, openWorldHint). They judge the user's work
+# (DECISIONS.md, Tool annotations).
+HINTS: dict[str, Hints] = {
+    # read-only
+    'get_guide': (True, False, True, False),
+    'designer_status': (True, False, True, False),
+    'read_designer_log': (True, False, True, False),
+    'search_nodes': (True, False, True, False),
+    'describe_node': (True, False, True, False),
+    'describe_graph': (True, False, True, False),
+    'list_graph_inputs': (True, False, True, False),
+    'preview_node': (True, False, True, False),
+    'node_stats': (True, False, True, False),
+    'check_tiling': (True, False, True, False),
+    'compare_to_reference': (True, False, True, False),
+    'list_snapshots': (True, False, True, False),
+    'diff_graph': (True, False, True, False),
+    'sbsar_info': (True, False, True, False),
+    'preview_maps': (True, False, True, False),
+    # destructive: they can overwrite or remove the user's work or files
+    'quit_designer': (False, True, True, False),
+    'arrange_graph': (False, True, True, False),
+    'set_link_display': (False, True, False, False),
+    'apply_edits': (False, True, False, False),
+    'create_graph': (False, True, False, False),
+    'set_graph_size': (False, True, True, False),
+    'remove_graph_input': (False, True, True, False),
+    'execute_designer_code': (False, True, False, True),
+    'run_designer_script': (False, True, False, True),
+    'save_package': (False, True, True, False),
+    'export_outputs': (False, True, True, False),
+    'render_sbs': (False, True, True, False),
+    # neither read-only nor destructive
+    'launch_designer': (False, False, True, False),
+    'cancel_designer_job': (False, False, True, False),
+    'sweep_param': (False, False, True, False),
+    'snapshot_graph': (False, False, False, False),
+    'add_frame': (False, False, False, False),
+    'add_comment': (False, False, False, False),
+    'screenshot_designer': (False, False, False, False),
+    'open_graph': (False, False, True, False),
+}
+
+
+def test_every_tool_declares_its_four_hints() -> None:
+    _tools()
+    missing = sorted(name for name, hints in ANNOTATIONS.items() if None in hints)
+    assert not missing, 'tools without all four hints: %s' % missing
+    assert ANNOTATIONS == HINTS
 
 
 def test_readme_lists_every_category_the_self_test_runs() -> None:

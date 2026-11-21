@@ -9,7 +9,7 @@ from typing import TypedDict, cast
 from .core import _bridge, _checked, _helpers_call, _tool
 
 
-@_tool()
+@_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
 def describe_graph(
     graph: str | None = None, node_ids: list[str] | None = None, include_params: bool = False, limit: int = 400
 ) -> str:
@@ -26,7 +26,7 @@ def describe_graph(
     )
 
 
-@_tool()
+@_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
 def describe_node(definition: str) -> str:
     """Show a node type's connectors and parameters (ids, types, labels, defaults, enum values).
     `definition`: atomic name ('levels', 'blend', 'sbs::compositing::normal') or library package
@@ -113,7 +113,7 @@ def _library_index() -> _LibraryIndex:
     return _LIBRARY_CACHE
 
 
-@_tool()
+@_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
 def search_nodes(query: str, limit: int = 30, include_hidden: bool = False) -> str:
     """Find node types by name, label, category or description, across atomic nodes and
     Designer's whole library of compositing graphs (not just loaded packages; not its function graphs),

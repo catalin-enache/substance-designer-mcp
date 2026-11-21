@@ -83,7 +83,7 @@ def _agent_log(port: int, home: str, written: float) -> str:
     return own
 
 
-@_tool()
+@_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
 def read_designer_log(
     lines: int = 60,
     contains: str | None = None,

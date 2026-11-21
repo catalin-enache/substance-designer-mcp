@@ -23,7 +23,7 @@ from .snapshots import _v
 _Value = float | int | bool | list[float]
 
 
-@_tool()
+@_tool(read_only=False, destructive=True, idempotent=True, open_world=False)
 def save_package(graph_or_path: str | None = None, save_as: str | None = None) -> str:
     """Save an open package from Designer. graph_or_path: a graph identifier or the package's
     file path (default: graph open in the UI). save_as: new absolute .sbs path (required for
@@ -34,7 +34,7 @@ def save_package(graph_or_path: str | None = None, save_as: str | None = None) -
     return _checked(_bridge(_helpers_call('save_package(%r, %r)' % (graph_or_path, _local_path(save_as))), timeout=120))
 
 
-@_tool()
+@_tool(read_only=False, destructive=True, idempotent=True, open_world=False)
 def export_outputs(
     output_dir: str, graph: str | None = None, outputs: list[str] | None = None, file_format: str = 'png'
 ) -> str:
@@ -59,7 +59,7 @@ def _value_arg(value: _Value) -> str:
     return str(value)
 
 
-@_tool()
+@_tool(read_only=False, destructive=True, idempotent=True, open_world=False)
 def render_sbs(
     sbs_path: str,
     output_dir: str,
@@ -282,7 +282,7 @@ def _cooked(sbs_path: str) -> Iterator[str]:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-@_tool()
+@_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
 def sbsar_info(sbs_path: str) -> str:
     """List graphs, exposed inputs (with types) and outputs of a .sbs/.sbsar, i.e. what
     render_sbs can take as graph/outputs/params. A .sbs is cooked in a temporary folder."""
@@ -308,7 +308,7 @@ def _load_8bit(path: str) -> PILImage.Image:
     return im.convert('RGB')
 
 
-@_tool()
+@_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
 def preview_maps(
     map_dir: str, names: list[str] | None = None, tile_size: int = 384, crop: NoneIfEmpty[Box] = None
 ) -> Image:

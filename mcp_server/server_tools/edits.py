@@ -4,14 +4,14 @@
 from .core import JsonObject, _bridge, _checked, _edit, _helpers_call, _local_path, _tool
 
 
-@_tool()
+@_tool(read_only=False, destructive=True, idempotent=False, open_world=False)
 def create_graph(name: str, save_path: str | None = None, size_log2: int = 11) -> str:
     """Create a new package with one empty compositing graph (output size 2^size_log2,
     default 2048; 13 is 8192 px, the largest). save_path: optional .sbs path to save it to. One undo step."""
     return _edit('create_graph(%r, %r, %d)' % (name, _local_path(save_path), size_log2), 'Claude: create graph ' + name)
 
 
-@_tool()
+@_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
 def list_graph_inputs(graph: str | None = None) -> str:
     """List a graph's exposed inputs (type, value, label/min/max, which node parameters they
     drive, FX-Map functions and those on the graph's own parameters as last saved included) and
@@ -21,7 +21,7 @@ def list_graph_inputs(graph: str | None = None) -> str:
     return _checked(_bridge(_helpers_call('list_graph_inputs(%r)' % graph), timeout=60))
 
 
-@_tool()
+@_tool(read_only=False, destructive=True, idempotent=True, open_world=False)
 def remove_graph_input(input_id: str, graph: str | None = None) -> str:
     """Delete an exposed graph input. Parameters bound to it (as an expose op binds them) keep its
     current value. Refuses, changing nothing, while another function (an expression, a Pixel
@@ -32,7 +32,7 @@ def remove_graph_input(input_id: str, graph: str | None = None) -> str:
     return _edit('remove_graph_input(%r, %r)' % (graph, input_id), 'Claude: remove input ' + input_id)
 
 
-@_tool()
+@_tool(read_only=False, destructive=True, idempotent=True, open_world=False)
 def set_graph_size(size_log2: int, graph: str | None = None, overridable: bool = True) -> str:
     """Set the graph's output size to 2^size_log2 (13 is 8192 px, the largest). overridable=True (default) makes the size
     follow the parent with that default, so render_sbs(size_log2=...) can override it;
@@ -40,7 +40,7 @@ def set_graph_size(size_log2: int, graph: str | None = None, overridable: bool =
     return _edit('set_graph_size(%r, %d, %r)' % (graph, size_log2, overridable), 'Claude: set graph size')
 
 
-@_tool()
+@_tool(read_only=False, destructive=True, idempotent=False, open_world=False)
 def apply_edits(ops: list[JsonObject], graph: str | None = None) -> str:
     """Edit a graph: one or more ops in one call and one undo step. Each op is a dict:
     {"op": "add", "definition": "levels", "ref": "lv", "position"?: [x, y], "identifier"?: "...", "label"?: "...",

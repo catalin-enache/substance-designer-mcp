@@ -16,3 +16,7 @@ names (few tools, unprefixed; node edits are `apply_edits` ops; a new capability
 tool where it fits, else a new tool rather than an existing one complicated with completely different logic: ROADMAP.md
 "Fewer tools"); JSON results (they are compact text for agents); Pydantic input models (inputs are typed parameters).
 Its code is for mcp 1.x; this server runs mcp 2.x (the note at the top of its `SKILL.md`).
+
+**A new tool declares its four MCP hints in its registration:** `_tool()`'s `read_only`, `destructive`, `idempotent`
+and `open_world`. It also gets a row in `HINTS`, the table in `tests/unit/test_server.py` (DECISIONS.md, Tool
+annotations).

@@ -133,7 +133,7 @@ def _node_pixels(node_id: str, graph: str | None, output: str | None, tool: str)
     return data, layout, meta
 
 
-@_tool()
+@_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
 def node_stats(
     node_id: str,
     graph: str | None = None,
@@ -145,7 +145,8 @@ def node_stats(
     buffer, so 16-bit/float precision is kept). Per channel: min, max, mean, std.
     output: which of the node's outputs (default: the one tagged base colour, else the first; the result says which).
     region: [x0, y0, x1, y1] in pixels to restrict the stats. points: [[x, y], ...] pixel
-    values to sample. Values are 0..1 for integer formats. Use it to verify results numerically."""
+    values to sample. Values are 0..1 for integer formats. Use it to verify results numerically.
+    The call may add a temporary output node and delete it, within one undo step."""
     data, layout, meta = _node_pixels(node_id, graph, output, 'node_stats')
     h, w, _ = data.shape
     lines = ['%s: %dx%d %s' % (meta['node'], w, h, meta['format'])]
@@ -214,7 +215,7 @@ def _channel_summary(data: Pixels, layout: str) -> str:
     )
 
 
-@_tool()
+@_tool(read_only=False, destructive=False, idempotent=True, open_world=False)
 def sweep_param(
     node_id: str,
     param: str,
@@ -307,13 +308,14 @@ def _seam_report(data: Pixels, axis_name: str, seam_axis: int) -> str:
     ) % (axis_name.capitalize(), seam_mean, interior_mean, ratio, worst, where, worst_at, verdict)
 
 
-@_tool()
+@_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
 def check_tiling(node_id: str, graph: str | None = None, output: str | None = None, axis: str = 'both') -> str:
     """Measure whether a node's output tiles: compares the jump across the wrap-around seam
     (left/right edges for 'horizontal', top/bottom for 'vertical') with the typical jump between
     neighbouring pixels. Ratio ~1 = seamless; above ~3 a seam is likely visible. output: which of the
     node's outputs (default: the one tagged base colour, else the first; the result says which). axis:
-    'horizontal', 'vertical' or 'both' (trim sheets usually only need horizontal)."""
+    'horizontal', 'vertical' or 'both' (trim sheets usually only need horizontal).
+    The call may add a temporary output node and delete it, within one undo step."""
     if axis not in ('horizontal', 'vertical', 'both'):
         raise ToolError("axis must be 'horizontal', 'vertical' or 'both'")
     data, _, meta = _node_pixels(node_id, graph, output, 'check_tiling')

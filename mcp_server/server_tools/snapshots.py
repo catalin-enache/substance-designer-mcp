@@ -34,7 +34,7 @@ def _copy_package(graph: str | None, path: str) -> dict[str, str]:
     return found
 
 
-@_tool()
+@_tool(read_only=False, destructive=False, idempotent=False, open_world=False)
 def snapshot_graph(graph: str | None = None, label: str | None = None) -> str:
     """Save a snapshot of a graph's package (a full .sbs copy) before risky work. It doesn't
     change the open package, its file or its saved state. Compare later with diff_graph; the
@@ -214,7 +214,7 @@ def _snapshots(graph_id: str, package: tuple[str | None, str | None] | None = No
     return sorted(paths, key=written)
 
 
-@_tool()
+@_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
 def list_snapshots(graph: str | None = None) -> str:
     """List saved snapshots, newest last (by when their content was written; set_link_display's
     copy of the saved file counts from when that file was saved), each with the package it came
@@ -494,7 +494,7 @@ def _diff_models(old: _GraphModel, new: _GraphModel, show_positions: bool) -> tu
     return summary, out
 
 
-@_tool()
+@_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
 def diff_graph(graph: str | None = None, against: str = 'saved', show_positions: bool = False) -> str:
     """Show what changed in a graph: nodes added/removed, parameter changes, an output's identifier, label
     and usage, links added/removed, exposed inputs and size. against: 'saved' (the package's file on disk),

@@ -25,7 +25,7 @@ from .core import XY, Color, Link, NoneIfEmpty, _bridge, _checked, _edit, _helpe
 from .snapshots import _new_snapshot_path, _note_package, _v, _whole_or_none, _xml_graph, snapshot_graph
 
 
-@_tool()
+@_tool(read_only=False, destructive=True, idempotent=True, open_world=False)
 def arrange_graph(graph: str | None = None, node_ids: list[str] | None = None, spacing: NoneIfEmpty[XY] = None) -> str:
     """Tidy a graph: left-to-right columns by data flow, ordered to reduce crossing links,
     outputs in the last column. Only positions change (connections are never touched).
@@ -35,7 +35,7 @@ def arrange_graph(graph: str | None = None, node_ids: list[str] | None = None, s
     return _edit('arrange_graph(%r, %r, %r)' % (graph, node_ids, spacing or (200.0, 150.0)), 'Claude: arrange graph')
 
 
-@_tool()
+@_tool(read_only=False, destructive=False, idempotent=False, open_world=False)
 def add_frame(
     node_ids: list[str],
     title: str,
@@ -50,7 +50,7 @@ def add_frame(
     )
 
 
-@_tool()
+@_tool(read_only=False, destructive=False, idempotent=False, open_world=False)
 def add_comment(
     text: str, graph: str | None = None, node_id: str | None = None, position: NoneIfEmpty[XY] = None
 ) -> str:
@@ -62,7 +62,7 @@ def add_comment(
 _DISPLAY: dict[str, str | None] = {'portal': '1', 'wire': None}
 
 
-@_tool()
+@_tool(read_only=False, destructive=True, idempotent=False, open_world=False)
 def set_link_display(
     graph: str | None = None,
     mode: str = 'portal',

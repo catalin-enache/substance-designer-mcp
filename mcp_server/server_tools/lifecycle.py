@@ -135,7 +135,7 @@ from .core import (
 )
 
 
-@_tool()
+@_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
 def designer_status(port: int | None = None) -> str:
     """Report Designer's version, the bridge state (idle/running) and the open user packages (an
     unsaved one by its UID, as list_snapshots names it), whether an agent started it, plus this server's Python and library versions. While a job runs or waits, the Designer
@@ -1015,7 +1015,7 @@ def _users_next_to(port: int, note: str) -> ToolError | None:
     )
 
 
-@_tool()
+@_tool(read_only=False, destructive=False, idempotent=True, open_world=False)
 def launch_designer(wait_s: int = 180, port: int | None = None) -> str:
     """Start Substance Designer if it isn't running and wait until the bridge plugin answers.
     When it starts Designer it also closes the Home screen, so the editor panels are visible. On macOS it starts
@@ -1320,7 +1320,7 @@ def _sampled_before_force(pid: int, port: int) -> str:
     )
 
 
-@_tool()
+@_tool(read_only=False, destructive=True, idempotent=True, open_world=False)
 def quit_designer(wait_s: int = 10, port: int | None = None) -> str:
     """Close a Designer an agent started, and wait until its process has exited: unsaved changes are dropped, and after
     wait_s it is force-ended; the result says which and, if forced, whether its close had taken (its own shutdown

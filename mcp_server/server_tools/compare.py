@@ -183,7 +183,7 @@ def _histogram_tile(node_luma: Values, ref_luma: Values, width: int, height: int
     return im
 
 
-@_tool()
+@_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
 def compare_to_reference(
     node_id: str,
     reference_path: str,
@@ -203,7 +203,8 @@ def compare_to_reference(
     for the same layout, e.g. an earlier render) and adds a difference image.
     region / reference_region: [x0, y0, x1, y1] in pixels to compare parts, e.g. one trim strip
     with the matching area of a photo. Transparent reference pixels (alpha < 0.5) are ignored.
-    Returns the numbers and an image: node | reference | luma histograms | difference."""
+    Returns the numbers and an image: node | reference | luma histograms | difference.
+    The call may add a temporary output node and delete it, within one undo step."""
     data, layout, meta = _node_pixels(node_id, graph, output, 'compare_to_reference')
     if region:
         data = _crop(data, region, 'region')

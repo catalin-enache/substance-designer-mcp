@@ -24,13 +24,14 @@ WINDOW = "Designer's window: "
 NOTES = (WINDOW, '3D view: ', '3D render: ')
 
 
-@_tool()
+@_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
 def preview_node(
     node_id: str, graph: str | None = None, output: str | None = None, max_size: int = 512
 ) -> list[str | Image]:
     """Compute the graph in Designer and return the image produced by one node (any node, not
     just outputs). Get node ids from describe_graph. `output` picks a connector on multi-output
-    nodes (default: the one tagged base colour, else the first; the result says which). `graph` defaults to the graph open in Designer's UI."""
+    nodes (default: the one tagged base colour, else the first; the result says which). `graph` defaults to the graph open in Designer's UI.
+    The call may add a temporary output node and delete it, within one undo step."""
     tmp_dir = tempfile.mkdtemp(prefix='sd_preview_')
     out_path = os.path.join(tmp_dir, 'node.png')
     try:
@@ -56,7 +57,7 @@ def preview_node(
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-@_tool()
+@_tool(read_only=False, destructive=False, idempotent=False, open_world=False)
 def screenshot_designer(
     panel: str = 'window',
     max_size: int = 1000,
@@ -182,7 +183,7 @@ def screenshot_designer(
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-@_tool()
+@_tool(read_only=False, destructive=False, idempotent=True, open_world=False)
 def open_graph(
     graph: str,
     node_id: str | None = None,
