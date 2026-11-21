@@ -258,11 +258,15 @@ A few never run beside some others, `--only` included: `undo` runs last, alone, 
 
 It builds temporary graphs (`mcp_selftest`), checks every tool including error cases, and removes
 them; in your Designer (Windows) it reopens the graph you had open. It doesn't touch your packages. Its files go in a
-temporary folder (`sd_mcp_selftest_...`), deleted once its Designer has closed. On Windows, where Designer stays open,
-it is left and its path printed: deleting it while Designer ran crashed Designer twice. Delete it
-once Designer is closed (the system may clear old temporary files itself, but don't count on it). To check that
-one change is one undo step it triggers Undo and Redo, but only while its own graph is the one
-in the editor; it skips that check otherwise. It also re-checks the Designer behaviour the
+temporary folder (`sd_mcp_selftest_...`), deleted once its Designer has closed, unless one of a category's own checks
+failed, or its run broke off. Then the folder is kept, with the pictures its checks saved, and on macOS that
+category's Designer folder too (its log, about 90 MB). A category whose quit check failed keeps its Designer's folder
+too. On Windows, where Designer stays open, the folder is always left: deleting it while Designer ran
+crashed Designer twice. The output names each folder it keeps. Delete them by hand once Designer is closed (the system
+may clear old temporary files itself, but don't count on it). To check that
+one change is one undo step it triggers Undo through the Edit menu, and reads the graph until the step shows undone,
+then triggers Redo the same way. Such a check fails, naming the graph in the editor, when its own graph isn't the one there. An
+Undo that fired and never showed is redone. It also re-checks the Designer behaviour the
 agent notes rely on ("designer facts"), so a Designer update that changes it shows up, and it
 checks the Security promises below (unsigned and wrongly signed requests refused, not
 reachable from the network, private token file), the command-line client, that the plugin Designer loaded matches

@@ -129,18 +129,25 @@ def _wheel_zoom(view: QtWidgets.QGraphicsView, notches: int) -> None:
     _wheel(view.viewport(), notches)
 
 
-def _wheel(viewport: QtWidgets.QWidget, notches: int, taking: Callable[[], Callable[[], bool]] | None = None) -> None:
-    """Mouse-wheel notches (positive: in) at the middle of a widget, as Designer takes them from the mouse. `taking`,
-    when given, runs before each notch and returns the wait run after it, for a view that drops some sent back to
-    back: the 3D view's _Frames.taking, a frame drawn once the notch's event ran, or off screen an UpdateRequest since
-    the notch (designer_helpers/view3d.py; REVIEW.md HLP-164)."""
+def _wheel(
+    viewport: QtWidgets.QWidget, notches: int, taking: Callable[[], Callable[[], bool] | None] | None = None
+) -> tuple[int, bool] | None:
+    """Mouse-wheel notches (positive: in) at the middle of a widget, as Designer takes them from the mouse, one event
+    each. Returns the notch, from 1, that ended them, and whether it was sent: not sent, the view didn't come to rest
+    before it; sent, no sign came that the view took it. None when every notch was sent and gave its sign, or none was
+    waited for.
+    `taking`, when given, runs before each notch and returns the wait run after it, or None when the notch mustn't be
+    sent, for a view that drops some: the 3D view's _Frames.from_rest (designer_helpers/frames3d.py, view3d.py;
+    REVIEW.md HLP-164; ROADMAP item 112)."""
     from PySide6.QtCore import QPoint, QPointF, Qt
     from PySide6.QtGui import QWheelEvent
     from PySide6.QtWidgets import QApplication
 
     centre = QPointF(viewport.width() / 2.0, viewport.height() / 2.0)
-    for _ in range(abs(notches)):
+    for notch in range(1, abs(notches) + 1):
         taken = taking() if taking is not None else None
+        if taking is not None and taken is None:
+            return notch, False
         event = QWheelEvent(
             centre,
             QPointF(viewport.mapToGlobal(centre.toPoint())),
@@ -153,8 +160,9 @@ def _wheel(viewport: QtWidgets.QWidget, notches: int, taking: Callable[[], Calla
         )
         QApplication.sendEvent(viewport, event)
         _process_events(2)
-        if taken is not None:
-            taken()
+        if taken is not None and not taken():
+            return notch, True
+    return None
 
 
 def _whole_graph_rect(g: SDSBSCompGraph) -> tuple[float, float, float, float, str] | None:

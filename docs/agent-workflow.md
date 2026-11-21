@@ -61,8 +61,10 @@ A user asks for a feature. This is what happens, from the ask to the merge.
    findings they moved to ROADMAP.md.
    The user decides: another round, or the final check. What must outlast the branch goes into DECISIONS.md or
    ROADMAP.md now, as the user approves it, before the final check: the merge takes the branch's whole tree.
-9. **The final check.** On the user's word, the runner runs the full suites. A failure goes in REVIEW.md like any
-   finding, and is fixed the same way.
+9. **The final check.** On the user's word, the runner runs the full suites, then reruns each failing test alone, as
+   it needs. One that passes alone failed at random: it counts as passed, and the lead lists
+   it in ROADMAP.md, or counts it again there, before the merge (DECISIONS.md, Project rules). Any other failure goes in REVIEW.md like
+   any finding, and is fixed the same way.
 10. **The merge.** The lead deletes PLAN.md in the branch's last commit, and the branch is squashed into `main` on
     the user's word.
 11. **The cleanup.** Later, and only when the user asks, REVIEW.md's resolved entries are removed. Git keeps them,

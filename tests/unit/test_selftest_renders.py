@@ -4,6 +4,7 @@ import asyncio
 import base64
 import io
 import math
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import numpy as np
@@ -126,6 +127,20 @@ def test_shots_that_worked_say_nothing(renders: ModuleType, capsys: pytest.Captu
     assert capsys.readouterr().out == ''
 
 
+def test_renders_saved_are_said_by_their_planes_width_and_their_mean_grey(
+    renders: ModuleType, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    # ROADMAP item 112: a zoom check's mean difference alone couldn't tell which of its two renders was off
+    saved = {'framed': _plain(), 'all plane': np.full((80, 80), 150.0)}
+    for name, a in saved.items():
+        PILImage.fromarray(a.astype(np.uint8)).save(tmp_path / (name + '.png'))
+    renders.say_renders(*((name, str(tmp_path / (name + '.png'))) for name in saved))
+    assert capsys.readouterr().out.splitlines() == [
+        '      framed: the plane 48 px wide of 80, mean grey %.1f: %s' % (_plain().mean(), tmp_path / 'framed.png'),
+        '      all plane: no plane edge in its 80 px, mean grey 150.0: %s' % (tmp_path / 'all plane.png'),
+    ]
+
+
 def _plain(size: int = 80) -> 'np.ndarray[tuple[int, int], np.dtype[np.float64]]':
     """The plane with nothing on it: the 3D view before a graph's material shows on the mesh."""
     a = np.full((size, size), BACKGROUND)
@@ -221,3 +236,34 @@ def test_a_shot_that_failed_isnt_taken_again(renders: ModuleType, monkeypatch: p
     failed = tool_result('Error executing tool', error=True)
     c, calls, _pauses = _shots_in_turn(monkeypatch, [failed])
     assert asyncio.run(renders.with_checker(c, ARGS)) is failed and len(calls) == 1
+
+
+def test_a_render_not_saved_is_said_so(renders: ModuleType, capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
+    # REVIEW.md TST-688: a plain shot after that saved nothing raised FileNotFoundError in the failure's report, and
+    # the category's later checks didn't run
+    renders.say_renders(('a shot after', str(tmp_path / 'after.png')))
+    assert capsys.readouterr().out.splitlines() == ['      a shot after: not saved: %s' % (tmp_path / 'after.png')]
+
+
+@pytest.mark.parametrize('first', [True, False], ids=['the shot after failed', 'the shot before saved nothing'])
+def test_a_plain_shot_after_that_saved_nothing_returns_what_was_said(
+    renders: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, first: bool
+) -> None:
+    # REVIEW.md TST-688: plain_after dropped its shot's reply, and a check failing on it couldn't say why
+    failed = "Error: RuntimeError: the 3D view isn't drawn"
+    path = tmp_path / 'zoomed.png'
+    if first:
+        PILImage.fromarray(_plain().astype(np.uint8)).save(path)
+    calls: list[str] = []
+
+    async def c(name: str, args: ToolArgs | None = None) -> SimpleNamespace:
+        calls.append(name)
+        return tool_result(failed)
+
+    async def at_rest(call: FakeCall, source: str) -> None:
+        calls.append('at rest')
+
+    monkeypatch.setitem(vars(renders), 'at_rest', at_rest)
+    after, apart, said = asyncio.run(renders.plain_after(c, 'helpers\n', str(path)))
+    assert (after, apart) == (str(tmp_path / 'zoomed_after.png'), 255.0)
+    assert (said, calls) == ((failed, ['execute_designer_code', 'at rest']) if first else (renders.NOT_TAKEN, []))

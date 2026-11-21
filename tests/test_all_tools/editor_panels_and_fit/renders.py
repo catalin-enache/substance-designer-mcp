@@ -5,6 +5,7 @@ on the mesh (with_checker)."""
 
 import base64
 import io
+import os
 import time
 
 import numpy as np
@@ -12,6 +13,7 @@ from mcp.types import CallToolResult
 from PIL import Image as PILImage
 
 from test_all_tools.common import Call, JsonSent, ToolArgs, is_image, text
+from test_all_tools.editor_panels_and_fit.window_states import at_rest
 
 # dark-light changes that show the checker on the mesh: with it 11 to 30, with the default material 1 at most, in each
 # kind of shot the checks take (measured 2026-11-13: a rounded cube from the Front and the Top, a plane from the
@@ -116,6 +118,42 @@ def say_failed(what: str, *shots: CallToolResult) -> None:
             '      %s: the shots are of two sizes: %s px'
             % (what, ', '.join('%dx%d' % grey(r).shape[::-1] for r in shots))
         )
+
+
+def say_renders(*renders: tuple[str, str]) -> None:
+    """Prints, for each render saved, given as (name, path), on a line of its own: its plane's width in the render's
+    width, which gives its zoom, its mean grey and its path. A render with no plane edge (plane_columns: no column 25
+    levels from its corner) is all plane or all background: its mean grey tells which. For a check that failed: a
+    check's detail is cut at 150 characters (common.check), and the renders stay with its scratch folder
+    (__main__.one_run). A render not saved is said so, with its path (REVIEW.md TST-688)."""
+    for name, path in renders:
+        if not os.path.exists(path):
+            print('      %s: not saved: %s' % (name, path))
+            continue
+        a = grey_file(path)
+        width = plane_width(a)
+        plane = (
+            'the plane %d px wide of %d' % (width, a.shape[1]) if width else 'no plane edge in its %d px' % a.shape[1]
+        )
+        print('      %s: %s, mean grey %.1f: %s' % (name, plane, a.mean(), path))
+
+
+NOT_TAKEN = 'not taken: the shot before saved nothing'  # plain_after's reply then
+
+
+async def plain_after(c: Call, helper_source: str, path: str) -> tuple[str, float, str]:
+    """A plain shot right after the 3D shot saved at `path`, with no set-up, which renders the view at rest. Returns its
+    path (`path`'s, with _after), how far apart the two are in grey levels, and its shot's reply, for a check that
+    fails on it (REVIEW.md TST-688). 255 when either shot saved nothing, the reply NOT_TAKEN when the shot at `path`
+    did."""
+    after = path.replace('.png', '_after.png')
+    if not os.path.exists(path):
+        return after, 255.0, NOT_TAKEN
+    try:
+        said = text(await c('execute_designer_code', {'code': helper_source + 'shoot_3d(%r)' % after}))
+    finally:
+        await at_rest(c, helper_source)
+    return after, difference(grey_file(path), grey_file(after)) if os.path.exists(after) else 255.0, said
 
 
 async def with_checker(c: Call, args: ToolArgs) -> CallToolResult:

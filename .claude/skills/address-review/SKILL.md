@@ -94,7 +94,7 @@ addressed in one go (the ones the user named, or the batch in the plan) are hand
       one (the `live-check` skill); say that you did.
 
    A scratch run proves a check in its own environment; if the full run the user asks for later shows it failing
-   there, the finding is open again. The lead unchecks it and adds a note under its resolution saying what failed (the
+   there, and failing alone too (the `live-check` skill, When the final check fails), the finding is open again. The lead unchecks it and adds a note under its resolution saying what failed (the
    entry's earlier text stays). The developer fixes it, and the lead adds the new resolution below the note.
 5. **Update the docs** the change touches, as the "Keeping the docs current" table of `.claude/rules/docs.md` says:
    tool docstrings, GUIDE.md facts, README.md. Add a new sentence only when an agent or a user

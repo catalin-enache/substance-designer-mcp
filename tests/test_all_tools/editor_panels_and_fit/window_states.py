@@ -30,6 +30,7 @@ together, after the others (editor_panels_and_fit/checks.py, run):
   Designer's (REVIEW.md HLP-130).
 """
 
+import re
 from collections.abc import Callable, Sequence
 from textwrap import dedent
 
@@ -445,11 +446,14 @@ _DURING_PAN = dedent("""
             DURING_THE_PAN
             # what it did, as macOS says it: a window covered about 0.07 s later, until then drawn on (REVIEW.md TST-421)
             until(lambda: DONE)
-        _first_drag(*args)
+        return _first_drag(*args)  # whether its sign came: the set-up sends no move after one with none
     shoot_3d(PATH, pan=[0.25, 0.0])
 """)
-# shoot_3d zooming ZOOM wheel steps, saved to PATH, Designer hidden at the first step, as a click on the user's own
-# window covers Designer's during a shot: the steps after it are sent while the view draws no frame (REVIEW.md HLP-149)
+# shoot_3d zooming ZOOM wheel steps, saved to PATH, Designer hidden as the view draws its first frame after the first
+# step, as a click on the user's own window covers Designer's during a shot. That frame begins an accumulation, so the
+# step after it would go off screen with the accumulation's request in flight, and a step sent then was dropped (1 run
+# in 60 of a hide right after the step's events, ROADMAP item 112; REVIEW.md HLP-149). The frame is waited for on a
+# paint spy from before the step, SETTLE_LIMIT at most (PAINTED_BEFORE_THE_HIDE says whether it came)
 _HIDDEN_MID_ZOOM = dedent("""
     print('BEFORE ' + state())
     _first_wheel = _wheel
@@ -457,16 +461,77 @@ _HIDDEN_MID_ZOOM = dedent("""
         _hid = []
         def _taking():  # before each notch; what it returns runs after it
             taken = taking() if taking is not None else None
+            if taking is not None and taken is None:
+                return None  # the view didn't come to rest: the notch isn't sent
+            painted = []
+            spy = None if _hid else _event_signal(viewport, ('Paint',), painted.append)
             def _after():
                 if not _hid:
                     _hid.append(True)
+                    try:
+                        _until(lambda: bool(painted), SETTLE_LIMIT, [spy.fired])
+                    finally:
+                        _unwatch(viewport, spy)
+                    print('PAINTED_BEFORE_THE_HIDE %s' % bool(painted))
                     mac.hide()
                     until(lambda: not exposed())
                     print('HIDDEN_AT_THE_FIRST_STEP exposed=%s' % exposed())
-                if taken is not None:
-                    taken()
+                return taken is None or taken()  # whether its sign came: no notch is sent after one with none
             return _after
-        _first_wheel(viewport, notches, _taking)
+        return _first_wheel(viewport, notches, _taking)
+    shoot_3d(PATH, zoom=ZOOM)
+""")
+# shoot_3d zooming ZOOM wheel steps, saved to PATH, Designer hidden right before the first step, the view at rest: every
+# step goes off screen from rest (ROADMAP item 112). Whether the overlay's count read SAMPLES at the hide is printed
+# (AT_REST_AT_THE_HIDE)
+_HIDDEN_BEFORE_ZOOM = dedent("""
+    print('BEFORE ' + state())
+    _first_wheel = _wheel
+    def _wheel(viewport, notches, taking=None):
+        mac.hide()
+        until(lambda: not exposed())
+        print('HIDDEN_BEFORE_THE_FIRST_STEP exposed=%s' % exposed())
+        count = _samples([label.text() for label in viewport.findChildren(QtWidgets.QLabel)])
+        print('AT_REST_AT_THE_HIDE %s count=%s' % (count is not None and count >= SAMPLES, count))
+        return _first_wheel(viewport, notches, taking)
+    shoot_3d(PATH, zoom=ZOOM)
+""")
+# shoot_3d zooming ZOOM wheel notches (closer), saved to PATH, the wheel facts (ROADMAP item 112). First the view brought
+# to rest by the shot's own wait (taking: _Frames.from_rest), then Designer hidden when HIDE, the count read at the hide
+# (AT_REST_BEFORE_THE_NOTCHES: whether the view was at rest). Then sent as MODE:
+# - 'one': one event carrying them all;
+# - 'back': an event each, back to back;
+# - 'apart': the shot's own _wheel, each from rest and after the one before's sign (STOPPED: what it returned).
+# For 'one' and 'back' it prints sendEvent's return and the event's isAccepted() for each event (SENT)
+_WHEEL_FACTS = dedent("""
+    _first_wheel = _wheel
+    def _wheel(viewport, notches, taking=None):
+        rested = taking() is not None
+        if HIDE:
+            mac.hide()
+            until(lambda: not exposed())
+            print('HIDDEN_BEFORE_THE_NOTCHES exposed=%s' % exposed())
+            count = _samples([label.text() for label in viewport.findChildren(QtWidgets.QLabel)])
+            rested = rested and count is not None and count >= SAMPLES
+        print('AT_REST_BEFORE_THE_NOTCHES %s' % rested)
+        if MODE == 'apart':
+            stopped = _first_wheel(viewport, notches, taking)
+            print('STOPPED %s' % (stopped,))
+            return stopped
+        centre = QtCore.QPointF(viewport.width() / 2.0, viewport.height() / 2.0)
+        def send(delta):
+            event = QtGui.QWheelEvent(
+                centre, QtCore.QPointF(viewport.mapToGlobal(centre.toPoint())), QtCore.QPoint(0, 0),
+                QtCore.QPoint(0, delta), QtCore.Qt.MouseButton.NoButton, QtCore.Qt.KeyboardModifier.NoModifier,
+                QtCore.Qt.ScrollPhase.NoScrollPhase, False)
+            returned = QtWidgets.QApplication.sendEvent(viewport, event)
+            print('SENT %s/%s' % (returned, event.isAccepted()))
+        if MODE == 'one':
+            send(120 * notches)
+        else:
+            for _ in range(notches):
+                send(120)
+        _process_events(2)
     shoot_3d(PATH, zoom=ZOOM)
 """)
 # the same shot, nothing done during it
@@ -530,6 +595,9 @@ LEFT_UP = "Designer's window: left on screen, as Designer became the active app 
 # what a shot says when a window brought over Designer's during it made it bring the window in front again: the start
 # of the line, which says ', transparent' only when Designer isn't the active app at that look (REVIEW.md TST-416)
 AGAIN = "Designer's window: brought in front again"
+# what a shot says each time a look put its window on screen again: shot3d.py's BROUGHT and QT_RESTORED, their second
+# wording (REVIEW.md TST-684)
+LOOKED = re.compile(r"^Designer's window: (shown again|brought in front again|un-minimized again)", re.M)
 # AppKit's notifications that wake the 3D shot's waits and the self-test's (designer_helpers/mac_window.py's UNHIDDEN,
 # OFF_SCREEN, UNMINIMIZED and HIDDEN), made to come in turn, from rest (Designer hidden) at the start, its windows
 # transparent and click-through, as the shot makes them. For each, whether what the waits look at had changed as the
@@ -713,9 +781,25 @@ def during_pan(path: str, event: str | None) -> str:
 
 
 def hidden_mid_zoom(path: str, zoom: int) -> str:
-    """shoot_3d zooming `zoom` wheel steps, saved to `path`, Designer hidden at the first step (HIDDEN_AT_THE_FIRST_STEP
-    exposed=...); prints the window's state first (BEFORE). The shot puts it back hidden."""
+    """shoot_3d zooming `zoom` wheel steps, saved to `path`, Designer hidden as the view draws its first frame after the
+    first step (PAINTED_BEFORE_THE_HIDE, then HIDDEN_AT_THE_FIRST_STEP exposed=...); prints the window's state first
+    (BEFORE). The shot puts it back hidden."""
     return _WINDOW + _HIDDEN_MID_ZOOM.replace('PATH', repr(path)).replace('ZOOM', str(zoom))
+
+
+def hidden_before_zoom(path: str, zoom: int) -> str:
+    """shoot_3d zooming `zoom` wheel steps, saved to `path`, Designer hidden right before the first step
+    (HIDDEN_BEFORE_THE_FIRST_STEP exposed=..., AT_REST_AT_THE_HIDE); prints the window's state first (BEFORE). The shot
+    puts it back hidden."""
+    return _WINDOW + _HIDDEN_BEFORE_ZOOM.replace('PATH', repr(path)).replace('ZOOM', str(zoom))
+
+
+def wheel_facts(path: str, zoom: int, mode: str, hidden: bool) -> str:
+    """shoot_3d zooming `zoom` (closer) wheel notches sent as `mode` ('one', 'back' or 'apart': _WHEEL_FACTS), saved to
+    `path`, Designer hidden before the notches when `hidden` (HIDDEN_BEFORE_THE_NOTCHES exposed=...). The shot puts it
+    back."""
+    body = _WHEEL_FACTS.replace('PATH', repr(path)).replace('ZOOM', str(zoom)).replace('MODE', repr(mode))
+    return _WINDOW + body.replace('HIDE', str(hidden))
 
 
 def became_active(said: str, before: dict[str, str], after: dict[str, str]) -> bool:

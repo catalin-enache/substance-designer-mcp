@@ -171,6 +171,7 @@ def pool(
     monkeypatch.setitem(vars(workers), 'wait_for_dumps', wait_for_dumps)
     vars(workers)['looked'] = looked
     started: list[str] = []
+    envs: dict[str, dict[str, str]] = {}
 
     gates: list[_Gate] = []
 
@@ -188,6 +189,7 @@ def pool(
             started.append(name)
             proc = start(name)
             codes[name] = proc.wait()
+            kw['on_end'](name)
         return codes
 
     monkeypatch.setitem(vars(workers), 'schedule', schedule)
@@ -202,15 +204,18 @@ def pool(
         for own in ('SD_SNAPSHOT_DIR', 'TMPDIR'):  # each worker's, in its folder (REVIEW.md TST-274)
             assert os.path.realpath(env[own]).startswith(os.path.realpath(folder) + os.sep), (own, env[own])
         started.append('--first ' + name if '--first' in command else name)
+        envs[name] = env
         Path(folder, name + '.log').write_text('PASS  t  check of %s\n' % name)
         part = write(name, folder, int(env['SD_BRIDGE_PORT']))
-        if part is not None:
-            Path(command[command.index('--results') + 1]).write_text(json.dumps(part))
-        return Done(0 if part is not None else 2)
+        if part is None:
+            return Done(2)
+        Path(command[command.index('--results') + 1]).write_text(json.dumps(part))
+        return Done(0 if all(all(oks) for oks in part['results'].values()) else 1)  # as a worker's one_run exits
 
     monkeypatch.setattr(workers.subprocess, 'Popen', popen)
     monkeypatch.setitem(vars(workers), 'start_unit', unit or (lambda folder: unit_log(folder, 0)))
     vars(workers)['started'] = started
+    vars(workers)['envs'] = envs  # each worker's environment, as it started: before write() runs
     return workers
 
 

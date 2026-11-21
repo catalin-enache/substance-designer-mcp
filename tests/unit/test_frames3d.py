@@ -6,6 +6,7 @@ live self-test re-measures the counts (editor_panels_and_fit's frames fact)."""
 import os
 import re
 import sys
+import time
 import types
 from collections.abc import Callable, Sequence
 from types import SimpleNamespace
@@ -338,17 +339,26 @@ def test_a_move_is_taken_once_the_view_draws_on_screen_or_asks_for_a_frame_off_s
     # sent each after it came out as drags 0.2 s apart (the frames fact re-measures it)
     frames, limits = _frames_seeing(helpers, exposed, *coming)
     assert frames.taking()() is taken
-    assert limits == [helpers.NO_RESTART]
+    # its limit is only the safety net: ended at NO_RESTART, a time measured, a sign coming later left the next move
+    # sent while the view's update for this one was pending, which Designer drops (ROADMAP item 112)
+    assert limits == [helpers.SETTLE_LIMIT]
 
 
 def _frames_counting(
-    helpers: types.ModuleType, exposed: bool, coming: Sequence[tuple[str, int | None]], shows: str = 'Samples: 8'
+    helpers: types.ModuleType,
+    exposed: bool,
+    coming: Sequence[tuple[str, int | None]],
+    shows: str = 'Samples: 8',
+    on_screen: list[bool] | None = None,
+    made: bool = False,
 ) -> tuple['_Frames', list[float]]:
     """A _Frames whose overlay reads `shows` as it is made, on a faked viewport `exposed` or not, and the limits its
     waits had: the events `coming` (kind, the count the overlay shows as it comes, None for none) are given one by one
-    while a wait's state doesn't hold. An 'Off' takes the window off screen, as covering it does."""
+    while a wait's state doesn't hold. An 'Off' takes the window off screen, as covering it does. `on_screen`, when
+    given, holds whether the window is on screen, for the test to change. `made`: by _frames_of, as the shot makes
+    it."""
     shown = [shows]
-    on_screen = [exposed]
+    on_screen = on_screen if on_screen is not None else [exposed]
     label = SimpleNamespace(text=lambda: shown[0])
     window = SimpleNamespace(isExposed=lambda: on_screen[0], removeEventFilter=lambda spy: None)
     viewport = SimpleNamespace(
@@ -378,11 +388,223 @@ def _frames_counting(
 
     vars(helpers)['_event_signal'] = event_signal
     vars(helpers)['_until'] = until
+    if made:
+        made_by: _Frames = helpers._frames_of('mw', viewport)
+        return made_by, limits
     return _frames(helpers, viewport, lambda: 'a render'), limits
 
 
 def _paints(*counts: int) -> list[tuple[str, int]]:
     return [('Paint', n) for n in counts]
+
+
+@pytest.mark.parametrize(
+    'exposed, shows, coming, brought, rested',
+    [
+        (True, 'Samples: 8', [], False, True),
+        (True, 'Samples: 3', _paints(4, 5, 6, 7, 8), False, True),
+        (False, 'Samples: 8', [], False, True),
+        (False, 'Samples: 1', _paints(2, 3, 4, 5, 6, 7, 8), True, True),
+        (True, 'Samples: 3', _paints(4, 5), False, False),
+        (False, 'Samples: 1', [], True, False),
+    ],
+    ids=[
+        'on screen at rest',
+        'on screen counting: its count back first',
+        'off screen, left at rest',
+        'off screen, left counting: on screen again, its count back',
+        'never back at rest',
+        'off screen, left counting, never drawn again',
+    ],
+)
+def test_a_move_is_sent_only_from_a_view_at_rest(
+    helpers: types.ModuleType,
+    exposed: bool,
+    shows: str,
+    coming: list[tuple[str, int]],
+    brought: bool,
+    rested: bool,
+) -> None:
+    # ROADMAP item 112, measured: a wheel step drawn on screen right before Designer's window went off left its
+    # accumulation's request in flight; the next step, sent off screen, was dropped, and its wait took that request for
+    # its sign (2 runs in 120). Off screen the count stays as last drawn: one below SAMPLES says an accumulation is
+    # left, and only the window on screen again (the shot's look) brings the view to rest
+    screen = [exposed]
+    frames, limits = _frames_counting(helpers, exposed, coming, shows, screen)
+    looks: list[str] = []
+
+    def again() -> None:  # the shot's look: the window on screen again
+        looks.append('look')
+        screen[0] = bool(coming)  # 'never drawn again': it goes off at once
+
+    assert (frames.from_rest(again) is not None) is rested
+    # never drawn again, the window gone at once after each look: looked at REST_LOOKS times (REVIEW.md HLP-218)
+    assert looks == (['look'] * (1 if coming else helpers.REST_LOOKS) if brought else [])
+    assert all(limit == helpers.SETTLE_LIMIT for limit in limits), 'a safety net, the frames own'
+
+
+BELOW = (  # the count, where it was read ('' on screen, ' when last drawn' off screen), and what may hold it there
+    ", its sample count at %d%s, below 8: it may still have been refining, or the Rasterizer's Samples may be set below"
+    ' 8 or its accumulation antialiasing off (Renderer > Edit settings)'
+)
+LAST_DRAWN = ' when last drawn'
+
+
+def _no_panel(helpers: types.ModuleType) -> None:
+    def reached(*args: object) -> NoReturn:
+        raise AssertionError('the Parameters panel reached')
+
+    for name in ('_3d_dock', '_visible_dock', '_menu_action', '_in_properties'):
+        vars(helpers)[name] = reached
+
+
+@pytest.mark.parametrize('exposed, where', [(True, ''), (False, LAST_DRAWN)], ids=['on screen', 'off screen'])
+def test_what_may_hold_the_count_below_8_is_said_once_a_watch(
+    helpers: types.ModuleType, exposed: bool, where: str
+) -> None:
+    # one result may say the count of several steps: the causes once, the count each time (/simplify, HLP-215)
+    frames, _ = _frames_counting(helpers, exposed, [], 'Samples: 4')
+    assert [frames.below_rest(), frames.below_rest()] == [
+        BELOW % (4, where),
+        ', its sample count at 4%s, below 8' % where,
+    ]
+
+
+@pytest.mark.parametrize('shows', ['Samples: 4', 'Samples: 1'], ids=['samples 4', 'antialiasing off'])
+def test_a_count_stopped_below_8_is_no_rest_and_reaches_no_panel(helpers: types.ModuleType, shows: str) -> None:
+    # REVIEW.md HLP-215, the user's decision (2026-11-21): no Parameters panel access. A read of the Rasterizer's
+    # settings failed a plain shot, and lost an environment step's next field
+    _no_panel(helpers)
+    frames, _ = _frames_counting(helpers, True, [], shows, made=True)
+    assert frames.from_rest(None) is None
+
+
+def test_a_settle_stuck_below_8_ends_unsettled_and_reaches_no_panel(helpers: types.ModuleType) -> None:
+    _no_panel(helpers)
+    frames, _ = _frames_counting(helpers, True, _paints(4, 1, 2, 3, 4), 'Samples: 4', made=True)
+    assert frames.settled(frames.mark()) is False
+
+
+@pytest.mark.parametrize(
+    'exposed, shows, said',
+    [
+        (True, 'Samples: 4', BELOW % (4, '')),
+        (True, 'Samples: 1', BELOW % (1, '')),
+        (True, 'Samples: 8', ''),
+        (True, 'Render Time: 0.09 s', ''),  # no count shown
+        # REVIEW.md TST-679, measured (2026-11-21): off screen at a refused step, the count reads as last drawn, 4 and 1
+        (False, 'Samples: 4', BELOW % (4, LAST_DRAWN)),
+        (False, 'Samples: 1', BELOW % (1, LAST_DRAWN)),
+        (False, 'Samples: 8', ''),
+    ],
+    ids=['samples 4', 'antialiasing off', 'at rest', 'no count', 'off screen', 'off screen at 1', 'off screen at rest'],
+)
+def test_a_count_below_8_names_what_may_hold_it_there(
+    helpers: types.ModuleType, exposed: bool, shows: str, said: str
+) -> None:
+    # HLP-215: the result names the count seen and the possible causes, claiming neither (the user, 2026-11-21). Off
+    # screen too: the result then hung on the window's state at the stop (REVIEW.md TST-679)
+    frames, _ = _frames_counting(helpers, exposed, [], shows)
+    assert frames.below_rest() == said
+
+
+def test_a_window_gone_again_after_the_look_is_looked_at_again_while_nothing_was_sent(
+    helpers: types.ModuleType,
+) -> None:
+    # REVIEW.md HLP-218: after the shot's look, a window off screen again before the count was back ended the wait at
+    # once, and the step was refused. Nothing was sent then, so a look again can't send it twice
+    screen = [False]
+    coming: list[tuple[str, int | None]] = [('Paint', 4), ('Off', None), *_paints(5, 6, 7, 8)]
+    frames, _ = _frames_counting(helpers, False, coming, 'Samples: 3', screen)
+    looks: list[str] = []
+
+    def again() -> None:  # the shot's look: the window on screen again
+        looks.append('look')
+        screen[0] = True
+
+    assert frames.from_rest(again) is not None
+    assert looks == ['look', 'look']
+
+
+def test_the_rests_time_covers_its_looks(helpers: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md HLP-219: no test read rest_waited from a real _Frames; one set before the looks would say 0 s for a
+    # rest of about 6 s
+    clock = [100.0]
+    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
+    screen = [False]
+    coming: list[tuple[str, int | None]] = [('Paint', 4), ('Off', None), *_paints(5, 6, 7, 8)]
+    frames, _ = _frames_counting(helpers, False, coming, 'Samples: 3', screen)
+
+    def again() -> None:  # a look whose wait ran to its limit
+        clock[0] += 3.0
+        screen[0] = True
+
+    assert frames.from_rest(again) is not None
+    assert frames.rest_waited == 6.0
+
+
+def test_a_view_left_counting_off_screen_with_no_look_isnt_at_rest(helpers: types.ModuleType) -> None:
+    frames, _ = _frames_counting(helpers, False, [], 'Samples: 1')
+    assert frames.from_rest(None) is None
+
+
+@pytest.mark.parametrize(
+    'exposed, coming, taken',
+    [
+        (True, _paints(8, 1), True),
+        (True, _paints(8, 8), False),  # drawn, but nothing restarted: today's sign took the first paint
+        (False, [('UpdateRequest', 8)], True),
+        (True, [('Paint', 8), ('Off', None), ('UpdateRequest', 8)], True),
+        (False, [], False),
+    ],
+    ids=[
+        'on screen: its restart read at a paint',
+        'on screen: paints with no restart',
+        'off screen: a frame asked for',
+        'gone off screen before its restart showed',
+        'off screen: nothing',
+    ],
+)
+def test_a_move_sent_from_rest_is_taken_once_its_restart_shows_or_off_screen_a_frame_is_asked_for(
+    helpers: types.ModuleType, exposed: bool, coming: list[tuple[str, int | None]], taken: bool
+) -> None:
+    # from rest nothing else restarts the count or asks for a frame, so neither can be another move's left over
+    frames, limits = _frames_counting(helpers, exposed, coming)
+    wait = frames.from_rest(None)
+    assert wait is not None and wait() is taken
+    assert limits == [helpers.SETTLE_LIMIT]
+
+
+def test_with_no_count_shown_a_move_waits_for_todays_sign(helpers: types.ModuleType) -> None:
+    # another language or Display > Samples off: nothing says the view is at rest, so the sign is taking's, which
+    # can still take a request left over by the move before for this one's (the module docstring)
+    frames, limits = _frames_counting(helpers, True, [('Paint', None)], shows='Render Time: 0.09 s')
+    wait = frames.from_rest(lambda: None)
+    assert wait is not None and wait() is True and limits == [helpers.SETTLE_LIMIT]
+
+
+def test_a_view_restarted_again_after_settling_is_settled_once_its_latest_restart_counted_back(
+    helpers: types.ModuleType,
+) -> None:
+    # ROADMAP item 112, measured: each wheel step now comes from the view at rest, so the step before's restart and
+    # its count back at the target were read since the mark the set-up's wait took before the zoom. The render was
+    # taken at the last step's first frame, one sample: 2.09 grey levels from the view at rest at a checker's edges
+    restarted_twice = counts(helpers, 8, 8, 1, 2, 3, 4, 5, 6, 7, 8, 8, 1)
+    assert not restarted_twice.settled(0)
+    restarted_twice.seen.extend([2, 3, 4, 5, 6, 7, 8])
+    assert restarted_twice.settled(0)
+
+
+def test_a_step_of_several_moves_waits_for_the_count_back_after_the_last(helpers: types.ModuleType) -> None:
+    frames, limits = _frames_counting(helpers, True, _paints(2, 3, 4, 5, 6, 7, 8))
+    since = frames.mark()  # before the step, as the set-up takes it
+    # what the step's moves' waits read: the first restarted and counted back, the last restarted (its sign)
+    read = [8, 1, 2, 3, 4, 5, 6, 7, 8, 8, 1]
+    _counted(frames).seen.extend(read)
+    frames._painted += len(read)
+    frames.settled(since)
+    assert _counted(frames).seen[len(read) :] == [2, 3, 4, 5, 6, 7, 8], 'the last move counted back, to the target'
+    assert limits == [helpers.NO_RESTART, helpers.SETTLE_LIMIT]
 
 
 def test_a_step_waits_for_its_restart_then_for_the_count_back(helpers: types.ModuleType) -> None:
@@ -391,6 +613,107 @@ def test_a_step_waits_for_its_restart_then_for_the_count_back(helpers: types.Mod
     frames.settled(frames.mark())
     assert limits == [helpers.NO_RESTART, helpers.SETTLE_LIMIT]
     assert _counted(frames).settled(0)
+
+
+@pytest.mark.parametrize(
+    'coming, settled',
+    [
+        (_paints(8, 1, 2, 3, 4, 5, 6, 7, 8), True),
+        ([], True),  # no restart: the step changed nothing the view shows
+        (_paints(8, 1, 2, 3), False),  # its net reached, the count not back
+    ],
+    ids=['back at rest', 'nothing changed', 'not back within the limit'],
+)
+def test_a_settle_says_whether_the_view_settled(
+    helpers: types.ModuleType, coming: list[tuple[str, int]], settled: bool
+) -> None:
+    # REVIEW.md HLP-214: the waits' results were dropped, and the render followed whether the count came back or not
+    frames, _ = _frames_counting(helpers, True, coming)
+    assert frames.settled(frames.mark()) is settled
+
+
+@pytest.mark.parametrize(
+    'coming, moved', [(_paints(8, 1, 1, 2, 3), True), (_paints(8, 1, 1, 1), False)], ids=['turned', 'still turning']
+)
+def test_a_turn_says_whether_it_ended(helpers: types.ModuleType, coming: list[tuple[str, int]], moved: bool) -> None:
+    frames, _ = _frames_counting(helpers, True, coming)
+    assert frames.moved(frames.mark()) is moved
+
+
+@pytest.mark.parametrize(
+    'coming, step, restarted, undrawn',
+    [
+        (_paints(4, 5, 6, 7, 8), None, False, False),  # the look's count went on to rest
+        (_paints(4, 5), None, False, True),  # not yet: the render follows the look
+        (_paints(4, 5), 'settled', True, False),  # a step restarted the view: its own wait's result is the step's
+        (_paints(4, 5), 'moved', True, False),
+        (_paints(4, 5), 'settled', False, True),  # a step that changed nothing: the view may still draw from the look
+        (_paints(4, 5), 'moved', False, True),
+    ],
+    ids=[
+        'the look drew it',
+        'the render next',
+        'a step restarted the view',
+        'a turn restarted it',
+        'a step changed nothing',
+        'a turn changed nothing',
+    ],
+)
+def test_a_look_that_ended_at_its_limit_is_recorded_until_a_step_restarts_the_view(
+    helpers: types.ModuleType, coming: list[tuple[str, int]], step: str | None, restarted: bool, undrawn: bool
+) -> None:
+    # REVIEW.md HLP-214: the look's wait ended at its limit, and the shot said nothing. HLP-222: said at every look, also
+    # before a step whose own wait then settled the view
+    frames, _ = _frames_counting(helpers, True, coming, shows='Samples: 3')  # left lower off screen
+    since = frames.mark()
+    _counted(frames).seen.append(3)
+    frames._painted += 1
+    frames.shown(since)
+    if step is not None:
+        since = frames.mark()
+        if restarted:  # a paint reading a count below the one before: the view restarted
+            _counted(frames).seen.append(1)
+            frames._painted += 1
+        getattr(frames, step)(since)
+    assert frames.undrawn is undrawn
+
+
+@pytest.mark.parametrize(
+    'after, asked, undrawn',
+    [
+        ([8, 8], 0, False),
+        ([8, 8], 1, True),  # a frame asked for, the count read still the one before: what changed isn't drawn
+        ([1, 2, 3, 4, 5, 6, 7, 8], 1, False),
+    ],
+    ids=['nothing changed', 'a frame asked for, the count stale', 'restarted and back'],
+)
+def test_a_look_that_ended_at_its_limit_isnt_said_once_the_view_drew_what_changed(
+    helpers: types.ModuleType, after: list[int], asked: int, undrawn: bool
+) -> None:
+    # HLP-222's open case, measured (forced, 3 of 3): a look ending at its limit, then a notch with no sign; during the
+    # notch's wait the view drew what changed, and the render, said not settled, matched a plain shot right after. The
+    # look's own read, its paints since, is read again as the render asks
+    frames, _ = _frames_counting(helpers, True, [], shows='Samples: 8')
+    since = frames.mark()
+    frames.shown(since)
+    assert frames.undrawn  # no paint yet: the look ended at its limit
+    frames._asked += asked
+    for count in after:
+        _counted(frames).seen.append(count)
+        frames._painted += 1
+    assert frames.undrawn is undrawn
+
+
+@pytest.mark.parametrize('step', ['settled', 'moved'])
+def test_with_no_count_shown_a_steps_renders_compared_end_the_looks_record(
+    helpers: types.ModuleType, step: str
+) -> None:
+    frames, _ = _frames_counting(helpers, True, [], shows='')
+    compared = _comparing(frames)  # recorded, not run: no render alike
+    frames.shown(frames.mark())
+    assert frames.undrawn
+    getattr(frames, step)(frames.mark())
+    assert (frames.undrawn, len(compared)) == (False, 2)
 
 
 def test_a_step_that_restarts_nothing_waits_no_further(helpers: types.ModuleType) -> None:

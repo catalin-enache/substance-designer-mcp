@@ -81,8 +81,8 @@ def screenshot_designer(
     puts a minimized, covered or hidden window there for the shot, transparent so the user doesn't see it, never
     taking focus, then puts it back as it was, and says so. It is left up if the user switched to Designer during
     the shot and Designer is still the app in front as it ends. After a set-up that moved the camera, switched the
-    mesh, or changed the tiling or the light, a render identical to the one before is said: shoot again with no set-up
-    (pan, orbit and zoom move from where the camera is).
+    mesh, or changed the tiling or the light, a render identical to the one before is said, and so is a 3D view that
+    hadn't settled within 3 s: shoot again with no set-up (pan, orbit and zoom move from where the camera is).
     '3d' can set up the view first and says what it set (stopped partway, the steps it began); it stays set, for
     later shots and in the user's view:
     graph puts that graph's outputs on the mesh, selecting it in the Explorer (outputs added to the graph open
@@ -93,6 +93,12 @@ def screenshot_designer(
     sideways, in fractions of the view at that point (nearer parts move more); zoom: wheel steps from where the camera
     is then, about 1.1x closer each (negative: away), so after pan it comes closer to what is in the middle; tiling:
     how often the material repeats on the mesh (the user's Parameters panel then shows the graph in the editor).
+    Each wheel step waits for the 3D view to be at rest, then for its sign of taking the step; each drag waits for its
+    sign. A step without them ends the camera's moves there: the result says which, and how long it waited. When a
+    wheel step isn't sent, or the view hadn't settled within 3 s after a step, or hadn't by the render since the window
+    came back with no step restarting it, the result also gives the view's count if below 8 (off screen, as last
+    drawn) and what may hold it there: still refining, or the Rasterizer's Samples below 8 or its accumulation
+    antialiasing off (Renderer > Edit settings). A shot where nothing of this happens says nothing of the count.
     The light: environment is one of Designer's environment maps (its Library's HDRI environments, such as
     studio_white_soft_light or studio_black_soft_light; an unknown name lists them); environment_rotation: the angle
     in degrees it is set to around the mesh, -180 to 180 (not added to the angle before, unlike orbit);

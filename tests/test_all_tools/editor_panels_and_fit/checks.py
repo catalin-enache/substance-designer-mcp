@@ -26,7 +26,7 @@ from test_all_tools.common import (
     text,
     until_job_running,
 )
-from test_all_tools.editor_panels_and_fit import popups, window_states
+from test_all_tools.editor_panels_and_fit import popups, rasterizer, window_states
 from test_all_tools.editor_panels_and_fit.preparations import (
     CHECKER_OPS,
     VIEW3D_ADDED,
@@ -42,15 +42,18 @@ from test_all_tools.editor_panels_and_fit.printed import (
     read_value,
 )
 from test_all_tools.editor_panels_and_fit.renders import (
+    CHECKER,
     difference,
     grey,
     grey_file,
     moved_left,
+    plain_after,
     plane_columns,
     plane_height,
     plane_middle,
     plane_width,
     say_failed,
+    say_renders,
     transitions,
     with_checker,
 )
@@ -74,6 +77,9 @@ QT_MINIMIZED = 'qt minimized'
 
 # the 3D view's zoom per wheel step, closer and away (designer_helpers/view3d.py): three away measured 0.75-0.78x
 STEP, STEP_AWAY = 1.11, 0.917
+# the wheel facts' check (designer_helpers/view3d.py): the notches it sends each way, and the steps they zoom sent back
+# to back, as measured
+NOTCHES, BACK_TO_BACK_STEPS = 6, 1
 
 
 async def check_outputs_added_to_the_open_graph_reach_the_3d_view_once_applied(ctx: Ctx) -> None:
@@ -981,9 +987,9 @@ SHOWN_ALREADY = dedent("""
     shoot_3d(os.path.join(folder, 'first.png'), **shown)
     _waits = []
     _settled = _Frames.settled
-    def _counted(self, since):
-        _waits.append(since)
-        _settled(self, since)
+    def _counted(self, *args, **kw):
+        _waits.append(args)
+        return _settled(self, *args, **kw)  # its result read since REVIEW.md HLP-214 (TST-678)
     _Frames.settled = _counted
     try:
         shoot_3d(os.path.join(folder, 'again.png'), **shown)
@@ -1623,43 +1629,323 @@ async def check_an_explorers_menu_closed_before_its_pick_is_said_so_and_gets_its
 
 async def check_wheel_steps_sent_as_designers_window_goes_off_screen_are_all_taken(ctx: Ctx) -> None:
     """screenshot_designer('3d', zoom=...) whose window goes off screen during its wheel steps, as a click on the user's
-    own window covers Designer's during a shot, zooms as far as the same zoom undisturbed (REVIEW.md HLP-149: off
-    screen the view draws no frame, the wait for the next one returned at once, and the steps went back to back, as
-    the frames fact measured some lost). Designer hidden at the first step, through shoot_3d. macOS only, in a Designer
-    the self-test started."""
+    own window covers Designer's during a shot, zooms as far as asked: its plane STEP times as wide a step as at the
+    start, not clipped at the panel's edge, and as wide as the same zoom undisturbed (REVIEW.md HLP-149: off screen the view draws
+    no frame, the wait for the next one returned at once, and the steps went back to back, as the frames fact measured
+    some lost). Through shoot_3d, in two cases, each from the same start:
+    - Designer hidden as the view draws its first frame after the first step: the step after it would go off screen
+      with that frame's accumulation in flight, where a step was dropped while its wait took the accumulation's request
+      for its sign (ROADMAP item 112: 2 runs in 120 hiding right after the step's events);
+    - Designer hidden right before the first step, the view at rest: every step goes off screen from rest.
+    The plane shows the checker, put there first: its edges show a render taken before the view settled, which a
+    plain colour hides. Each zoom's render, the undisturbed one's included, matches a plain shot taken right after it,
+    with no set-up, which renders the view at rest: a zoom on screen once rendered at its first frame, one sample
+    (ROADMAP item 112). macOS only, in a Designer the self-test started. On failure it prints each render's plane
+    width, mean grey and path (ROADMAP item 112)."""
     c = ctx.c
     what = "3d with zoom=: the wheel steps sent as Designer's window goes off screen are all taken"
+    from_rest = "3d with zoom=: the wheel steps sent with Designer's window off screen from the first are all taken"
+    settled = '3d with zoom= on screen: the render is of the view at rest, as a plain shot right after it'
     if ctx.was_running or sys.platform != 'darwin':
-        skip('screenshot_designer', what, USERS_3D_VIEW if ctx.was_running else 'macOS only')
+        for name in (what, from_rest, settled):
+            skip('screenshot_designer', name, USERS_3D_VIEW if ctx.was_running else 'macOS only')
         return
-    zoom = 6
-    await c('screenshot_designer', {**THREE_D, **TOP})
+    # from the plane framed, 4 steps out: in a hidden Designer's 342 px wide 3D panel the plane is 154 px wide there and
+    # 290 after the 6 steps, so each step shows. From the plane framed it spans the panel 4 steps in, so a 5th and 6th
+    # step rendered alike and a lost one went unseen (REVIEW.md TST-640)
+    zoom, start = 6, {**THREE_D, **TOP, 'zoom': -4}
+    # edges on the plane, whatever an earlier check left: on a plain one an unsettled render reads 0.00 (REVIEW.md
+    # HLP-210). The start's render shows them, or nothing is compared (TST-666)
+    shown = text(await with_checker(c, {**start, 'graph': VIEW3D_GRAPH}))
+    at_start = os.path.join(ctx.scratch, 'zoom_start.png')
+    started = text(await c('execute_designer_code', {'code': ctx.helper_source + 'shoot_3d(%r)' % at_start}))
+    if not (os.path.exists(at_start) and transitions(grey_file(at_start)) >= CHECKER):
+        said = ' / '.join((shown + '\n' + started).strip().splitlines()[-2:])
+        for name in (settled, what, from_rest):
+            check('screenshot_designer', name, False, 'no checker on the plane at the start: ' + said)
+        return
+
     # through shoot_3d too, saved alike: a tool's shot is shrunk to max_size, a render saved by shoot_3d isn't
     # (REVIEW.md TST-423)
     alike = os.path.join(ctx.scratch, 'undisturbed_zoom.png')
     said = text(await c('execute_designer_code', {'code': ctx.helper_source + 'shoot_3d(%r, zoom=%d)' % (alike, zoom)}))
-    await c('screenshot_designer', {**THREE_D, **TOP})  # framed again
-    path = os.path.join(ctx.scratch, 'hidden_mid_zoom.png')
-    try:
-        t = text(
-            await c('execute_designer_code', {'code': ctx.helper_source + window_states.hidden_mid_zoom(path, zoom)})
-        )
-    finally:
-        await at_rest(c, ctx.helper_source)
-    hidden = 'HIDDEN_AT_THE_FIRST_STEP exposed=False' in t
-    if not (os.path.exists(alike) and os.path.exists(path)):
-        check('screenshot_designer', what, False, 'a shot failed (below)')
-        print('      undisturbed: %s' % ' / '.join(said.strip().splitlines()[-3:]))
-        print('      hidden at the first step: %s' % ' / '.join(t.strip().splitlines()[-3:]))
-        return
-    apart = difference(grey_file(alike), grey_file(path))
+    after, from_after, after_said = await plain_after(c, ctx.helper_source, alike)
     check(
         'screenshot_designer',
-        what,
-        hidden and apart < 1.0,
-        'hidden at the first step: %s; mean difference from the same zoom undisturbed %.2f grey levels'
-        % (hidden, apart),
+        settled,
+        from_after < 1.0,
+        '%.2f grey levels from it; looks %d' % (from_after, _looks(said)),
     )
+    if from_after >= 1.0:
+        _say_shots(('undisturbed', alike, said), ('a plain shot after', after, after_said))
+    # where the hidden zooms start, as the start's render; its reply kept: a zoom -4 that stopped short starts the case
+    # closer (REVIEW.md TST-672)
+    framed = text(await c('screenshot_designer', start))
+    cases = [
+        # the name, the snippet, its render, what the snippet says when its case happened, and how the detail says it
+        (
+            what,
+            window_states.hidden_mid_zoom,
+            'hidden_mid_zoom.png',
+            ('PAINTED_BEFORE_THE_HIDE True', 'HIDDEN_AT_THE_FIRST_STEP exposed=False'),
+            "hidden after the first step's frame",
+        ),
+        (
+            from_rest,
+            window_states.hidden_before_zoom,
+            'hidden_before_zoom.png',
+            ('HIDDEN_BEFORE_THE_FIRST_STEP exposed=False', 'AT_REST_AT_THE_HIDE True'),
+            'hidden at rest before the first step',
+        ),
+    ]
+    for name, snippet, file, marks, case in cases:
+        path = os.path.join(ctx.scratch, file)
+        if name == from_rest:
+            framed = text(await c('screenshot_designer', start))  # the same start again
+        try:
+            t = text(await c('execute_designer_code', {'code': ctx.helper_source + snippet(path, zoom)}))
+        finally:
+            await at_rest(c, ctx.helper_source)
+        forced = all(mark in t for mark in marks)  # the case happened
+        after, from_after, after_said = await plain_after(c, ctx.helper_source, path)
+        if not all(os.path.exists(p) for p in (alike, at_start, path)):
+            check('screenshot_designer', name, False, 'a shot failed (below)')
+            _say('its start', framed)
+            print('      undisturbed: %s' % ' / '.join(said.strip().splitlines()[-3:]))
+            print('      %s: %s' % (case, ' / '.join(t.strip().splitlines()[-3:])))
+            continue
+        zoomed = grey_file(path)
+        ratio = plane_width(zoomed) / max(plane_width(grey_file(at_start)), 1)
+        edges = plane_columns(zoomed)
+        clipped = edges[0] == 0 or edges[1] == zoomed.shape[1] - 1  # wider than the panel: the width stops growing
+        apart = difference(grey_file(alike), zoomed)
+        expected = STEP**zoom
+        taken = forced and not clipped and expected * 0.95 <= ratio <= expected * 1.05 and apart < 1.0
+        taken = taken and from_after < 1.0
+        check(
+            'screenshot_designer',
+            name,
+            taken,  # a step fewer (1.69x) or more (2.08x) fails
+            # the looks the shot made last, within the 150 characters check() keeps (REVIEW.md TST-684)
+            '%s: %s; the plane %.2fx (%.2f^%d = %.2f)%s; %.2f from undisturbed, %.2f from a shot after; looks %d'
+            % (case, forced, ratio, STEP, zoom, expected, ', clipped' if clipped else '', apart, from_after, _looks(t)),
+        )
+        if not taken:
+            # what the tool said, and the marks of the case: a stop said or a step lost silently (REVIEW.md TST-664)
+            _say('undisturbed', said)
+            _say('its start', framed)
+            _say(case, t, *marks)
+            _say_unsaved(('a plain shot after', after, after_said))
+            say_renders(('the start', at_start), ('undisturbed', alike), (case, path), ('a plain shot after', after))
+
+
+def _say(what: str, reply: str, *marks: str) -> None:
+    """Prints under a failed check what the tool said in `reply` about `what` (_said_by_the_tool)."""
+    print('      %s, the tool said: %s' % (what, ' / '.join(_said_by_the_tool(reply, *marks))))
+
+
+def _say_shots(*shots: tuple[str, str, str]) -> None:
+    """Prints under a failed check what each shot, given as (name, path, reply), said: its tool lines (_say) when it
+    saved its render, the last lines of its reply when it didn't (_say_unsaved); then their renders (say_renders;
+    REVIEW.md TST-692)."""
+    for name, path, reply in shots:
+        if os.path.exists(path):
+            _say(name, reply)
+    _say_unsaved(*shots)
+    say_renders(*((name, path) for name, path, _ in shots))
+
+
+def _say_unsaved(*shots: tuple[str, str, str]) -> None:
+    """Prints under a failed check, for each shot given as (name, path, reply) that saved nothing at its path, the last
+    lines its tool said, where its error is (REVIEW.md TST-688)."""
+    for name, path, reply in shots:
+        if not os.path.exists(path):
+            print('      %s, the tool said: %s' % (name, ' / '.join(reply.strip().splitlines()[-3:]) or 'nothing'))
+
+
+def _looks(reply: str) -> int:
+    """How many times a shot's look put Designer's window on screen again (window_states.LOOKED), a wheel step's rest's
+    looks included (frames3d.REST_LOOKS; REVIEW.md TST-684)."""
+    return len(window_states.LOOKED.findall(reply))
+
+
+def _said_by_the_tool(reply: str, *marks: str) -> list[str]:
+    """The 3D shot's lines in a shot's `reply` ('3D view:', '3D render:'), and those starting with one of `marks`."""
+    starts = ('3D view:', '3D render:', *(mark.split()[0] for mark in marks))
+    return [line for line in reply.splitlines() if line.startswith(starts)] or ['nothing']
+
+
+def _steps(ratio: float) -> int | None:
+    """The wheel steps closer a plane `ratio` times as wide as at the start shows, STEP each within 5 %; None for none."""
+    return next((k for k in range(NOTCHES + 1) if STEP**k * 0.95 <= ratio <= STEP**k * 1.05), None)
+
+
+async def check_the_3d_views_wheel_takes_one_notch_an_event_and_drops_those_back_to_back(ctx: Ctx) -> None:
+    """Designer facts the 3D shot's zoom relies on (designer_helpers/view3d.py; ROADMAP item 112), each on screen and
+    with Designer hidden before the notches, each from the view at rest (the shot's own wait, _Frames.from_rest), from
+    the plane framed then 4 steps out, through shoot_3d with its _wheel replaced (window_states.wheel_facts):
+    - one wheel event carrying NOTCHES notches (angleDelta NOTCHES x 120) zooms one step;
+    - NOTCHES notches sent back to back zoom BACK_TO_BACK_STEPS; sent by the shot's own _wheel, each from rest after
+      the one before's sign, NOTCHES;
+    - sendEvent returns True and the event's isAccepted() is False for each notch, taken or dropped.
+    Judged by the plane's width against the start's, STEP a step. macOS only, in a Designer the self-test started."""
+    c = ctx.c
+    one = 'one 3D wheel event carrying %d notches zooms one step, on screen and hidden' % NOTCHES
+    back = (
+        '%d 3D wheel notches sent back to back zoom %d step(s); sent by the shot, each from rest after the one '
+        "before's sign, %d, on screen and hidden" % (NOTCHES, BACK_TO_BACK_STEPS, NOTCHES)
+    )
+    said = 'sendEvent returns True and isAccepted() False for each 3D wheel notch, taken or dropped'
+    if ctx.was_running or sys.platform != 'darwin':
+        for name in (one, back, said):
+            skip('designer facts', name, USERS_3D_VIEW if ctx.was_running else 'macOS only')
+        return
+    at_start = os.path.join(ctx.scratch, 'wheel_start.png')
+    # the start set up and shot at once, at full size as the zoomed shots are (REVIEW.md TST-423)
+    code = ctx.helper_source + "shoot_3d(%r, mesh='Plane', view='Top', zoom=-4)" % at_start
+    t = text(await c('execute_designer_code', {'code': code}))
+    if not os.path.exists(at_start):
+        for name in (one, back, said):
+            check('designer facts', name, False, 'the start shot failed: %s' % ' / '.join(t.strip().splitlines()[-3:]))
+        return
+    start_width = max(plane_width(grey_file(at_start)), 1)
+    steps: dict[tuple[str, bool], int | None] = {}  # (mode, hidden): the steps the plane shows, the cases measured
+    sent: list[tuple[str, str]] = []  # each event of 'one' and 'back': where it was sent, and what sendEvent said
+    stopped: list[str] = []  # what the shot's _wheel returned, 'apart'
+    looks = 0  # the shot's looks in 'apart', a wheel step's rest's included (REVIEW.md TST-684)
+    renders = [('the start', at_start)]
+    # each re-framing between the cases, and what the tool said (REVIEW.md TST-672)
+    framings: list[tuple[str, str]] = []
+    first = True
+    for hidden in (False, True):
+        where = 'hidden' if hidden else 'shown'
+        for mode in ('one', 'back', 'apart'):
+            if not first:  # the same start each time; the start shot left the camera there
+                framed = text(await c('screenshot_designer', {**THREE_D, **TOP, 'zoom': -4}))
+                framings.append(('%s, %s' % (mode, where), framed))
+            first = False
+            path = os.path.join(ctx.scratch, 'wheel_%s_%s.png' % (mode, where))
+            try:
+                code = ctx.helper_source + window_states.wheel_facts(path, NOTCHES, mode, hidden)
+                t = text(await c('execute_designer_code', {'code': code}))
+            finally:
+                await at_rest(c, ctx.helper_source)
+            sent += [
+                ('%s, %s %d' % (mode, where, n), value)
+                for n, value in enumerate(re.findall(r'^SENT (\S+)', t, re.M), 1)
+            ]
+            stopped += re.findall(r'^STOPPED (.+)', t, re.M)
+            looks += _looks(t) if mode == 'apart' else 0
+            measured = 'AT_REST_BEFORE_THE_NOTCHES True' in t and (
+                not hidden or 'HIDDEN_BEFORE_THE_NOTCHES exposed=False' in t
+            )
+            if not measured:  # not the case the fact is about
+                print(
+                    '      %s, %s: not at rest or not hidden: %s'
+                    % (mode, where, ' / '.join(t.strip().splitlines()[-3:]))
+                )
+                continue
+            if not os.path.exists(path):
+                print('      %s, %s: the shot failed: %s' % (mode, where, ' / '.join(t.strip().splitlines()[-3:])))
+                continue
+            renders.append(('%s, %s' % (mode, where), path))
+            steps[mode, hidden] = _steps(plane_width(grey_file(path)) / start_width)
+
+    def got(mode: str, wanted: int) -> bool:
+        return all(steps.get((mode, hidden)) == wanted for hidden in (False, True))
+
+    detail = 'steps on screen / hidden: ' + '; '.join(
+        '%s: %s / %s' % (mode, steps.get((mode, False)), steps.get((mode, True))) for mode in ('one', 'back', 'apart')
+    )
+    took_one = got('one', 1)
+    check('designer facts', one, took_one, detail)
+    dropped = got('back', BACK_TO_BACK_STEPS) and got('apart', NOTCHES) and stopped == ['None'] * 2
+    check('designer facts', back, dropped, '%s; the shot stopped: %s; looks %d' % (detail, ','.join(stopped), looks))
+    # the events that differ named first: the whole list is cut at common.check's 150 characters (REVIEW.md TST-665)
+    others = ['%s: %s' % (event, value) for event, value in sent if value != 'True/False']
+    alike = len(sent) == 2 * (1 + NOTCHES) and not others
+    check(
+        'designer facts',
+        said,
+        alike,
+        '%d events of %d, %d True/False; the others: %s'
+        % (len(sent), 2 * (1 + NOTCHES), len(sent) - len(others), '; '.join(others) or 'none'),
+    )
+    if not alike:
+        print('      each event: %s' % ', '.join('%s: %s' % event for event in sent))
+    if not (took_one and dropped and alike):
+        for case, framed in framings:
+            _say('%s, its start' % case, framed)
+    if not (took_one and dropped):
+        say_renders(*renders)
+
+
+async def check_an_on_screen_3d_zoom_held_below_8_samples_is_refused_naming_the_rasterizers_settings(ctx: Ctx) -> None:
+    """screenshot_designer('3d', zoom=...) on screen, with the Rasterizer's Samples at 4, then its accumulation
+    antialiasing off, each holding the overlay's count below 8 (4, then 1, as designer_helpers/frames3d.py's docstring
+    says): the zoom is refused at its first wheel step and the plane is as wide as before. The result names the count
+    it saw and what may hold it there, the Rasterizer's settings among them (Renderer > Edit settings), and has no
+    STALE line (REVIEW.md HLP-215, the user's decision). The count at the render is 4, then 1. Each setting is changed
+    only from Designer's default, and put back, in a finally, only from the value set. macOS only, in a Designer the
+    self-test started."""
+    c = ctx.c
+    cases = (  # the name, the setting, its value for the case and its default, the count it holds the view at
+        ("3d with zoom= and the Rasterizer's Samples at 4: refused, the settings named", 'samples', 4.0, 8.0, 4),
+        ("3d with zoom= and the Rasterizer's antialiasing off: refused, the settings named", 'aa', False, True, 1),
+    )
+    if ctx.was_running or sys.platform != 'darwin':
+        for name, *_ in cases:
+            skip('screenshot_designer', name, USERS_3D_VIEW if ctx.was_running else 'macOS only')
+        return
+    zoom = 3
+    for name, kind, wanted, before, held in cases:
+        # set only from its default, put back only from the value set: no other value is changed
+        code = ctx.helper_source + rasterizer.set_rasterizer(kind, wanted, before)
+        t = text(await c('execute_designer_code', {'code': code}))
+        try:
+            if rasterizer.DEFAULTS_BEFORE not in t:
+                check('screenshot_designer', name, False, rasterizer.off_defaults(t))
+                continue
+            at_start = os.path.join(ctx.scratch, 'raster_%s_start.png' % kind)
+            zoomed = os.path.join(ctx.scratch, 'raster_%s_zoom.png' % kind)
+            framed = 'shoot_3d(%r, mesh=%r, view=%r)' % (at_start, TOP['mesh'], TOP['view'])  # where the zoom starts
+            started = text(await c('execute_designer_code', {'code': ctx.helper_source + framed}))
+            code = ctx.helper_source + rasterizer.COUNTED + 'shoot_3d(%r, zoom=%d)' % (zoomed, zoom)
+            said = text(await c('execute_designer_code', {'code': code}))
+            if not all(os.path.exists(path) for path in (at_start, zoomed)):
+                failed = ' / '.join((started + '\n' + said).strip().splitlines()[-2:])
+                check('screenshot_designer', name, False, 'a shot failed: %s' % failed)
+                continue
+            ratio = plane_width(grey_file(zoomed)) / max(plane_width(grey_file(at_start)), 1)
+            counts = re.findall(r'^RENDER_COUNT (\S+)', said, re.M)
+            # any count below 8: off screen, one last drawn mid-accumulation reads lower than the case's (REVIEW.md TST-681)
+            refusal = re.search(
+                r"wheel step 1 of %d not sent: the 3D view didn't come to rest within [\d.]+ s, its sample count at (\d+)"
+                % zoom,
+                said,
+            )
+            named = refusal is not None and int(refusal[1]) < 8 and '(Renderer > Edit settings)' in said
+            stale = '3D render: identical' in said  # STALE (REVIEW.md HLP-212)
+            refused = named and not stale and _steps(ratio) == 0 and counts[-1:] == [str(held)]
+            check(
+                'screenshot_designer',
+                name,
+                refused,
+                'the refusal said: %s; STALE: %s; the plane %.2fx; the count at the render: %s'
+                % (named, stale, ratio, ','.join(counts) or 'not read'),
+            )
+            if not refused:
+                _say('the start', started)
+                _say('the zoom', said)
+                say_renders(('the start', at_start), ('zoomed', zoomed))
+        finally:
+            code = ctx.helper_source + rasterizer.set_rasterizer(kind, before, wanted)
+            back = text(await c('execute_designer_code', {'code': code}))
+            await at_rest(c, ctx.helper_source)
+            # the snippet's own lines, which no other line holding ' after' passes for, and its line says the values it
+            # left (REVIEW.md TST-677, TST-683)
+            if rasterizer.SET.search(t) and rasterizer.DEFAULTS_SET not in back:
+                check('screenshot_designer', name, False, rasterizer.off_defaults(back, 'after'))
 
 
 async def check_an_explorers_menu_closed_before_its_pick_is_opened_again(ctx: Ctx) -> None:
@@ -3147,6 +3433,8 @@ async def run(ctx: Ctx) -> None:
         await check_an_explorers_menu_closed_before_its_pick_is_said_so_and_gets_its_look_back(ctx)
         await check_an_explorers_menu_closed_before_its_pick_is_opened_again(ctx)
         await check_wheel_steps_sent_as_designers_window_goes_off_screen_are_all_taken(ctx)
+        await check_the_3d_views_wheel_takes_one_notch_an_event_and_drops_those_back_to_back(ctx)
+        await check_an_on_screen_3d_zoom_held_below_8_samples_is_refused_naming_the_rasterizers_settings(ctx)
         await check_a_3d_shot_puts_designers_window_on_screen_without_taking_focus(ctx)
         await check_a_3d_shot_keeps_designers_window_transparent_and_click_through_while_off_screen(ctx)
         await check_a_render_that_didnt_follow_a_set_up_is_said(ctx)

@@ -12,9 +12,10 @@ the user's Designer open it starts nothing and asks for it to be closed. On Wind
 Designer, of every category but `lifecycle`, without the unit suite: it starts Designer if none runs
 (launch_designer) and leaves it open at the end, as it leaves one already running (ROADMAP item 65). Everything
 that changes state happens in temporary graphs ("mcp_selftest"), removed after each category; in the user's
-Designer the graph they had open in the editor is reopened. It triggers Undo/Redo only while the self-test graph is
-the one in the editor (Undo acts on the document in focus), checks that exactly its own step was undone, and redoes
-at once if not. "designer facts" checks the Designer behaviour GUIDE.md documents.
+Designer the graph they had open in the editor is reopened. It triggers Undo and Redo through the Edit menu, which act
+on the document in focus: a check fails, naming the graph in the editor, when the self-test graph isn't the one there.
+It reads the graph until its step shows undone, and an Undo that fired and never showed is redone. "designer facts"
+checks the Designer behaviour GUIDE.md documents.
 The 3D screenshot is skipped if no 3D View is visible in the user's Designer. Exits with code 1 if any check fails.
 
 This file is the index: it opens the MCP session, runs the categories in order (CATEGORIES, categories.py), each on its
@@ -57,6 +58,7 @@ from test_all_tools.common import (  # noqa: E402
     CLEAN,
     PARAMS,
     SAME_GRAPH_BACK,
+    SCRATCH_PREFIX,
     STATE,
     TEST_GRAPH,
     Call,
@@ -317,13 +319,17 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def one_run(worker: str | None = None, results_file: str | None = None, first: bool = False) -> None:
-    """One run in one Designer: the whole suite, or a worker's category (written to results_file too)."""
+    """One run in one Designer: the whole suite, or a worker's category (written to results_file too). A run that
+    failed (a check failed, or the run raised) keeps its scratch folder, with the shots its checks saved, and prints
+    its path: in a pool, workers.py keeps it with the run's folder."""
     steps: list[Step] = (
         CATEGORIES if worker is None else [lifecycle.run] if worker == 'lifecycle' else [by_name(worker)]
     )
-    scratch = tempfile.mkdtemp(prefix='sd_mcp_selftest_')
+    scratch = tempfile.mkdtemp(prefix=SCRATCH_PREFIX)
+    failed = True  # unless the run returns with every check passed
     try:
         tools = asyncio.run(run(scratch, steps, worker, first))
+        failed = not all(all(oks) for oks in results.values())
     finally:
         dumps_before = crash_dumps()  # just before the clean-up it is about (REVIEW.md TST-21)
 
@@ -340,6 +346,8 @@ def one_run(worker: str | None = None, results_file: str | None = None, first: b
             # deleting it while Designer ran crashed Designer twice, in its own file watcher, and
             # couldn't be reproduced on demand (REVIEW.md PLG-9, PLG-18): leave it to the OS
             print('scratch folder left for the OS to clear, since Designer is running:', scratch)
+        elif failed:
+            print('scratch folder kept, the run failed:', scratch)
         else:
             shutil.rmtree(scratch, ignore_errors=True)
     if STATE['was_running']:

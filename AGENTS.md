@@ -80,7 +80,8 @@ scratch probes run as the `project-code-review` skill's **Who settles what** say
 **The full suites run only when the user asks:** the whole unit suite (`pytest` with no test ids) and a whole run of the
 live self-test (`tests/test_all_tools`). Never start one on your own: not for TDD, not after a fix, not between
 reviews. When the reviews look converged, the user decides what comes next (the `project-code-review` skill, step 7).
-The final check is both suites in full, just before merging into `main`; both must pass (DECISIONS.md, Project rules).
+The final check is both suites in full, just before merging into `main`; both must pass, a test that fails at random
+and passes rerun alone counting as passed (DECISIONS.md, Project rules).
 Docs changed alone run the docs tests instead, the final check included (`.claude/rules/docs-tests.md`). The command
 for each run the user asks for: the `live-check` skill (`.claude/skills/live-check/SKILL.md`), The suites.
 

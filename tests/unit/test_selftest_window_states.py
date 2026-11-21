@@ -478,13 +478,30 @@ def test_clear_ends_every_hold_and_makes_the_windows_opaque_only_once_designer_i
     assert 'mac.let_go(w)' in [ast.unparse(statement) for statement in looks.body], 'every hold ended, hidden or not'
 
 
-def test_the_wheel_steps_check_compares_two_renders_saved_alike() -> None:
-    # REVIEW.md TST-423: a tool's shot shrunk to max_size against shoot_3d's render at full size: 255 for two sizes
-    body = _check_source(
-        'editor_panels_and_fit.checks', 'check_wheel_steps_sent_as_designers_window_goes_off_screen_are_all_taken'
-    )
-    assert "c('screenshot_designer', {**THREE_D, 'zoom': zoom})" not in body
-    assert body.count('grey_file(') == 2
+def test_the_wheel_steps_check_compares_only_renders_saved_alike() -> None:
+    # REVIEW.md TST-423: a tool's shot shrunk to max_size against shoot_3d's render at full size: 255 for two sizes.
+    # TST-651: what that guards, not a count: every render the check reads is a file shoot_3d saved, none a tool's shot
+    body = _functions()['check_wheel_steps_sent_as_designers_window_goes_off_screen_are_all_taken']
+    calls = [n for n in ast.walk(body) if isinstance(n, ast.Call)]
+    read = {ast.unparse(n.args[0]) for n in calls if ast.unparse(n.func) == 'grey_file'}
+    # the paths given to shoot_3d: 'shoot_3d(%r...)' % (path, ...), and each hidden case's: its snippet calls it. The
+    # cases are exactly those two snippets, given their path as snippet(path, ...) (ROADMAP item 112)
+    snippets = {
+        'window_states.hidden_mid_zoom': '_HIDDEN_MID_ZOOM',
+        'window_states.hidden_before_zoom': '_HIDDEN_BEFORE_ZOOM',
+    }
+    cases = [n for n in ast.walk(body) if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == 'cases']
+    assert len(cases) == 1 and isinstance(cases[0].value, ast.List)
+    entries = [case for case in cases[0].value.elts if isinstance(case, ast.Tuple)]
+    assert len(entries) == len(cases[0].value.elts) and {ast.unparse(case.elts[1]) for case in entries} == set(snippets)
+    saved = {ast.unparse(n.args[0]) for n in calls if ast.unparse(n.func) == 'snippet'}
+    for n in ast.walk(body):
+        if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Mod) and 'shoot_3d(' in ast.unparse(n.left):
+            saved.add(ast.unparse(n.right.elts[0] if isinstance(n.right, ast.Tuple) else n.right))
+    assert len(read) >= 2 and read <= saved, 'read %s; saved by shoot_3d %s' % (sorted(read), sorted(saved))
+    for snippet in snippets.values():
+        assert 'shoot_3d(PATH' in _check_source('editor_panels_and_fit.window_states', snippet), snippet
+    assert not [n for n in calls if ast.unparse(n.func) == 'grey'], "no tool's shot read"
 
 
 def test_the_material_check_judges_designer_hidden_again_and_puts_its_windows_back_in_a_finally() -> None:

@@ -510,14 +510,24 @@ def test_a_mesh_with_several_materials_is_refused(helpers: types.ModuleType) -> 
 
 class Frames:
     """_Frames, faked: each wait recorded in `events` as ('wait', (what,)), and raising as an abort would at the
-    `abort_at`-th (from 1). `closed` once it stops watching."""
+    `abort_at`-th (from 1). `closed` once it stops watching. Each move's wait (taken) returns the next of `signs`, True
+    once they run out: whether the move's sign came."""
 
     def __init__(self, events: list[tuple[str, tuple[str, ...]]]) -> None:
         self.events = events
+        self.signs: list[bool] = []
+        self.rests: list[bool] = []  # whether the view comes to rest before each move, True once they run out
+        self.rested: list[Callable[[], None] | None] = []  # the look each rest was given
+        self.taking_calls = 0  # the moves sent on today's sign wait (taking), with no rest before
+        self.settles: list[bool] = []  # what each settled() says, True once they run out
+        self.moves: list[bool] = []  # what each moved() says, True once they run out
         self.abort_at = 0
         self.closed = False
         self.settled_since: list[int] = []  # the marks settled() waited from
         self.settle_error = ''  # settled() raising a RuntimeError of this text, when not empty
+        self.below = ''  # what below_rest() says
+        self.rest_waited = 3.0  # s the last rest before a wheel step was waited for
+        self.rest_error_at = 0  # from_rest raising as the shot's look can (shot3d._bring) at this call, from 1
         self._waits = 0
 
     def _wait(self, what: str) -> None:
@@ -529,21 +539,33 @@ class Frames:
     def mark(self) -> int:
         return len(self.events)
 
-    def settled(self, since: int) -> None:
+    def settled(self, since: int) -> bool:
         self.settled_since.append(since)
         if self.settle_error:
             raise RuntimeError(self.settle_error)
         self._wait('settled')
+        return self.settles.pop(0) if self.settles else True
 
-    def moved(self, since: int) -> None:
+    def moved(self, since: int) -> bool:
         self._wait('moved')
+        return self.moves.pop(0) if self.moves else True
 
     def taken(self) -> bool:
         self._wait('taken')
-        return True
+        return self.signs.pop(0) if self.signs else True
+
+    def below_rest(self) -> str:
+        return self.below
 
     def taking(self) -> Callable[[], bool]:
+        self.taking_calls += 1
         return self.taken
+
+    def from_rest(self, again: Callable[[], None] | None) -> Callable[[], bool] | None:
+        self.rested.append(again)
+        if len(self.rested) == self.rest_error_at:
+            raise RuntimeError("the 3D view isn't drawn")
+        return self.taken if (self.rests.pop(0) if self.rests else True) else None
 
     def close(self) -> None:
         self.closed = True
@@ -601,10 +623,17 @@ class Designer:
         vars(helpers)['_material'] = lambda bar, keep: 'Default (overridden)'
         vars(helpers)['_home_screen'] = lambda: None
 
-        def wheel(viewport: 'QtWidgets.QWidget', steps: int, taking: Callable[[], Callable[[], bool]]) -> None:
+        def wheel(
+            viewport: 'QtWidgets.QWidget', steps: int, taking: Callable[[], Callable[[], bool] | None]
+        ) -> tuple[int, bool] | None:
             self.events.append(('trigger', ('wheel', str(steps))))
-            for _ in range(abs(steps)):
-                taking()()
+            for step in range(1, abs(steps) + 1):  # as the real one: no notch after one not at rest or with no sign
+                taken = taking()
+                if taken is None:
+                    return step, False
+                if not taken():
+                    return step, True
+            return None
 
         vars(helpers)['_wheel'] = wheel
 
@@ -615,11 +644,11 @@ class Designer:
             dy: int,
             pressed: 'Pressed',
             taking: Callable[[], Callable[[], bool]],
-        ) -> None:
+        ) -> bool:
             which = 'left' if button is qt('QtCore').Qt.MouseButton.LeftButton else 'middle'
             taken = taking()
             self.events.append(('trigger', ('drag', which, str(dx), str(dy))))
-            taken()
+            return taken()
 
         vars(helpers)['_drag'] = drag
         vars(helpers)['_apply_outputs'] = lambda tree, g, keep: self.events.append(
@@ -1391,6 +1420,127 @@ def test_each_step_waits_for_the_3d_view_to_take_it(
     assert designer.frames.closed
 
 
+UNSETTLED = " (the 3D view hadn't settled within 3 s after it)"
+
+
+@pytest.mark.parametrize(
+    'options, settles, moves, said',
+    [
+        ({'zoom': 2}, [False], [], '+2 wheel steps' + UNSETTLED),
+        ({'mesh': 'Sphere'}, [False], [], 'Sphere' + UNSETTLED),
+        ({'view': 'Top'}, [], [False], 'view Top, framed' + UNSETTLED),
+        # REVIEW.md TST-673: the other steps, each its own wait
+        ({'graph': 'g'}, [False], [], "graph g's outputs on the mesh" + UNSETTLED),
+        ({'view': 'Top'}, [False], [], 'view Top, framed' + UNSETTLED),
+        ({'tiling': 2.0}, [False], [], 'tiling 2' + UNSETTLED),
+        (
+            {'environment': 'studio', 'environment_rotation': 90.0},
+            [True, False],
+            [],
+            'environment studio, rotation 90 degrees' + UNSETTLED,
+        ),
+    ],
+    ids=[
+        'the moves',
+        'a step waited for',
+        "a viewpoint's turn",
+        "a graph's outputs",
+        'Frame alone',
+        'the tiling',
+        "the environment's second wait",
+    ],
+)
+def test_a_step_whose_view_never_settled_says_so(
+    helpers: types.ModuleType,
+    capsys: pytest.CaptureFixture[str],
+    options: View3dOptions,
+    settles: list[bool],
+    moves: list[bool],
+    said: str,
+) -> None:
+    # REVIEW.md HLP-214: the settle's wait ended at its net and the render followed, the result saying nothing
+    designer = _panel_steps(helpers)
+    designer.frames.settles, designer.frames.moves = settles, moves
+    helpers.set_3d_view(**options)
+    assert capsys.readouterr().out.splitlines()[-1] == '3D view: ' + said
+
+
+HELD = (
+    ", its sample count at 4, below 8: it may still have been refining, or the Rasterizer's Samples may be set below 8 "
+    'or its accumulation antialiasing off (Renderer > Edit settings)'
+)
+
+
+@pytest.mark.parametrize(
+    'rests, settles, said',
+    [
+        (
+            [False],
+            [],
+            "+2 wheel steps (wheel step 1 of 2 not sent: the 3D view didn't come to rest within 3 s"
+            + HELD
+            + "; the camera's moves stopped there)",
+        ),
+        ([], [False], "+2 wheel steps (the 3D view hadn't settled within 3 s after it" + HELD + ')'),
+    ],
+    ids=['a wheel step refused', 'its settle'],
+)
+def test_a_view_held_below_8_samples_says_what_may_hold_it_there(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str], rests: list[bool], settles: list[bool], said: str
+) -> None:
+    # REVIEW.md HLP-215, the user's decision (2026-11-21): with the Rasterizer's Samples below 8 or its accumulation
+    # antialiasing off, an on-screen zoom is refused, and the result names the setting and where to change it
+    designer = Designer(helpers)
+    designer.frames.rests, designer.frames.settles, designer.frames.below = rests, settles, HELD
+    helpers.set_3d_view(zoom=2)
+    assert capsys.readouterr().out.splitlines()[-1] == '3D view: ' + said
+
+
+def test_a_zoom_whose_rest_fails_mid_zoom_says_the_notches_sent(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-221: the rest's look raised inside _wheel, and the error said nothing of the notches sent
+    designer = Designer(helpers)
+    designer.frames.rest_error_at = 3
+    with pytest.raises(RuntimeError) as raised:
+        helpers.set_3d_view(zoom=6)
+    assert str(raised.value) == "the 3D view isn't drawn; the 3D view was already set: +6 wheel steps (2 sent)"
+
+
+def test_a_wheel_step_refused_says_how_long_its_rest_was_waited_for(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # REVIEW.md HLP-218: the line said "within 3 s" whatever the rest had waited, less with the window gone again
+    designer = Designer(helpers)
+    designer.frames.rests, designer.frames.rest_waited = [False], 7.4
+    helpers.set_3d_view(zoom=2)
+    assert "wheel step 1 of 2 not sent: the 3D view didn't come to rest within 7.4 s;" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('rests, changed', [([False], False), ([True, False], True)], ids=['none sent', 'one sent'])
+def test_a_set_up_whose_moves_sent_none_changed_nothing(
+    helpers: types.ModuleType, rests: list[bool], changed: bool
+) -> None:
+    # REVIEW.md HLP-212: `changed` was set before the moves, so a zoom whose first notch wasn't sent said the camera
+    # moved, and the shot printed STALE beside "wheel step 1 of 2 not sent"
+    designer = Designer(helpers)
+    designer.frames.rests = rests
+    assert helpers._3d_set_up(zoom=2)(lambda: None, designer.frames) is changed
+
+
+def test_each_wheel_step_is_brought_to_rest_by_the_shots_look_and_a_drag_waits_for_its_sign(
+    helpers: types.ModuleType,
+) -> None:
+    # ROADMAP item 112: off screen with an accumulation left, only the window on screen again brings the view to rest.
+    # Drags stay on today's sign wait: from rest, a drag landed 1.5 to 3.6 grey levels from today's path (view3d.py)
+    designer = Designer(helpers)
+
+    def look() -> None:  # the shot's, before each step
+        pass
+
+    helpers._3d_set_up(zoom=2, pan=[0.25, 0.0])(look, designer.frames)
+    assert designer.frames.rested == [look] * 2, 'the two wheel steps'
+    assert designer.frames.taking_calls == 1, "the pan's one drag"
+
+
 def test_a_set_up_given_the_shots_frames_leaves_them_watching(helpers: types.ModuleType) -> None:
     designer = Designer(helpers)
     run = helpers._3d_set_up(mesh='Sphere')
@@ -1768,7 +1918,7 @@ def test_a_drag_is_a_press_moves_and_a_release_from_the_middle_then_the_wait_for
 
         return taken
 
-    helpers._drag(mouse.viewport, qt('QtCore').Qt.MouseButton.LeftButton, -200, 50, pressed, taking)
+    assert helpers._drag(mouse.viewport, qt('QtCore').Qt.MouseButton.LeftButton, -200, 50, pressed, taking) is True
     moves = ['move'] * helpers.DRAG_MOVES
     assert mouse.what() == ['guard on', 'mark', 'press', *moves, 'release', 'taken', 'guard off']
     assert mouse.sent[2] == ('press', 200.0, 150.0) and mouse.sent[-4:-2] == [
@@ -1776,6 +1926,15 @@ def test_a_drag_is_a_press_moves_and_a_release_from_the_middle_then_the_wait_for
         ('release', 0.0, 200.0),
     ]
     assert pressed == []
+
+
+def test_a_drag_with_no_sign_says_so(helpers: types.ModuleType) -> None:
+    # ROADMAP item 112: the wait's result was dropped, and the next move sent all the same
+    mouse = Mouse()
+    vars(helpers)['_mouse'] = mouse.mouse
+    left = qt('QtCore').Qt.MouseButton.LeftButton
+    assert helpers._drag(mouse.viewport, left, -200, 50, mouse.pressed, lambda: lambda: False) is False
+    assert mouse.what()[-2:] == ['release', 'guard off']
 
 
 def test_a_drag_whose_move_fails_still_releases_its_button_and_removes_its_guard(helpers: types.ModuleType) -> None:
@@ -2072,5 +2231,84 @@ def test_each_wheel_notch_waits_from_a_mark_taken_before_it_is_sent(helpers: typ
         return taken
 
     viewport = SimpleNamespace(width=lambda: 400, height=lambda: 300, mapToGlobal=lambda point: point)
-    helpers._wheel(viewport, -2, taking)
+    assert helpers._wheel(viewport, -2, taking) is None, 'every notch gave its sign'
     assert done == ['mark', 'notch', 'events', 'taken'] * 2, done
+
+
+def test_a_wheel_notch_with_no_sign_is_the_last_sent(helpers: types.ModuleType) -> None:
+    # ROADMAP item 112, measured: six notches back to back gave one UpdateRequest and one step, so a notch sent while
+    # the view's update for the one before is pending is dropped. Nothing says a notch was dropped (sendEvent returns
+    # True and isAccepted() is False alike): one whose sign never came ends the zoom, and is said
+    sent: list[str] = []
+    sys.modules['PySide6.QtWidgets'].QApplication.sendEvent = lambda viewport, event: sent.append('notch')
+    vars(helpers)['_process_events'] = lambda times=1: None
+    signs = iter([True, False, True, True])
+    viewport = SimpleNamespace(width=lambda: 400, height=lambda: 300, mapToGlobal=lambda point: point)
+    assert helpers._wheel(viewport, 4, lambda: lambda: next(signs)) == (2, True), 'step 2 sent, with no sign'
+    assert sent == ['notch', 'notch']
+
+
+def test_a_wheel_notch_from_a_view_not_at_rest_isnt_sent(helpers: types.ModuleType) -> None:
+    # ROADMAP item 112: the step after one drawn on screen, sent off screen with its accumulation in flight, was dropped
+    # and its wait took the accumulation's request for its sign
+    sent: list[str] = []
+    sys.modules['PySide6.QtWidgets'].QApplication.sendEvent = lambda viewport, event: sent.append('notch')
+    vars(helpers)['_process_events'] = lambda times=1: None
+    rests = iter([True, False, True])
+    viewport = SimpleNamespace(width=lambda: 400, height=lambda: 300, mapToGlobal=lambda point: point)
+    assert helpers._wheel(viewport, 3, lambda: (lambda: True) if next(rests) else None) == (2, False)
+    assert sent == ['notch']
+
+
+@pytest.mark.parametrize(
+    'options, signs, waits, said',
+    [
+        (
+            {'zoom': 6},
+            [True, True, False],
+            [('wheel', '6'), 'taken', 'taken', 'taken', 'settled'],
+            "+6 wheel steps (wheel step 3 of 6: no sign the 3D view took it within 3 s; the camera's moves stopped "
+            'there)',
+        ),
+        (
+            {'zoom': 6},
+            [],
+            [('wheel', '6'), 'taken', 'taken', 'settled'],
+            "+6 wheel steps (wheel step 3 of 6 not sent: the 3D view didn't come to rest within 3 s; the camera's "
+            'moves stopped there)',
+        ),
+        (
+            {'orbit': [90.0, 30.0], 'pan': [0.25, -0.4], 'zoom': 2},
+            [False],
+            [('drag', 'left', '-200', '0'), 'taken', 'settled'],
+            "orbit 90 degrees right, 30.1 up (drag 1 of 2: no sign the 3D view took it within 3 s; the camera's moves "
+            'stopped there)',
+        ),
+        (
+            {'pan': [0.25, -0.4], 'zoom': 2},
+            [True, False],
+            [('drag', 'middle', '-89', '0'), 'taken', ('drag', 'middle', '0', '-107'), 'taken', 'settled'],
+            "pan 0.25 of the view right, 0.401 down (drag 2 of 2: no sign the 3D view took it within 3 s; the camera's "
+            'moves stopped there)',
+        ),
+    ],
+    ids=['a wheel step', 'a wheel step not at rest', 'an orbit drag', 'a pan drag'],
+)
+def test_a_move_with_no_sign_ends_the_cameras_moves_there_and_is_said(
+    helpers: types.ModuleType,
+    capsys: pytest.CaptureFixture[str],
+    options: View3dOptions,
+    signs: list[bool],
+    waits: list[tuple[str, ...] | str],
+    said: str,
+) -> None:
+    # ROADMAP item 112: a move sent while the view may still hold the one before is the one dropped, so none follows a
+    # move whose sign never came. The Light tool is put back and the view's settling waited for as after any move
+    designer = Designer(helpers, tool='Light')
+    designer.frames.signs = signs
+    designer.frames.rests = [True, True, False] if not signs else []  # the case not at rest: its third move
+    helpers.set_3d_view(**options)
+    seen = [path if kind == 'trigger' else path[0] for kind, path in designer.events if kind in ('trigger', 'wait')]
+    assert [step for step in seen if step not in (('tool', 'Camera'), ('tool', 'Light'))] == waits
+    assert seen[-2:] == [('tool', 'Light'), 'settled'], seen
+    assert capsys.readouterr().out.splitlines()[-1] == '3D view: ' + said

@@ -241,17 +241,49 @@ CLEAN = dedent("""\
         if any(r.getIdentifier().startswith('mcp_selftest') for r in p.getChildrenResources(False)):
             pm.unloadUserPackage(p); n+=1
     print('removed', n)""")
-# Undo/Redo via Designer's Edit menu, scheduled to run after this call's own undo group closes
+# Undo/Redo via Designer's Edit menu, scheduled to run after this call's own undo group closes (undo/edit_menu.py reads
+# it back; ROADMAP item 112):
+# - It prints Designer's state as it schedules the action (AT_SCHEDULE), and keeps it as the action fires, in
+#   sys._selftest_undo_fired (None until then). Scheduling nothing, it prints why, with the state seen (NOT_FOCUSED,
+#   NO_ACTION). The state is Designer's own (Qt's).
+# - The action fires only while it is the one armed: UNDO_FIRED's read disarms it, and the next send arms its own. So
+#   a read saying it never fired means it never will, and sending it again can't undo twice.
+# - It fires only if the self-test graph is still the current one as its timer fires: Edit > Undo acts on the document
+#   in focus then. Otherwise it keeps NOT_CURRENT and the graph current then, and doesn't fire (REVIEW.md TST-693).
+#   Measured, 3 of 3: another package's graph opened after the schedule read as current there, and the Undo still
+#   undid the self-test graph's step, so this refuses some actions that would have landed on it.
+# - The app in front as macOS says it is read by the self-test's client (REVIEW.md TST-650): nothing runs a process in
+#   Designer around the Undo (undo/edit_menu.py says what lsappinfo run there did).
 UNDO_REDO = dedent("""\
-    import sd
+    import sd, sys
     from PySide6.QtCore import QTimer
-    from PySide6.QtWidgets import QApplication, QMenu
-    g=sd.getContext().getSDApplication().getQtForPythonUIMgr().getCurrentGraph()
-    if g is None or g.getIdentifier()!='%s':
-        print('NOT_FOCUSED')
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtWidgets import QApplication, QMenu, QWidget
+    def _name(o):
+        return 'none' if o is None else '%%s:%%s' %% (type(o).__name__, o.objectName())
+    def _windows(menu):
+        # an Edit menu has no parent: the windows of the menu bars holding it
+        return '/'.join(_name(o.window()) for o in menu.menuAction().associatedObjects() if isinstance(o, QWidget))
+    def _state():
+        # the app's state, its active and focus windows, and each Edit menu's action found: its windows, text, enabled
+        try:
+            return 'app=%%s active=%%s focus=%%s menus: %%s' %% (
+                QGuiApplication.applicationState().name, _name(QApplication.activeWindow()),
+                _name(QGuiApplication.focusWindow()),
+                ', '.join('%%s %%r enabled=%%s' %% (_windows(w), a.text(), a.isEnabled()) for w, a in found) or 'none')
+        except Exception as e:  # a diagnostic, never in the way of the action
+            return 'unread (%%s)' %% e
+    def _current():
+        # the identifier of the graph in the editor, 'none' without one
+        g=sd.getContext().getSDApplication().getQtForPythonUIMgr().getCurrentGraph()
+        return g.getIdentifier() if g is not None else 'none'
+    scheduled_on=_current()
+    if scheduled_on!='%s':
+        print('NOT_FOCUSED current=' + scheduled_on)
     else:
-        acts=[a for w in QApplication.instance().allWidgets() if isinstance(w, QMenu) and w.title()=='&Edit'
-              for a in w.actions() if a.text()=='%s' and a.isEnabled()]
+        found=[(w, a) for w in QApplication.instance().allWidgets() if isinstance(w, QMenu) and w.title()=='&Edit'
+               for a in w.actions() if a.text()=='%s']
+        acts=[a for w, a in found if a.isEnabled()]
         if acts:
             # in a Designer just started, with another Designer in front, Undo of an output's fields sometimes did
             # nothing without this (8 in 8 beside one idle Designer, 3 pool runs in 4, 1 in 3 in scratch runs; with it 4 in 4); it leaves the other
@@ -259,22 +291,35 @@ UNDO_REDO = dedent("""\
             mw=sd.getContext().getSDApplication().getQtForPythonUIMgr().getMainWindow()
             mw.raise_()
             mw.activateWindow()
-            QTimer.singleShot(0, acts[0].trigger)
+            sys._selftest_undo_armed=_armed=object()
+            sys._selftest_undo_fired=None
+            def _fire(armed=_armed):
+                if sys._selftest_undo_armed is not armed:
+                    return  # disarmed by UNDO_FIRED's read, or a later send armed its own
+                current=_current()
+                if current!=scheduled_on:
+                    sys._selftest_undo_fired='NOT_CURRENT current=' + current
+                    return
+                sys._selftest_undo_fired=_state()
+                acts[0].trigger()
+            QTimer.singleShot(0, _fire)
+            print('AT_SCHEDULE ' + _state())
             print('SCHEDULED')
         else:
-            print('NO_ACTION')""")
+            print('NO_ACTION ' + _state())""")
+# The state UNDO_REDO keeps as its action fires ('FIRED None' before), read and removed; the action is disarmed, so
+# one not fired yet never fires. ARMED says whether one was armed since the last read: 'FIRED None' then says it hadn't
+# fired, else nothing (REVIEW.md TST-690)
+UNDO_FIRED = dedent("""\
+    import sys
+    print('ARMED %s' % (getattr(sys, '_selftest_undo_armed', None) is not None))
+    sys._selftest_undo_armed=None
+    print('FIRED %s' % sys.__dict__.pop('_selftest_undo_fired', None))""")
 # The start of a short snippet: finds the graph with this identifier as g
 GRAPH_OF = dedent("""\
     import sd
     g = [r for p in sd.getContext().getSDApplication().getPackageMgr().getUserPackages() for r in p.getChildrenResources(False) if r.getIdentifier() == '%s'][0]
 """)
-NODE_EXISTS = dedent("""\
-    import sd
-    from PySide6.QtWidgets import QApplication
-    for _ in range(20):
-        QApplication.processEvents()
-    g=[r for p in sd.getContext().getSDApplication().getPackageMgr().getUserPackages() for r in p.getChildrenResources(False) if r.getIdentifier()=='%s'][0]
-    print('EXISTS=%%s' %% (g.getNodeFromId('%s') is not None))""")
 # The graph in the editor when the run starts; the graph object is kept so the end of the run can
 # check that the very same graph is back in the editor (REVIEW.md TST-5)
 CURRENT_GRAPH = dedent("""\
@@ -512,6 +557,9 @@ def designer_alive() -> bool:
 
 
 STATE: dict[str, bool] = {'was_running': False}  # set by run(): the run used the user's own, already open Designer
+# the start of a run's scratch folder's name (__main__.one_run): in a pool, the only folder so named in the worker's
+# temp folder, where workers.py finds a failed worker's
+SCRATCH_PREFIX = 'sd_mcp_selftest_'
 
 
 class Call(Protocol):

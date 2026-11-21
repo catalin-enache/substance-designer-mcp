@@ -87,7 +87,8 @@ The lead's question moved the runner's foreground command to the background with
 **The merge** into `main` is a squash, on the user's word, once the final check passed. A squash takes the branch's
 whole tree. So what must outlast the branch is in DECISIONS.md or ROADMAP.md before the final check: the lead proposes
 it when the reviews look converged and adds what the user approves (**The loop is the lead's**, above). After the
-final check, the lead deletes PLAN.md in the branch's last commit.
+final check, the lead lists or counts each test that failed at random in ROADMAP.md, with the docs tests run (the
+`live-check` skill, When the final check fails), and deletes PLAN.md in the branch's last commit.
 
 ## The brief
 

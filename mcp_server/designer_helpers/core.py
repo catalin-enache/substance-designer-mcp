@@ -6,7 +6,7 @@ other parts use these)."""
 import math
 import os as os
 import sys as sys
-from collections.abc import Callable as Callable, Sequence as Sequence
+from collections.abc import Callable as Callable, Iterator as Iterator, Sequence as Sequence
 from typing import Protocol as Protocol, TypedDict as TypedDict, cast as cast
 
 import sd

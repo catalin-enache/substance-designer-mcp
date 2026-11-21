@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 
 import pytest
-from docs_text import agent, flat, headings, read, section, skill, story_md
+from docs_text import agent, agents_md, flat, headings, read, section, skill, story_md
 
 from conftest import ROOT
 
@@ -256,6 +256,67 @@ def test_the_users_rules_of_2026_11_20_keep_their_wording() -> None:
         'the Opus rounds after the last step, on the entire branch and on its fixes (the `project-code-review` skill, '
         'step 7)' in model
     )
+
+
+def test_the_users_rule_on_tests_that_fail_at_random_keeps_its_wording() -> None:
+    # REVIEW.md TST-676: the user's rule of 2026-11-21, its key clauses in six of the places it is written, all but the
+    # `delegate` skill's merge sentence and the `address-review` skill's step 4 (DECISIONS.md, Project rules). A
+    # test that fails in a full run and passes rerun alone, a live check with its category alone, failed at random: it
+    # counts as passed, and is listed, or its row's count goes up. The coverage check, made only over a full run, names
+    # its missing tools: their categories rerun alone. One that fails alone too is a failure
+    coverage = (
+        'The check that every tool was exercised, made only over a full run, names the tools no check ran for: the'
+        ' categories whose checks exercise them are rerun alone, and if they pass with checks run for those tools, it'
+        ' failed at random too'
+    )
+    decisions = flat(read('DECISIONS.md'))
+    for said in (
+        '**A test that fails in a full run and passes rerun alone failed at random, and counts as passed.**',
+        '(`tests/test_all_tools --only <category>`)',
+        coverage,
+        'One already listed there that fails at random again has its count raised, and the merge goes ahead',
+        # the user's answers to AGT-113, AGT-114 and the count, 2026-11-21
+        'The pool\'s other checks over the whole run are rerun with what they need (the user, 2026-11-21: "rerun")',
+        'a live check is rerun with its category alone in a scratch run',
+        'it is fixed when ROADMAP.md gets to it, whatever its count',
+        # the user's answers of 2026-11-21 on the reruns' edge cases (REVIEW.md AGT-119, AGT-120)
+        'A check that skips in its rerun is rerun once the cause of the skip is cleared',
+        'Another check failing in that rerun is rerun alone too, as a failure of the final check',
+        "The checks only the whole run makes there, such as its start checks and its check that the user's graph is back"
+        ' in the editor, are rerun with the whole run there',
+        "A failure that meets another entry's Reopen if still meets it when its rerun passes",
+        # the user's answer on the branch's own flaky check, 2026-11-21
+        "A test the branch was to make robust that fails at random reopens the branch's ROADMAP.md item",
+        "the item is unchecked, its Done note naming that row, as its fix isn't proven",
+    ):
+        assert said in decisions, said
+    # the user changed the second time, 2026-11-21; it says what happens, in neither term, as the user's "counts as
+    # failed" came with "no fix is mandatory" (REVIEW.md AGT-115)
+    for gone in ('counts as passed once', 'again counts as passed', 'again counts as failed'):
+        assert gone not in decisions, gone
+    live = flat(skill('live-check'))
+    for said in (
+        '**When the final check fails,** the runner first reruns each failing test alone',
+        'tests/test_all_tools --only <category>`',
+        coverage,
+        'A test that passes alone failed at random: the final check counts as passed for it, whatever its count',
+        "The pool's other checks over the whole run are rerun with what they need",
+        'the count of quits forced, with the categories it names, together: `--only <category> <category> ...`',
+        'a live check is rerun with its category alone in a scratch run',
+        '"Tests that failed at random", or raises the count of the row it has',
+        "unchecks the branch's ROADMAP.md item, its Done note naming the test's row (DECISIONS.md)",
+        'One that fails alone too is a failure (DECISIONS.md, Project rules)',
+    ):
+        assert said in live, said
+    assert 'When the final check fails, rerun each failing test alone in the same brief' in flat(agent('runner'))
+    assert 'a test that fails at random and passes rerun alone counting as passed' in flat(agents_md())
+    assert (
+        'it counts as passed, and the lead lists it in ROADMAP.md, or counts it again there, before the merge'
+        in flat(story_md())
+    )
+    roadmap = section(read('ROADMAP.md'), '## Tests that failed at random')
+    assert 'gets its count raised' in flat(roadmap) and 'and the merge goes ahead' in flat(roadmap)
+    assert '| Test | Times | Last seen | Commit | Its last FAIL line | Evidence kept |' in roadmap
 
 
 def test_a_leftover_in_the_branchs_own_code_is_fixed_in_the_branch() -> None:

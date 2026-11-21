@@ -107,7 +107,33 @@ findings' tests first, run together**, point 4):
 - **What goes in the entry,** for a review's probe: the probe in short and what it measured, in the scenario, so the
   agent addressing the finding can start its test from it.
 
-**When the final check fails,** each failure goes in `REVIEW.md` (the user, 2026-11-19). The runner reports the
+**When the final check fails,** the runner first reruns each failing test alone, in the same brief: a unit test by name,
+with lint and types; on macOS, a live check through the pool with its category alone, `mcp_server/venv/bin/python
+tests/test_all_tools --only <category>`, which also makes the pool's checks for it (its quit and crash dumps, and the
+start checks if they ran in it). The check that every tool was exercised, made only over a full run, names the tools no
+check ran for: the categories whose checks exercise them are rerun alone, and if they pass with checks run for those
+tools, it failed at random too. Their PASS lines in the rerun's output show those checks ran, as its summary leaves out
+a tool no check ran for. The pool's other checks over the whole run are rerun with what they need:
+- the count of quits forced, with the categories it names, together: `--only <category> <category> ...`;
+- Designer's preferences and a crash dump outside the run, which name no category, with the whole live self-test:
+  `mcp_server/venv/bin/python tests/test_all_tools --no-unit`. Another check failing in that rerun is rerun alone
+  too, as a failure of the final check.
+
+Off macOS, where `--only` refuses, a live check is rerun with its category alone in a scratch run (`alone.run`, above),
+once the user has closed the Designer the run left open: there `alone.run` takes every running Designer for the user's.
+The checks only the whole run makes there, such as its start checks and its check that the user's graph is back in the
+editor, are rerun with the whole run there.
+A check that skips in its rerun is rerun once the cause of the skip is cleared, such as a Designer outside the run; one
+whose cause can't be cleared is a failure.
+A test that passes alone failed at random: the final check counts as passed for it, whatever its count in ROADMAP.md.
+After the final check and before the merge, the lead adds its row to ROADMAP.md's
+"Tests that failed at random", or raises the count of the row it has, its FAIL line's `|` written `\|`, and runs the
+docs tests. A failure that meets a DECISIONS.md entry's Reopen if (Bridge and quitting's count of quits forced, a
+crash dump pointing at a cause) still meets it when its rerun passes: the lead tells the user with the merge.
+A test the branch was to make robust that fails at random unchecks the branch's ROADMAP.md item, its Done note naming
+the test's row (DECISIONS.md). One
+that fails alone too is a failure (DECISIONS.md, Project rules).
+Each failure goes in `REVIEW.md` (the user, 2026-11-19). The runner reports the
 failures, the lead writes each one, as a new finding or a reopened one (the `address-review` skill, step 4), and the
 developer fixes them. The developer reruns only the failing tests until they pass: unit tests by name (the summary lists
 them) with lint and types; a live check in a scratch run (failing only in the full run: run it beside other Designers, with

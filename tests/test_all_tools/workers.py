@@ -24,7 +24,16 @@ at once (2026-11-11), lifecycle (about 3.8 minutes) and then undo alone setting 
   a run, lifecycle's normal closes that reach `common.normal_close` counted too, fail a check of their own. A category's
   Designer's folder is kept after its quit was forced or named a sample of its threads (one that ended while sampled),
   lifecycle's after one of its normal closes forced during its shutdown that its check reached, to read its log and
-  sample (DECISIONS.md, Bridge and quitting; ROADMAP item 70).
+  sample (DECISIONS.md, Bridge and quitting; ROADMAP item 70). A category whose quit check failed keeps its Designer's
+  folder too, its worker passed or not: the Designer gone before the quit, say, whose log may tell why (REVIEW.md
+  TST-659).
+- **A failed worker keeps its evidence** (its exit code not 0): its scratch folder, with the shots its checks saved,
+  which the worker leaves (`__main__.one_run`), and its Designer's folder, with its log. The output names both, or
+  says none was made. When a worker or the unit suite failed, the run's folder is kept, holding only their folders. A
+  run failed only by the checks this parent makes (the quits, the preferences, the coverage) removes it. While a
+  Designer of the run may still run, the whole run's folder is kept, and its ports are named. A passing worker's
+  folders are removed.
+- **When each worker ran:** the line before its output says when it started and ended, in seconds from the run's start.
 - **No folder shared** between workers (worker_env): with the system's temp folder shared, two of five runs lost a
   Designer (ROADMAP item 59).
 - **No unit test starts a real run:** `spawn` and the index's run refuse under pytest unless the test faked them (a
@@ -36,6 +45,8 @@ asks for it to be closed and starts nothing (all share the preferences plist, wh
 runs: check_the_preferences). Off macOS, where launch_designer starts one per port only there, it is one run in one
 Designer (`__main__.py`'s docstring)."""
 
+import contextlib
+import glob
 import json
 import os
 import re
@@ -54,6 +65,7 @@ from test_all_tools.categories import CATEGORIES, CLIPBOARD, SOLO, category_name
 from test_all_tools.common import (
     QUIT_FORCED_IN_SHUTDOWN,
     QUIT_SAMPLED,
+    SCRATCH_PREFIX,
     NoListing,
     agent_folder,
     agents_designers,
@@ -135,15 +147,19 @@ def worker_env(port: int, folder: str, gate: Gate | None = None) -> dict[str, st
     another worker: its snapshots and its temp folder (TMPDIR: its scratch folder, its server's temporary files) in its
     own folder, by their real path (under a symlink, the paths Designer writes in a snapshot come out one `..` short:
     ROADMAP item 57). Its Designer's temp folder and home are its own already (launch_designer)."""
-    real = os.path.realpath(folder)
     env = dict(os.environ)
     env['SD_BRIDGE_PORT'] = str(port)
-    env['SD_SNAPSHOT_DIR'] = os.path.join(real, 'snapshots')
-    env['TMPDIR'] = os.path.join(real, 'tmp')
+    env['SD_SNAPSHOT_DIR'] = os.path.join(os.path.realpath(folder), 'snapshots')
+    env['TMPDIR'] = temp_folder(folder)
     os.makedirs(env['TMPDIR'], exist_ok=True)
     if gate is not None:
         env.update(gate.env())
     return env
+
+
+def temp_folder(folder: str) -> str:
+    """The temp folder (TMPDIR) a worker or the unit suite gets in its folder, by its real path (worker_env)."""
+    return os.path.join(os.path.realpath(folder), 'tmp')
 
 
 class _Start(TypedDict, total=False):
@@ -171,7 +187,7 @@ def start_unit(folder: str) -> 'subprocess.Popen[bytes]':
     """The whole unit suite from the repository, its lines going to <folder>/unit.log, with a temp folder of its own
     (its tests' tmp_path): no folder shared with a worker."""
     env = dict(os.environ)
-    env['TMPDIR'] = os.path.join(os.path.realpath(folder), 'tmp')
+    env['TMPDIR'] = temp_folder(folder)
     os.makedirs(env['TMPDIR'], exist_ok=True)
     with open(os.path.join(folder, 'unit.log'), 'wb') as log:
         return spawn([sys.executable, '-m', 'pytest', '-q'], cwd=REPO, env=env, stdout=log, stderr=subprocess.STDOUT)
@@ -303,11 +319,15 @@ def wait_for_dumps(ports: Sequence[int], before: set[str], until: float) -> None
         sleep(POLL_S)
 
 
-def check_the_quits(parts: Mapping[str, WorkerResults | None], port_of: Mapping[str, int], before: set[str]) -> None:
+def check_the_quits(
+    parts: Mapping[str, WorkerResults | None], port_of: Mapping[str, int], before: set[str]
+) -> set[str]:
     """After one wait from the last quit (wait_for_dumps): each category's quit check, failed by a quit forced before its close took or
     whose log couldn't be read (common.closed_by_quit), none, or a crash dump in its Designer's folder; more than two
     quits forced during their shutdown, the categories' and those of lifecycle's normal closes (its `forced_in_shutdown`),
-    fail a check of their own, as does a new dump elsewhere (the shared folder)."""
+    fail a check of their own, as does a new dump elsewhere (the shared folder). Returns the categories whose quit check
+    failed: their Designers' folders are kept (REVIEW.md TST-659)."""
+    failed: set[str] = set()
     quits = [at for part in parts.values() if part and (at := part.get('quit_at'))]
     if quits:
         wait_for_dumps(sorted(port_of.values()), before, max(quits) + CRASH_WAIT_S)
@@ -323,16 +343,20 @@ def check_the_quits(parts: Mapping[str, WorkerResults | None], port_of: Mapping[
         if part is None:  # no quit to check: its failure is already one (merge); its dumps, if any, one more
             if dumps:
                 common.check('quit_designer', "%s's Designer left no crash dump" % name, False, str(dumps))
+                failed.add(name)
             continue
         t = part.get('quit') or 'no quit'
         if 'forced' in t or QUIT_SAMPLED in t:  # whole: a check's detail is cut, the log's line and sample with it
             print("      %s's quit whole: %s" % (name, t))
+        closed = closed_by_quit(t) and not dumps
         common.check(
             'quit_designer',
             "closes %s's Designer, which left no crash dump" % name,
-            closed_by_quit(t) and not dumps,
+            closed,
             '%s; new crash dumps: %s' % (t, dumps),
         )
+        if not closed:
+            failed.add(name)
     # each passes its own check (DECISIONS.md, Bridge and quitting); more than the two seen at once (ROADMAP item 69) is
     # a pattern, such as a task every Designer leaves in Qt's thread pool, which the user's own Designer would hang on too
     in_shutdown = sorted(n for n, part in parts.items() if part and QUIT_FORCED_IN_SHUTDOWN in (part.get('quit') or ''))
@@ -347,6 +371,7 @@ def check_the_quits(parts: Mapping[str, WorkerResults | None], port_of: Mapping[
     )
     if new - placed:
         common.check('self-test', 'no new crash dump outside the run', False, str(sorted(new - placed)))
+    return failed
 
 
 PREFERENCES = "Designer's preferences are as before the run, once its Designers ended"
@@ -457,7 +482,7 @@ def run_pool(slots: int, unit: bool = True, only: Sequence[str] | None = None) -
     before = crash_dumps(chosen, run_port=False)
     preferences = preferences_before()
     began: dict[str, float] = {}
-    took: dict[str, float] = {}
+    ended: dict[str, float] = {}
     # the first to start after lifecycle (which runs none of them), not the one SOLO keeps for last unless it is alone
     others = [name for name in order if name != LIFECYCLE]
     first = next((name for name in others if name not in SOLO), others[0] if others else None)
@@ -492,13 +517,17 @@ def run_pool(slots: int, unit: bool = True, only: Sequence[str] | None = None) -
         gate=gate,
         exclusive=CLIPBOARD,
         solo=SOLO,
-        on_end=lambda name: took.update({name: time.monotonic() - began[name]}),
+        on_end=lambda name: ended.update({name: time.monotonic()}),
     )
     unit_code = unit_proc.wait() if unit_proc else None
     wall = time.monotonic() - started
     parts: dict[str, WorkerResults | None] = {}
     for name in order:
-        print('\n===== worker %s (exit code %d, %.0f s) =====' % (name, codes[name], took.get(name, 0.0)))
+        # when it ran, so who ran beside whom is read from these lines
+        print(
+            '\n===== worker %s (exit code %d, %.0f s, from %.0f s to %.0f s of the run) ====='
+            % (name, codes[name], ended[name] - began[name], began[name] - started, ended[name] - started)
+        )
         with open(os.path.join(folder_of[name], name + '.log'), encoding='utf-8', errors='replace') as log:
             print(log.read().rstrip())
         parts[name] = _read(results_path(folder_of[name], name))
@@ -514,7 +543,7 @@ def run_pool(slots: int, unit: bool = True, only: Sequence[str] | None = None) -
         common.results.setdefault(tool, []).extend(oks)
     common.skipped.extend(skipped)
     common.times.update(times)
-    check_the_quits(parts, port_of, before)
+    quit_failed = check_the_quits(parts, port_of, before)
     check_the_preferences(preferences, chosen)
     if unit_code is not None:
         last = unit_lines.splitlines()[-1] if unit_lines else 'no output'
@@ -528,28 +557,64 @@ def run_pool(slots: int, unit: bool = True, only: Sequence[str] | None = None) -
     summary, ok = summarize(tools, common.results, common.skipped, common.times)
     print(summary)
     print('wall time %.0f s, %d categories, %s' % (wall, len(order), what))
-    keep = {port_of[n] for n, part in parts.items() if part and _quit_to_keep(part)}
-    _clean_up(root, chosen, keep)
+    # a failed worker's evidence: the shots in its scratch folder, which it leaves (__main__.one_run), and its
+    # Designer's log in its Designer's folder
+    failed = [name for name in order if codes[name] != 0]
+    for name in failed:
+        scratch = sorted(glob.glob(os.path.join(temp_folder(folder_of[name]), SCRATCH_PREFIX + '*')))
+        print('kept, %s failed, its scratch folder: %s' % (name, ', '.join(scratch) or 'none'))
+    keep: dict[int, str] = {}  # each port's reasons, both when a failed worker's quit was forced too
+    for name in order:
+        part = parts[name]
+        # each reason names the category: the folder's name holds only its port (REVIEW.md TST-670)
+        why = (["%s failed, its Designer's folder" % name] if name in failed else []) + (
+            ["%s's quit was forced or sampled" % name] if part and _quit_to_keep(part) else []
+        )
+        why += ["%s's quit check failed" % name] if name in quit_failed else []
+        if why:
+            keep[port_of[name]] = '; '.join(why)
+    evidence = [folder_of[name] for name in failed] + ([unit_folder] if unit_code else [])
+    _clean_up(root, chosen, keep, evidence, {port: name for name, port in port_of.items()})
     return 0 if ok else 1
 
 
-def _clean_up(root: str, chosen: list[int], keep: Collection[int] = ()) -> None:
+def _clean_up(
+    root: str, chosen: list[int], keep: Mapping[int, str], evidence: Sequence[str], owners: Mapping[int, str]
+) -> None:
     """The folders launch_designer made for the workers' Designers (about 90 MB each), unless one still runs there, left
-    a crash dump or is in `keep` (run_pool's: the ports whose quit was forced or sampled, their log saying how far that
-    quit got), to read; then the run's folder, once none of its Designers is left."""
+    a crash dump or is in `keep`, to read; then the run's folder, once none of its Designers is left: all of it, or all
+    but the folders in `evidence`. run_pool's `keep`: the ports whose quit was forced or sampled, their log saying how
+    far that quit got, those whose quit check failed, and those of the failed workers, each with why it is kept, the
+    category named. Its `evidence`: the failed workers' folders, which hold their scratch folders, and the unit suite's
+    when it failed. `owners`: each port's category, named on each line of a folder kept: a folder's name holds only its
+    port (REVIEW.md TST-670)."""
     try:
         left = set(chosen) & set(agents_designers())
     except Exception as e:  # can't tell: everything kept
         left = set(chosen)
         print("the workers' Designers can't be listed (%s)" % e)
     for port in sorted(set(chosen) - left):
-        if _holds_a_crash_dump(agent_folder(port)):
-            print('kept, it holds a crash dump:', agent_folder(port))
-        elif port in keep:
-            print('kept, its quit was forced or sampled:', agent_folder(port))
+        folder = agent_folder(port)
+        if _holds_a_crash_dump(folder):
+            print("kept, %s's folder holds a crash dump: %s" % (owners[port], folder))
+        elif port in keep:  # a worker that failed before its launch made none
+            print('kept, %s: %s' % (keep[port], folder if os.path.isdir(folder) else 'none'))
         else:
-            shutil.rmtree(agent_folder(port), ignore_errors=True)
+            shutil.rmtree(folder, ignore_errors=True)
     if left:
-        print('folders kept, a Designer of the run may still be open:', root, sorted(left))
+        running = ', '.join("%s's (port %d)" % (owners[port], port) for port in sorted(left))
+        print('folders kept, a Designer of the run may still be open: %s; %s' % (root, running))
+    elif evidence:
+        for entry in os.listdir(root):
+            path = os.path.join(root, entry)
+            if path in evidence:
+                continue
+            if os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+            else:  # the launch lock's file, which a worker killed holding the lock leaves
+                with contextlib.suppress(OSError):
+                    os.remove(path)
+        names = ', '.join(os.path.basename(folder) for folder in evidence)
+        print("the run's folder kept, with only the folders of what failed: %s (%s)" % (root, names))
     else:
         shutil.rmtree(root, ignore_errors=True)

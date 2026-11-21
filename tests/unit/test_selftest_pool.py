@@ -7,9 +7,11 @@ import asyncio
 import inspect
 import json
 import os
+import re
 import sys
+import tempfile
 import time
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Sequence
 from pathlib import Path
 from types import ModuleType, SimpleNamespace, TracebackType
 from typing import IO, TYPE_CHECKING, NoReturn, TypedDict, Unpack, cast
@@ -494,6 +496,25 @@ def test_the_pool_runs_every_category_once_and_prints_one_summary(
     assert 'quit_designer' in out and not (tmp_path / 'root').exists()
 
 
+def test_the_pool_says_when_each_worker_ran_from_the_runs_start(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    # ROADMAP item 112: who ran beside whom was rebuilt from sums of times; the output now says it
+    now = [1000.0]
+    monkeypatch.setattr(time, 'monotonic', lambda: now[0])
+
+    def write(name: str, folder: str, port: int) -> 'WorkerResults':
+        now[0] += 10  # each worker takes 10 s, one after the other
+        return part(name)
+
+    workers = pool(monkeypatch, tmp_path, write)
+    assert workers.run_pool(4) == 0
+    out = capsys.readouterr().out
+    for i, name in enumerate(workers.names()):
+        line = '===== worker %s (exit code 0, 10 s, from %d s to %d s of the run) =====' % (name, 10 * i, 10 * i + 10)
+        assert line in out, name
+
+
 def test_one_wait_for_crash_dumps_at_the_end_and_each_dump_fails_its_category_only(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
@@ -599,8 +620,33 @@ def test_a_forced_quits_designer_folder_is_kept_to_read_its_log(
         os.makedirs(tmp_path / ('agent_%d' % port))
     workers.run_pool(4)
     kept = list(tmp_path.glob('agent_*'))
-    assert len(kept) == 1 and 'kept, its quit was forced or sampled: %s' % kept[0] in capsys.readouterr().out
+    # REVIEW.md TST-670: the folder's name holds a port no line names; the reason names the category
+    assert len(kept) == 1 and "kept, render's quit was forced or sampled: %s" % kept[0] in capsys.readouterr().out
     assert kept[0].name == 'agent_%d' % ports['render'], "render's (REVIEW.md TST-294)"
+
+
+def test_a_passing_workers_failed_quit_keeps_its_designers_folder(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    # REVIEW.md TST-659: render passed every check, its worker exiting 0, and its Designer was gone before the quit; the
+    # quit check failed, and the folder holding the log that could say why was removed (the branch's rule 5)
+    ports: dict[str, int] = {}
+
+    def write(name: str, folder: str, port: int) -> 'WorkerResults':
+        ports[name] = port
+        return part(
+            name, 'No Designer is running on port %d.' % port if name == 'render' else 'Designer quit after 2s.'
+        )
+
+    workers = pool(monkeypatch, tmp_path, write)
+    for port in range(5001, 5001 + len(workers.names())):
+        os.makedirs(tmp_path / ('agent_%d' % port))
+    workers.run_pool(4)
+    out = capsys.readouterr().out
+    assert "FAIL  quit_designer          closes render's Designer, which left no crash dump" in out
+    kept = [k.name for k in tmp_path.glob('agent_*')]
+    assert kept == ['agent_%d' % ports['render']], kept
+    assert "kept, render's quit check failed: %s" % (tmp_path / kept[0]) in out
 
 
 def test_a_quit_ending_while_sampled_passes_and_keeps_its_folder(
@@ -634,6 +680,126 @@ def test_a_quit_ending_while_sampled_passes_and_keeps_its_folder(
         )
         in out
     )
+
+
+@pytest.mark.parametrize('unit_code', [0, 1], ids=['unit passed', 'unit failed'])
+@pytest.mark.parametrize('how', ['a check failed', 'no results'])
+def test_a_failed_workers_scratch_and_designers_folders_are_kept_and_named(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path, how: str, unit_code: int
+) -> None:
+    # ROADMAP item 112: the shots its checks saved (its scratch folder, which a failed worker leaves) and its Designer's
+    # log were deleted with the run, so a failure seen once in a full run couldn't be explained. REVIEW.md TST-644: only
+    # what failed stays in the run's folder. TST-645: the scratch is made where a worker's one_run makes it, in its
+    # TMPDIR with the prefix (test_a_failed_worker_keeps_its_scratch_and_says_where), and no passing worker is kept
+    ports: dict[str, int] = {}
+
+    def write(name: str, folder: str, port: int) -> 'WorkerResults | None':
+        ports[name] = port
+        if name != 'render':
+            return part(name)
+        # mkdtemp is the pool's fake here: the folder one_run's makes, by hand
+        os.makedirs(scratch(name))
+        Path(scratch(name), 'shot.png').write_bytes(b'')
+        return {**part(name), 'results': {'t': [False]}} if how == 'a check failed' else None
+
+    workers = pool(monkeypatch, tmp_path, write, unit=lambda folder: unit_log(folder, unit_code))
+
+    def scratch(name: str) -> str:
+        temp: str = workers.envs[name]['TMPDIR']
+        return os.path.join(temp, workers.common.SCRATCH_PREFIX + 'x')
+
+    for port in range(5001, 5001 + len(workers.names())):
+        os.makedirs(tmp_path / ('agent_%d' % port))
+    assert workers.run_pool(4) == 1
+    out = capsys.readouterr().out
+    designers = tmp_path / ('agent_%d' % ports['render'])
+    assert Path(scratch('render'), 'shot.png').exists()
+    assert [p.name for p in tmp_path.glob('agent_*')] == [designers.name], "the passing workers' are removed"
+    assert [line for line in out.splitlines() if line.startswith('kept, ')] == [
+        'kept, render failed, its scratch folder: %s' % scratch('render'),
+        "kept, render failed, its Designer's folder: %s" % designers,
+    ]
+    root = os.path.realpath(tmp_path / 'root')
+    failed = ['render', 'unit'] if unit_code else ['render']
+    assert sorted(os.listdir(root)) == failed, "the passing workers' folders, the unit suite's if it passed"
+    assert "the run's folder kept, with only the folders of what failed: %s (%s)" % (root, ', '.join(failed)) in out
+
+
+@pytest.mark.parametrize('removed', [True, False], ids=['removed', 'its removal fails'])
+def test_a_kept_runs_folder_loses_the_launch_locks_file(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path, removed: bool
+) -> None:
+    # REVIEW.md TST-654: a worker killed holding the lock leaves its file; its removal was never tested, nor guarded as
+    # the folders' are
+    workers = pool(
+        monkeypatch,
+        tmp_path,
+        lambda name, folder, port: {**part(name), 'results': {'t': [False]}} if name == 'render' else part(name),
+    )
+    lock = tmp_path / 'root' / 'launch.lock'
+    lock.write_text('')
+    if not removed:
+        real = os.remove
+
+        def remove(path: str) -> None:
+            if str(path).endswith('launch.lock'):
+                raise PermissionError('in use')
+            real(path)
+
+        monkeypatch.setattr(os, 'remove', remove)
+    assert workers.run_pool(4) == 1
+    assert lock.exists() is not removed
+    assert "the run's folder kept, with only the folders of what failed" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('unit_code', [0, 1], ids=['nothing failed', 'the unit suite failed'])
+def test_a_failed_unit_suite_alone_keeps_its_folder_in_the_runs(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path, unit_code: int
+) -> None:
+    # REVIEW.md TST-644: what failed keeps its folder, the unit suite as a worker; nothing failed, nothing stays
+    workers = pool(monkeypatch, tmp_path, lambda name, folder, port: part(name), unit=lambda f: unit_log(f, unit_code))
+    assert workers.run_pool(4) == unit_code
+    root = os.path.realpath(tmp_path / 'root')
+    if unit_code:
+        assert os.listdir(root) == ['unit']
+        assert (
+            "the run's folder kept, with only the folders of what failed: %s (unit)" % root in capsys.readouterr().out
+        )
+    else:
+        assert not os.path.exists(root)
+
+
+def test_a_failed_worker_with_no_designers_folder_nor_scratch_is_said_so(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    # REVIEW.md TST-643: its server failed before launch_designer, so neither its Designer's folder nor a scratch was
+    # made, and the line named a folder that isn't there
+    workers = pool(monkeypatch, tmp_path, lambda name, folder, port: None if name == 'render' else part(name))
+    assert workers.run_pool(4) == 1
+    out = capsys.readouterr().out
+    assert 'kept, render failed, its scratch folder: none' in out
+    assert "kept, render failed, its Designer's folder: none" in out
+
+
+def test_a_failed_worker_whose_quit_was_forced_says_both_why_its_folder_is_kept(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    # REVIEW.md TST-643: the failure's reason replaced the forced quit's, which says its log shows how far the quit got
+    ports: dict[str, int] = {}
+
+    def write(name: str, folder: str, port: int) -> 'WorkerResults':
+        ports[name] = port
+        if name != 'render':
+            return part(name)
+        return {**part(name, _forced(project_constants.QUIT_FORCED_IN_SHUTDOWN)), 'results': {'t': [False]}}
+
+    workers = pool(monkeypatch, tmp_path, write)
+    for port in range(5001, 5001 + len(workers.names())):
+        os.makedirs(tmp_path / ('agent_%d' % port))
+    assert workers.run_pool(4) == 1
+    designers = tmp_path / ('agent_%d' % ports['render'])
+    out = capsys.readouterr().out
+    assert "kept, render failed, its Designer's folder; render's quit was forced or sampled: %s" % designers in out
 
 
 def test_lifecycles_quits_forced_during_their_shutdown_count_and_keep_its_folder(
@@ -797,13 +963,200 @@ def test_a_worker_that_closed_its_designer_ends_nothing_else_and_removes_its_scr
     assert not scratch.exists()
 
 
+@pytest.mark.parametrize('how', ['a check failed', 'the run raised'])
+def test_a_failed_worker_keeps_its_scratch_and_says_where(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path, how: str
+) -> None:
+    # ROADMAP item 112: the shots a failed check saved there are its evidence; the pool keeps them with the run's folder.
+    # REVIEW.md TST-645: made in the worker's TMPDIR (workers.worker_env), named with the prefix, where the pool looks
+    index = fresh('__main__')
+    temp = tmp_path / 'tmp'
+    temp.mkdir()
+    monkeypatch.setenv('TMPDIR', str(temp))
+    monkeypatch.setattr(tempfile, 'tempdir', None)  # tempfile reads TMPDIR again
+
+    async def run(
+        scratch: str, steps: list['Step'] | None = None, worker: str | None = None, first: bool = False
+    ) -> list[str]:
+        if how == 'the run raised':
+            raise RuntimeError('the bridge is gone')
+        index.check('t', 'a check', False)
+        return ['t']
+
+    monkeypatch.setitem(vars(index), 'run', run)
+    monkeypatch.setitem(vars(index), 'agents_designers', dict)  # its Designer ended: nothing keeps the folder
+    monkeypatch.setitem(vars(index), 'crash_dumps', lambda ports=(): set())
+    with pytest.raises(SystemExit if how == 'a check failed' else RuntimeError):
+        index.one_run(worker='undo', results_file=str(tmp_path / 'undo.json'))
+    said = re.search(r'scratch folder kept, the run failed: (.*)', capsys.readouterr().out)
+    assert said, 'the path said'
+    scratch = Path(said.group(1))
+    assert scratch.is_dir() and scratch.parent == temp and scratch.name.startswith(index.common.SCRATCH_PREFIX)
+
+
 def test_undo_and_redo_raise_and_activate_their_window_first() -> None:
     # beside another Designer (a pool's), Undo of an output's fields did nothing, 8 times in 8, until the window was
     # raised and activated first; then 8 in 8 passed (REVIEW.md TST-234)
     common = fresh('common')
     snippet = common.UNDO_REDO
-    assert snippet.index('mw.activateWindow()') < snippet.index('QTimer.singleShot(0, acts[0].trigger)')
+    assert snippet.index('mw.activateWindow()') < snippet.index('QTimer.singleShot(0, _fire)')
     assert snippet.index('mw.raise_()') < snippet.index('mw.activateWindow()')
+
+
+def _undo_redo_on_fakes(
+    monkeypatch: pytest.MonkeyPatch, unreadable: bool = False, current: str = 'mcp_selftest', enabled: bool = True
+) -> tuple[ModuleType, list[str], list[Callable[[], None]]]:
+    """common, imported afresh, with fakes of sd and Qt for its UNDO_REDO snippet: `current` the graph in the editor,
+    the Edit menu's Undo `enabled`, Designer's state `unreadable` or not. Returns common, the actions triggered and the
+    timers scheduled."""
+    common = fresh('common')
+    fired: list[str] = []
+    timers: list[Callable[[], None]] = []
+
+    class QWidget:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def objectName(self) -> str:
+            return self.name
+
+        def window(self) -> 'QWidget':
+            return QWidget('designer')
+
+    class QMenu(QWidget):
+        def title(self) -> str:
+            return '&Edit'
+
+        def actions(self) -> list[SimpleNamespace]:
+            return [
+                SimpleNamespace(text=lambda: 'Undo', isEnabled=lambda: enabled, trigger=lambda: fired.append('Undo'))
+            ]
+
+        def menuAction(self) -> SimpleNamespace:  # held by a menu bar, and by an object that is no widget
+            return SimpleNamespace(associatedObjects=lambda: [QWidget('menu bar'), SimpleNamespace()])
+
+    def app_state() -> SimpleNamespace:
+        if unreadable:
+            raise RuntimeError('Internal C++ object already deleted')
+        return SimpleNamespace(name='ApplicationInactive')
+
+    qt_widgets = SimpleNamespace(
+        QApplication=SimpleNamespace(
+            instance=lambda: SimpleNamespace(allWidgets=lambda: [QMenu('edit')]), activeWindow=lambda: None
+        ),
+        QMenu=QMenu,
+        QWidget=QWidget,
+    )
+    ui = SimpleNamespace(
+        getCurrentGraph=lambda: SimpleNamespace(getIdentifier=lambda: current),
+        getMainWindow=lambda: SimpleNamespace(raise_=dict, activateWindow=dict),
+    )
+    app = SimpleNamespace(getQtForPythonUIMgr=lambda: ui)
+    fakes = {
+        'sd': SimpleNamespace(getContext=lambda: SimpleNamespace(getSDApplication=lambda: app)),
+        'PySide6': SimpleNamespace(),
+        'PySide6.QtCore': SimpleNamespace(QTimer=SimpleNamespace(singleShot=lambda ms, f: timers.append(f))),
+        'PySide6.QtGui': SimpleNamespace(
+            QGuiApplication=SimpleNamespace(applicationState=app_state, focusWindow=lambda: None)
+        ),
+        'PySide6.QtWidgets': qt_widgets,
+    }
+    for name, module in fakes.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    # setitem: the snippets remove what they keep (UNDO_FIRED)
+    monkeypatch.setitem(vars(sys), '_selftest_undo_fired', 'from an earlier Undo')
+    monkeypatch.setitem(vars(sys), '_selftest_undo_armed', None)
+    return common, fired, timers
+
+
+def _run(snippet: str) -> None:
+    exec(compile(snippet, 'snippet', 'exec'), {})
+
+
+@pytest.mark.parametrize(
+    'unreadable, state',
+    [
+        (False, "app=ApplicationInactive active=none focus=none menus: QWidget:designer 'Undo' enabled=True"),
+        (True, 'unread (Internal C++ object already deleted)'),
+    ],
+)
+def test_undo_and_redo_keep_designers_state_as_scheduled_and_as_fired(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], unreadable: bool, state: str
+) -> None:
+    # ROADMAP item 112: a failed Undo couldn't tell whether its action fired, nor in what state; a state that can't be
+    # read never keeps the action from being scheduled or firing. REVIEW.md TST-650: nothing runs a process in Designer
+    # around the Undo (lsappinfo in the timer's callback kept it from landing): the self-test's client reads the app in
+    # front (undo/edit_menu.py). The snippet runs on fakes of sd and Qt
+    common, fired, timers = _undo_redo_on_fakes(monkeypatch, unreadable)
+    assert 'subprocess' not in common.UNDO_REDO and 'lsappinfo' not in common.UNDO_REDO
+    _run(common.UNDO_REDO % ('mcp_selftest', 'Undo'))
+    assert capsys.readouterr().out.splitlines() == ['AT_SCHEDULE ' + state, 'SCHEDULED']
+    assert vars(sys)['_selftest_undo_fired'] is None and not fired and len(timers) == 1, 'nothing fired yet'
+    timers[0]()
+    assert fired == ['Undo'] and vars(sys)['_selftest_undo_fired'] == state
+    _run(common.UNDO_FIRED)
+    assert capsys.readouterr().out == 'ARMED True\nFIRED %s\n' % state
+
+
+def test_a_read_of_an_action_not_fired_yet_disarms_it(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # ROADMAP item 112: an action read as never fired is sent again; fired after that read, it would undo twice
+    common, fired, timers = _undo_redo_on_fakes(monkeypatch)
+    _run(common.UNDO_REDO % ('mcp_selftest', 'Undo'))
+    _run(common.UNDO_FIRED)
+    assert capsys.readouterr().out.splitlines()[-2:] == ['ARMED True', 'FIRED None']
+    timers[0]()
+    assert fired == [], 'disarmed: it never fires'
+    # REVIEW.md TST-690: a read after that says none was armed since, so 'FIRED None' says nothing of an action
+    _run(common.UNDO_FIRED)
+    assert capsys.readouterr().out.splitlines() == ['ARMED False', 'FIRED None']
+
+
+@pytest.mark.parametrize('now', ['probe_other', None], ids=['another graph', 'none'])
+def test_an_action_whose_graph_isnt_current_as_it_fires_doesnt_fire(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], now: str | None
+) -> None:
+    # REVIEW.md TST-693: the self-test graph was checked only as the action was scheduled, and Edit > Undo acts on the
+    # document in focus as it fires
+    common, fired, timers = _undo_redo_on_fakes(monkeypatch)
+    _run(common.UNDO_REDO % ('mcp_selftest', 'Undo'))
+    ui = sys.modules['sd'].getContext().getSDApplication().getQtForPythonUIMgr()
+    ui.getCurrentGraph = lambda: None if now is None else SimpleNamespace(getIdentifier=lambda: now)
+    timers[0]()
+    assert fired == [], 'not triggered'
+    _run(common.UNDO_FIRED)
+    assert capsys.readouterr().out.splitlines()[-2:] == ['ARMED True', 'FIRED NOT_CURRENT current=%s' % (now or 'none')]
+
+
+def test_only_the_last_action_sent_fires(monkeypatch: pytest.MonkeyPatch) -> None:
+    common, fired, timers = _undo_redo_on_fakes(monkeypatch)
+    for _ in range(2):
+        _run(common.UNDO_REDO % ('mcp_selftest', 'Undo'))
+    for timer in timers:
+        timer()
+    assert fired == ['Undo'], 'the first replaced by the second'
+
+
+@pytest.mark.parametrize(
+    'current, enabled, said',
+    [
+        ('other_graph', True, 'NOT_FOCUSED current=other_graph'),
+        (
+            'mcp_selftest',
+            False,
+            "NO_ACTION app=ApplicationInactive active=none focus=none menus: QWidget:designer 'Undo' enabled=False",
+        ),
+    ],
+    ids=['another graph in the editor', 'the action disabled'],
+)
+def test_an_undo_scheduling_nothing_says_the_state_seen(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], current: str, enabled: bool, said: str
+) -> None:
+    # the branch's rule 8: the check fails with it, where it skipped
+    common, fired, timers = _undo_redo_on_fakes(monkeypatch, current=current, enabled=enabled)
+    _run(common.UNDO_REDO % ('mcp_selftest', 'Undo'))
+    assert capsys.readouterr().out.splitlines() == [said] and timers == [] and fired == []
 
 
 def test_a_second_holder_waits_for_the_first_to_release_the_lock(
@@ -847,7 +1200,13 @@ def test_the_folders_are_kept_while_a_designer_of_the_run_may_run(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path, listing: str
 ) -> None:
     # never a folder deleted under a running Designer: deleting one crashed Designer twice (REVIEW.md PLG-9)
-    workers = pool(monkeypatch, tmp_path, lambda name, folder, port: part(name))
+    names: dict[int, str] = {}
+
+    def write(name: str, folder: str, port: int) -> 'WorkerResults':
+        names[port] = name
+        return part(name)
+
+    workers = pool(monkeypatch, tmp_path, write)
     for port in range(5001, 5001 + len(workers.names())):
         (tmp_path / ('agent_%d' % port)).mkdir()
 
@@ -861,6 +1220,8 @@ def test_the_folders_are_kept_while_a_designer_of_the_run_may_run(
     out = capsys.readouterr().out
     kept = sorted(p.name for p in tmp_path.glob('agent_*'))
     assert (tmp_path / 'root').is_dir() and 'folders kept, a Designer of the run may still be open' in out
+    if listing == 'one still running':  # whose Designer it is, not only its port (REVIEW.md TST-670)
+        assert "%s's (port 5002)" % names[5002] in out, out
     if sys.platform == 'darwin':  # where the plist is
         preferences = next(line for line in out.splitlines() if PREFERENCES in line)
         assert preferences.startswith('FAIL'), "nothing could put them back, or that can't be told: %s" % preferences
@@ -899,6 +1260,28 @@ def test_a_report_uploaded_during_the_run_is_no_new_dump(
     monkeypatch.setitem(vars(workers), 'crash_dumps', dumps)
     assert workers.run_pool(4) == 0
     assert 'no new crash dump outside the run' not in capsys.readouterr().out
+
+
+def test_a_kept_folder_holding_a_crash_dump_names_its_category(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    # REVIEW.md TST-670: "kept, it holds a crash dump: .../agent_5003": the folder's name holds only the port
+    ports: dict[str, int] = {}
+
+    def write(name: str, folder: str, port: int) -> 'WorkerResults':
+        ports[name] = port
+        if name == 'render':  # its Designer left a report
+            dumps = tmp_path / ('agent_%d' % port) / 'Sentry-Crashpad' / 'completed'
+            dumps.mkdir(parents=True)
+            (dumps / 'x.dmp').touch()
+        return part(name)
+
+    workers = pool(monkeypatch, tmp_path, write)
+    for port in range(5001, 5001 + len(workers.names())):
+        os.makedirs(tmp_path / ('agent_%d' % port))
+    workers.run_pool(4)
+    out = capsys.readouterr().out
+    assert "kept, render's folder holds a crash dump: %s" % (tmp_path / ('agent_%d' % ports['render'])) in out, out
 
 
 @pytest.mark.parametrize('waiting', [False, True], ids=['completed', 'pending'])

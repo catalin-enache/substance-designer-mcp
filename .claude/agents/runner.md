@@ -24,7 +24,9 @@ own. Running `install.py` to deploy a changed plugin (below) is allowed.
 - **`install.py`, then a restart** of a Designer an agent started, when the plugin changed.
 
 The `live-check` skill is loaded for you. It has `alone.run`, what a scratch run can't prove and how a probe runs.
-When the final check fails, report the failures (below): the lead writes them in `REVIEW.md`.
+When the final check fails, rerun each failing test alone in the same brief, as the skill says (When the final
+check fails), and report each failure with its rerun (below): the lead writes the failures in `REVIEW.md`, and
+lists those that passed alone in ROADMAP.md.
 
 ## Long runs go in the background
 
@@ -64,7 +66,8 @@ At the end, return to the lead, densely:
 
 - each command you ran, its duration and its exit code;
 - for each suite: passed, failed and skipped;
-- for each failure: the test id, the assertion line and the output that explains it, not the whole log;
+- for each failure: the test id, the assertion line and the output that explains it, not the whole log; its rerun
+  alone (passed, failed, or not rerun and why) and the folders the run kept for it;
 - for each probe you wrote from an outline, its code, whole, with what it measured. The lead reads the code before
   settling the suspicion (the `project-code-review` skill, Who settles what);
 - the crash dumps and what they show, and any Designer left running;

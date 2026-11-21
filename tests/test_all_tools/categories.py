@@ -62,7 +62,9 @@ CATEGORIES: list[Step] = [
 CLIPBOARD: frozenset[str] = frozenset({'facts', 'editor_panels_and_fit'})
 # last in a pool, with no other Designer of the run: beside the others (starting, closing their Home screen, lifecycle's
 # own launches) Undo of an output's fields failed in 3 pool runs of 4, and 8 times in 8 beside one idle Designer until
-# its window was raised and activated first (common.UNDO_REDO)
+# its window was raised and activated first (common.UNDO_REDO). In the 2026-11-20 final check that Undo failed with
+# `undo` run last and alone, no other Designer running: an Undo is now read back until the graph shows it, and sent
+# again only when its action never fired (undo/edit_menu.py). Whether `undo` still needs to run alone wasn't measured
 SOLO: frozenset[str] = frozenset({'undo'})
 
 

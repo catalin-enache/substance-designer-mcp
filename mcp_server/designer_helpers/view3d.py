@@ -11,8 +11,27 @@ Designer's API has none of it
   checked already. The camera turns to a viewpoint over a moment, and a Frame triggered at once cancels the turn, so
   Frame waits for the turn to end (_Frames.moved: frames3d.py).
 - Zoom: wheel events on the viewport (the visible Alg::Gui3D::ViewportWidget), taken as from the mouse although the
-  view is GPU-drawn: about 1.11x a step closer, 1.09x a step away, from wherever the camera is. Sent back to back,
-  some are dropped, so each waits for the view to take the one before (_Frames.taking: frames3d.py).
+  view is GPU-drawn: about 1.11x a step closer, 1.09x a step away, from wherever the camera is. One event carrying
+  several notches (angleDelta 6 x 120, or -3 x 120) is taken as one notch, so each notch is an event of its own.
+  Sent back to back, some are dropped, so each waits for the view to take the one before (_Frames.taking:
+  frames3d.py). Measured (2026-11-20, 3 runs each, on screen and hidden): six notches back to back gave one
+  UpdateRequest and one step; sent each after the one before gave its UpdateRequest, six and six. Nothing says a
+  notch was dropped: sendEvent returns True and the event's isAccepted() is False for each, taken or dropped. The
+  self-test's wheel facts check (editor_panels_and_fit) re-measures, in the closer direction, by the plane's width
+  the one event, the notches back to back and what sendEvent and isAccepted() say, and six notches sent as the shot
+  sends them, from rest. The away direction's one event (-3 x 120) was measured once, 2026-11-20. A
+  notch drawn on screen right before Designer's window went off left its accumulation's request in flight: the next
+  notch, sent off screen, was dropped, and its wait took that request for its sign (2 runs in 120 hiding the window
+  right after the first notch's events; hiding it at the first frame after that notch, 9 in 10 with the waits before
+  this fix and 10 in 10 with a wait for the sign alone). So each notch is sent only from a view at rest, its sign read from there
+  (_Frames.from_rest: frames3d.py). A notch the view didn't come to rest before, its rest made of waits of
+  SETTLE_LIMIT at most each, up to REST_LOOKS looks again, or whose sign never came within SETTLE_LIMIT, a safety net,
+  ends the camera's moves there, and the step says so, with how long the rest waited (_stopped): never sent again, as
+  it may yet have been taken. Each of 240 notches, 40 in then 80 out from the plane framed, on screen and hidden,
+  gave its sign within 0.04 s. With a count past SAMPLES, as the GPU Pathtracer's, which counts on, the view reads as
+  at rest while it still accumulates (_Frames._resting). On screen, a notch dropped then shows no restart, so its wait
+  runs to SETTLE_LIMIT and the camera's moves stop, said. Off screen, a notch can take a left-over request for its
+  sign, as with no count to read. Neither was measured.
 - The camera's position and angles are in none of its properties (Camera > Edit properties shows its lens, clip
   planes and exposure; the Scene Browser's Camera the same), so orbit and pan are Designer's own navigation: mouse
   drags on the viewport, taken as from the mouse, in any number of moves. A left-drag turns the camera around the
@@ -29,7 +48,11 @@ Designer's API has none of it
   later, both taken), two turns sent back to back came out wrong (0.1 s apart, as two calls), and wheel steps right
   after a drag zoomed less. Sent once the view drew a frame after it, both were taken (frames3d.py), so each drag is
   followed by a wait for that frame; off screen, where the view draws none, for its request for one (_Frames.taking;
-  REVIEW.md HLP-149). A mouse move with no button held, as the user's
+  REVIEW.md HLP-149). A drag whose sign never came within SETTLE_LIMIT ends the camera's moves there (_drags_sent).
+  By the code, a drag's wait can take a request a move before left in flight for its sign, as a wheel notch's could;
+  no drag loss was measured. Sent from rest, a drag landed 1.5 to 3.6 grey levels from where today's path lands it,
+  in the self-test's checks of orbit=[90, 90] in one call and of set_3d_view's pan run on its own (2026-11-21). So
+  drags aren't sent from rest (ROADMAP item 112). A mouse move with no button held, as the user's
   mouse sends over the viewport, ends a drag where it is: one after the 5th of 10 moves left orbit=[90, 0] 60 grey
   levels from Designer's Right view, and pan=[0.25, 0] at 0.099 of the view (REVIEW.md HLP-122). So while a drag
   runs, its wait included, a filter on the viewport drops every mouse event (MOUSE_EVENTS) _mouse isn't sending;
@@ -115,7 +138,7 @@ from .core import (
     sys,
 )
 from .editor import _process_events, _wheel
-from .frames3d import _Frames, _frames_of, _viewport, _Waiting
+from .frames3d import SETTLE_LIMIT, _Frames, _frames_of, _viewport, _Waiting
 from .mac_window import _MacWindow
 from .screenshots import _PANEL_AREAS, _3d_dock, _visible_dock
 from .shot3d import _on_screen
@@ -593,7 +616,7 @@ def _set_tiling(
         said = 'tiling %g' % shown
         if since is not None:
             try:
-                watched.settled(since)
+                said += _unsettled(watched.settled(since), watched)
             except (Exception, APIException) as e:  # the sd API's error is a BaseException too
                 raise _with_set(e, said) from e
         return said, since is not None
@@ -701,6 +724,7 @@ def _set_environment(
         rotation_set: float | None = None
         exposure_set: float | None = None
         changed = False  # what the view shows: a map changed, or a value committed
+        settled = True  # each change's wait ended on the view (REVIEW.md HLP-214)
         try:
             if name is not None:
                 field = _panel_field(params, 'environment_texture_name', 'the Environment field', keep, spins=0)
@@ -709,6 +733,7 @@ def _set_environment(
                     # wait would run to its limit (REVIEW.md HLP-201)
                     waiting.needed = changed = _drop_map(viewport, field, name)
                     name_set = name  # before its wait: an error there says the map was set (REVIEW.md HLP-200)
+                settled = waiting.settled
             if rotation is not None:
                 turned = "the environment's Rotation Angle"
                 rotation_set, committed = _commit_change(  # said before its wait
@@ -716,7 +741,7 @@ def _set_environment(
                 )  # Degrees
                 if committed is not None:
                     changed = True
-                    watched.settled(committed)
+                    settled = watched.settled(committed) and settled
             if exposure is not None:
                 brightened = "the environment's Exposure"
                 exposure_set, committed = _commit_change(
@@ -724,12 +749,12 @@ def _set_environment(
                 )
                 if committed is not None:
                     changed = True
-                    watched.settled(committed)
+                    settled = watched.settled(committed) and settled
         except (Exception, APIException) as e:  # the sd API's error is a BaseException too
             if (name_set, rotation_set, exposure_set) == (None, None, None):
                 raise
             raise _with_set(e, _environment_said(name_set, rotation_set, exposure_set)) from e
-        return _environment_said(name_set, rotation_set, exposure_set), changed
+        return _environment_said(name_set, rotation_set, exposure_set) + _unsettled(settled, watched), changed
 
     return _in_properties(
         params,
@@ -845,12 +870,11 @@ def _drag(
     dy: int,
     pressed: Pressed,
     taking: Callable[[], Callable[[], bool]] | None = None,
-) -> None:
+) -> bool:
     """A drag with `button` from the middle of `viewport`, dx and dy pixels (right, down), in DRAG_MOVES moves, then
-    released, even when a move fails. `taking`, when given, runs before the press and returns the wait for Designer to
-    take the drag, run after the release (_Frames.taking: a frame of the 3D view drawn once the drag's events ran;
-    off screen, an UpdateRequest since the press). A guard on the viewport drops the user's mouse from before the press to the end of that wait
-    (_mouse_guard). `pressed` holds (button, x, y), where it is
+    released, even when a move fails. Returns whether its sign came: False when the wait said none did, True without a
+    wait. `taking`, when given, runs before the press and returns the wait run after the release (_Frames.taking). A
+    guard on the viewport drops the user's mouse from before the press to the end of that wait (_mouse_guard). `pressed` holds (button, x, y), where it is
     released, from before the press to after the release: an abort skipping the release finds it there (set_3d_view's
     handler). The guard, held by this frame alone, goes with it after an abort that skips its removal."""
     x, y = viewport.width() / 2.0, viewport.height() / 2.0
@@ -868,10 +892,55 @@ def _drag(
         finally:
             _release(viewport, *end)
             pressed.remove(end)
-        if taken is not None:
-            taken()
+        return taken is None or taken()
     finally:
         viewport.removeEventFilter(guard)
+
+
+def _drags_sent(
+    viewport: QtWidgets.QWidget,
+    button: QtCore.Qt.MouseButton,
+    drags: list[tuple[int, int]],
+    pressed: Pressed,
+    taking: Callable[[], Callable[[], bool]],
+) -> tuple[int, bool] | None:
+    """Each of `drags` (_drag), until one whose sign never came: the drags after it aren't sent (the module
+    docstring). Returns that drag, from 1, and that it was sent (as _stopped takes it); None when each gave its sign."""
+    for number, (dx, dy) in enumerate(drags, 1):
+        if not _drag(viewport, button, dx, dy, pressed, taking):
+            return number, True
+    return None
+
+
+def _stopped(move: str, stopped: tuple[int, bool] | None, of: int, watched: _Frames | None = None) -> str:
+    """What a set-up step says of the `move` of `of` that ended the camera's moves (`stopped`: its number from 1, and
+    whether it was sent): not sent, the view didn't come to rest before it, within the time `watched`'s rest waited
+    (rest_waited; REVIEW.md HLP-218), with what may hold its count below 8 (below_rest; REVIEW.md HLP-215); sent, no
+    sign came within SETTLE_LIMIT. '' when none did."""
+    if stopped is None:
+        return ''
+    number, sent = stopped
+    why = ': no sign the 3D view took it' if sent else " not sent: the 3D view didn't come to rest"
+    held, waited = '', SETTLE_LIMIT
+    if watched is not None and not sent:  # refused before it was sent: its rest's own wait, and what held the count
+        held, waited = watched.below_rest(), round(watched.rest_waited, 1)
+    return " (%s %d of %d%s within %g s%s; the camera's moves stopped there)" % (
+        move,
+        number,
+        of,
+        why,
+        waited,
+        held,
+    )
+
+
+def _unsettled(settled: bool, watched: _Frames) -> str:
+    """What a set-up step adds to what it says when its wait for the 3D view ended at its limit, not on the view at
+    rest: the render may be of a view still drawing (REVIEW.md HLP-214), and what may hold its count below 8
+    (`watched`'s below_rest; REVIEW.md HLP-215). '' when the wait ended on the view."""
+    if settled:
+        return ''
+    return " (the 3D view hadn't settled within %g s after it%s)" % (SETTLE_LIMIT, watched.below_rest())
 
 
 def _set_up_checked(
@@ -927,7 +996,8 @@ def _3d_set_up(
     """set_3d_view checked, changing nothing: what the arguments rule out, the graph, the panels, the menu entries and
     the tools it needs, an orbit or pan of less than a pixel's drag; refused here (shoot_3d calls it before it puts
     Designer's window on screen: REVIEW.md HLP-127). Returns its steps, to run: set_3d_view's docstring. Given a
-    watch, they run `between`, when given, before each step and after the viewpoint's turn, before Frame: the 3D
+    watch, they run `between`, when given, before each step, after the viewpoint's turn, before Frame, and in a wheel
+    step's rest (_Frames.from_rest): the 3D
     shot's look whether the user made Designer the active app, which also puts the window on screen again if it went
     off screen (shot3d.py; REVIEW.md HLP-136, HLP-158, HLP-163). The shot gives its watch of the view's frames and its
     look, and keeps the window on screen itself (REVIEW.md HLP-174). Run without a watch, as set_3d_view runs them, the
@@ -1041,13 +1111,15 @@ def _3d_set_up(
                     if changed:
                         picked.trigger()
                     done.append(step)  # before its wait: an error there says the step was set (REVIEW.md HLP-200)
+                done[-1] += _unsettled(waiting.settled, watched)
             if g is not None:
                 step = begin("graph %s's outputs on the mesh" % g.getIdentifier())
-                with _Waiting(watched):
+                with _Waiting(watched) as waiting:
                     g.compute()  # its outputs ready for the mesh
                     # the Explorer's tree was found above, as g was given
                     _apply_outputs(cast(QtWidgets.QTreeView, tree), g, keep)
                     done.append(step)  # before its wait (REVIEW.md HLP-200)
+                done[-1] += _unsettled(waiting.settled, watched)
             if view is not None:
                 step = begin('view %s, framed' % view)
 
@@ -1058,14 +1130,15 @@ def _3d_set_up(
                     since = watched.mark()
                     _menu_action(bar, keep, 'Camera', view).trigger()
                     done.append('view %s' % view)  # before the waits: an error there says it (REVIEW.md HLP-200)
-                    watched.moved(since)  # Frame at once cancels the camera's turn
+                    ended = watched.moved(since)  # Frame at once cancels the camera's turn
                     # off screen meanwhile, moved() ended there: the look puts the window on screen again and
                     # waits for the view to settle there, which it does once the turn ends (REVIEW.md HLP-163)
                     if look is not None:
                         look()
-                    with _Waiting(watched):
+                    with _Waiting(watched) as framing:
                         _menu_action(bar, keep, 'Camera', 'Frame').trigger()
                         done[-1] = step  # framed
+                    done[-1] += _unsettled(ended and framing.settled, watched)
 
                 if kept:
                     turn(between)
@@ -1081,27 +1154,47 @@ def _3d_set_up(
                     if switched:
                         camera.trigger()
                         _process_events()
-                    changed = True  # moving: a drag or a wheel step follows
+                    # what the view shows changes once a move is sent (REVIEW.md HLP-212): a drag is sent at once, as
+                    # each is but after one with no sign; a wheel step only from rest (resting)
+                    changed = changed or bool(orbit_drags or pan_drags)
+
+                    notches = 0  # the wheel steps sent
+
+                    def resting() -> Callable[[], bool] | None:
+                        # each wheel step from the view at rest, the shot's look bringing it there (_Frames.from_rest);
+                        # a drag on its sign alone (the module docstring). A step is sent once its wait is given
+                        nonlocal notches
+                        wait = watched.from_rest(between)
+                        if wait is not None:
+                            notches += 1
+                            done[-1] = '%s (%d sent)' % (step, notches)
+                        return wait
+
+                    stopped = None  # the move that ended the camera's moves: none is sent after it
                     if orbit_drags:
                         step = begin('orbit ' + _directions(turned, ' degrees'))
                         since = watched.mark()
-                        for dx, dy in orbit_drags:
-                            _drag(viewport, QtCore.Qt.MouseButton.LeftButton, dx, dy, pressed, watched.taking)
-                        done.append(step)
-                    if pan_drags:
+                        left = QtCore.Qt.MouseButton.LeftButton
+                        stopped = _drags_sent(viewport, left, orbit_drags, pressed, watched.taking)
+                        done.append(step + _stopped('drag', stopped, len(orbit_drags)))
+                    if pan_drags and stopped is None:
                         step = begin('pan ' + _directions(panned, ' of the view'))
                         since = watched.mark()
-                        for dx, dy in pan_drags:
-                            _drag(viewport, QtCore.Qt.MouseButton.MiddleButton, dx, dy, pressed, watched.taking)
-                        done.append(step)
-                    if zoom:
+                        middle = QtCore.Qt.MouseButton.MiddleButton
+                        stopped = _drags_sent(viewport, middle, pan_drags, pressed, watched.taking)
+                        done.append(step + _stopped('drag', stopped, len(pan_drags)))
+                    if zoom and stopped is None:
                         step = begin('%+d wheel steps' % zoom)
                         since = watched.mark()
-                        _wheel(viewport, zoom, watched.taking)
-                        done.append(step)
+                        # before the rests: the shot's look in one can refuse the shot (shot3d._bring), and the
+                        # error says the notches sent (REVIEW.md HLP-200, HLP-221)
+                        done.append('%s (0 sent)' % step)
+                        stopped = _wheel(viewport, zoom, resting)
+                        changed = changed or notches > 0
+                        done[-1] = step + _stopped('wheel step', stopped, abs(zoom), watched)
                 finally:
                     _tool_back(light, switched)
-                watched.settled(since)
+                done[-1] += _unsettled(watched.settled(since), watched)
             if tiling is not None:
                 begin('tiling %g' % tiling)
                 panel_begun = True

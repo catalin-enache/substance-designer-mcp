@@ -106,3 +106,34 @@ def test_a_file_with_the_uid_passes_the_fact(monkeypatch: pytest.MonkeyPatch, tm
     assert not error
     assert 'SAME_UID=True' in printed
     assert 'COPY_KEEPS_UID=True' in printed
+
+
+def test_undos_output_is_put_back_as_its_preparation_made_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """undo/designer_scripts/as_prepared.py: identifier `height`, an empty label and no usage, whatever an Undo that
+    failed left (REVIEW.md TST-646: the repair put back only the identifier; apply_edits can't clear a usage)."""
+    made = _stand_in(
+        monkeypatch,
+        'sd',
+        'sd.api.sbs.sdsbscompgraph',
+        'sd.api.sdpackagemgr',
+        'sd.api.sdtypeusage',
+        'sd.api.sdvaluearray',
+        'sd.api.sdvaluestring',
+    )
+    graph = MagicMock()
+    graph.getIdentifier.return_value = 'mcp_selftest'
+    package = MagicMock()
+    package.getChildrenResources.return_value = [graph]
+    manager = made['sd'].getContext.return_value.getSDApplication.return_value.getPackageMgr.return_value
+    manager.getUserPackages.return_value = [package]
+    assert _run('undo/as_prepared', {'graph': 'mcp_selftest', 'node': '1'}) == ('AS_PREPARED', '')
+    graph.getNodeFromId.assert_called_once_with('1')
+    strings = made['sd.api.sdvaluestring'].SDValueString.sNew
+    usages = made['sd.api.sdvaluearray'].SDValueArray.sNew
+    assert [call.args for call in strings.call_args_list] == [('height',), ('',)]
+    usages.assert_called_once_with(made['sd.api.sdtypeusage'].SDTypeUsage.sNew.return_value, 0)
+    assert [call.args for call in graph.getNodeFromId.return_value.setAnnotationPropertyValueFromId.call_args_list] == [
+        ('identifier', strings.return_value),
+        ('label', strings.return_value),
+        ('usages', usages.return_value),
+    ]

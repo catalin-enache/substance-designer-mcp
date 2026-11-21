@@ -35,6 +35,45 @@ entry, takes the user (the `address-review` skill (`.claude/skills/address-revie
   Reopen if: the full suites become fast enough to run after every change, or a break found only in the full run cost
   more than the time saved. (The user's decision, 2026-11-06.)
 
+- **A test that fails in a full run and passes rerun alone failed at random, and counts as passed.** The runner reruns
+  each test the final check failed, alone, each as it needs (the user, 2026-11-21: "run the category in isolation for
+  which that test is belonging", then "rerun"):
+  - A unit test is rerun by name.
+  - On macOS, a live check is rerun through the pool with its category alone (`tests/test_all_tools --only
+    <category>`), which also makes the checks the pool makes for that category: its quit and crash dumps, and the
+    run's start checks when they ran in it.
+  - The check that every tool was exercised, made only over a full run, names the tools no check ran for: the
+    categories whose checks exercise them are rerun alone, and if they pass with checks run for those tools, it failed
+    at random too (the user, 2026-11-21). Their PASS lines in the rerun's output show those checks ran, as its summary
+    leaves out a tool no check ran for.
+  - The pool's other checks over the whole run are rerun with what they need (the user, 2026-11-21: "rerun"). The
+    count of quits forced is rerun with the categories it names, together (`--only <category> ...`). Designer's
+    preferences and a crash dump outside the run name no category, so they are rerun with the whole live self-test
+    (`tests/test_all_tools --no-unit`). Another check failing in that rerun is rerun alone too, as a failure of the
+    final check.
+  - Off macOS, where `--only` refuses (ROADMAP item 65), a live check is rerun with its category alone in a scratch run
+    (`alone.run`, the `live-check` skill), once the user has closed the Designer the run left open: there `alone.run`
+    takes every running Designer for the user's. The checks only the whole run makes there, such as its start checks
+    and its check that the user's graph is back in the editor, are rerun with the whole run there.
+
+  A check that skips in its rerun is rerun once the cause of the skip is cleared, such as a Designer outside the run;
+  one whose cause can't be cleared is a failure. A test that passes alone counts as passed for the merge, and the lead
+  adds its row to ROADMAP.md's "Tests that failed at random", or raises the count of the row it has, after the final
+  check and before the merge, with the docs tests run on that row (the `live-check` skill, When the final check
+  fails). One already listed there that fails at random again has its count raised, and the merge goes ahead: it is
+  fixed when ROADMAP.md gets to it, whatever its count (the user, 2026-11-21: "no fix is mandatory since it passed when
+  running its category alone. Having it in roadmap is eenough"; "if it passes no fix now. we have it in the table and
+  fix it at some time"). A failure that meets another entry's Reopen if still meets it when its rerun passes, such as
+  the count of quits forced (Bridge and quitting) or a crash dump pointing at a cause: the merge goes ahead, and the
+  lead tells the user. A test the branch was to make robust that fails at random reopens the branch's ROADMAP.md
+  item: the merge goes ahead with the test's row in "Tests that failed at random", and the item is unchecked, its
+  Done note naming that row, as its fix isn't proven. The user's answer, 2026-11-21, asked of item 112: "Merge,
+  reopen 112"; this form for every branch is the lead's reading, told the user. One that fails alone too is a failure, fixed before the merge. A pass alone shows the failure
+  is rare, or needs the full run's conditions; the count shows which tests fail now and then, for the tool or the check
+  (ROADMAP item 112: its zoom check passed 3 times in 3 in scratch runs, while the 3D zoom lost a step in 2 runs of 120
+  with the window hidden right after the first step: `designer_helpers/view3d.py`). The user's decisions, 2026-11-21.
+  Reopen if: the table grows faster than its tests are fixed, or the user changes the rule.
+
 - **Only the current and next versions of Designer are supported.** README says older versions aren't, and the plugin's
   manifest asks for 16.0.0, so code needn't work on an older Designer or its older Python.
   Reopen if: the user wants older versions supported. (The user's decision, 2026-11-03.)
@@ -230,6 +269,12 @@ entry, takes the user (the `address-review` skill (`.claude/skills/address-revie
   one click on the node shows its parameters again. The user's decision, 2026-11-12, for the tiling; widened to the
   environment at their request, 2026-11-18.
   Reopen if: the user wants the selected node back, or the API gains a way to show a node in the Parameters panel.
+- **The 3D shot never sends a wheel step or a drag move again; one whose sign doesn't come within its limit ends the
+  camera's moves, and the shot says which.** Designer gives no sign that it dropped one: `sendEvent` returns True and
+  `isAccepted()` is False for every notch, taken or dropped, and a dropped one shows only as a sign that never comes,
+  which a late one also shows until it comes (the self-test's wheel facts check; `designer_helpers/view3d.py`). A step
+  sent again could then be taken twice. The lead's choice, which the user approved, 2026-11-21.
+  Reopen if: Designer gains a way to tell a dropped step from a late one.
 - **A 3D screenshot, and `set_3d_view` where it can't work off screen, put Designer's window on screen transparent, then
   back as it was.** The 3D view doesn't draw off screen (how the shot works around it: `_Screen`,
   `designer_helpers/shot3d.py`). The user chose a transparent, click-through window on screen over refusing the shot.

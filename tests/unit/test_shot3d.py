@@ -170,12 +170,16 @@ class Window:
 
 class Frames:
     """_Frames, faked: the waits asked of it, in `waits`, and in `log` too when given (a Mac's done). `drawing`: whether
-    the view draws a next frame."""
+    the view draws a next frame. `drawn`: whether the view drew what changed off screen, which shown() records in
+    `undrawn` as the real one does. `below`: what below_rest() says."""
 
-    def __init__(self, log: list[str] | None = None, drawing: bool = True) -> None:
+    def __init__(self, log: list[str] | None = None, drawing: bool = True, drawn: bool = True, below: str = '') -> None:
         self.waits: list[str] = []
         self.log = log
         self.drawing = drawing
+        self.drawn = drawn
+        self.below = below
+        self.undrawn = False
         self.closed = False
 
     def _did(self, what: str) -> None:
@@ -189,10 +193,14 @@ class Frames:
 
     def shown(self, since: int) -> None:
         self._did('shown since %d' % since)
+        self.undrawn = not self.drawn
 
     def next_frame(self) -> bool:
         self._did('next frame')
         return self.drawing
+
+    def below_rest(self) -> str:
+        return self.below
 
     def off_screen(self) -> bool:  # read once the window was put on screen: still there
         return False
@@ -1197,6 +1205,42 @@ def test_each_spy_on_the_windows_expose_events_is_removed(helpers: types.ModuleT
     with on_screen(helpers, Watched(mac)):
         mac.done.append('shot')
     assert installed and sorted(map(id, removed)) == sorted(map(id, installed))
+
+
+UNDRAWN = "3D render: the 3D view hadn't settled within 3 s after Designer's window came back on screen"
+
+
+def test_a_look_whose_view_hadnt_drawn_within_the_limit_says_nothing_itself(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # REVIEW.md HLP-222: the look said it, also before a step whose own wait then settled the view. The look's wait
+    # records it (_Frames.undrawn), and shoot_3d says it after its render
+    mac = Mac(minimized=True)
+    _on(helpers, mac)
+    frames = Frames(drawn=False)
+    with on_screen(helpers, Window(mac), frames):
+        mac.done.append('shot')
+    assert 'shown since 1' in frames.waits and UNDRAWN not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('undrawn', [True, False], ids=['not drawn within the limit', 'drawn'])
+def test_a_view_that_hadnt_settled_since_the_latest_look_is_said_after_the_render(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str], undrawn: bool
+) -> None:
+    # REVIEW.md HLP-214: shown()'s wait ended at its limit and the shot went on to its render, saying nothing. HLP-215:
+    # with what may hold the count below 8
+    shot = Shot(helpers, 'A')
+    shot.frames.below = ', its sample count at 4, below 8: ...'
+
+    def again() -> None:  # the render's look, whose wait ended at its limit or not
+        shot.events.append('again')
+        shot.frames.undrawn = undrawn
+
+    shot.screen.again = again
+    helpers.shoot_3d('out.png')
+    out = capsys.readouterr().out.splitlines()
+    assert (UNDRAWN + shot.frames.below in out) is undrawn
+    assert out[0].startswith('3d render ')  # said after it
 
 
 class Covering(Frames):

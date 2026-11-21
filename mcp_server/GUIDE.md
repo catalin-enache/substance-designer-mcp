@@ -88,8 +88,11 @@ Fallback without MCP: `client/sd_run.py script.py [--timeout N]`, `-c CODE`, `--
   whole run.
 - Undo history is **per document** (Edit > Undo reverts the last step of the graph in focus). If you must trigger it:
   the actions live in a `QMenu` (find them via `QApplication.instance().allWidgets()`, not `mainWindow.findChildren`)
-  and apply **asynchronously**: schedule them with `QTimer.singleShot(0, action.trigger)` (outside your own undo group)
-  and call `QApplication.processEvents()` before reading results. Raise and activate the main window first
+  and apply **asynchronously**: schedule them with `QTimer.singleShot(0, action.trigger)` (outside your own undo group),
+  then read the result in later calls (`describe_graph`) until it shows, with a limit, since it may land after the call
+  that scheduled it returns. Past the limit, don't send it again: the first may still land, and two steps would be
+  reverted. Tell the user, and look with `diff_graph` or `snapshot_graph` before anything else. Raise and activate the
+  main window first
   (`getQtForPythonUIMgr().getMainWindow()`, `raise_()`, `activateWindow()`): in a Designer just started, with another
   Designer in front, Undo of an output's fields sometimes did nothing without it. It leaves the other app in front.
 - Timeouts and cancel use a trace hook in the plugin: the abort happens the next time Python runs, so one long C++ call
