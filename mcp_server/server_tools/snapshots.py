@@ -11,13 +11,14 @@ import time
 import uuid
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterator
-from typing import TypedDict, cast
+from typing import Annotated, TypedDict, cast
 
 from mcp.server.mcpserver.exceptions import ToolError
+from pydantic import Field
 
 from project_constants import Json
 
-from .core import _bridge, _checked, _helpers_call, _tool
+from .core import Graph, _bridge, _checked, _helpers_call, _tool
 
 SNAPSHOT_DIR = os.environ.get('SD_SNAPSHOT_DIR') or os.path.join(os.path.expanduser('~'), '.sd_mcp', 'snapshots')
 
@@ -35,7 +36,12 @@ def _copy_package(graph: str | None, path: str) -> dict[str, str]:
 
 
 @_tool(read_only=False, destructive=False, idempotent=False, open_world=False)
-def snapshot_graph(graph: str | None = None, label: str | None = None) -> str:
+def snapshot_graph(
+    graph: Graph = None,
+    label: Annotated[
+        str | None, Field(description="A label for the snapshot, which diff_graph's against takes.")
+    ] = None,
+) -> str:
     """Save a snapshot of a graph's package (a full .sbs copy) before risky work. It doesn't
     change the open package, its file or its saved state. Compare later with diff_graph; the
     snapshot .sbs can also be opened in Designer to recover anything. Bitmaps aren't copied: the
@@ -215,12 +221,14 @@ def _snapshots(graph_id: str, package: tuple[str | None, str | None] | None = No
 
 
 @_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
-def list_snapshots(graph: str | None = None) -> str:
+def list_snapshots(
+    graph: Annotated[str | None, Field(description='Graph identifier (default: all graphs).')] = None,
+) -> str:
     """List saved snapshots, newest last (by when their content was written; set_link_display's
     copy of the saved file counts from when that file was saved), each with the package it came
     from. A snapshot opened in Designer and saved in place since is marked as changed (one whose note records
     its size and time: taken by this version); diff_graph's
-    'latest' and labels skip it (diff against it by its path). graph: graph identifier (default: all graphs)."""
+    'latest' and labels skip it (diff against it by its path)."""
     graphs = [_safe_name(graph)] if graph else (sorted(os.listdir(SNAPSHOT_DIR)) if os.path.isdir(SNAPSHOT_DIR) else [])
     lines: list[str] = []
     for gid in graphs:
@@ -495,13 +503,23 @@ def _diff_models(old: _GraphModel, new: _GraphModel, show_positions: bool) -> tu
 
 
 @_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
-def diff_graph(graph: str | None = None, against: str = 'saved', show_positions: bool = False) -> str:
+def diff_graph(
+    graph: Graph = None,
+    against: Annotated[
+        str,
+        Field(
+            description="'saved' (the package's file on disk), 'latest' (this package's newest snapshot), a snapshot "
+            "label (this package's), or a .sbs path (any snapshot: after a Save As, the earlier file's snapshots count "
+            "as another package's)."
+        ),
+    ] = 'saved',
+    show_positions: Annotated[
+        bool, Field(description='Positions are only counted unless show_positions=True.')
+    ] = False,
+) -> str:
     """Show what changed in a graph: nodes added/removed, parameter changes, an output's identifier, label
-    and usage, links added/removed, exposed inputs and size. against: 'saved' (the package's file on disk),
-    'latest' (this package's newest snapshot), a snapshot label (this package's), or a .sbs path (any
-    snapshot: after a Save As, the earlier file's snapshots count as another package's). The live graph is read
-    without modifying it, so a package using a graph of a never-saved package is refused, as in save_package.
-    Positions are only counted unless show_positions=True."""
+    and usage, links added/removed, exposed inputs and size. The live graph is read
+    without modifying it, so a package using a graph of a never-saved package is refused, as in save_package."""
     tmp_dir = tempfile.mkdtemp(prefix='sd_diff_')
     try:
         info = _copy_package(graph, os.path.join(tmp_dir, 'live.sbs'))

@@ -304,18 +304,3 @@ entry, takes the user (the `address-review` skill (`.claude/skills/address-revie
   `std::terminate` aborted; the same quit without the filter left no dump. The user's decision, 2026-11-12.
   Reopen if: Designer, Qt or PySide is updated (the crash may be gone, or move), or a crash dump at a quit points at a
   Python wrapper of another of Qt's long-lived objects.
-
-## Tool annotations
-
-- **A tool's annotations judge the user's work, not every trace a call leaves in Designer.** `readOnlyHint` marks a
-  tool that leaves the user's graphs, packages and files as they were, and changes nothing else a user sees, such as
-  Designer's view, the editor's current graph or the clipboard. `node_stats`, `preview_node`, `check_tiling`
-  and `compare_to_reference` count, though each may add a temporary output node and remove it inside an undo step
-  (Library packages, above, on the modified flag). `sweep_param` doesn't, as it leaves the package marked modified.
-  `destructiveHint` marks a tool that can overwrite or remove the user's work or files; a change of Designer's view,
-  of the editor's current graph, or of the clipboard's text, put back, isn't one. `idempotentHint` compares the end
-  state of that work, not the undo history. `openWorldHint` is False except on `execute_designer_code` and
-  `run_designer_script`: the server talks only to the local Designer, but the code they run can reach anything. Every
-  tool declares all four hints, listed in `tests/unit/test_server.py`.
-  The user's decision on read-only, 2026-11-21 ("go with your recommendation"); the other hints follow its reading.
-  Reopen if: a client is seen acting on a hint in a way that harms the user's work, or the user changes the reading.

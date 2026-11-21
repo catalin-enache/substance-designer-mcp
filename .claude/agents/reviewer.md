@@ -121,9 +121,9 @@ marks its generation (**Follow-up chains**).
   still worth making, give its real reason and rate it Low. An inflated severity costs trust in the next review.
 - **Five severities,** from high to low: High, Medium-high, Medium, Low-medium, Low.
 - **Cite the authority** of each finding: an AGENTS.md section, a rule or skill AGENTS.md points to, a GUIDE.md rule, a
-  DECISIONS.md entry, the module's docstring or the tool's. When nothing documented governs it, report it under
-  **Unspecified**, apart from the findings: what you expected, what the code does, and that no doc decides. That is a
-  gap in the docs for the lead to raise with the user, not a defect.
+  DECISIONS.md entry, the module's docstring, the tool's, or a parameter's description. When nothing documented
+  governs it, report it under **Unspecified**, apart from the findings: what you expected, what the code does, and that
+  no doc decides. That is a gap in the docs for the lead to raise with the user, not a defect.
 
 ## Follow-up chains
 

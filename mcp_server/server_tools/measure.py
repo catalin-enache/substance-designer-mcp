@@ -6,15 +6,28 @@ import os
 import re
 import shutil
 import tempfile
-from typing import TypedDict
+from typing import Annotated, TypedDict
 
 import numpy as np
 import numpy.typing as npt
 from mcp.server.mcpserver import Image
 from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image as PILImage
+from pydantic import Field
 
-from .core import AnyJson, Box, NoneIfEmpty, Pixel, _bridge, _helpers_call, _output_note_in, _tool, _with_undo
+from .core import (
+    AnyJson,
+    Box,
+    Graph,
+    NoneIfEmpty,
+    Output,
+    Pixel,
+    _bridge,
+    _helpers_call,
+    _output_note_in,
+    _tool,
+    _with_undo,
+)
 
 # decoded pixels: (H, W, C) floats
 Pixels = npt.NDArray[np.float64]
@@ -133,19 +146,17 @@ def _node_pixels(node_id: str, graph: str | None, output: str | None, tool: str)
     return data, layout, meta
 
 
-@_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
+@_tool(read_only=False, destructive=False, idempotent=True, open_world=False)
 def node_stats(
-    node_id: str,
-    graph: str | None = None,
-    output: str | None = None,
-    region: NoneIfEmpty[Box] = None,
-    points: list[Pixel] | None = None,
+    node_id: Annotated[str, Field(description='The node whose output is measured.')],
+    graph: Graph = None,
+    output: Output = None,
+    region: Annotated[NoneIfEmpty[Box], Field(description='[x0, y0, x1, y1] in pixels to restrict the stats.')] = None,
+    points: Annotated[list[Pixel] | None, Field(description='[[x, y], ...] pixel values to sample.')] = None,
 ) -> str:
     """Exact pixel statistics of any node's output (computed in Designer, read from the raw
     buffer, so 16-bit/float precision is kept). Per channel: min, max, mean, std.
-    output: which of the node's outputs (default: the one tagged base colour, else the first; the result says which).
-    region: [x0, y0, x1, y1] in pixels to restrict the stats. points: [[x, y], ...] pixel
-    values to sample. Values are 0..1 for integer formats. Use it to verify results numerically.
+    Values are 0..1 for integer formats. Use it to verify results numerically.
     The call may add a temporary output node and delete it, within one undo step."""
     data, layout, meta = _node_pixels(node_id, graph, output, 'node_stats')
     h, w, _ = data.shape
@@ -217,19 +228,31 @@ def _channel_summary(data: Pixels, layout: str) -> str:
 
 @_tool(read_only=False, destructive=False, idempotent=True, open_world=False)
 def sweep_param(
-    node_id: str,
-    param: str,
-    values: list[AnyJson],
-    graph: str | None = None,
-    view_node: str | None = None,
-    output: str | None = None,
-    tile_size: int = 256,
+    node_id: Annotated[str, Field(description='The node whose parameter is swept.')],
+    param: Annotated[str, Field(description="The parameter's id.")],
+    values: Annotated[list[AnyJson], Field(description='The values to try.')],
+    graph: Graph = None,
+    view_node: Annotated[
+        str | None,
+        Field(
+            description='The node to look at (default: the swept node), e.g. the final output while sweeping an early '
+            'node.'
+        ),
+    ] = None,
+    output: Annotated[
+        str | None,
+        Field(
+            description="Which of view_node's outputs (default: the one tagged base colour, else the first; the result "
+            'says which).'
+        ),
+    ] = None,
+    tile_size: Annotated[
+        int, Field(description="Each tile's longest side in pixels, at most (a larger image is scaled down).")
+    ] = 256,
 ) -> list[str | Image]:
     """Try several values of one parameter and see them side by side: returns a labelled image
     strip plus per-value channel ranges, then restores the original value. node_id='graph' with
-    param=<input id> sweeps an exposed graph input (then view_node is required). view_node: the
-    node to look at (default: the swept node), e.g. the final output while sweeping an early
-    node. output: which of its outputs (default: the one tagged base colour, else the first; the result says which). Values are converted as in apply_edits' set op, but a $ parameter is made Absolute for the sweep
+    param=<input id> sweeps an exposed graph input (then view_node is required). Values are converted as in apply_edits' set op, but a $ parameter is made Absolute for the sweep
     even where a set op refuses it or leaves it inherited (an overridable graph's $outputsize, the
     graph's $randomseed), so its values are absolute ones. The parameter ends where it started,
     inheritance included, but the sweep is an undo step and marks the package as modified."""
@@ -308,13 +331,18 @@ def _seam_report(data: Pixels, axis_name: str, seam_axis: int) -> str:
     ) % (axis_name.capitalize(), seam_mean, interior_mean, ratio, worst, where, worst_at, verdict)
 
 
-@_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
-def check_tiling(node_id: str, graph: str | None = None, output: str | None = None, axis: str = 'both') -> str:
+@_tool(read_only=False, destructive=False, idempotent=True, open_world=False)
+def check_tiling(
+    node_id: Annotated[str, Field(description='The node whose output is measured.')],
+    graph: Graph = None,
+    output: Output = None,
+    axis: Annotated[
+        str, Field(description="'horizontal', 'vertical' or 'both' (trim sheets usually only need horizontal).")
+    ] = 'both',
+) -> str:
     """Measure whether a node's output tiles: compares the jump across the wrap-around seam
     (left/right edges for 'horizontal', top/bottom for 'vertical') with the typical jump between
-    neighbouring pixels. Ratio ~1 = seamless; above ~3 a seam is likely visible. output: which of the
-    node's outputs (default: the one tagged base colour, else the first; the result says which). axis:
-    'horizontal', 'vertical' or 'both' (trim sheets usually only need horizontal).
+    neighbouring pixels. Ratio ~1 = seamless; above ~3 a seam is likely visible.
     The call may add a temporary output node and delete it, within one undo step."""
     if axis not in ('horizontal', 'vertical', 'both'):
         raise ToolError("axis must be 'horizontal', 'vertical' or 'both'")

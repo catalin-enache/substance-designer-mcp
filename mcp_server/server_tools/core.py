@@ -21,7 +21,7 @@ from typing import Annotated, Literal, ParamSpec, TypeVar
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
-from pydantic import BeforeValidator, JsonValue, WithJsonSchema
+from pydantic import BeforeValidator, Field, JsonValue, WithJsonSchema
 
 PORT = int(os.environ.get('SD_BRIDGE_PORT', '9877'))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -169,7 +169,7 @@ P = ParamSpec('P')
 R = TypeVar('R')
 
 # The types of the tools' JSON parameters: a JSON object, and any JSON value. Their schemas are pinned to the ones
-# agents saw before these parameters were narrowed to JsonValue.
+# agents saw before these parameters were narrowed to JsonValue, with the description each parameter's annotation adds.
 JsonObject = Annotated[dict[str, JsonValue], WithJsonSchema({'additionalProperties': True, 'type': 'object'})]
 AnyJson = Annotated[JsonValue, WithJsonSchema({})]
 
@@ -200,6 +200,20 @@ def _empty_is_none(value: object) -> object:
 
 
 NoneIfEmpty = Annotated[T | None, BeforeValidator(_empty_is_none)]  # an optional XY, Four, Box or Color: None, or []
+
+# The parameters that mean one thing in several tools, with the description their schema shows
+Graph = Annotated[str | None, Field(description="The graph identifier (default: the graph open in Designer's UI).")]
+Output = Annotated[
+    str | None,
+    Field(
+        description="Which of the node's outputs (default: the one tagged base colour, else the first; the result says "
+        'which).'
+    ),
+]
+Port = Annotated[
+    int | None,
+    Field(description="The Designer on that bridge port (launch_designer's port); this server's when omitted."),
+]
 
 
 def _not_finite(value: JsonSent, where: str) -> tuple[str, float] | None:
@@ -236,15 +250,28 @@ def _tool(
     Designer first. `gated=False` for a tool that must always work. `finite`: a number that isn't (JSON's 1e999,
     Infinity, NaN, which the arguments' validation turns into inf and nan) is refused by where it is, since written
     into a helper call with %r it comes out as a name Designer doesn't know (REVIEW.md SRV-119); False for a tool that
-    sends its values as JSON. `read_only`, `destructive`, `idempotent` and `open_world` are the tool's four MCP hints,
-    set as DECISIONS.md, Tool annotations, says."""
-    register = server.tool(
-        annotations=ToolAnnotations(
-            read_only_hint=read_only,
-            destructive_hint=destructive,
-            idempotent_hint=idempotent,
-            open_world_hint=open_world,
-        )
+    sends its values as JSON.
+
+    `read_only`, `destructive`, `idempotent` and `open_world` are the tool's four MCP hints:
+
+    - `read_only`: the call changes none of the user's graphs, packages or files, not even while it runs, and nothing
+      else they see, such as Designer's view, the editor's graph or the clipboard. A package the tool makes for itself
+      and unloads isn't the user's, nor is a library package it opens to read (`describe_node` leaves it open). A tool
+      that adds a temporary node to the user's graph isn't read-only: the graph changes while the call runs, and a
+      library package can stay marked modified (DECISIONS.md, Library packages).
+    - `destructive`: the call can overwrite or remove the user's work or files. A change of the view, of the editor's
+      graph or of the clipboard's text, put back, isn't one.
+    - `idempotent`: a second call with the same arguments leaves the user's work as the first did.
+    - `open_world`: True only for the two code tools, whose code can reach anything. The others talk only to the local
+      Designer.
+
+    The tool's description is its docstring cleaned by `inspect.getdoc`: the SDK would send the raw `__doc__`, each
+    line after the first keeping the source's indentation."""
+    hints = ToolAnnotations(
+        read_only_hint=read_only,
+        destructive_hint=destructive,
+        idempotent_hint=idempotent,
+        open_world_hint=open_world,
     )
 
     def decorate(fn: Callable[P, R]) -> Callable[P, R]:
@@ -265,7 +292,7 @@ def _tool(
                         raise ToolError("%s is %r, which isn't a finite number: nothing was sent to Designer" % found)
             return fn(*args, **kwargs)
 
-        return register(wrapper)
+        return server.tool(annotations=hints, description=inspect.getdoc(fn))(wrapper)
 
     return decorate
 

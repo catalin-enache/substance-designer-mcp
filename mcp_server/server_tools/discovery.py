@@ -4,34 +4,48 @@ import os
 import re
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
-from typing import TypedDict, cast
+from typing import Annotated, TypedDict, cast
 
-from .core import _bridge, _checked, _helpers_call, _tool
+from pydantic import Field
+
+from .core import Graph, _bridge, _checked, _helpers_call, _tool
 
 
 @_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
 def describe_graph(
-    graph: str | None = None, node_ids: list[str] | None = None, include_params: bool = False, limit: int = 400
+    graph: Graph = None,
+    node_ids: Annotated[
+        list[str] | None, Field(description='A few nodes to focus on (ids that name no node are listed as not found).')
+    ] = None,
+    include_params: Annotated[
+        bool,
+        Field(
+            description='Adds every parameter that differs from its default, and each one driven by a graph input or '
+            "a function (`param <- graph input 'x'`, `param <- a function`); a function with no output node drives "
+            "nothing and is noted beside the parameter's value; an FX-Map's inner functions are listed too."
+        ),
+    ] = False,
+    limit: Annotated[int, Field(description='Caps how many nodes are listed (the rest are counted).')] = 400,
 ) -> str:
     """List a graph's nodes: id, type (atomic name or instance:<library graph>), position,
-    an output node's identifier, label and usage, and incoming connections (`input<-sourceNodeId.output`). `graph` is the graph identifier
-    (default: the graph open in Designer's UI). `include_params` adds every parameter that
-    differs from its default, and each one driven by a graph input or a function
-    (`param <- graph input 'x'`, `param <- a function`); a function with no output node drives nothing
-    and is noted beside the parameter's value; an FX-Map's inner functions are listed too. Use `node_ids` to focus on a few nodes (ids that
-    name no node are listed as not found); `limit` caps how many nodes are listed (the rest are
-    counted)."""
+    an output node's identifier, label and usage, and incoming connections (`input<-sourceNodeId.output`)."""
     return _checked(
         _bridge(_helpers_call('describe_graph(%r, %r, %r, %d)' % (graph, node_ids, include_params, limit)), timeout=60)
     )
 
 
 @_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
-def describe_node(definition: str) -> str:
-    """Show a node type's connectors and parameters (ids, types, labels, defaults, enum values).
-    `definition`: atomic name ('levels', 'blend', 'sbs::compositing::normal') or library package
-    '<file>[/<graph id>]' as found in Designer's packages folder or a subfolder ('tile_generator',
-    'hbao.sbs/hbao', 'materials/pbr/bricks_001')."""
+def describe_node(
+    definition: Annotated[
+        str,
+        Field(
+            description="Atomic name ('levels', 'blend', 'sbs::compositing::normal') or library package "
+            "'<file>[/<graph id>]' as found in Designer's packages folder or a subfolder ('tile_generator', "
+            "'hbao.sbs/hbao', 'materials/pbr/bricks_001')."
+        ),
+    ],
+) -> str:
+    """Show a node type's connectors and parameters (ids, types, labels, defaults, enum values)."""
     return _checked(_bridge(_helpers_call('describe_node(%r)' % definition), timeout=60))
 
 
@@ -114,13 +128,17 @@ def _library_index() -> _LibraryIndex:
 
 
 @_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
-def search_nodes(query: str, limit: int = 30, include_hidden: bool = False) -> str:
+def search_nodes(
+    query: Annotated[str, Field(description='Words in the query must all match.')],
+    limit: Annotated[int, Field(description='Caps how many results are listed (the rest are counted).')] = 30,
+    include_hidden: Annotated[
+        bool, Field(description='Also the graphs Designer hides from its library (helpers, some materials).')
+    ] = False,
+) -> str:
     """Find node types by name, label, category or description, across atomic nodes and
     Designer's whole library of compositing graphs (not just loaded packages; not its function graphs),
-    its ready-made materials included.
-    include_hidden: also the graphs Designer hides from its library (helpers, some materials); when
-    nothing else matches, the result says how many of those do. Results show the `definition`
-    to pass to describe_node and to apply_edits' add op. Words in the query must all match."""
+    its ready-made materials included. When nothing else matches, the result says how many hidden graphs
+    do. Results show the `definition` to pass to describe_node and to apply_edits' add op."""
     index = _library_index()
     words = [w.lower() for w in query.split()]
 

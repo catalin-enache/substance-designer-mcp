@@ -3,15 +3,17 @@
 import os
 import re
 import sys
+from typing import Annotated
 
 from mcp.server.mcpserver.exceptions import ToolError
+from pydantic import Field
 
 from project_constants import (
     PLUGIN,
     QUIT_CLOSED,
 )  # on sys.path: the package's __init__ imports .core, which puts it there
 
-from .core import _designer_data_dir, _tool
+from .core import Port, _designer_data_dir, _tool
 from .lifecycle import _agent_record, _checked_folder, _own_home_path, _port, _Recorded, _running_on
 
 NEW_SESSION = '===== New Session ====='  # the first line Designer logs at each start
@@ -85,16 +87,18 @@ def _agent_log(port: int, home: str, written: float) -> str:
 
 @_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
 def read_designer_log(
-    lines: int = 60,
-    contains: str | None = None,
-    errors_only: bool = False,
-    since_last_start: bool = True,
-    port: int | None = None,
+    lines: Annotated[
+        int, Field(description='How many of the last matching lines to show (0 or less: all of them).')
+    ] = 60,
+    contains: Annotated[
+        str | None,
+        Field(description="Case-insensitive text to filter on (e.g. 'listening on', 'Traceback')."),
+    ] = None,
+    errors_only: Annotated[bool, Field(description='Only [ERROR]/[WARNING] lines.')] = False,
+    since_last_start: Annotated[bool, Field(description="Ignore lines from before Designer's last start.")] = True,
+    port: Port = None,
 ) -> str:
-    """Read the end of Designer's log, where every plugin/Python traceback lands. contains:
-    case-insensitive text to filter on (e.g. 'listening on', 'Traceback'). errors_only: only
-    [ERROR]/[WARNING] lines. since_last_start: ignore lines from before Designer's last start.
-    port: the log of the Designer on that bridge port (launch_designer's port); this server's when omitted. One an agent
+    """Read the end of Designer's log, where every plugin/Python traceback lands. A Designer an agent
     started on macOS writes a log of its own, also read after it has ended (unless a Designer of the user's started
     since, on that port or without the plugin saying which); just started, it has none yet, and this says so. The user's write one log together, their lines not
     told apart. The first line names the file read. Override the shared log's location with SD_DESIGNER_LOG."""

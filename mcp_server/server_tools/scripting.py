@@ -2,6 +2,9 @@
 
 import json
 import os
+from typing import Annotated
+
+from pydantic import Field
 
 from .core import JsonObject, _bridge, _control, _tool, _with_undo
 
@@ -15,10 +18,15 @@ def cancel_designer_job() -> str:
 
 
 @_tool(read_only=False, destructive=True, idempotent=False, open_world=True, scripting=True)
-def execute_designer_code(code: str, undo_label: str = 'Claude: code', timeout_s: int = 120) -> str:
+def execute_designer_code(
+    code: Annotated[str, Field(description='The Python code to run.')],
+    undo_label: Annotated[str, Field(description="The undo step's name.")] = 'Claude: code',
+    timeout_s: Annotated[
+        int, Field(description='Seconds after which the script is aborted (0 = no limit in Designer).')
+    ] = 120,
+) -> str:
     """Run Python inside Substance Designer (full `sd` API) and return printed output and errors.
-    All changes form one undo step named `undo_label` (Ctrl+Z in Designer reverts them).
-    The script is aborted after `timeout_s` seconds (0 = no limit in Designer). A script queued
+    All changes form one undo step (Ctrl+Z in Designer reverts them). A script queued
     behind another can wait up to 15 minutes before it starts; this call stops waiting 15 minutes
     + `timeout_s` (15 minutes if 0) + 1 minute after it is sent, about 31 minutes for 0, while the
     script goes on (cancel_designer_job stops it)."""
@@ -27,13 +35,22 @@ def execute_designer_code(code: str, undo_label: str = 'Claude: code', timeout_s
 
 # finite=False: its args reach Designer as JSON, which keeps inf and nan
 @_tool(read_only=False, destructive=True, idempotent=False, open_world=True, scripting=True, finite=False)
-def run_designer_script(path: str, timeout_s: int = 600, args: JsonObject | None = None) -> str:
+def run_designer_script(
+    path: Annotated[str, Field(description='The Python file to run.')],
+    timeout_s: Annotated[
+        int, Field(description='Seconds after which the script is aborted (0 = no limit in Designer).')
+    ] = 600,
+    args: Annotated[
+        JsonObject | None,
+        Field(
+            description='JSON values that reach the script as the global dict `ARGS`, empty without any; a script '
+            "checked by mypy reads it with `ARGS: Args = globals()['ARGS']`, Args a TypedDict of its keys."
+        ),
+    ] = None,
+) -> str:
     """Run a Python file inside Substance Designer; `__file__` is set to its absolute path.
-    `args` (JSON values) reach the script as the global dict `ARGS`, empty without any; a script
-    checked by mypy reads it with `ARGS: Args = globals()['ARGS']`, Args a TypedDict of its keys.
-    Only this tool sets it.
-    All changes form one undo step named after the file. Aborted after `timeout_s` seconds
-    (0 = no limit in Designer). A script queued behind another can wait up to 15 minutes before it
+    Only this tool sets `ARGS`.
+    All changes form one undo step named after the file. A script queued behind another can wait up to 15 minutes before it
     starts; this call stops waiting 15 minutes + `timeout_s` (15 minutes if 0) + 1 minute after it
     is sent, while the script goes on (cancel_designer_job stops it)."""
     path = os.path.abspath(os.path.expanduser(path))

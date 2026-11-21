@@ -17,34 +17,41 @@ import re
 import shutil
 import tempfile
 import xml.etree.ElementTree as ET
-from typing import cast
+from typing import Annotated, cast
 
 from mcp.server.mcpserver.exceptions import ToolError
+from pydantic import Field
 
-from .core import XY, Color, Link, NoneIfEmpty, _bridge, _checked, _edit, _helpers_call, _sentence, _tool
+from .core import XY, Color, Graph, Link, NoneIfEmpty, _bridge, _checked, _edit, _helpers_call, _sentence, _tool
 from .snapshots import _new_snapshot_path, _note_package, _v, _whole_or_none, _xml_graph, snapshot_graph
 
 
 @_tool(read_only=False, destructive=True, idempotent=True, open_world=False)
-def arrange_graph(graph: str | None = None, node_ids: list[str] | None = None, spacing: NoneIfEmpty[XY] = None) -> str:
+def arrange_graph(
+    graph: Graph = None,
+    node_ids: Annotated[
+        list[str] | None,
+        Field(
+            description='Arrange just these nodes, from their current top-left (an id that names no node is refused, '
+            'nothing moved).'
+        ),
+    ] = None,
+    spacing: Annotated[NoneIfEmpty[XY], Field(description='[dx, dy] (default [200, 150]).')] = None,
+) -> str:
     """Tidy a graph: left-to-right columns by data flow, ordered to reduce crossing links,
-    outputs in the last column. Only positions change (connections are never touched).
-    node_ids: arrange just these nodes, from their current top-left (an id that names no node is
-    refused, nothing moved). spacing: [dx, dy]
-    (default [200, 150]). One undo step."""
+    outputs in the last column. Only positions change (connections are never touched). One undo step."""
     return _edit('arrange_graph(%r, %r, %r)' % (graph, node_ids, spacing or (200.0, 150.0)), 'Claude: arrange graph')
 
 
 @_tool(read_only=False, destructive=False, idempotent=False, open_world=False)
 def add_frame(
-    node_ids: list[str],
-    title: str,
-    graph: str | None = None,
-    color: NoneIfEmpty[Color] = None,
-    description: str | None = None,
+    node_ids: Annotated[list[str], Field(description='The nodes the frame goes around.')],
+    title: Annotated[str, Field(description="The frame's title.")],
+    graph: Graph = None,
+    color: Annotated[NoneIfEmpty[Color], Field(description='[r, g, b(, a)] 0..1.')] = None,
+    description: Annotated[str | None, Field(description='Text shown in the frame.')] = None,
 ) -> str:
-    """Draw a titled frame around nodes (e.g. one per section of a material). color: [r, g, b(, a)]
-    0..1. description: text shown in the frame. One undo step."""
+    """Draw a titled frame around nodes (e.g. one per section of a material). One undo step."""
     return _edit(
         'add_frame(%r, %r, %r, %r, %r)' % (graph, node_ids, title, color, description), 'Claude: add frame ' + title
     )
@@ -52,9 +59,12 @@ def add_frame(
 
 @_tool(read_only=False, destructive=False, idempotent=False, open_world=False)
 def add_comment(
-    text: str, graph: str | None = None, node_id: str | None = None, position: NoneIfEmpty[XY] = None
+    text: Annotated[str, Field(description="The comment's text.")],
+    graph: Graph = None,
+    node_id: Annotated[str | None, Field(description='The node the comment is attached to.')] = None,
+    position: Annotated[NoneIfEmpty[XY], Field(description='[x, y] of a free-standing comment.')] = None,
 ) -> str:
-    """Add a comment to a graph: attached to node_id, or free-standing at position [x, y].
+    """Add a comment to a graph: attached to node_id, or free-standing at position.
     One undo step."""
     return _edit('add_comment(%r, %r, %r, %r)' % (graph, text, node_id, position), 'Claude: add comment')
 
@@ -64,18 +74,21 @@ _DISPLAY: dict[str, str | None] = {'portal': '1', 'wire': None}
 
 @_tool(read_only=False, destructive=True, idempotent=False, open_world=False)
 def set_link_display(
-    graph: str | None = None,
-    mode: str = 'portal',
-    from_nodes: list[str] | None = None,
-    fanout_at_least: int | None = None,
-    longer_than: float | None = None,
-    links: list[Link] | None = None,
+    graph: Graph = None,
+    mode: Annotated[str, Field(description="'portal' or 'wire'.")] = 'portal',
+    from_nodes: Annotated[list[str] | None, Field(description='All outgoing links of these nodes.')] = None,
+    fanout_at_least: Annotated[
+        int | None, Field(description='All links from outputs that feed at least this many inputs.')
+    ] = None,
+    longer_than: Annotated[
+        float | None,
+        Field(description='Links longer than this distance in graph units; nodes are ~96 wide.'),
+    ] = None,
+    links: Annotated[list[Link] | None, Field(description='[[to_node, input], ...].')] = None,
 ) -> str:
     """Show connections as portals (hidden wires with a symbol at each end) or as normal wires, to
-    reduce wire clutter. Pick links by any of: from_nodes (all outgoing links of these nodes),
-    fanout_at_least (all links from outputs that feed at least N inputs), longer_than (links
-    longer than this distance in graph units; nodes are ~96 wide), links ([[to_node, input], ...]).
-    mode: 'portal' or 'wire'. Designer's API can't do this, so the tool first takes a snapshot of
+    reduce wire clutter. Pick links by any of from_nodes, fanout_at_least, longer_than and links.
+    Designer's API can't do this, so the tool first takes a snapshot of
     the graph and copies the package's saved file (both in the snapshot folder), then saves the
     package, edits the .sbs and reloads it (the package's undo history is reset; the graph is
     reopened). If no selected link would change, nothing is saved or reloaded. If the package is

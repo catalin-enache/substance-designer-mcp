@@ -24,7 +24,7 @@ the rule's wording or figures.
 |---|---|
 | How to use the tools well, workflow, sd API / Designer pitfalls, verified facts | **`mcp_server/GUIDE.md`**, in the matching section: the core if an agent using only the tools needs it or every script hits it on the first try, otherwise under `# Scripting` |
 | How a tool works around Designer: what only whoever maintains it needs (would an agent using the tools act differently without it?) | The **docstring or comments of its module**, not the tool's docstring, which agents pay for; the guide keeps at most a line and the path |
-| A tool's parameters and behaviour | The tool's **docstring in its module of `mcp_server/server_tools/`**, the single source; don't repeat parameters in the guide |
+| A tool's behaviour, and what each of its parameters means | The tool's **docstring** for its behaviour, and each parameter's **`Field(description=...)` in its annotation** for its meaning, both in its module of `mcp_server/server_tools/`: the single source; don't repeat parameters in the guide |
 | Install, configuration, security, troubleshooting, anything a **person** needs | **README.md** |
 | Architecture: what the plugin, server, helpers and CLI tools each do | **README.md**, "How it works" |
 | How to deploy changes, diagnostics an **agent** needs | **AGENTS.md**, Deploying and diagnosing, or the rule or skill it points to for that work |

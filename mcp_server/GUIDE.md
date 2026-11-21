@@ -28,7 +28,7 @@ this project itself: [AGENTS.md](../AGENTS.md).)
 
 ## Which tool for what
 
-Parameters are in each tool's description; this is when to reach for which.
+Parameters are described in each tool's schema; this is when to reach for which.
 
 - **Start:** `designer_status`; if Designer isn't running, ask the user to open it (`launch_designer` is for tests and
   work on this project); `quit_designer` (the rules). Designers side by side, each on a bridge port of its own: Several

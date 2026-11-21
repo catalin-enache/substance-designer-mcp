@@ -42,8 +42,8 @@ _OP_FIELDS: dict[str, tuple[str, ...]] = {
     'delete': ('node',),
     'expose': ('node', 'param', 'input_id', 'label', 'default', 'min', 'max', 'step', 'group'),
 }
-# An apply_edits op as the tool's docstring documents it (server_tools/edits.py): every field an op may have, with
-# its type. The ops arrive as parsed JSON, so these are the types the agent was told to send, not checked ones:
+# An apply_edits op as the description of its ops documents it (OPS, server_tools/edits.py): every field an op may
+# have, with its type. The ops arrive as parsed JSON, so these are the types the agent was told to send, not checked ones:
 # - _check_batch checks the fields' names, the nodes, the refs, the positions and an output's tags before any op runs.
 # - A value of another type is converted when its op runs, and fails if it can't be: a node id, a position's numbers,
 #   a parameter's value (_make_value).

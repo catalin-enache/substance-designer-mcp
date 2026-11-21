@@ -4,12 +4,26 @@ import io
 import os
 import shutil
 import tempfile
+from typing import Annotated
 
 from mcp.server.mcpserver import Image
 from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image as PILImage
+from pydantic import Field
 
-from .core import XY, Four, NoneIfEmpty, _bridge, _checked, _helpers_call, _output_note_in, _tool, _with_undo
+from .core import (
+    XY,
+    Four,
+    Graph,
+    NoneIfEmpty,
+    Output,
+    _bridge,
+    _checked,
+    _helpers_call,
+    _output_note_in,
+    _tool,
+    _with_undo,
+)
 from .output import _load_8bit
 
 # screenshot_designer('3d', zoom=...): wheel steps either way (their size: designer_helpers/view3d.py)
@@ -24,13 +38,17 @@ WINDOW = "Designer's window: "
 NOTES = (WINDOW, '3D view: ', '3D render: ')
 
 
-@_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
+@_tool(read_only=False, destructive=False, idempotent=True, open_world=False)
 def preview_node(
-    node_id: str, graph: str | None = None, output: str | None = None, max_size: int = 512
+    node_id: Annotated[str, Field(description="The node's id: get node ids from describe_graph.")],
+    graph: Graph = None,
+    output: Output = None,
+    max_size: Annotated[
+        int, Field(description="The image's longest side in pixels, at most (a larger image is scaled down).")
+    ] = 512,
 ) -> list[str | Image]:
     """Compute the graph in Designer and return the image produced by one node (any node, not
-    just outputs). Get node ids from describe_graph. `output` picks a connector on multi-output
-    nodes (default: the one tagged base colour, else the first; the result says which). `graph` defaults to the graph open in Designer's UI.
+    just outputs).
     The call may add a temporary output node and delete it, within one undo step."""
     tmp_dir = tempfile.mkdtemp(prefix='sd_preview_')
     out_path = os.path.join(tmp_dir, 'node.png')
@@ -59,53 +77,100 @@ def preview_node(
 
 @_tool(read_only=False, destructive=False, idempotent=False, open_world=False)
 def screenshot_designer(
-    panel: str = 'window',
-    max_size: int = 1000,
-    crop: NoneIfEmpty[Four] = None,
-    graph: str | None = None,
-    mesh: str | None = None,
-    view: str | None = None,
-    zoom: int = 0,
-    tiling: float | None = None,
-    orbit: NoneIfEmpty[XY] = None,
-    pan: NoneIfEmpty[XY] = None,
-    environment: str | None = None,
-    environment_rotation: float | None = None,
-    environment_exposure: float | None = None,
+    panel: Annotated[
+        str,
+        Field(
+            description="window, graph, 2d, 3d, explorer, parameters, library or console. 'graph' is the node view "
+            "alone (no title bar or toolbars). '3d' returns the 3D view's own render (material on the mesh). Inside "
+            "'window' the 3D area doesn't show the render."
+        ),
+    ] = 'window',
+    max_size: Annotated[
+        int, Field(description="The image's longest side in pixels, at most (a larger image is scaled down).")
+    ] = 1000,
+    crop: Annotated[
+        NoneIfEmpty[Four],
+        Field(description='[left, top, right, bottom] as fractions 0-1 of the panel, applied before max_size.'),
+    ] = None,
+    graph: Annotated[
+        str | None,
+        Field(
+            description="Puts that graph's outputs on the mesh, selecting it in the Explorer (outputs added to the "
+            "graph open in the editor don't reach it by themselves; one with fewer than two outputs is refused: "
+            'preview_node shows one).'
+        ),
+    ] = None,
+    mesh: Annotated[
+        str | None, Field(description="One of the 3D view's Scene menu (Plane, Sphere, Rounded cube...).")
+    ] = None,
+    view: Annotated[
+        str | None, Field(description='Default, Front, Right, Back, Left, Top or Bottom, then framed.')
+    ] = None,
+    zoom: Annotated[
+        int,
+        Field(
+            description='Wheel steps from where the camera is then, about 1.1x closer each (negative: away), so after '
+            'pan it comes closer to what is in the middle.'
+        ),
+    ] = 0,
+    tiling: Annotated[
+        float | None,
+        Field(
+            description="How often the material repeats on the mesh (the user's Parameters panel then shows the graph "
+            'in the editor).'
+        ),
+    ] = None,
+    orbit: Annotated[
+        NoneIfEmpty[XY],
+        Field(
+            description='[right, up] degrees the camera turns around the point it looks at (from Front, [90, 0] is '
+            'Right, [0, 20] a low angle from above).'
+        ),
+    ] = None,
+    pan: Annotated[
+        NoneIfEmpty[XY],
+        Field(
+            description='[right, up] the camera moves sideways, in fractions of the view at that point (nearer parts '
+            'move more).'
+        ),
+    ] = None,
+    environment: Annotated[
+        str | None,
+        Field(
+            description="One of Designer's environment maps (its Library's HDRI environments, such as "
+            'studio_white_soft_light or studio_black_soft_light; an unknown name lists them).'
+        ),
+    ] = None,
+    environment_rotation: Annotated[
+        float | None,
+        Field(
+            description='The angle in degrees the environment is set to around the mesh, -180 to 180 (not added to '
+            'the angle before, unlike orbit).'
+        ),
+    ] = None,
+    environment_exposure: Annotated[
+        float | None,
+        Field(description="The environment's Exposure, -10 to 10, higher brighter (Designer starts at 0)."),
+    ] = None,
 ) -> list[str | Image]:
-    """Capture Designer's own UI (never other apps): panel = window, graph, 2d, 3d, explorer,
-    parameters, library or console. Shows what the user sees (node layout, 2D view, properties).
-    'graph' is the node view alone (no title bar or toolbars); open_graph(frame=... / node_ids=...)
-    zooms it to a section first. '3d' returns the 3D view's own render (material on the mesh);
-    it goes through the clipboard: its text is put back, anything else on it may be lost. Inside 'window' the
-    3D area doesn't show the render. The 3D view draws only while Designer's window is on screen: on macOS '3d'
+    """Capture Designer's own UI (never other apps). Shows what the user sees (node layout, 2D view, properties).
+    open_graph(frame=... / node_ids=...) zooms the graph panel to a section first.
+    '3d' goes through the clipboard: its text is put back, anything else on it may be lost. The 3D view draws only while Designer's window is on screen: on macOS '3d'
     puts a minimized, covered or hidden window there for the shot, transparent so the user doesn't see it, never
     taking focus, then puts it back as it was, and says so. It is left up if the user switched to Designer during
     the shot and Designer is still the app in front as it ends. After a set-up that moved the camera, switched the
     mesh, or changed the tiling or the light, a render identical to the one before is said, and so is a 3D view that
     hadn't settled within 3 s: shoot again with no set-up (pan, orbit and zoom move from where the camera is).
-    '3d' can set up the view first and says what it set (stopped partway, the steps it began); it stays set, for
-    later shots and in the user's view:
-    graph puts that graph's outputs on the mesh, selecting it in the Explorer (outputs added to the graph open
-    in the editor don't reach it by themselves; one with fewer than two outputs is refused:
-    preview_node shows one); mesh is one of the 3D view's Scene menu (Plane, Sphere, Rounded cube...); view:
-    Default, Front, Right, Back, Left, Top or Bottom, then framed; orbit: [right, up] degrees the camera turns around
-    the point it looks at (from Front, [90, 0] is Right, [0, 20] a low angle from above); pan: [right, up] it moves
-    sideways, in fractions of the view at that point (nearer parts move more); zoom: wheel steps from where the camera
-    is then, about 1.1x closer each (negative: away), so after pan it comes closer to what is in the middle; tiling:
-    how often the material repeats on the mesh (the user's Parameters panel then shows the graph in the editor).
+    '3d' can set up the view first with graph, mesh, view, orbit, pan, zoom, tiling and the light, and says what it set
+    (stopped partway, the steps it began); it stays set, for later shots and in the user's view.
     Each wheel step waits for the 3D view to be at rest, then for its sign of taking the step; each drag waits for its
     sign. A step without them ends the camera's moves there: the result says which, and how long it waited. When a
     wheel step isn't sent, or the view hadn't settled within 3 s after a step, or hadn't by the render since the window
     came back with no step restarting it, the result also gives the view's count if below 8 (off screen, as last
     drawn) and what may hold it there: still refining, or the Rasterizer's Samples below 8 or its accumulation
     antialiasing off (Renderer > Edit settings). A shot where nothing of this happens says nothing of the count.
-    The light: environment is one of Designer's environment maps (its Library's HDRI environments, such as
-    studio_white_soft_light or studio_black_soft_light; an unknown name lists them); environment_rotation: the angle
-    in degrees it is set to around the mesh, -180 to 180 (not added to the angle before, unlike orbit);
-    environment_exposure: its Exposure, -10 to 10, higher brighter (Designer starts at 0). These go through the
-    Parameters panel, as tiling does.
-    crop: [left, top, right, bottom] as fractions 0-1 of the panel, applied before max_size.
+    The light (environment, environment_rotation, environment_exposure) goes through the Parameters panel, as tiling
+    does.
     An image costs about width x height / 750 tokens (1000 x 700 is about 930), so keep
     max_size small and crop to what you need."""
     if crop is not None and (not all(0.0 <= v <= 1.0 for v in crop) or not (crop[0] < crop[2] and crop[1] < crop[3])):
@@ -185,19 +250,23 @@ def screenshot_designer(
 
 @_tool(read_only=False, destructive=False, idempotent=True, open_world=False)
 def open_graph(
-    graph: str,
-    node_id: str | None = None,
-    node_ids: list[str] | None = None,
-    frame: str | None = None,
-    rect: NoneIfEmpty[Four] = None,
+    graph: Annotated[str, Field(description='The graph identifier.')],
+    node_id: Annotated[
+        str | None, Field(description="Centres the view on one node (Designer's own focus, zoomed in close).")
+    ] = None,
+    node_ids: Annotated[
+        list[str] | None, Field(description='Fits the view to these nodes (their bounding box).')
+    ] = None,
+    frame: Annotated[str | None, Field(description="Fits the view to a frame, by the frame's title.")] = None,
+    rect: Annotated[
+        NoneIfEmpty[Four], Field(description='Fits the view to [x, y, width, height] in graph units.')
+    ] = None,
 ) -> str:
     """Open a graph in Designer's graph editor (so the user and screenshot_designer see it;
     closes Designer's Home screen if it is showing). By default the whole graph is fitted in
-    view. To look at one section, fit the view to a frame (its title), to node_ids (their
-    bounding box) or to rect ([x, y, width, height] in graph units), with a little padding and
+    view. To look at one section, fit the view to a frame, to node_ids or to rect, with a little padding and
     at most 100 % zoom; it zooms in Designer's own wheel steps (1.2x), so the view may show up
-    to one step more than the area. node_id centres the view on one node (Designer's own focus, zoomed in
-    close). Prints the zoom and the visible area in graph units; "could not fit" instead of "fitted" when the
+    to one step more than the area. Or centre it on node_id. Prints the zoom and the visible area in graph units; "could not fit" instead of "fitted" when the
     view can't show the whole area (Designer's zoom stops at 5 %)."""
     chosen = [
         name

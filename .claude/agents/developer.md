@@ -50,12 +50,12 @@ agents you start start none.
 When the unit adds a tool, a parameter or an op, your first deliverable is a triage, not code. Load the `mcp-builder`
 skill first (`.claude/rules/changing-tools.md`). Give one line per layer the unit touches:
 
-- the tool, in `mcp_server/server_tools/`, and its docstring;
+- the tool, in `mcp_server/server_tools/`, its docstring and its parameters' descriptions;
 - the helpers, in `mcp_server/designer_helpers/`;
 - the plugin;
 - the unit tests;
 - the live checks, with their category and preparation;
-- the docs: README's Tools table, GUIDE.md, the modules' docstrings.
+- the docs: README's Tools table, GUIDE.md, the modules' docstrings, the parameters' descriptions.
 
 Each line carries one verdict:
 

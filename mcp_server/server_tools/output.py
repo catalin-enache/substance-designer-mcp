@@ -8,14 +8,15 @@ import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
-from typing import cast
+from typing import Annotated, cast
 
 import numpy as np
 from mcp.server.mcpserver import Image
 from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image as PILImage
+from pydantic import Field
 
-from .core import SBSCOOKER, SBSRENDER, Box, NoneIfEmpty, _bridge, _checked, _helpers_call, _local_path, _tool
+from .core import SBSCOOKER, SBSRENDER, Box, Graph, NoneIfEmpty, _bridge, _checked, _helpers_call, _local_path, _tool
 from .measure import _crop_box, _sheet
 from .snapshots import _v
 
@@ -24,10 +25,16 @@ _Value = float | int | bool | list[float]
 
 
 @_tool(read_only=False, destructive=True, idempotent=True, open_world=False)
-def save_package(graph_or_path: str | None = None, save_as: str | None = None) -> str:
-    """Save an open package from Designer. graph_or_path: a graph identifier or the package's
-    file path (default: graph open in the UI). save_as: new absolute .sbs path (required for
-    packages that were never saved). A package using a graph of a never-saved package is refused until
+def save_package(
+    graph_or_path: Annotated[
+        str | None,
+        Field(description="A graph identifier or the package's file path (default: graph open in the UI)."),
+    ] = None,
+    save_as: Annotated[
+        str | None, Field(description='New absolute .sbs path (required for packages that were never saved).')
+    ] = None,
+) -> str:
+    """Save an open package from Designer. A package using a graph of a never-saved package is refused until
     that one is saved: Designer would open a dialog and wait for a person."""
     if graph_or_path and graph_or_path.lower().endswith('.sbs'):
         graph_or_path = _local_path(graph_or_path)
@@ -36,11 +43,14 @@ def save_package(graph_or_path: str | None = None, save_as: str | None = None) -
 
 @_tool(read_only=False, destructive=True, idempotent=True, open_world=False)
 def export_outputs(
-    output_dir: str, graph: str | None = None, outputs: list[str] | None = None, file_format: str = 'png'
+    output_dir: Annotated[str, Field(description='The folder the textures are saved to.')],
+    graph: Graph = None,
+    outputs: Annotated[list[str] | None, Field(description='Subset of output identifiers (default: all).')] = None,
+    file_format: Annotated[str, Field(description="The files' extension, which sets their format.")] = 'png',
 ) -> str:
     """Compute a graph inside Designer and save its output nodes' textures directly (no
     sbscooker/sbsrender), named after the output identifiers. Reflects the current, possibly
-    unsaved, state of the graph (default: the graph open in the UI; the result names the graph). outputs: subset of output identifiers (default: all); names that
+    unsaved, state of the graph; the result names the graph. Names in outputs that
     match no output are listed, and so are outputs that computed no image. Two outputs with one
     identifier are refused (one file each)."""
     return _checked(
@@ -61,21 +71,28 @@ def _value_arg(value: _Value) -> str:
 
 @_tool(read_only=False, destructive=True, idempotent=True, open_world=False)
 def render_sbs(
-    sbs_path: str,
-    output_dir: str,
-    size_log2: int | None = None,
-    graph: str | None = None,
-    outputs: list[str] | None = None,
-    params: dict[str, float | int | bool | list[float]] | None = None,
-    output_format: str = 'png',
+    sbs_path: Annotated[str, Field(description='The .sbs or .sbsar file.')],
+    output_dir: Annotated[str, Field(description='The folder the files are rendered to.')],
+    size_log2: Annotated[
+        int | None,
+        Field(
+            description="Output size override (11 = 2048). Without it a .sbs renders at the graph's default parent "
+            'size (as in Designer) and a .sbsar at its own stored default (often 256 px).'
+        ),
+    ] = None,
+    graph: Annotated[
+        str | None, Field(description='Graph identifier inside the package (default: every graph).')
+    ] = None,
+    outputs: Annotated[list[str] | None, Field(description='Output identifiers to render (default: all).')] = None,
+    params: Annotated[
+        dict[str, float | int | bool | list[float]] | None,
+        Field(description='Exposed input values, e.g. {"wear": 0.5, "tint": [1, 0.8, 0.6]}.'),
+    ] = None,
+    output_format: Annotated[str, Field(description='png, tga, exr, jpg, ...')] = 'png',
 ) -> str:
     """Cook a .sbs in a temporary folder (or take a .sbsar) and render outputs to files named after
     the output nodes (graph_output when several graphs render, so same-named outputs don't collide).
-    size_log2: output size override (11 = 2048). Without it a .sbs renders at the graph's default
-    parent size (as in Designer) and a .sbsar at its own stored default (often 256 px). graph: graph identifier inside the package
-    (default: every graph). outputs: output identifiers to render (default: all).
-    params: exposed input values, e.g. {"wear": 0.5, "tint": [1, 0.8, 0.6]}.
-    output_format: png, tga, exr, jpg, ... Use sbsar_info to list graphs/inputs/outputs."""
+    Use sbsar_info to list graphs/inputs/outputs."""
     if not (SBSCOOKER and SBSRENDER):
         raise ToolError(
             'sbscooker/sbsrender not found. Set SD_DESIGNER_BIN_DIR to the folder containing '
@@ -283,7 +300,7 @@ def _cooked(sbs_path: str) -> Iterator[str]:
 
 
 @_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
-def sbsar_info(sbs_path: str) -> str:
+def sbsar_info(sbs_path: Annotated[str, Field(description='The .sbs or .sbsar file.')]) -> str:
     """List graphs, exposed inputs (with types) and outputs of a .sbs/.sbsar, i.e. what
     render_sbs can take as graph/outputs/params. A .sbs is cooked in a temporary folder."""
     if not (SBSCOOKER and SBSRENDER):
@@ -310,10 +327,12 @@ def _load_8bit(path: str) -> PILImage.Image:
 
 @_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
 def preview_maps(
-    map_dir: str, names: list[str] | None = None, tile_size: int = 384, crop: NoneIfEmpty[Box] = None
+    map_dir: Annotated[str, Field(description='The folder holding the maps.')],
+    names: Annotated[list[str] | None, Field(description='Picks maps by file stem (default: all).')] = None,
+    tile_size: Annotated[int, Field(description="Each map's longest side in the preview, in pixels.")] = 384,
+    crop: Annotated[NoneIfEmpty[Box], Field(description='[x0, y0, x1, y1] in source pixels to zoom in.')] = None,
 ) -> Image:
-    """Return a side-by-side preview of rendered maps (PNG files in map_dir). `names` picks
-    maps by file stem (default: all). `crop` = [x0, y0, x1, y1] in source pixels to zoom in."""
+    """Return a side-by-side preview of rendered maps (PNG files in map_dir)."""
     map_dir = os.path.abspath(os.path.expanduser(map_dir))
     if not os.path.isdir(map_dir):
         raise ToolError('%s is not a folder' % map_dir)

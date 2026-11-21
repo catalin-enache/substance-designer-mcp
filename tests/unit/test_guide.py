@@ -28,12 +28,11 @@ from docs_text import (
     without_code,
 )
 from mcp.server.mcpserver.exceptions import ToolError
-from test_server import _tools
+from test_server import CLAUDE_CODE_LIMIT, _described, _tools
 
 from conftest import ROOT, fake_bridge, patch_server, server
 from server_tools import scripting
 
-CLAUDE_CODE_LIMIT = 4096  # measured: the guide arrived cut at exactly this many characters
 AGENTS_MD_BUDGET = 15_000  # bytes (test_agents_md_stays_within_its_budget)
 # the sections of each file, by the audience that reads it
 GUIDE_SECTIONS = (
@@ -772,8 +771,8 @@ def test_a_tools_only_agent_is_told_the_units() -> None:
     core, scripting = map(flat, _parts())
     assert '`$outputsize` is log2' in core and 'node **centres**' in core
     assert '**Graph size** is log2' not in scripting and 'node **centres**' not in scripting, 'one place'
-    doc = flat(server.apply_edits.__doc__ or '')
-    assert 'log2' in doc and 'centre' in doc
+    ops = flat(_described('apply_edits', 'ops'))
+    assert 'log2' in ops and 'centre' in ops
 
 
 def test_the_core_says_when_outputsize_is_an_offset() -> None:
@@ -795,7 +794,7 @@ def test_the_core_names_the_tools_that_refuse_too_large_a_size() -> None:
 @pytest.mark.parametrize('tool', ['create_graph', 'set_graph_size'])
 def test_the_size_tools_state_the_largest_size(tool: str) -> None:
     # REVIEW.md HLP-84
-    assert '13 is 8192 px, the largest' in flat(getattr(server, tool).__doc__ or '')
+    assert '13 is 8192 px, the largest' in flat(_described(tool, 'size_log2'))
 
 
 def test_the_hot_reload_rule_is_among_the_rules() -> None:
@@ -824,7 +823,7 @@ def test_a_tools_only_agent_is_told_where_the_crash_dumps_are() -> None:
 
 def test_apply_edits_says_what_it_refuses_for_a_size() -> None:
     # REVIEW.md HLP-87
-    assert 'above 13 or below 0 is refused' in flat(server.apply_edits.__doc__ or '')
+    assert 'above 13 or below 0 is refused' in flat(_described('apply_edits', 'ops'))
 
 
 def test_the_skill_doesnt_call_a_guide_only_fix_code() -> None:

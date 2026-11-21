@@ -1,18 +1,20 @@
 """The server starts without Designer, and the docs list every tool it serves."""
 
 import asyncio
+import inspect
 import json
 import os
 import re
 import sys
 from pathlib import Path
-from typing import cast
+from typing import cast, get_args
 
 import pytest
 from docs_text import guide_md, read
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.types import CallToolResult, ToolAnnotations
+from pydantic.fields import FieldInfo
 
 import designer_helpers
 from conftest import (
@@ -28,6 +30,10 @@ from conftest import (
 from project_constants import Json
 
 SERVER = os.path.join(ROOT, 'mcp_server', 'server.py')
+# Claude Code keeps this many characters of a server's instructions (measured: the guide arrived cut at exactly this
+# many), and of a tool's description when the tool loads at the session's start (its MCP docs, "Tool search for MCP
+# server authors")
+CLAUDE_CODE_LIMIT = 4096
 
 
 async def _list_tools() -> tuple[str, dict[str, str]]:
@@ -61,11 +67,46 @@ def _tools() -> tuple[str, dict[str, str]]:
     return TOOLS
 
 
+def _described(tool: str, name: str) -> str:
+    """The description a tool's parameter is given in its annotation (`Field(description=...)`)."""
+    annotation = inspect.signature(getattr(server, tool)).parameters[name].annotation
+    field = next(meta for meta in get_args(annotation)[1:] if isinstance(meta, FieldInfo))
+    return field.description or ''
+
+
 def test_server_starts_and_points_to_the_guide() -> None:
     instructions, tools = _tools()
     assert 'get_guide()' in instructions and 'get_guide' in tools
     assert len(tools) > 30
     assert all(desc.strip() for desc in tools.values()), 'every tool needs a docstring'
+
+
+def test_every_tool_parameter_is_described_in_its_schema() -> None:
+    # ROADMAP item 38: a client shows the schema's parameters, so each says what it means (its annotation's
+    # Field(description=...)); the docstring keeps what the tool does
+    _tools()
+    missing = sorted(
+        '%s(%s)' % (tool, name)
+        for tool, params in PROPERTIES.items()
+        for name, schema in params.items()
+        if not (isinstance(schema, dict) and isinstance(text := schema.get('description'), str) and text.strip())
+    )
+    assert not missing, 'parameters without a description in their schema: %s' % missing
+
+
+def test_no_tool_description_is_cut_by_claude_code() -> None:
+    # Claude Code cuts the description of a tool loaded at the session's start (CLAUDE_CODE_LIMIT)
+    _, tools = _tools()
+    long = {name: len(text) for name, text in tools.items() if len(text) > CLAUDE_CODE_LIMIT}
+    assert not long, 'tool descriptions over %d characters: %s' % (CLAUDE_CODE_LIMIT, long)
+
+
+def test_no_tool_description_keeps_its_docstrings_indentation() -> None:
+    # The SDK sends a tool's raw __doc__ unless it is given a description, and each line after the first keeps the
+    # docstring's indentation, which agents pay for in every listing: _tool() gives it cleaned
+    _, tools = _tools()
+    indented = sorted(name for name, text in tools.items() if text != inspect.cleandoc(text))
+    assert not indented, "tool descriptions with their docstring's indentation: %s" % indented
 
 
 def test_readme_tool_count_and_table() -> None:
@@ -78,8 +119,8 @@ def test_readme_tool_count_and_table() -> None:
     assert not missing, 'tools missing from README Tools table: %s' % missing
 
 
-# Each tool's hints: (readOnlyHint, destructiveHint, idempotentHint, openWorldHint). They judge the user's work
-# (DECISIONS.md, Tool annotations).
+# Each tool's hints: (readOnlyHint, destructiveHint, idempotentHint, openWorldHint). How each is chosen: _tool()'s
+# docstring (mcp_server/server_tools/core.py).
 HINTS: dict[str, Hints] = {
     # read-only
     'get_guide': (True, False, True, False),
@@ -89,10 +130,6 @@ HINTS: dict[str, Hints] = {
     'describe_node': (True, False, True, False),
     'describe_graph': (True, False, True, False),
     'list_graph_inputs': (True, False, True, False),
-    'preview_node': (True, False, True, False),
-    'node_stats': (True, False, True, False),
-    'check_tiling': (True, False, True, False),
-    'compare_to_reference': (True, False, True, False),
     'list_snapshots': (True, False, True, False),
     'diff_graph': (True, False, True, False),
     'sbsar_info': (True, False, True, False),
@@ -114,6 +151,10 @@ HINTS: dict[str, Hints] = {
     'launch_designer': (False, False, True, False),
     'cancel_designer_job': (False, False, True, False),
     'sweep_param': (False, False, True, False),
+    'preview_node': (False, False, True, False),
+    'node_stats': (False, False, True, False),
+    'check_tiling': (False, False, True, False),
+    'compare_to_reference': (False, False, True, False),
     'snapshot_graph': (False, False, False, False),
     'add_frame': (False, False, False, False),
     'add_comment': (False, False, False, False),
@@ -249,15 +290,15 @@ def test_apply_edits_checks_the_node_fields_of_every_op() -> None:
         assert fields & {'node', 'from', 'to'} == set(node_fields[kind]), (kind, fields, node_fields[kind])
 
 
-def test_apply_edits_docstring_lists_every_op_and_field() -> None:
-    text = server_source().split('def apply_edits(', 1)[1].split('Refs let', 1)[0]
+def test_apply_edits_ops_description_lists_every_op_and_field() -> None:
+    # the ops' grammar: an op's line starts with {"op", and its next lines with a space
     doc = {
         m.group(1): set(re.findall(r'"(\w+)"\??:', m.group(0))) - {'op'}
-        for m in re.finditer(r'\{"op": "(\w+)"[^{]*', text)
+        for m in re.finditer(r'^\{"op": "(\w+)".*(?:\n .*)*', _described('apply_edits', 'ops'), re.M)
     }
     for kind, fields in _dispatched_ops().items():
-        assert kind in doc, 'apply_edits op %r is not in the docstring' % kind
-        assert fields <= doc[kind], 'apply_edits %r: fields %s not in the docstring' % (
+        assert kind in doc, "apply_edits op %r is not in ops' description" % kind
+        assert fields <= doc[kind], "apply_edits %r: fields %s not in ops' description" % (
             kind,
             sorted(fields - doc[kind]),
         )
@@ -489,8 +530,9 @@ def test_the_fallback_client_sends_no_args() -> None:
 
 
 # The JSON parameters' schemas, as agents saw them before the parameters were typed as pydantic's JsonValue, which
-# would describe each nested value (ROADMAP item 98)
-_PINNED: dict[tuple[str, str], Json] = {
+# would describe each nested value (ROADMAP item 98). The test adds beside them the description each one's annotation
+# gives.
+_PINNED: dict[tuple[str, str], dict[str, Json]] = {
     ('apply_edits', 'ops'): {
         'items': {'additionalProperties': True, 'type': 'object'},
         'title': 'Ops',
@@ -509,10 +551,10 @@ _PINNED: dict[tuple[str, str], Json] = {
 def test_the_json_parameters_keep_the_schemas_agents_saw(tool: str, name: str) -> None:
     # REVIEW.md TST-485: the schemas were said to be pinned, with no test
     _tools()
-    assert PROPERTIES[tool][name] == _PINNED[(tool, name)]
+    assert PROPERTIES[tool][name] == {**_PINNED[(tool, name)], 'description': _described(tool, name)}
 
 
-# The parameters that take a fixed number of values (their docstrings), and the least and most their schemas allow; for a
+# The parameters that take a fixed number of values (their descriptions), and the least and most their schemas allow; for a
 # list of such items, those of each item; and the array parameters that take any number (REVIEW.md SRV-177)
 _FIXED: dict[tuple[str, str], tuple[int, int, str]] = {  # (least, most, the values' JSON type)
     ('add_comment', 'position'): (2, 2, 'number'),

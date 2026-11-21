@@ -11,8 +11,8 @@ but hasn't been tested yet. How the pieces fit together: [How it works](#how-it-
 **Documents:** this README is for people (what it does, install, configure, troubleshoot).
 [mcp_server/GUIDE.md](mcp_server/GUIDE.md) is for the AI agent driving Designer (which tool when, workflow, Designer
 pitfalls), [AGENTS.md](AGENTS.md) for an agent changing this project; the
-server serves the guide to the agent through `get_guide`. Each tool's exact parameters are in its description
-in `mcp_server/server_tools/`.
+server serves the guide to the agent through `get_guide`. Each tool's exact parameters are described in its
+schema, written in `mcp_server/server_tools/`.
 
 ## What you can ask for
 

@@ -1,15 +1,16 @@
 """compare_to_reference: tones of a node against a reference image."""
 
 import os
-from typing import cast
+from typing import Annotated, cast
 
 import numpy as np
 import numpy.typing as npt
 from mcp.server.mcpserver import Image
 from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image as PILImage
+from pydantic import Field
 
-from .core import Box, NoneIfEmpty, _tool
+from .core import Box, Graph, NoneIfEmpty, Output, _tool
 from .measure import Pixels, _crop, _labelled, _node_pixels, _sheet, _to_display
 
 Values = npt.NDArray[np.float64]  # one channel, (H, W) or flattened
@@ -183,26 +184,40 @@ def _histogram_tile(node_luma: Values, ref_luma: Values, width: int, height: int
     return im
 
 
-@_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
+@_tool(read_only=False, destructive=False, idempotent=True, open_world=False)
 def compare_to_reference(
-    node_id: str,
-    reference_path: str,
-    graph: str | None = None,
-    output: str | None = None,
-    region: NoneIfEmpty[Box] = None,
-    reference_region: NoneIfEmpty[Box] = None,
-    aligned: bool = False,
-    tile_size: int = 256,
+    node_id: Annotated[str, Field(description='The node whose output is compared.')],
+    reference_path: Annotated[str, Field(description='The reference image file.')],
+    graph: Graph = None,
+    output: Output = None,
+    region: Annotated[
+        NoneIfEmpty[Box],
+        Field(description="[x0, y0, x1, y1] in pixels: the part of the node's output to compare, e.g. one trim strip."),
+    ] = None,
+    reference_region: Annotated[
+        NoneIfEmpty[Box],
+        Field(
+            description='[x0, y0, x1, y1] in pixels: the part of the reference to compare, e.g. the matching area of '
+            'a photo.'
+        ),
+    ] = None,
+    aligned: Annotated[
+        bool,
+        Field(
+            description='True also compares pixel by pixel (reference resized to the node; for references made for the '
+            'same layout, e.g. an earlier render) and adds a difference image.'
+        ),
+    ] = False,
+    tile_size: Annotated[
+        int, Field(description="Each tile's longest side in pixels, at most (a larger image is scaled down).")
+    ] = 256,
 ) -> list[str | Image]:
-    """Compare a node's output with a reference image file, with numbers. output: which of the node's outputs (default: the one tagged base colour, else the first; the result says which). Always compares value
+    """Compare a node's output with a reference image file, with numbers. Always compares value
     distributions (works for a photo that isn't pixel-aligned with the material): per channel
     mean, std, percentiles, the mean shift, the contrast ratio and the earth mover's distance
     (EMD: how far values must move on average, 0..1), plus a linear map (x*gain + bias) that
     would match mean and contrast. R, G, B are compared when both are colour, luma always.
-    aligned=True also compares pixel by pixel (reference resized to the node; for references made
-    for the same layout, e.g. an earlier render) and adds a difference image.
-    region / reference_region: [x0, y0, x1, y1] in pixels to compare parts, e.g. one trim strip
-    with the matching area of a photo. Transparent reference pixels (alpha < 0.5) are ignored.
+    Transparent reference pixels (alpha < 0.5) are ignored.
     Returns the numbers and an image: node | reference | luma histograms | difference.
     The call may add a temporary output node and delete it, within one undo step."""
     data, layout, meta = _node_pixels(node_id, graph, output, 'compare_to_reference')

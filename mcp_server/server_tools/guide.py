@@ -1,21 +1,27 @@
 """The guide: get_guide and the designer://agents-guide resource."""
 
+from typing import Annotated
+
 from mcp.server.mcpserver.exceptions import ToolError
-from mcp.types import ToolAnnotations
+from pydantic import Field
 
-from .core import _agent_guide, _session, server
+from .core import _agent_guide, _session, _tool, server
 
 
-@server.tool(
-    annotations=ToolAnnotations(
-        read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
-    )
-)
-def get_guide(part: str = 'core') -> str:
-    """The guide for agents driving Substance Designer (GUIDE.md). `part='core'`: rules that protect the
-    user's work, which tool to use when, verified facts. Call it right before the first Designer tool
+# gated=False: reading the guide is what opens the other tools
+@_tool(read_only=True, destructive=False, idempotent=True, open_world=False, gated=False)
+def get_guide(
+    part: Annotated[
+        str,
+        Field(
+            description="'core': rules that protect the user's work, which tool to use when, verified facts. "
+            "'scripting': the sd API and Designer UI pitfalls."
+        ),
+    ] = 'core',
+) -> str:
+    """The guide for agents driving Substance Designer (GUIDE.md). The core: call it right before the first Designer tool
     call of a session (not otherwise), read all of it, then tell the user you have read it; every tool but cancel_designer_job refuses until you have.
-    `part='scripting'`: the sd API and Designer UI pitfalls; read it before writing raw `sd` or Qt code
+    The scripting part: read it before writing raw `sd` or Qt code
     (execute_designer_code, run_designer_script), which refuse until you have; then tell the user you have read it."""
     if part not in ('core', 'scripting'):
         raise ToolError("part is 'core' or 'scripting', not %r" % part)

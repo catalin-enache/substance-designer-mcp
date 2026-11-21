@@ -97,10 +97,11 @@ import time
 import urllib.parse
 from collections.abc import Iterator, Sequence
 from textwrap import dedent
-from typing import NamedTuple, Protocol, cast
+from typing import Annotated, NamedTuple, Protocol, cast
 from xml.etree import ElementTree
 
 from mcp.server.mcpserver.exceptions import ToolError
+from pydantic import Field
 
 import designer_preferences  # beside project_constants (on sys.path: core.py puts the repo root there)
 from project_constants import (  # on sys.path: the package's __init__ imports .core, which puts it there
@@ -120,6 +121,7 @@ from project_constants import (  # on sys.path: the package's __init__ imports .
 
 from .core import (
     PORT,
+    Port,
     _bridge,
     _checked,
     _control,
@@ -136,11 +138,10 @@ from .core import (
 
 
 @_tool(read_only=True, destructive=False, idempotent=True, open_world=False)
-def designer_status(port: int | None = None) -> str:
+def designer_status(port: Port = None) -> str:
     """Report Designer's version, the bridge state (idle/running) and the open user packages (an
     unsaved one by its UID, as list_snapshots names it), whether an agent started it, plus this server's Python and library versions. While a job runs or waits, the Designer
-    version and package list are skipped: they would have to wait for the job.
-    port: the Designer on that bridge port (launch_designer's port); this server's when omitted. The result also lists
+    version and package list are skipped: they would have to wait for the job. The result also lists
     the Designers an agent started on other ports."""
     port = _port(port)
     state = _control('status', wait=10, port=port)
@@ -1016,7 +1017,16 @@ def _users_next_to(port: int, note: str) -> ToolError | None:
 
 
 @_tool(read_only=False, destructive=False, idempotent=True, open_world=False)
-def launch_designer(wait_s: int = 180, port: int | None = None) -> str:
+def launch_designer(
+    wait_s: Annotated[int, Field(description='Seconds to wait until the bridge plugin answers.')] = 180,
+    port: Annotated[
+        int | None,
+        Field(
+            description="The bridge port the Designer's plugin listens on, 1024-65535; this server's (SD_BRIDGE_PORT, "
+            '9877 by default) when omitted.'
+        ),
+    ] = None,
+) -> str:
     """Start Substance Designer if it isn't running and wait until the bridge plugin answers.
     When it starts Designer it also closes the Home screen, so the editor panels are visible. On macOS it starts
     Designer hidden, without taking the keyboard (and gives it back if Designer takes it anyway): its Dock icon
@@ -1025,8 +1035,7 @@ def launch_designer(wait_s: int = 180, port: int | None = None) -> str:
     during the wait, a new one is started and gets its own wait_s, so the call can then take up to
     about twice wait_s. One an agent started is waited for only until 180 s after it started; past that, not answering,
     it is ended and a new one started, and the result says so.
-    port (1024-65535): the bridge port the Designer's plugin listens on; this server's (SD_BRIDGE_PORT, 9877 by
-    default) when omitted. On macOS, Designers an agent started run side by side, one per port, each recorded on its
+    On macOS, Designers an agent started run side by side, one per port, each recorded on its
     own (other platforms not tried; on Windows nothing is recorded, and with any Designer running none is started);
     designer_status, quit_designer and read_designer_log take the same port. The other tools reach only this server's
     port: one on another is for a server or client/sd_run.py started with SD_BRIDGE_PORT set to it. None is started
@@ -1321,14 +1330,16 @@ def _sampled_before_force(pid: int, port: int) -> str:
 
 
 @_tool(read_only=False, destructive=True, idempotent=True, open_world=False)
-def quit_designer(wait_s: int = 10, port: int | None = None) -> str:
+def quit_designer(
+    wait_s: Annotated[int, Field(description="Seconds to wait for the Designer's process to exit.")] = 10,
+    port: Port = None,
+) -> str:
     """Close a Designer an agent started, and wait until its process has exited: unsaved changes are dropped, and after
     wait_s it is force-ended; the result says which and, if forced, whether its close had taken (its own shutdown
     then hung) and the last line of its log. On macOS, one still running past wait_s has its threads sampled into a
     file the result names, also when it then quits by itself. Running a job, it isn't asked to close. Not replying to
     the close within wait_s (at least 10 s) adds that to the wait. Any other Designer is the user's: this ends nothing
-    and says to ask them to save, close and reopen it.
-    port: the one on that bridge port (launch_designer's port); this server's when omitted. Others are left alone.
+    and says to ask them to save, close and reopen it. Designers on other ports are left alone.
     On macOS, once no Designer runs, it puts Designer's preferences plist back from the copy launch_designer saved,
     unless the user's Designer ran since, or the copy is over 6 hours old and this call ended none (it is dropped
     then); the result says which."""

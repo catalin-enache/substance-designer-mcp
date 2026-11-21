@@ -97,8 +97,8 @@ addressed in one go (the ones the user named, or the batch in the plan) are hand
    there, and failing alone too (the `live-check` skill, When the final check fails), the finding is open again. The lead unchecks it and adds a note under its resolution saying what failed (the
    entry's earlier text stays). The developer fixes it, and the lead adds the new resolution below the note.
 5. **Update the docs** the change touches, as the "Keeping the docs current" table of `.claude/rules/docs.md` says:
-   tool docstrings, GUIDE.md facts, README.md. Add a new sentence only when an agent or a user
-   needs it to act, and make it say exactly what its check measures, no more. Every claim is
+   tool docstrings and parameters' descriptions, GUIDE.md facts, README.md. Add a new sentence only when an agent or a
+   user needs it to act, and make it say exactly what its check measures, no more. Every claim is
    something the next review audits against its test: a third of the links in REVIEW.md's
    chains were "the sentence says more than the check".
 6. **Review your own fix as a reviewer would, and repeat until nothing is left.** Before calling
@@ -110,9 +110,9 @@ addressed in one go (the ones the user named, or the batch in the plan) are hand
       a comparison that any rule would satisfy, hashes of data that differs run to run;
     - the test leaves state behind for later checks, or cleans up only when every step succeeds (no `finally`);
     - an older test no longer guards what it was written for, because the fix changed the order;
-    - a comment, a docstring, or a sentence of AGENTS.md, a rule or skill AGENTS.md points to, GUIDE.md or README.md
-      that the fix made untrue, a name or path in DECISIONS.md it made stale, or a new sentence that claims more than
-      the test measures.
+    - a comment, a docstring, a parameter's description, or a sentence of AGENTS.md, a rule or skill AGENTS.md points
+      to, GUIDE.md or README.md that the fix made untrue, a name or path in DECISIONS.md it made stale, or a new
+      sentence that claims more than the test measures.
       Adjust what you find, then step back and review the adjusted change the same way, again and
       again, until a fresh look finds nothing a reviewer could report. Only then go on.
       When a sentence claims more than its test measures, prefer narrowing the sentence to writing a

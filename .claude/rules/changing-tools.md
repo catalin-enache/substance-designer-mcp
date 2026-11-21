@@ -18,5 +18,11 @@ tool where it fits, else a new tool rather than an existing one complicated with
 Its code is for mcp 1.x; this server runs mcp 2.x (the note at the top of its `SKILL.md`).
 
 **A new tool declares its four MCP hints in its registration:** `_tool()`'s `read_only`, `destructive`, `idempotent`
-and `open_world`. It also gets a row in `HINTS`, the table in `tests/unit/test_server.py` (DECISIONS.md, Tool
-annotations).
+and `open_world`, chosen as `_tool()`'s docstring says. It also gets a row in `HINTS`, the table in
+`tests/unit/test_server.py`.
+
+**A new parameter gets its description in its annotation:** `Annotated[<its type>, Field(description='...')]`, its
+default kept as the Python default, or the shared `Graph`, `Output` or `Port` of `server_tools/core.py`. What goes in
+the description and what stays in the docstring: `.claude/rules/docs.md`, the table. **A tool's description stays
+within what Claude Code keeps** of a tool loaded at the session's start (`CLAUDE_CODE_LIMIT`). Both are held by tests
+in `tests/unit/test_server.py`.
