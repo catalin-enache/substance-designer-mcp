@@ -3,11 +3,9 @@
 import os
 import re
 import subprocess
-import sys
 from textwrap import dedent
 
 from test_all_tools.common import (
-    BUNDLE,
     TEST_GRAPH,
     Ctx,
     _mean_png,
@@ -240,7 +238,6 @@ async def run(ctx: Ctx) -> None:
         not os.path.exists(os.path.splitext(sbs)[0] + '.sbsar'),
         '',
     )
-    sys.path.insert(0, os.path.join(BUNDLE, 'mcp_server'))
     import server as mcp_server_module  # for the sbscooker path only
 
     cooked = os.path.join(scratch, 'cooked')

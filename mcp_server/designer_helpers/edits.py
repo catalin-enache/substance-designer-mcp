@@ -4,6 +4,7 @@ from .core import (
     APIException,
     Callable,
     Json,
+    SDGraph,
     SDNode,
     SDProperty,
     SDPropertyCategory,
@@ -15,6 +16,7 @@ from .core import (
     Shown,
     _annotation_text,
     _default_output,
+    _definition_id,
     _find_node,
     _graph_to_edit,
     _new_instance,
@@ -31,12 +33,16 @@ from .core import (
     fmt,
     node_kind,
     os,
+    re,
 )
 from .describe import _library_graph
 from .graph_inputs import (
+    _PROGRAMS,
+    _REPLACE,
     _driver_text,
     _driving_graph,
     _offset_note,
+    _plain_binding,
     _refuse_bad_size_on_input,
     _refuse_no_input,
     _refuse_no_output,
@@ -53,10 +59,43 @@ def _node(g: SDSBSCompGraph, node_id: str | None) -> SDSBSCompNode:
     """A node of g, never the graph itself, for every tool that needs a node: 'graph' is no node, and
     taking it for one failed halfway (delete_nodes, move_nodes: REVIEW.md HLP-31), with an unclear
     error, or crashed Designer (open_graph's focusGraphNode: HLP-41). _target is for parameters."""
+    return cast(SDSBSCompNode, _graph_node(g, node_id))  # the nodes of a compositing graph
+
+
+def _graph_node(g: SDGraph, node_id: str | None) -> SDNode:
+    """_node of any graph, a function graph's too: a node of g, never the graph itself."""
     node = _find_node(g, str(node_id)) if node_id not in (None, '') else None
     if node is None:
         raise RuntimeError('node %r not found in graph %s' % (node_id, g.getIdentifier()))
-    return cast(SDSBSCompNode, node)  # the nodes of a compositing graph
+    return node
+
+
+def _parameter(node: SDSBSCompNode, node_id: str | None, pid: str) -> SDProperty:
+    """The parameter `pid` of a node: refused when the node has none of that id, or has an input connector of it."""
+    prop = node.getPropertyFromId(pid, SDPropertyCategory.Input)
+    if prop is None:
+        raise RuntimeError('%r is not a parameter of node %s; see describe_node' % (pid, node_id))
+    if prop.isConnectable():
+        raise RuntimeError('%r is an input connector of node %s, not a parameter; see describe_node' % (pid, node_id))
+    return prop
+
+
+def _made_absolute(target: SDSBSCompNode | SDSBSCompGraph, prop: SDProperty) -> bool:
+    """Makes a $ parameter of a node or the graph Absolute, every one but $randomseed alike. Measured for two: inherited,
+    $format and $outputsize ignore a value (REVIEW.md HLP-24), and a function on $format is ignored, one on $outputsize
+    read as an offset (GUIDE.md, Building a function graph). $randomseed counts while inherited too (added to its
+    parent's seed), and only then follows the graph's seed and a .sbsar's control (REVIEW.md HLP-25, HLP-27). Returns
+    whether it made `prop` Absolute."""
+    from sd.api.sdproperty import SDPropertyInheritanceMethod
+
+    pid = prop.getId()
+    if not pid.startswith('$') or pid == '$randomseed' or not hasattr(target, 'setPropertyInheritanceMethod'):
+        return False
+    try:
+        target.setPropertyInheritanceMethod(prop, SDPropertyInheritanceMethod.Absolute)
+    except (Exception, APIException):
+        return False
+    return True
 
 
 def _make_value(prop: SDProperty, value: Json | Shown, inherited: bool = False) -> SDValue:
@@ -165,6 +204,8 @@ def set_params(graph_id: str | SDSBSCompGraph | None, node_id: str | None, param
             # setting it would cut the parameter loose from its graph input or function
             _refuse_no_output(driven, node_id, pid)
             _refuse_no_input(g, driven, node_id, pid)
+            if _plain_binding(driven) is None:  # a function, which no graph input stands for (REVIEW.md HLP-230)
+                raise RuntimeError('%s.%s is driven by a function; %s' % (node_id, pid, _REPLACE))
             raise RuntimeError(
                 "%s.%s is driven by %s; set that instead (a set op on node 'graph')%s"
                 % (node_id, pid, _driver_text(g, driven), _offset_note(target, prop))
@@ -173,21 +214,15 @@ def set_params(graph_id: str | SDSBSCompGraph | None, node_id: str | None, param
         checked.append((pid, prop, _make_value(prop, value)))
     for pid, prop, new_value in checked:
         before = fmt(target.getPropertyValue(prop))
-        if pid.startswith('$') and pid != '$randomseed' and hasattr(target, 'setPropertyInheritanceMethod'):
-            # $outputsize/$format etc. only take effect when not inherited, on a node or the graph
-            # (REVIEW.md HLP-24); the graph's $outputsize gets here only when already Absolute (HLP-22).
-            # A $randomseed counts while inherited too (added to its parent's seed), and only then
-            # follows the graph's seed and a .sbsar's control (REVIEW.md HLP-25, HLP-27)
-            try:
-                target.setPropertyInheritanceMethod(prop, SDPropertyInheritanceMethod.Absolute)
-            except (Exception, APIException):
-                pass
+        _made_absolute(target, prop)  # the graph's $outputsize gets here only when already Absolute (REVIEW.md HLP-22)
         target.setPropertyValue(prop, new_value)
         print('%s.%s: %r -> %r' % (node_id or 'graph', pid, before, fmt(target.getPropertyValue(prop))))
 
 
 def atomic_definition_ids(g: SDSBSCompGraph) -> set[str]:
-    return {d.getId() for d in g.getNodeDefinitions()}
+    """The ids of the atomic nodes `g` takes. sd's getNodeDefinitions() gives None when Designer sets no array, as
+    getDefinitions() does (REVIEW.md HLP-248)."""
+    return {d.getId() for d in g.getNodeDefinitions() or []}
 
 
 def _resolve_definition(g: SDSBSCompGraph, definition: str) -> SDNode:
@@ -340,12 +375,69 @@ def connect(
         out_id, how = _default_output(src, outs)
     if out_id not in outs:
         raise RuntimeError('output %r not on node %s; outputs: %s' % (out_id, from_node, outs))
+    made = _input_value(src, from_node, str(out_id), dst, to_node, to_input) if to_input.startswith('#') else ''
     ins = [p.getId() for p in dst.getProperties(SDPropertyCategory.Input) if p.isConnectable()]
     if to_input not in ins:
-        raise RuntimeError('input %r not on node %s; connectors: %s' % (to_input, to_node, ins))
+        raise RuntimeError(
+            'input %r not on node %s; connectors: %s%s' % (to_input, to_node, ins, _later_image(dst, to_input))
+        )
     src.newPropertyConnectionFromId(out_id, dst, to_input)
     note = ' (%s)' % _output_note(how) if how and len(outs) > 1 else ''
-    print('connected %s.%s -> %s.%s%s' % (from_node, out_id, to_node, to_input, note))
+    print('connected %s.%s -> %s.%s%s%s' % (from_node, out_id, to_node, to_input, note, made))
+
+
+# the types of a node's input values: those of a value, as a Value Processor gives it (server_tools/functions.py VALUE)
+_VALUE_TYPES = ('bool', 'int', 'int2', 'int3', 'int4', 'float', 'float2', 'float3', 'float4')
+
+
+def _input_value(src: SDNode, from_node: str | None, out_id: str, dst: SDNode, to_node: str | None, name: str) -> str:
+    """Makes `dst`'s input value `name` (a `#`, a letter, then letters, digits or _, as set_function reads it) of the
+    type of `src`'s output `out_id`, unless `dst` has it already. Returns what connect's line adds. Refuses an output
+    that isn't a value, such as an image, and an input value of another type: Designer connects either, raising
+    nothing, and a function reading it computes a wrong value (GUIDE.md, Building a function graph)."""
+    if not re.fullmatch(r'#[A-Za-z][A-Za-z0-9_]*', name):
+        raise RuntimeError(
+            'input value %r: a # and a letter, then letters, digits or _, the name set_function reads it by' % name
+        )
+    given = _type(cast(SDProperty, src.getPropertyFromId(out_id, SDPropertyCategory.Output)))
+    if given.getId() not in _VALUE_TYPES:
+        raise RuntimeError(
+            '%s.%s gives %s, not a value: an input value takes a bool, an int to int4 or a float to float4, as a Value '
+            'Processor gives' % (from_node, out_id, given.getId())
+        )
+    held = dst.getPropertyFromId(name, SDPropertyCategory.Input)
+    if held is None:
+        dst.newProperty(name, given, SDPropertyCategory.Input)
+        return '; made %s, an input value of type %s' % (name, given.getId())
+    if _type(held).getId() != given.getId():
+        raise RuntimeError(
+            '%s.%s is an input value of type %s, and %s.%s gives type %s: connect it into another #name'
+            % (to_node, name, _type(held).getId(), from_node, out_id, given.getId())
+        )
+    return ''
+
+
+def _image_inputs(node: SDNode) -> list[SDProperty]:
+    """A Pixel or Value Processor's input images, as Designer lists them: input, input:1, input:2..., the last one
+    empty, after the last one connected (GUIDE.md, A processor's input images)."""
+    listed = [
+        p
+        for p in node.getProperties(SDPropertyCategory.Input)
+        if p.isConnectable() and re.fullmatch(r'input(:[1-9]\d*)?', p.getId())
+    ]
+    return sorted(listed, key=lambda p: int(p.getId().partition(':')[2] or 0))
+
+
+def _later_image(node: SDNode, input_id: str) -> str:
+    """What connect's refusal adds for an input image `input_id` a processor doesn't list yet: the one to connect
+    first, since Designer lists input:N once input:N-1 has a connection; '' for any other connector."""
+    # input:1 and after: no processor lists input:0 or input:01 (REVIEW.md HLP-240)
+    if _definition_id(node) not in _PROGRAMS or not re.fullmatch(r'input:[1-9]\d*', input_id):
+        return ''
+    return (
+        ': a Pixel or Value Processor lists input:1, input:2... one at a time, each once the one before it has a '
+        'connection: connect an image into %s first' % _image_inputs(node)[-1].getId()
+    )
 
 
 def disconnect(graph_id: str | SDSBSCompGraph | None, node_id: str | None, input_id: str) -> None:

@@ -24,6 +24,7 @@ from .core import (
     _tool,
     _with_undo,
 )
+from .functions import NO_PARAMETER
 from .output import _load_8bit
 
 # screenshot_designer('3d', zoom=...): wheel steps either way (their size: designer_helpers/view3d.py)
@@ -261,13 +262,37 @@ def open_graph(
     rect: Annotated[
         NoneIfEmpty[Four], Field(description='Fits the view to [x, y, width, height] in graph units.')
     ] = None,
+    function: Annotated[
+        str | None,
+        Field(
+            description="Opens a function graph of the graph's package instead, by identifier: node_id, node_ids, "
+            'frame and rect then name its nodes and frames.'
+        ),
+    ] = None,
+    parameter: Annotated[
+        str | None,
+        Field(
+            description="A node's function on this parameter: refused, as Designer's editor opens the node's graph "
+            'instead; describe_graph lists it.'
+        ),
+    ] = None,
 ) -> str:
     """Open a graph in Designer's graph editor (so the user and screenshot_designer see it;
     closes Designer's Home screen if it is showing). By default the whole graph is fitted in
     view. To look at one section, fit the view to a frame, to node_ids or to rect, with a little padding and
     at most 100 % zoom; it zooms in Designer's own wheel steps (1.2x), so the view may show up
     to one step more than the area. Or centre it on node_id. Prints the zoom and the visible area in graph units; "could not fit" instead of "fitted" when the
-    view can't show the whole area (Designer's zoom stops at 5 %)."""
+    view can't show the whole area (Designer's zoom stops at 5 %). With function, it opens a function graph of the
+    package the same way. A node's function can't be opened (Designer's editor opens the node's graph instead):
+    describe_graph lists it."""
+    if parameter:  # with node_id or without, as either would be refused next (REVIEW.md SRV-206)
+        raise ToolError(
+            NO_PARAMETER
+            if function
+            else "Designer's editor can't open a node's function: openResourceInEditor opens the node's graph "
+            'instead. describe_graph(graph=%r, node_id=%s, parameter=%r) lists its nodes, or the user opens it in '
+            'Designer.' % (graph, repr(node_id) if node_id else "<the node's id>", parameter)
+        )
     chosen = [
         name
         for name, value in (('node_id', node_id), ('node_ids', node_ids), ('frame', frame), ('rect', rect))
@@ -279,7 +304,8 @@ def open_graph(
         # '' or [] is no choice, as above: sent as one, frame='' was looked for as a title (REVIEW.md SRV-180)
         _bridge(
             _helpers_call(
-                'open_graph(%r, %r, %r, %r, %r)' % (graph, node_id or None, node_ids or None, frame or None, rect)
+                'open_graph(%r, %r, %r, %r, %r, %r)'
+                % (graph, node_id or None, node_ids or None, frame or None, rect, function or None)
             ),
             timeout=60,
         )

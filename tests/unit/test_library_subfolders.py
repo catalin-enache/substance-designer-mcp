@@ -54,10 +54,18 @@ def resources(tmp_path: Path) -> Path:
     return tmp_path
 
 
+# list_atomic's lines for two of Designer's function nodes, one with no description
+FUNCTIONS = (
+    'FUNCTION=sbs::function::lr\tLower\tThe <b>Lower</b> function\nFUNCTION=sbs::function::passthrough\tPass\t\n'
+)
+
+
 @pytest.fixture
 def index(monkeypatch: pytest.MonkeyPatch, resources: Path) -> None:
     patch_server(monkeypatch, '_LIBRARY_CACHE', {})
-    fake_bridge(monkeypatch, lambda code: 'RESOURCES_DIR=%s\nATOMIC=sbs::compositing::levels\n' % resources)
+    fake_bridge(
+        monkeypatch, lambda code: 'RESOURCES_DIR=%s\nATOMIC=sbs::compositing::levels\n%s' % (resources, FUNCTIONS)
+    )
 
 
 @pytest.mark.usefixtures('index')
@@ -73,6 +81,17 @@ def test_a_graph_in_a_group_is_named_with_its_group() -> None:
     assert "definition='materials/pbr/fabric_002.sbs/Resources/stains'" in server.search_nodes('stains')
     assert "definition='constant_values.sbs/float/constant_float'" in server.search_nodes('constant float')
     assert "definition='constant_values.sbs/float/deep/deeper'" in server.search_nodes('deeper')
+
+
+@pytest.mark.usefixtures('index')
+def test_search_finds_the_function_nodes_list_atomic_reads() -> None:
+    # REVIEW.md TST-749: the cache read straight from list_atomic's lines, one with no description
+    assert server.search_nodes('lower') == (
+        "function lr                           definition='sbs::function::lr'  [Lower]  The Lower function"
+    )
+    assert server.search_nodes('pass') == (
+        "function passthrough                  definition='sbs::function::passthrough'  [Pass]"
+    )
 
 
 @pytest.mark.usefixtures('index')

@@ -503,6 +503,9 @@ async def run(ctx: Ctx) -> None:
             ('set_graph_size', {'size_log2': 9}),
             ('remove_graph_input', {'input_id': 'x'}),
             ('sweep_param', {'node_id': '1', 'param': 'x', 'values': [1]}),
+            ('set_function', {'expression': '0.5', 'node_id': '1'}),
+            # a function graph made in the library package would change it too
+            ('set_function', {'expression': '0.5', 'function': 'mcp_selftest_function'}),
         ]
         for tool, edit in edits:
             r_ = await c(tool, edit)

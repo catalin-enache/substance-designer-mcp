@@ -22,14 +22,15 @@ from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.types import CallToolResult
 
-BUNDLE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, BUNDLE)
-from project_constants import (  # noqa: E402 (after the sys.path entry; `X as X` re-exports them)
+# on sys.path, the repository's root and mcp_server: test_all_tools/__init__.py
+import designer_helpers
+from project_constants import (  # `X as X` re-exports them
     DESIGNER_PROCESS,
     PLUGIN as PLUGIN,
     PLUGIN_PACKAGE_DIR as PLUGIN_PACKAGE_DIR,
     QUIT_FORCED_IN_SHUTDOWN as QUIT_FORCED_IN_SHUTDOWN,
     QUIT_SAMPLED as QUIT_SAMPLED,
+    ROOT,
     SHORT_TEMP as SHORT_TEMP,  # where launch_designer makes the folders of a Designer it starts
     TOKEN_FILE as TOKEN_FILE,
     Greeting,
@@ -41,11 +42,9 @@ from project_constants import (  # noqa: E402 (after the sys.path entry; `X as X
     agent_folder_name,
     read_agent_record,
 )
+from test_all_tools.crash_watch import CrashWatch  # lifecycle's, kept on its Ctx
 
-sys.path.insert(0, os.path.join(BUNDLE, 'mcp_server'))
-import designer_helpers  # noqa: E402
-from test_all_tools.crash_watch import CrashWatch  # noqa: E402  (lifecycle's, kept on its Ctx)
-
+BUNDLE = ROOT  # the repository's root
 helpers_source = designer_helpers.source  # the helpers as sent to Designer (used by the categories)
 SERVER = os.path.join(BUNDLE, 'mcp_server', 'server.py')
 TEST_GRAPH = 'mcp_selftest'
@@ -186,6 +185,11 @@ def sd_run(*args: str, timeout: float = 60) -> subprocess.CompletedProcess[str]:
         text=True,
         timeout=timeout,
     )
+
+
+def picture(r: CallToolResult) -> str:
+    """A screenshot's image as the tool sent it, base64: two alike pictures are the same text."""
+    return next(x.data for x in r.content if x.type == 'image')
 
 
 def image_size(r: CallToolResult) -> tuple[int, int]:
@@ -649,6 +653,11 @@ class Ctx:
     slope: str
     lv: str
     out: str
+    pp: str  # a Pixel Processor
+    vp: str  # a Value Processor
+    blend: str  # a blend node
+    img: str  # a bitmap node of an image to sample
+    nm: str  # a normal node
     png: str  # the path of a PNG the preparation wrote
     sbs: str  # where the self-test graph was saved
     stats_before: str  # node_stats of lv, before set_link_display

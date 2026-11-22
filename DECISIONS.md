@@ -21,8 +21,9 @@ entry, takes the user (the `address-review` skill (`.claude/skills/address-revie
 
 ## Project rules
 
-- **The full suites run only when the user asks; while working, only the tests added or modified run, always with lint
-  and types, a live check in a scratch run.** The full suites take longer than the tests of one change (their times:
+- **The full suites run only when the user asks; while working, only the tests added or modified run, and the unit
+  tests that read the source of the files the change edits, always with lint and types, a live check in a scratch
+  run.** The full suites take longer than the tests of one change (their times:
   `tests/test_all_tools/workers.py`). No agent starts a whole run of either suite on its own, not for TDD, not after a
   fix, not between reviews: when the reviews look converged, the lead says so, and the user decides: another round, or
   the final check (both suites in full, before merging into `main`) when they say the work is done. Lint and types

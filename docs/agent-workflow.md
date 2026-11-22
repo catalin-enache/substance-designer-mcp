@@ -35,7 +35,8 @@ A user asks for a feature. This is what happens, from the ask to the merge.
    acceptance criteria, and a section **Waiting for the user** for the decisions that are the user's. The user reads
    the whole plan and approves it. Nothing is built before that.
 3. **A step is built.** The lead briefs one developer for the step. The developer writes the tests first and watches
-   them fail, then writes the code until they pass. It runs only its own tests, never a full suite. It runs
+   them fail, then writes the code until they pass. It runs only the tests of its change, which
+   `.claude/rules/python.md` names, never a full suite. It runs
    `/simplify` on its change, with analysts as the cleanup agents, unless the change touches Markdown
    files alone (`.claude/rules/python.md`, Simplify the change before reviewing it). It reports what changed, how each test failed
    first, and the runs. The lead reads the report and the change's size (`git diff --stat`), never the diff itself,

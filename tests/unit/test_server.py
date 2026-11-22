@@ -142,6 +142,7 @@ HINTS: dict[str, Hints] = {
     'create_graph': (False, True, False, False),
     'set_graph_size': (False, True, True, False),
     'remove_graph_input': (False, True, True, False),
+    'set_function': (False, True, True, False),
     'execute_designer_code': (False, True, False, True),
     'run_designer_script': (False, True, False, True),
     'save_package': (False, True, True, False),
@@ -686,11 +687,13 @@ def test_an_empty_array_is_taken_as_not_given(tool: str, name: str) -> None:
 @pytest.mark.parametrize(
     ('arguments', 'sent_as'),
     [
-        ({'frame': ''}, 'None, None, None, None'),
-        ({'node_ids': ['a', 'b'], 'frame': ''}, "None, ['a', 'b'], None, None"),
-        ({'node_id': '', 'node_ids': [], 'frame': 'Shape'}, "None, None, 'Shape', None"),
+        ({'frame': ''}, 'None, None, None, None, None'),
+        ({'node_ids': ['a', 'b'], 'frame': ''}, "None, ['a', 'b'], None, None, None"),
+        ({'node_id': '', 'node_ids': [], 'frame': 'Shape'}, "None, None, 'Shape', None, None"),
+        ({'function': '', 'frame': 'Shape'}, "None, None, 'Shape', None, None"),
+        ({'function': 'paint', 'node_id': '7'}, "'7', None, None, None, 'paint'"),
     ],
-    ids=['an empty frame', 'nodes and an empty frame', 'a frame and empty others'],
+    ids=['an empty frame', 'nodes and an empty frame', 'a frame and empty others', 'an empty function', 'a function'],
 )
 def test_open_graph_sends_an_empty_choice_as_not_given(
     sent: list[str], arguments: dict[str, Json], sent_as: str
@@ -699,3 +702,77 @@ def test_open_graph_sends_an_empty_choice_as_not_given(
     helper took frame='' as a frame titled '' and refused it (REVIEW.md SRV-180)."""
     asyncio.run(server.server.call_tool('open_graph', {'graph': 'g', **arguments}))
     assert sent and sent[0].rstrip('\n').endswith("open_graph('g', %s)" % sent_as), sent[-1:]
+
+
+def test_open_graph_refuses_a_nodes_function_before_designer(sent: list[str]) -> None:
+    """Designer's editor opens a node's graph for its function (the functions category's facts): the refusal names
+    describe_graph, which reads it, with the graph (REVIEW.md SRV-207), and nothing reaches Designer."""
+    with pytest.raises(server.ToolError) as raised:
+        server.open_graph('g', node_id='7', parameter='perpixel')
+    assert "describe_graph(graph='g', node_id='7', parameter='perpixel')" in str(raised.value)
+    assert "openResourceInEditor opens the node's graph" in str(raised.value)
+    assert sent == []
+
+
+@pytest.mark.parametrize(
+    ('function', 'says'),
+    [
+        (
+            None,
+            "Designer's editor can't open a node's function: openResourceInEditor opens the node's graph instead. "
+            "describe_graph(graph='g', node_id=<the node's id>, parameter='perpixel') lists its nodes, or the user "
+            'opens it in Designer.',
+        ),
+        ('paint', "parameter is a node's: a function graph has none."),
+    ],
+    ids=['no node', 'a function graph'],
+)
+def test_open_graph_refuses_a_parameter_with_no_node_in_one_answer(
+    sent: list[str], function: str | None, says: str
+) -> None:
+    # REVIEW.md SRV-202: its refusal of a node's function named describe_graph(node_id=None, ...), which is refused too.
+    # SRV-206: "give node_id too" sent the agent to that refusal of a node's function
+    with pytest.raises(server.ToolError) as raised:
+        server.open_graph('g', parameter='perpixel', function=function)
+    assert str(raised.value) == says and sent == []
+
+
+@pytest.mark.parametrize(
+    ('arguments', 'sent_as'),
+    [
+        ({}, "describe_graph('g', None, False, 400)"),
+        ({'node_id': '7'}, "describe_function('g', '7', None, None, None, 400)"),
+        (
+            {'node_id': '7', 'parameter': 'leveloutlow'},
+            "describe_function('g', '7', 'leveloutlow', None, None, 400)",
+        ),
+        ({'function': 'paint', 'node_ids': ['3']}, "describe_function('g', None, None, 'paint', ['3'], 400)"),
+        ({'node_id': '', 'function': ''}, "describe_graph('g', None, False, 400)"),
+    ],
+    ids=['the graph', "a processor's function", "a parameter's function", 'a function graph', 'empty ones'],
+)
+def test_describe_graph_sends_the_function_it_shows(sent: list[str], arguments: dict[str, Json], sent_as: str) -> None:
+    asyncio.run(server.server.call_tool('describe_graph', {'graph': 'g', **arguments}))
+    assert sent and sent[0].rstrip('\n').endswith(sent_as), sent[-1:]
+
+
+@pytest.mark.parametrize(
+    ('node_id', 'parameter', 'function', 'says'),
+    [
+        (
+            '7',
+            None,
+            'paint',
+            "Give node_id, for a node's function, or function, for a function graph of the package, not both.",
+        ),
+        (None, 'perpixel', 'paint', "parameter is a node's: a function graph has none."),
+        (None, 'perpixel', None, "parameter is a node's: give node_id too."),
+    ],
+    ids=['both', 'a parameter for a function graph', 'a parameter alone'],
+)
+def test_describe_graph_refuses_a_function_named_two_ways_before_designer(
+    sent: list[str], node_id: str | None, parameter: str | None, function: str | None, says: str
+) -> None:
+    with pytest.raises(server.ToolError) as raised:
+        server.describe_graph('g', node_id=node_id, parameter=parameter, function=function)
+    assert str(raised.value) == says and sent == []

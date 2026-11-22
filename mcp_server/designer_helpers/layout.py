@@ -1,6 +1,7 @@
 """Readable graphs: arrange_graph, add_frame, add_comment."""
 
 from .core import (
+    SDGraph,
     SDNode,
     SDPropertyCategory,
     SDSBSCompGraph,
@@ -12,15 +13,15 @@ from .core import (
     _position,
     _xy,
 )
-from .edits import _node
+from .edits import _graph_node, _node
 
 _NODE_SIZE = 96.0  # graph-view size of a node; positions are node centres
 
 
-def _nodes_bbox(g: SDSBSCompGraph, node_ids: Sequence[str]) -> tuple[list[SDNode], tuple[float, float, float, float]]:
+def _nodes_bbox(g: SDGraph, node_ids: Sequence[str]) -> tuple[list[SDNode], tuple[float, float, float, float]]:
     """The nodes (never the graph itself, which _target allows for parameters) and their
-    bounding box (left, top, right, bottom) in graph units."""
-    nodes: list[SDNode] = [_node(g, i) for i in node_ids]
+    bounding box (left, top, right, bottom) in graph units, in a compositing or a function graph."""
+    nodes: list[SDNode] = [_graph_node(g, i) for i in node_ids]
     if not nodes:
         raise RuntimeError('no node ids given')
     half = _NODE_SIZE / 2.0

@@ -27,7 +27,7 @@ from .core import (
     find_graph,
     fmt,
 )
-from .edits import _make_value, _node
+from .edits import _make_value, _node, _parameter
 
 _GETTERS = {
     'float': 'get_float1',
@@ -44,7 +44,15 @@ _GETTERS = {
 }
 
 
-def _graph_inputs(g: SDSBSCompGraph) -> list[SDProperty]:
+def _function_type_id(prop: SDProperty) -> str:
+    """The type id _GETTERS reads a parameter or graph input with: its type's own, or int for an enum."""
+    ptype = _type(prop)
+    return 'int' if isinstance(ptype, SDTypeEnum) else ptype.getId()
+
+
+def _graph_inputs(g: SDGraph) -> list[SDProperty]:
+    """A graph's inputs, but its `$` parameters: a compositing graph's exposed ones, a function graph's in the order
+    Designer lists them, which is the order a call gives them."""
     return [p for p in g.getProperties(SDPropertyCategory.Input) if not p.getId().startswith('$')]
 
 
@@ -81,12 +89,10 @@ def expose_param(
 
     g = _graph_to_edit(identifier)
     node = _node(g, node_id)
-    prop = node.getPropertyFromId(param, SDPropertyCategory.Input)
-    if prop is None or prop.isConnectable():
-        raise RuntimeError('%r is not a parameter of node %s; see describe_node' % (param, node_id))
+    prop = _parameter(node, node_id, param)
     ptype = _type(prop)
     is_enum = isinstance(ptype, SDTypeEnum)
-    type_id = 'int' if is_enum else ptype.getId()
+    type_id = _function_type_id(prop)
     getter = _GETTERS.get(type_id)
     if getter is None:
         raise RuntimeError('parameters of type %s cannot be exposed by this tool' % type_id)
@@ -102,8 +108,8 @@ def expose_param(
         _refuse_no_output(driven, node_id, param)
         _refuse_no_input(g, driven, node_id, param)
         raise RuntimeError(
-            '%s.%s is already driven by a function; replacing it would lose that logic. Edit the function by hand%s.'
-            % (node_id, param, ', or remove its graph input first' if _plain_binding(driven) is not None else '')
+            '%s.%s is already driven by a function; replacing it would lose that logic. Edit the function by hand, or %s.'
+            % (node_id, param, 'remove its graph input first' if _plain_binding(driven) is not None else _REPLACE)
         )
     from sd.api.sdvalueenum import SDValueEnum
     from sd.api.sdvalueint import SDValueInt
@@ -116,7 +122,6 @@ def expose_param(
     if is_enum:
         value = SDValueInt.sNew(int(cast(SDValueEnum, value).get()))
     inp = cast(SDProperty, g.newProperty(input_id, SDTypeInt.sNew() if is_enum else ptype, SDPropertyCategory.Input))
-    created_graph = existing is None
     get: SDNode | None = None
     old_value = _value(node, prop)  # adding a function graph resets it to the default
     try:
@@ -125,27 +130,30 @@ def expose_param(
         for key, val in (('min', minimum), ('max', maximum), ('step', step), ('group', group)):
             if val is not None:
                 _set_annotation(g, inp, key, val)
-        fg = cast(SDGraph, existing or node.newPropertyGraph(prop, 'SDSBSFunctionGraph'))
+        fg = existing or _new_function_graph(node, prop, '%s.%s' % (node_id, param))
         get = _new_node(fg, 'sbs::function::' + getter)
         get.setInputPropertyValueFromId('__constant__', SDValueString.sNew(input_id))
         fg.setOutputNode(get, True)
     except (Exception, APIException):
         # leave nothing half-made: a function graph left on the parameter would count as "driven";
         # a reused empty one loses the node added to it (REVIEW.md HLP-15)
-        try:
-            if created_graph:
-                _delete_function(node, prop)
-                node.setPropertyValue(prop, old_value)  # as it was (REVIEW.md HLP-21)
-            elif get is not None:
-                fg.deleteNode(get)
-        except (Exception, APIException):
-            pass
+        _take_back_function(node, prop, existing, old_value, [get] if get is not None else [])
         g.deleteProperty(inp)  # don't leave an input that drives nothing
         raise
     print(
         'exposed %s.%s as graph input %r (%s, default %r)'
         % (node_id, param, input_id, type_id, fmt(g.getPropertyValue(inp)))
     )
+
+
+def _new_function_graph(node: SDNode, prop: SDProperty, where: str) -> SDGraph:
+    """A new function graph on `node`'s parameter `prop`, which messages name `where` (node.parameter). Refuses where
+    Designer makes none: sd types newPropertyGraph's result as optional, and a curve's or a gradient's parameters gave
+    None (REVIEW.md HLP-244, HLP-249)."""
+    fg = node.newPropertyGraph(prop, 'SDSBSFunctionGraph')
+    if fg is None:
+        raise RuntimeError("%s takes no function: Designer's newPropertyGraph made none" % where)
+    return fg
 
 
 def _driving_graph(node: SDNode, prop: SDProperty) -> SDGraph | None:
@@ -171,9 +179,8 @@ def _refuse_no_output(fg: SDGraph, node_id: str | None, param: str) -> None:
     """Raise if this function graph has no output node, instead of calling it what drives the value."""
     if not _has_output(fg):
         raise RuntimeError(
-            '%s.%s has a function with no output node: it drives nothing, and '
-            'this would replace it. Give it an output node in Designer, or delete it first '
-            '(deletePropertyGraph in code).' % (node_id, param)
+            '%s.%s has a function with no output node: it drives nothing, and this would replace it. Give it an output '
+            'node in Designer, %s, or delete it first (deletePropertyGraph in code).' % (node_id, param, _REPLACE)
         )
 
 
@@ -200,6 +207,18 @@ def _driver_text(g: SDSBSCompGraph, fg: SDGraph) -> str:
     return 'graph input %r' % source
 
 
+# how a refusal offers set_function, in one wording, for a node's parameter (REVIEW.md HLP-231)
+_REPLACE = 'replace the function with set_function'
+
+
+def _replacing(*refs: str) -> str:
+    """_REPLACE when set_function reaches the function of each of `refs` ('<node>.<param>', as _input_users gives
+    them), else '': it doesn't reach an FX-Map's inner function ('<node> (FX-Map) <inner>.<param>') or one on the
+    graph's own parameter ('graph.<param>')."""
+    reached = bool(refs) and all(' (FX-Map) ' not in ref and not ref.startswith('graph.') for ref in refs)
+    return _REPLACE if reached else ''
+
+
 def _refuse_no_input(g: SDSBSCompGraph, fg: SDGraph, node_id: str | None, param: str) -> None:
     """Raise if this function reads a name that is no graph input, or one of Designer's own: there is nothing to set
     instead."""
@@ -208,12 +227,13 @@ def _refuse_no_input(g: SDSBSCompGraph, fg: SDGraph, node_id: str | None, param:
         return
     if _reads_no_input(g, fg):
         raise RuntimeError(
-            '%s.%s is driven by %s. Edit the function in Designer, or delete it first (deletePropertyGraph in code).'
-            % (node_id, param, _driver_text(g, fg))
+            '%s.%s is driven by %s. Edit the function in Designer, %s, or delete it first (deletePropertyGraph in code).'
+            % (node_id, param, _driver_text(g, fg), _REPLACE)
         )
     if str(source).startswith(('$', '#')):
         raise RuntimeError(
-            '%s.%s is driven by %s. Edit the function in Designer.' % (node_id, param, _driver_text(g, fg))
+            '%s.%s is driven by %s. Edit the function in Designer, or %s.'
+            % (node_id, param, _driver_text(g, fg), _REPLACE)
         )
 
 
@@ -259,6 +279,25 @@ def _delete_function(node: SDSBSCompNode, prop: SDProperty) -> None:
         node.setPropertyInheritanceMethod(prop, method)
 
 
+def _take_back_function(
+    node: SDSBSCompNode, prop: SDProperty, existing: SDGraph | None, old_value: SDValue, added: list[SDNode]
+) -> None:
+    """After a failed build on a parameter's function, leave it as it was: the nodes `added` to the function graph
+    `existing` are deleted, or with `existing` None the parameter's function graph is deleted and the value it reset
+    put back. Raises nothing, so that the caller raises the failure. Each caller says what `existing` is (REVIEW.md
+    HLP-227): expose_param passes getPropertyGraph's graph, an empty one it reused included, so only its added node
+    goes; set_function passes _driving_graph's, None for an empty one too, so that one is deleted."""
+    try:
+        if existing is None:
+            _delete_function(node, prop)
+            node.setPropertyValue(prop, old_value)  # as it was (REVIEW.md HLP-21)
+        else:
+            for n in added:
+                existing.deleteNode(n)
+    except (Exception, APIException):
+        pass
+
+
 def _fx_map_functions(node: SDNode) -> list[tuple[str, SDProperty, SDGraph]]:
     """An FX-Map node's inner functions, which read its graph's inputs: (the inner node's id, parameter, function)."""
     if _definition_id(node) != 'sbs::compositing::fxmaps':
@@ -268,13 +307,13 @@ def _fx_map_functions(node: SDNode) -> list[tuple[str, SDProperty, SDGraph]]:
     return [(inner.getIdentifier(), prop, fg) for inner in inner_nodes for prop, fg in _functions_of(inner)]
 
 
+# a processor's own function, what the node computes, by the processor's definition
+_PROGRAMS = {'sbs::compositing::pixelprocessor': 'perpixel', 'sbs::compositing::valueprocessor': 'function'}
+
+
 def _is_processor_program(node: SDNode, prop: SDProperty) -> bool:
     """A Value or Pixel Processor's function, which is what the node computes: never a plain binding, whatever its size."""
-    definition = _definition_id(node)
-    return definition in ('sbs::compositing::valueprocessor', 'sbs::compositing::pixelprocessor') and prop.getId() in (
-        'function',
-        'perpixel',
-    )
+    return _PROGRAMS.get(_definition_id(node)) == prop.getId()
 
 
 def _graph_parameter_reads(g: SDSBSCompGraph, connected_only: bool, plain_only: bool = False) -> dict[str, list[str]]:
@@ -461,11 +500,13 @@ def remove_graph_input(identifier: str | SDSBSCompGraph | None, input_id: str) -
     if other:
         reading = _input_users(g, connected_only=True).get(input_id, [])
         idle = [ref for ref in other if ref not in reading]
+        offer = _replacing(*other)
         raise RuntimeError(
-            'input %r is read inside the functions of %s; edit those by hand first (nothing was changed)%s'
+            'input %r is read inside the functions of %s; edit those by hand first%s (nothing was changed)%s'
             % (
                 input_id,
                 ', '.join(other),
+                ', or %s' % offer if offer else '',
                 '. %s: no effect on the output today, but a later edit could connect it' % ', '.join(idle)
                 if idle
                 else '',

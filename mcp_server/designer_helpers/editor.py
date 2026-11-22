@@ -7,9 +7,11 @@ from .core import (
     Callable,
     QtWidgets,
     SDApplicationPath,
+    SDGraph,
     SDSBSCompGraph,
     Sequence,
     _current_graph,
+    _function_definitions,
     _graph_to_edit,
     _main_window,
     _nodes,
@@ -26,7 +28,8 @@ from .core import (
     os,
 )
 from .describe import _package_uids, _unload_new_packages
-from .edits import _node
+from .edits import _graph_node, _node, atomic_definition_ids
+from .functions import _function_graph
 from .layout import _nodes_bbox
 from .screenshots import _PANEL_AREAS, _graph_view, _visible_dock
 
@@ -91,7 +94,7 @@ def leave_home_screen() -> None:
 
 
 def _fit_area(
-    g: SDSBSCompGraph, node_ids: list[str] | None = None, frame: str | None = None, rect: Sequence[float] | None = None
+    g: SDGraph, node_ids: list[str] | None = None, frame: str | None = None, rect: Sequence[float] | None = None
 ) -> tuple[float, float, float, float, str]:
     """(x, y, w, h) in graph units: a frame (by title), the nodes' bounding box, or rect."""
     if frame is not None:
@@ -165,7 +168,7 @@ def _wheel(
     return None
 
 
-def _whole_graph_rect(g: SDSBSCompGraph) -> tuple[float, float, float, float, str] | None:
+def _whole_graph_rect(g: SDGraph) -> tuple[float, float, float, float, str] | None:
     """(x, y, w, h, description) around every node, frame and free comment of g (a comment has a
     position but no size; one attached to a node sits with it), or None for an empty graph."""
     from sd.api.sdgraphobjectcomment import SDGraphObjectComment
@@ -194,7 +197,7 @@ def _whole_graph_rect(g: SDSBSCompGraph) -> tuple[float, float, float, float, st
 
 
 def _fit_view_to(
-    g: SDSBSCompGraph,
+    g: SDGraph,
     node_ids: list[str] | None = None,
     frame: str | None = None,
     rect: Sequence[float] | None = None,
@@ -272,15 +275,19 @@ def open_graph(
     node_ids: list[str] | None = None,
     frame: str | None = None,
     rect: Sequence[float] | None = None,
+    function: str | None = None,
 ) -> None:
-    """Open a graph in Designer's graph editor; fit the view to a frame, nodes or a rectangle,
-    or centre it on one node; by default fit the whole graph."""
-    g = find_graph(identifier)
+    """Open a graph in Designer's graph editor, or the function graph `function` of its package; fit the view to a
+    frame, nodes or a rectangle, or centre it on one node; by default fit the whole graph. openResourceInEditor opens a
+    function graph of the package, but a node's function it opens as the node's graph (the functions category's facts),
+    so the server refuses that one."""
+    graph = find_graph(identifier)
+    g: SDGraph = _function_graph(graph, function) if function else graph
     leave_home_screen()  # otherwise the graph opens behind it
     ui = _ui_mgr()
     ui.openResourceInEditor(g)
     _process_events()
-    print('opened', g.getIdentifier())
+    print('opened function graph' if function else 'opened', g.getIdentifier())
     if node_ids or frame is not None or rect is not None:
         _fit_view_to(g, node_ids, frame, rect)
         return
@@ -302,7 +309,7 @@ def open_graph(
             except (Exception, APIException) as e:
                 print('could not fit the view: %s' % e)
     if node_id:
-        node = _node(g, node_id)  # never the graph: focusGraphNode with it crashed Designer (REVIEW.md HLP-41)
+        node = _graph_node(g, node_id)  # never the graph: focusGraphNode with it crashed Designer (REVIEW.md HLP-41)
         views = [ui.getGraphViewIDAt(i) for i in range(ui.getGraphViewIDCount())]
         views = [v for v in views if _same_graph(ui.getGraphFromGraphViewID(v), g)]
         if not views:
@@ -354,10 +361,14 @@ def list_atomic() -> None:
         try:
             if g is None:
                 g = SDSBSCompGraph.sNew(_PM.newUserPackage())
-            ids = sorted(d.getId() for d in g.getNodeDefinitions())
+            ids = sorted(atomic_definition_ids(g))
             print('RESOURCES_DIR=' + _APP.getPath(SDApplicationPath.DefaultResourcesDir))
             for i in ids:
                 print('ATOMIC=' + i)
+            # Designer's function nodes: each definition, label and description, on one line
+            for definition, found in _function_definitions().items():
+                texts = (definition, found.label, found.description)
+                print('FUNCTION=' + '\t'.join(' '.join(text.split()) for text in texts))
         finally:
             _unload_new_packages(before)
     except BaseException:

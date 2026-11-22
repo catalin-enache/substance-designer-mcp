@@ -14,6 +14,7 @@ from test_all_tools.editor_open_and_zoom import checks as editor_open_and_zoom
 from test_all_tools.editor_panels_and_fit import checks as editor_panels_and_fit
 from test_all_tools.example import checks as example
 from test_all_tools.facts import checks as facts
+from test_all_tools.functions import checks as functions
 from test_all_tools.graph_edit_create import checks as graph_edit_create
 from test_all_tools.graph_edit_output_fields import checks as graph_edit_output_fields
 from test_all_tools.graph_edit_wire import checks as graph_edit_wire
@@ -32,6 +33,9 @@ from test_all_tools.undo import checks as undo
 # in the pool's order (SOLO's start last), slowest first, so a pool's last ones are short (measured 2026-11-10, each
 # category's preparation, checks and clean-up: a run's summary lists them); one run (Windows) runs them in this order too
 CATEGORIES: list[Step] = [
+    # 136 s (2026-11-22, two scratch runs, with their server's start: 150.0 s, 122.7 s): function graphs' Designer facts,
+    # set_function, function graphs of the package, sampling images, the tools reading functions
+    functions.run,
     # 40 s (2026-11-12, a scratch run: 46 s with its server's start): every panel's screenshot, the clipboard, fitting
     # the whole graph, the 3D view set up
     editor_panels_and_fit.run,
@@ -54,7 +58,7 @@ CATEGORIES: list[Step] = [
     save.run,  # 2 s: save_package, snapshots of a saved package, copied bitmaps
     graph_edit_output_fields.run,  # 2 s: naming and tagging output nodes, on a graph of their own
     batch.run,  # 1 s: apply_edits
-    undo.run,  # 1 s: one tool call = one undo step
+    undo.run,  # 13 s (2026-11-22, two scratch runs: 14.2 s, 12.1 s): one tool call = one undo step
     script_runner.run,  # 1 s: run_designer_script
 ]
 # never two at once in a pool (workers.py): they use the machine's one clipboard (the 3D capture goes through it), and

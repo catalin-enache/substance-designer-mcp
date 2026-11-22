@@ -60,6 +60,19 @@ async def check_an_abort_unloading_describe_nodes_package_still_unloads_it(ctx: 
     )
 
 
+async def check_a_parameters_description_shows_the_characters_its_entities_stand_for(ctx: Ctx) -> None:
+    """describe_node of paths_tools' mask_to_paths gives its threshold's description with the < its library file holds
+    as an entity, not the entity (REVIEW.md HLP-246)."""
+    t = text(await ctx.c('describe_node', {'definition': 'paths_tools.sbs/mask_to_paths'}))
+    line = next((line.strip() for line in t.splitlines() if 'Mask Threshold Value' in line), t.splitlines()[0])
+    check(
+        'describe_node',
+        "a parameter's description shows the characters its entities stand for",
+        '(values < Mask Threshold Value)' in line and '&' not in line,
+        line,
+    )
+
+
 async def run(ctx: Ctx) -> None:
     c = ctx.c
     # --- discovery
@@ -134,3 +147,4 @@ async def run(ctx: Ctx) -> None:
     check('describe_node', 'library', "output connector ids: ['Slope_Blur']" in t, t.splitlines()[0])
     await check_a_package_made_has_a_uid_of_its_own_and_no_file_and_goes_once_unloaded(ctx)
     await check_an_abort_unloading_describe_nodes_package_still_unloads_it(ctx)
+    await check_a_parameters_description_shows_the_characters_its_entities_stand_for(ctx)

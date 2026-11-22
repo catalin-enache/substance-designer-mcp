@@ -18,8 +18,18 @@ every use of a name, which `search_symbol` doesn't give (it finds where a name i
 unit tests) stay the checks that count; PyCharm's inspections don't replace them.
 
 **After editing,** run `mcp_server/venv/bin/ruff check --fix .` and `mcp_server/venv/bin/ruff format .` (`test_lint.py`
-runs `ruff check` and `ruff format --check`). Then run the tests of your change by name. Lint and types always run
-with them (about 10 s):
+runs `ruff check` and `ruff format --check`). Then run the tests of your change by name. They are the tests added or
+modified for it, and the unit tests that read the source of the files it changes. A guard test the change never touched
+still fails on it: `test_library_refusal.py` failed on a reader added to the helpers, and no developer had run that
+test since (REVIEW.md TST-754). To find those tests, grep `tests/unit` for:
+- `designer_helpers.source()` or `part_source(`, which read the helpers' text;
+- the `helpers` and `faked_helpers` fixtures, which run the joined helpers;
+- `server_source()`, `selftest_sources()` and the walks of `mcp_server` or `tests/test_all_tools`, which read the
+  server's or the self-test's files;
+- `repo_files()` (`tests/unit/docs_text.py`), which lists every file of the repository for the scans of
+  `test_constants.py`, `test_guide.py` and `test_types.py`.
+
+Lint and types always run with them (about 10 s):
 `mcp_server/venv/bin/python -m pytest <test ids> tests/unit/test_lint.py tests/unit/test_types.py`, the test ids files
 or single tests (`tests/unit/test_x.py::test_name`). A change of Markdown, a comment or a
 docstring adds the docs tests (`.claude/rules/docs-tests.md`).

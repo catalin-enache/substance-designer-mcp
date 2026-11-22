@@ -6,6 +6,7 @@ from . import (
     core,
     discovery,
     edits,
+    functions,
     guide,
     layout,
     lifecycle,
@@ -17,4 +18,19 @@ from . import (
     views,
 )
 
-MODULES = (core, guide, lifecycle, scripting, discovery, views, edits, measure, compare, log, snapshots, layout, output)
+MODULES = (
+    core,
+    guide,
+    lifecycle,
+    scripting,
+    discovery,
+    views,
+    edits,
+    functions,
+    measure,
+    compare,
+    log,
+    snapshots,
+    layout,
+    output,
+)

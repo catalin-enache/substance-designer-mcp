@@ -37,13 +37,16 @@ def test_every_category_but_lifecycle_is_listed_once_by_its_run() -> None:
             for folder, _, names in os.walk(SELFTEST_DIR)
             if 'designer_scripts' not in folder
             for name in names
-            if name.endswith('.py') and name != '__main__.py' and 'project_constants' in Path(folder, name).read_text()
+            if name.endswith('.py')
+            and name != '__main__.py'
+            and re.search(r'\b(project_constants|function_compiler)\b', Path(folder, name).read_text())
         ),
     ],
 )
 def test_a_module_imports_first_in_a_fresh_interpreter(module: str) -> None:
     # `python tests/test_all_tools` stopped at its first import: project_constants was on the path only once common.py
-    # had been imported, which the order of the index's imports happened to give. The unit tests' own path hides that
+    # had been imported, which the order of the index's imports happened to give. The unit tests' own path hides that.
+    # function_compiler, in mcp_server/, is the same case
     code = 'import sys; sys.path.insert(0, %r); import test_all_tools.%s' % (os.path.dirname(SELFTEST_DIR), module)
     done = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, cwd='/', env={})
     assert done.returncode == 0, done.stderr

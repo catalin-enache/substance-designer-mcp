@@ -1,8 +1,6 @@
 """apply_edits: several edits in one call."""
 
-import re
-
-from .core import APIException, Json, SDSBSCompGraph, TypedDict, _find_node, _graph_to_edit, _position, cast
+from .core import APIException, Json, SDSBSCompGraph, TypedDict, _find_node, _graph_to_edit, _position, cast, re
 from .editor import move_nodes
 from .edits import (
     _OUTPUT_DEFINITION,

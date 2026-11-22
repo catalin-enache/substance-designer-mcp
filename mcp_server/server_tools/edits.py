@@ -94,15 +94,19 @@ set: node "graph" = the graph itself, e.g. a fixed-size graph's $outputsize (an 
   graph's size is refused: use set_graph_size). Values are converted to the parameter's type:
   numbers, bools, lists for vectors/colors ([r,g,b(,a)]), enums by id or number ('max', 5 or
   '5'). Every value is checked before any is set. A parameter driven by a graph input (an
-  expose op) or a function is refused: set the graph input instead (node "graph"); so is one
-  with a function that has no output node, which drives nothing but would be deleted. A $
+  expose op) or a function is refused: set the graph input instead (node "graph"), or replace the
+  function with set_function; so is one with a function that has no output node, which drives
+  nothing but would be deleted. A $
   parameter is made Absolute so its value takes effect ($format and $outputsize ignore theirs
   while inherited); except $randomseed, on a node or the graph, whose inheritance is left as it
   is: inherited, its value counts (added to the parent's seed), and only an inherited seed
   follows the graph's seed and the cooked .sbsar's Random Seed. To fix a seed on purpose,
   change its inheritance with execute_designer_code. Prints old -> new for params. $outputsize is log2 of the size in pixels (11 is 2048 px; above 13 or below 0 is refused).
 connect: from's output (default: the one tagged base colour, else its first; the result says which) to to's input connector; replaces an existing
-  link on that input.
+  link on that input. An input "#name" (a letter after the #) is an input value of the to node, which set_function's
+  expressions on that node read as #name. It is made with the output's type if missing; the output must be a value (a
+  Value Processor's) of its type. A Pixel or Value Processor's second and later input images are "input:1",
+  "input:2"...: each appears once the one before it has a connection, so connect them in order.
 disconnect: removes the connection(s) going into the node's input connector.
 delete: the node and its connections.
 expose: a node parameter as a graph input (same type as the parameter; enums become ints),

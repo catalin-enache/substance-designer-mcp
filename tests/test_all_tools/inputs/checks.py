@@ -18,6 +18,9 @@ from test_all_tools.common import (
     text,
 )
 
+# how a refusal offers set_function, where it reaches the function (designer_helpers/graph_inputs.py, REPLACE)
+REPLACE = 'replace the function with set_function'
+
 
 async def run(ctx: Ctx) -> None:
     c, G, slope, lv = ctx.c, ctx.G, ctx.slope, ctx.lv
@@ -131,8 +134,8 @@ async def run(ctx: Ctx) -> None:
     r_ = await c('apply_edits', {'ops': [{'op': 'set', 'node': lv, 'params': {'leveloutlow': [0.5] * 4}}], **G})
     check(
         'apply_edits',
-        'set: refuses a parameter driven by a graph input',
-        r_.is_error and "driven by graph input 'floor'" in text(r_),
+        'set: refuses a parameter driven by a graph input, naming no set_function',
+        r_.is_error and "driven by graph input 'floor'" in text(r_) and 'set_function' not in text(r_),
         text(r_),
     )
     r_ = await c(
@@ -140,6 +143,16 @@ async def run(ctx: Ctx) -> None:
     )
     check(
         'apply_edits', 'expose: error on duplicate input', r_.is_error and 'already has an input' in text(r_), text(r_)
+    )
+    # bound to a graph input, its way out is removing that input, not set_function (REVIEW.md HLP-231)
+    r_ = await c(
+        'apply_edits', {'ops': [{'op': 'expose', 'node': lv, 'param': 'leveloutlow', 'input_id': 'floor2'}], **G}
+    )
+    check(
+        'apply_edits',
+        'expose: refuses a parameter bound to a graph input, naming no set_function',
+        r_.is_error and 'remove its graph input first' in text(r_) and 'set_function' not in text(r_),
+        text(r_),
     )
     t = text(await c('list_graph_inputs', G))
     check(
@@ -176,8 +189,8 @@ async def run(ctx: Ctx) -> None:
     still = 'mid (float4)' in text(await c('list_graph_inputs', G))
     check(
         'remove_graph_input',
-        'refuses while a larger function reads it',
-        r_.is_error and 'read inside the functions' in text(r_) and still,
+        'refuses while a larger function reads it, naming set_function',
+        r_.is_error and 'read inside the functions' in text(r_) and REPLACE in text(r_) and still,
         text(r_),
     )
 
@@ -263,8 +276,16 @@ async def run(ctx: Ctx) -> None:
     r_ = await c('apply_edits', {'ops': [{'op': 'expose', 'node': lv, 'param': 'levelinmid', 'input_id': 'mid2'}], **G})
     check(
         'apply_edits',
-        'expose: refuses a parameter driven by a function',
-        r_.is_error and 'already driven by a function' in text(r_),
+        'expose: refuses a parameter driven by a function, naming set_function',
+        r_.is_error and 'already driven by a function' in text(r_) and REPLACE in text(r_),
+        text(r_),
+    )
+    # set_function replaces a function, which a graph input can't stand for (REVIEW.md HLP-230)
+    r_ = await c('apply_edits', {'ops': [{'op': 'set', 'node': lv, 'params': {'levelinmid': [0.5] * 4}}], **G})
+    check(
+        'apply_edits',
+        'set: refuses a parameter driven by a function, naming set_function',
+        r_.is_error and REPLACE in text(r_) and "node 'graph'" not in text(r_),
         text(r_),
     )
     # sweeping either kind of driven parameter would delete what drives it
@@ -272,8 +293,11 @@ async def run(ctx: Ctx) -> None:
         r_ = await c('sweep_param', {'node_id': lv, 'param': param, 'values': [[0.4] * 4, [0.6] * 4], **G})
         check(
             'sweep_param',
-            'refuses a parameter driven by a %s' % driver,
-            r_.is_error and 'is driven by a graph input or function' in text(r_),
+            'refuses a parameter driven by a %s, naming set_function for a function' % driver,
+            r_.is_error
+            and 'is driven by a graph input or function' in text(r_)
+            and (REPLACE in text(r_)) == (driver == 'function')
+            and ('set_function' in text(r_)) == (driver == 'function'),
             text(r_),
         )
     # a function with nodes but no output node drives nothing (designer facts), yet setting the
@@ -325,6 +349,7 @@ async def run(ctx: Ctx) -> None:
                 r_.is_error
                 and 'no output node' in text(r_)
                 and 'drives nothing' in text(r_)
+                and REPLACE in text(r_)
                 and 'STUB_NODES=1' in left,
                 '%s | %s' % (text(r_), left.strip()),
             )
@@ -345,6 +370,20 @@ async def run(ctx: Ctx) -> None:
             and 'no effect on the output today' in text(r_)
             and 'STUB_NODES=1' in left,
             '%s | %s' % (text(r_), left.strip()),
+        )
+        # GUIDE.md's table says set_function replaces a function with no output node (REVIEW.md TST-720): its one node
+        # gives way to the three of the new one (const_float4, const_float1, mulscalar), which drive the value
+        r_ = await c(
+            'set_function',
+            {'expression': 'float4(0.5, 0.5, 0.5, 1) * 0.5', 'node_id': stub, 'parameter': 'levelouthigh', **G},
+        )
+        left = text(await c('execute_designer_code', {'code': count_nodes}))
+        t = text(await c('describe_graph', {'node_ids': [stub], 'include_params': True, **G}))
+        check(
+            'set_function',
+            'replaces a function with no output node, which then drives the value',
+            not r_.is_error and 'STUB_NODES=3' in left and 'levelouthigh <- a function' in t,
+            '%s | %s | %s' % (text(r_), left.strip(), t),
         )
         # a get node only counts as driving when it is connected to the function's output: here
         # stub_wired goes through an add node, and stub_orphan is connected to nothing
@@ -402,8 +441,8 @@ async def run(ctx: Ctx) -> None:
         still = 'fx_in' in text(await c('list_graph_inputs', G))
         check(
             'remove_graph_input',
-            "refuses while an FX-Map's function reads it, and keeps it",
-            r_.is_error and fx is not None and fx.group(1) in text(r_) and still,
+            "refuses while an FX-Map's function reads it, and keeps it, naming no set_function",
+            r_.is_error and fx is not None and fx.group(1) in text(r_) and 'set_function' not in text(r_) and still,
             text(r_),
         )
     finally:
@@ -491,6 +530,7 @@ async def run(ctx: Ctx) -> None:
                     and repr(name) in refusal
                     and ('not an input of this graph' in refusal) == missing
                     and ('delete it first' in refusal) == missing
+                    and REPLACE in refusal
                     and "node 'graph'" not in refusal
                     and 'node_id="graph"' not in refusal
                     and 'remove its graph input' not in refusal,
@@ -542,8 +582,8 @@ async def run(ctx: Ctx) -> None:
         still = 'size_in' in text(await c('list_graph_inputs', B))
         check(
             'remove_graph_input',
-            "refuses while a function on the graph's own parameter reads it, and keeps it",
-            r_.is_error and 'graph.outputsize' in text(r_) and still,
+            "refuses while a function on the graph's own parameter reads it, and keeps it, naming no set_function",
+            r_.is_error and 'graph.outputsize' in text(r_) and 'set_function' not in text(r_) and still,
             text(r_),
         )
     finally:

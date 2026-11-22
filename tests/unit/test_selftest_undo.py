@@ -27,6 +27,16 @@ FRONT = (
     "Designer's process 99"
 )
 SET = "set: one Undo puts an output's fields back"
+# the Pixel Processor the set_function check adds, its function replaced, and with the function before
+REPLACED = ('7 pixelprocessor @(0,600)', '    perpixel <- a function')
+BEFORE = ('7 pixelprocessor @(0,600)', "    perpixel <- a function reading '$time'")
+SET_FUNCTION = 'check_one_undo_reverts_a_set_function'
+SET_FUNCTION_UNDO = 'one Undo brings back the function before, the node kept'
+# the blend the input value check adds (ref bl, 8), connected from its Value Processor (ref vp, 7) into #u, and without
+LINKED, UNLINKED = '8 blend @(200,800)  in: #u<-7.unique_filter_output', '8 blend @(200,800)'
+INPUT_VALUE = 'check_one_undo_reverts_a_connect_into_a_new_input_value'
+INPUT_VALUE_UNDO = 'connect into a new #name: one Undo removes the connection'
+INPUT_VALUE_REDO = 'connect into a new #name: Redo brings the connection back'
 # a graph as describe_graph reads it: the number of sends of the Undo and of the Redo so far, the reads since the last
 Graph = Callable[[int, int, int], str]
 
@@ -58,7 +68,10 @@ def _graph(*nodes: str) -> str:
 
 
 def _what(name: str, args: ToolArgs | None) -> str:
-    """What a tool call of the checks does: the tool, or for code the snippet it runs."""
+    """What a tool call of the checks does: the tool, or for code the snippet it runs; set_function on a function graph
+    of the package is 'set_function graph', and describe_graph of one 'describe function'."""
+    if name in ('set_function', 'describe_graph') and (args or {}).get('function'):
+        return 'set_function graph' if name == 'set_function' else 'describe function'
     if name == 'run_designer_script':
         return 'as prepared' if str((args or {}).get('path', '')).endswith('as_prepared.py') else name
     if name != 'execute_designer_code':
@@ -75,13 +88,21 @@ def _what(name: str, args: ToolArgs | None) -> str:
 
 
 def _designer(
-    graph: Graph, fired: Sequence[str] = (FIRED,), undo: str | Sequence[str] = SCHEDULED
+    graph: Graph,
+    fired: Sequence[str] = (FIRED,),
+    undo: str | Sequence[str] = SCHEDULED,
+    values: Callable[[int, int], bool | str] | None = None,
+    nodes: Callable[[int, int], str] | None = None,
 ) -> tuple[FakeCall, list[str]]:
     """A fake tool call: each describe_graph answers `graph` (an answer starting 'Error' is an error), each Undo sent
     answers `undo`, or the next of them (the last again once they run out), each read of the action's state the next of
-    `fired` (the same way); and the calls it got."""
+    `fired` (the same way); and the calls it got. set_function refuses, listing the blend's input value #u when
+    `values` says it has it, by the Undos and Redos sent (default: while the graph shows its link, LINKED), or answers
+    the text `values` gives (an answer starting 'Error' is an error). A read of a function graph's nodes answers what
+    `nodes` gives, by the Undos and Redos sent."""
     calls: list[str] = []
-    answers = {'apply_edits': 'added 7', 'Redo': SCHEDULED, 'two nodes': 'IDS=7,8'}
+    # an add's refs: the Value Processor and the blend the input value check adds
+    answers = {'apply_edits': "added 7\n  ref 'vp' = 7\n  ref 'bl' = 8", 'Redo': SCHEDULED, 'two nodes': 'IDS=7,8'}
     fires = list(fired)
     undos = [undo] if isinstance(undo, str) else list(undo)
     since = [0]  # the graph's reads since the last call of another kind, a read of the action's state not counted
@@ -96,6 +117,18 @@ def _designer(
         if what == 'fired':
             read = fires.pop(0) if len(fires) > 1 else fires[0]
             return tool_result(read, error=read.startswith('Error'))
+        if what == 'describe function' and nodes:
+            read = nodes(calls.count('Undo'), calls.count('Redo'))
+            return tool_result(read, error=read.startswith('Error'))
+        if what == 'set_function':
+            u, r = calls.count('Undo'), calls.count('Redo')
+            has = values(u, r) if values else LINKED in graph(u, r, since[0])
+            if isinstance(has, str):
+                return tool_result(has, error=has.startswith('Error'))
+            listed = '; its input values are #u.' if has else ', nor any other: connect a value into it first.'
+            return tool_result(
+                'column 1: the node has no input value `#lacking`%s Nothing was built.' % listed, error=True
+            )
         since[0] = 0
         if what == 'Undo':
             return tool_result(undos.pop(0) if len(undos) > 1 else undos[0])
@@ -285,8 +318,10 @@ def test_which_is_undo_or_redo(undo: ModuleType) -> None:
             'one Undo reverts the whole run',
             ['7 blur @(0,500)', '8 blur @(200,500)'],
         ),
+        (SET_FUNCTION, SET_FUNCTION_UNDO, list(REPLACED)),
+        (INPUT_VALUE, INPUT_VALUE_UNDO, [LINKED]),
     ],
-    ids=['add', 'code run'],
+    ids=['add', 'code run', 'set_function', 'input value'],
 )
 def test_the_add_and_code_run_checks_say_why_an_undo_that_fired_never_showed(
     undo: ModuleType, capsys: pytest.CaptureFixture[str], step: str, name: str, graph: list[str]
@@ -320,6 +355,218 @@ def test_the_add_check_reads_its_undo_and_redo_with_describe_graph(
     assert calls == ['apply_edits', 'Undo', 'describe_graph', 'Redo', 'describe_graph', 'apply_edits']
 
 
+def test_the_set_function_check_reads_its_undo_and_redo_with_describe_graph(
+    undo: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    c, calls = _designer(lambda u, r, since: _graph(*BEFORE) if u > r else _graph(*REPLACED))
+    asyncio.run(undo.check_one_undo_reverts_a_set_function(_ctx(c)))
+    out = capsys.readouterr().out
+    assert _line(out, SET_FUNCTION_UNDO).startswith('PASS')
+    assert _line(out, 'Redo brings back the new one').startswith('PASS')
+    assert calls == [
+        'apply_edits',
+        'set_function',
+        'set_function',
+        'describe_graph',
+        'Undo',
+        'describe_graph',
+        'Redo',
+        'describe_graph',
+        'apply_edits',
+    ]
+
+
+def test_the_input_value_check_reads_its_undo_and_redo_with_describe_graph(
+    undo: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    c, calls = _designer(lambda u, r, since: _graph(UNLINKED) if u > r else _graph(LINKED))
+    asyncio.run(undo.check_one_undo_reverts_a_connect_into_a_new_input_value(_ctx(c)))
+    out = capsys.readouterr().out
+    for name in (INPUT_VALUE_UNDO, 'connect into a new #name: one Undo removes the #name it made', INPUT_VALUE_REDO):
+        assert _line(out, name).startswith('PASS'), out
+    assert _line(out, 'connect into a new #name: Redo brings the #name back').startswith('PASS'), out
+    assert calls == [
+        'apply_edits',
+        'apply_edits',
+        'describe_graph',
+        'set_function',
+        'Undo',
+        'describe_graph',
+        'set_function',
+        'Redo',
+        'describe_graph',
+        'set_function',
+        'apply_edits',
+    ]
+
+
+def test_the_input_value_check_fails_when_the_undo_leaves_the_name(
+    undo: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # the connection gone and #u left: set_function would read it with nothing connected (REVIEW.md TST-725)
+    c, _ = _designer(lambda u, r, since: _graph(UNLINKED) if u > r else _graph(LINKED), values=lambda u, r: True)
+    asyncio.run(undo.check_one_undo_reverts_a_connect_into_a_new_input_value(_ctx(c)))
+    out = capsys.readouterr().out
+    assert _line(out, INPUT_VALUE_UNDO).startswith('PASS'), out
+    assert _line(out, 'connect into a new #name: one Undo removes the #name it made').startswith('FAIL'), out
+
+
+def test_the_input_value_check_fails_naming_a_read_of_the_values_that_failed(
+    undo: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # REVIEW.md TST-731: a reply listing none was taken for no input value; a read that fails fails the check, naming
+    # it, as TST-652 and TST-655 set
+    error = 'Error executing tool set_function: bridge busy'
+    c, _ = _designer(
+        lambda u, r, since: _graph(UNLINKED) if u > r else _graph(LINKED), values=lambda u, r: error if u > r else True
+    )
+    asyncio.run(undo.check_one_undo_reverts_a_connect_into_a_new_input_value(_ctx(c)))
+    line = _line(capsys.readouterr().out, 'connect into a new #name: one Undo removes the #name it made')
+    assert line.startswith('FAIL') and line.endswith('a read failed: ' + error), line
+
+
+@pytest.mark.parametrize(
+    'after',
+    [_graph(), _graph(*REPLACED), _graph('7 pixelprocessor @(0,600)')],
+    ids=['the node gone', 'the new function left', 'no function'],
+)
+def test_the_set_function_check_fails_unless_the_undo_brings_back_the_function_before(
+    undo: ModuleType, capsys: pytest.CaptureFixture[str], after: str
+) -> None:
+    # REVIEW.md TST-713: an Undo taking the node away, or only part of the replacement, isn't the function back
+    c, _ = _designer(lambda u, r, since: after if u > r else _graph(*REPLACED))
+    asyncio.run(undo.check_one_undo_reverts_a_set_function(_ctx(c)))
+    assert _line(capsys.readouterr().out, SET_FUNCTION_UNDO).startswith('FAIL')
+
+
+FUNCTION_GRAPH = 'check_one_undo_reverts_a_function_graph'
+# what describe_graph of the self-test graph says of its package's function graphs: none, undo_fn made with k, given m
+UNDO_FN = (
+    '',
+    'function graphs of the package: undo_fn(k float) -> float',
+    'function graphs of the package: undo_fn(k float, m float) -> float',
+)
+FUNCTION_GRAPH_LINES = (
+    'a function graph made: one Undo removes it',
+    'a function graph made: Redo brings it back',
+    'a function graph given another input: one Undo brings back its inputs before',
+    'a function graph given another input: Redo brings back the new ones',
+)
+# what describe_graph says of undo_fn itself, after each of them: refused, k * 0.5's nodes, k + m's (REVIEW.md TST-740)
+UNDO_FN_NODES = (
+    "Error executing tool describe_graph: the package of graph mcp_selftest has no function graph 'undo_fn'; its "
+    'function graphs: none',
+    'function graph undo_fn of /p/mine.sbs: 3 nodes, output node 9 mul -> float\ninputs: k float',
+    'function graph undo_fn of /p/mine.sbs: 3 nodes, output node 9 add -> float\ninputs: k float, m float',
+)
+FUNCTION_GRAPH_NODES = (
+    'a function graph made: one Undo removes its nodes too',
+    'a function graph made: Redo brings back its nodes too',
+    'a function graph given another input: one Undo brings back its nodes before too',
+    'a function graph given another input: Redo brings back the new nodes too',
+)
+State = Callable[[int, int, int], int]  # (set_function on undo_fn so far, Undos, Redos) -> UNDO_FN's index
+
+
+def _function_graphs(
+    undone: State = lambda made, u, r: made - u + r, nodes: State | None = None
+) -> tuple[FakeCall, list[str]]:
+    """A fake Designer for the function graph check: set_function on undo_fn makes it, then gives it m too; each read,
+    describe_graph of the self-test graph, names what the package has, by `undone` as UNDO_FN's index: as one step
+    each, by default. describe_graph of undo_fn answers by `nodes` (default: `undone`) as UNDO_FN_NODES' index."""
+
+    def state(given: State, u: int, r: int) -> int:
+        return max(0, min(2, given(calls.count('set_function graph'), u, r)))
+
+    c, calls = _designer(
+        lambda u, r, since: '\n'.join(line for line in (_graph(), UNDO_FN[state(undone, u, r)]) if line),
+        nodes=lambda u, r: UNDO_FN_NODES[state(nodes or undone, u, r)],
+    )
+    return c, calls
+
+
+def test_the_function_graph_check_reads_its_undo_and_redo_with_describe_graph(
+    undo: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # REVIEW.md TST-735 read the function graph with set_function's refusal of a call, as describe_graph showed none
+    c, calls = _function_graphs()
+    asyncio.run(undo.check_one_undo_reverts_a_function_graph(_ctx(c)))
+    out = capsys.readouterr().out
+    for name in FUNCTION_GRAPH_LINES + FUNCTION_GRAPH_NODES:
+        assert _line(out, name).startswith('PASS'), out
+    assert 'describe_graph showed it' in _line(out, FUNCTION_GRAPH_LINES[0])
+    # the nodes read with describe_graph's function once each Undo and Redo has shown, never between a send and that
+    # read; no Qt events, no node read by code (REVIEW.md TST-741: with the function graph's own states, so that each is
+    # reached)
+    shown = ['describe_graph', 'describe function']
+    assert calls == [
+        'set_function graph',
+        'describe_graph',
+        'Undo',
+        *shown,
+        'Redo',
+        *shown,
+        'set_function graph',
+        'describe_graph',
+        'Undo',
+        *shown,
+        'Redo',
+        *shown,
+    ]
+
+
+def test_the_function_graph_check_fails_when_an_undo_brings_back_the_inputs_and_not_the_nodes(
+    undo: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # REVIEW.md TST-740: the inputs alone would pass the Undo of the replacement
+    c, _ = _function_graphs(nodes=lambda made, u, r: 2 if made == 2 else made - u + r)
+    asyncio.run(undo.check_one_undo_reverts_a_function_graph(_ctx(c)))
+    out = capsys.readouterr().out
+    assert _line(out, FUNCTION_GRAPH_LINES[2]).startswith('PASS'), out
+    assert _line(out, FUNCTION_GRAPH_NODES[2]).startswith('FAIL'), out
+
+
+@pytest.mark.parametrize(
+    ('undone', 'failing'),
+    [
+        # the Undo of the replacement taking undo_fn away whole
+        (lambda made, u, r: 0 if made == 2 and u > r else made - u + r, FUNCTION_GRAPH_LINES[2]),
+        # an Undo that leaves undo_fn
+        (lambda made, u, r: made, FUNCTION_GRAPH_LINES[0]),
+    ],
+    ids=['an Undo of the replacement removing it', 'an Undo leaving it'],
+)
+def test_the_function_graph_check_fails_unless_one_undo_brings_back_what_was_before(
+    undo: ModuleType, capsys: pytest.CaptureFixture[str], undone: State, failing: str
+) -> None:
+    c, _ = _function_graphs(undone)
+    asyncio.run(undo.check_one_undo_reverts_a_function_graph(_ctx(c)))
+    assert _line(capsys.readouterr().out, failing).startswith('FAIL')
+
+
+@pytest.mark.parametrize(
+    ('said', 'nodes'),
+    [
+        (UNDO_FN_NODES[0], 'none'),
+        (UNDO_FN_NODES[1], '3 nodes, output mul'),
+        # a step of its build undone alone, as a build outside one undo group leaves it
+        ('function graph undo_fn of /p/mine.sbs: 3 nodes, no output node\ninputs: k float', None),
+        ('Error executing tool describe_graph: bridge busy', None),
+    ],
+    ids=['none', 'k * 0.5', 'no output node', 'another reply'],
+)
+def test_the_function_graphs_nodes_are_read_from_describe_graph(undo: ModuleType, said: str, nodes: str | None) -> None:
+    # anything but a function graph's nodes or its absence is said as it came, never taken for either
+    menu = sys.modules['test_all_tools.undo.edit_menu']
+
+    async def c(name: str, args: ToolArgs | None = None) -> SimpleNamespace:
+        assert name == 'describe_graph' and args == {'graph': 'mcp_selftest', 'function': 'undo_fn'}
+        return tool_result(said, error=said.startswith('Error'))
+
+    read = asyncio.run(menu.function_graph_nodes(c, {'graph': 'mcp_selftest'}, 'undo_fn'))
+    assert read == (nodes or said.splitlines()[0])
+
+
 def test_the_code_run_check_reads_its_undo_and_redo_with_describe_graph(
     undo: ModuleType, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -345,25 +592,47 @@ def test_the_code_run_check_reads_its_undo_and_redo_with_describe_graph(
 
 @pytest.mark.parametrize('redo', [False, True], ids=['the Undo', 'the Redo'])
 @pytest.mark.parametrize(
-    'step, name',
+    'step, name, start, shown, before',
     [
-        ('check_one_undo_removes_an_added_node', ('add: one Undo removes the added node', 'add: Redo restores it')),
-        ('check_one_undo_reverts_a_whole_code_run', ('one Undo reverts the whole run', 'one Redo restores it')),
+        (
+            'check_one_undo_removes_an_added_node',
+            ('add: one Undo removes the added node', 'add: Redo restores it'),
+            _graph(*REPLACED),
+            _graph(),
+            0,
+        ),
+        (
+            'check_one_undo_reverts_a_whole_code_run',
+            ('one Undo reverts the whole run', 'one Redo restores it'),
+            _graph(*REPLACED),
+            _graph(),
+            0,
+        ),
+        # one read before the Undo: the function replaced
+        (SET_FUNCTION, (SET_FUNCTION_UNDO, 'Redo brings back the new one'), _graph(*REPLACED), _graph(*BEFORE), 1),
+        # one read before the Undo: the connection made
+        (INPUT_VALUE, (INPUT_VALUE_UNDO, INPUT_VALUE_REDO), _graph(LINKED), _graph(UNLINKED), 1),
     ],
-    ids=['add', 'code run'],
+    ids=['add', 'code run', 'set_function', 'input value'],
 )
 def test_a_read_that_failed_fails_the_check_naming_it(
-    undo: ModuleType, capsys: pytest.CaptureFixture[str], step: str, name: tuple[str, str], redo: bool
+    undo: ModuleType,
+    capsys: pytest.CaptureFixture[str],
+    step: str,
+    name: tuple[str, str],
+    start: str,
+    shown: str,
+    before: int,
+    redo: bool,
 ) -> None:
     # REVIEW.md TST-655: an error reply has no node in it, and two failed reads passed "one Undo reverts the whole run";
     # TST-652: read as every node gone, one said the Undo landed
     error = 'Error executing tool describe_graph: bridge busy'
-    gone = _graph()
-    c, calls = _designer(lambda u, r, since: error if r == int(redo) else gone)
+    c, calls = _designer(lambda u, r, since: start if u == 0 else error if r == int(redo) else shown)
     asyncio.run(getattr(undo, step)(_ctx(c)))
     out = capsys.readouterr().out
     assert _line(out, name[int(redo)]).startswith('FAIL') and 'a read failed: ' + error in _line(out, name[int(redo)])
-    assert calls.count('describe_graph') == 1 + int(redo), 'no read after the failed one'
+    assert calls.count('describe_graph') == before + 1 + int(redo), 'no read after the failed one'
     if not redo:
         assert _line(out, name[1]) == '' and 'Redo' not in calls
 
@@ -382,17 +651,21 @@ def test_a_read_of_the_action_that_failed_fails_the_check_naming_it(
 
 
 @pytest.mark.parametrize(
-    'step',
+    'step, graph',
     [
-        'check_one_undo_removes_an_added_node',
-        'check_one_undo_puts_an_outputs_fields_back',
-        'check_one_undo_reverts_a_whole_code_run',
+        ('check_one_undo_removes_an_added_node', _back_after(1)),
+        ('check_one_undo_puts_an_outputs_fields_back', _back_after(1)),
+        ('check_one_undo_reverts_a_whole_code_run', _back_after(1)),
+        (SET_FUNCTION, lambda u, r, since: _graph(*BEFORE) if u > r else _graph(*REPLACED)),
+        (INPUT_VALUE, lambda u, r, since: _graph(UNLINKED) if u > r else _graph(LINKED)),
+        (FUNCTION_GRAPH, None),
     ],
+    ids=['add', 'set', 'code run', 'set_function', 'input value', 'function graph'],
 )
-def test_no_check_runs_qts_events_or_reads_a_node_by_code(undo: ModuleType, step: str) -> None:
-    c, calls = _designer(_back_after(1))
+def test_no_check_runs_qts_events_or_reads_a_node_by_code(undo: ModuleType, step: str, graph: Graph | None) -> None:
+    c, calls = _designer(graph) if graph else _function_graphs()
     asyncio.run(getattr(undo, step)(_ctx(c)))
-    assert 'processEvents' not in calls and 'exists' not in calls, calls
+    assert 'processEvents' not in calls and 'exists' not in calls and 'code' not in calls, calls
 
 
 # --- what the diagnostic prints when a state wasn't said
@@ -478,7 +751,7 @@ def test_an_action_whose_state_couldnt_be_read_is_said_to_maybe_still_fire(
 
 
 # the self-test graph holding what each check's Undo takes away: none of them ever shows
-NONE_SHOWS = _graph('7 blur @(0,400)', '8 blur @(200,500)', CHANGED)
+NONE_SHOWS = _graph('7 blur @(0,400)', '8 blur @(200,500)', CHANGED, '    perpixel <- a function', LINKED)
 
 
 @pytest.mark.parametrize(
@@ -504,10 +777,10 @@ def test_the_undo_checks_end_reading_the_action_left_armed(
     # REVIEW.md TST-690: put_back's Redo after the last check's Undo was never read, so never disarmed: fired later, it
     # would land on the document in focus then
     # each check's Undo, then the Redo putting it back, read as never shown (REVIEW.md TST-693)
-    c, calls = _designer(lambda u, r, since: NONE_SHOWS, fired=[FIRED] * 6 + [end])
+    c, calls = _designer(lambda u, r, since: NONE_SHOWS, fired=[FIRED] * 10 + [end])
     asyncio.run(undo.run(_ctx(c)))
     out = _said(capsys.readouterr().out)
-    assert calls.count('Redo') == 3 and calls[-3:] == ['fired', 'apply_edits', 'fired'], calls  # after the clean-up
+    assert calls.count('Redo') == 5 and calls[-3:] == ['fired', 'apply_edits', 'fired'], calls  # after the clean-up
     ended = [line for line in out if line.startswith("the undo checks' end")]
     assert ended == ([said] if said else []), out
 

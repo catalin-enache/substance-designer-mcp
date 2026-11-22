@@ -3,11 +3,13 @@ other parts use these)."""
 
 # `X as X`: the other parts import these from here (mypy counts only explicit re-exports); the parts
 # share one namespace, so each name is imported once, here
+import html as html
 import math
 import os as os
+import re as re
 import sys as sys
 from collections.abc import Callable as Callable, Iterator as Iterator, Sequence as Sequence
-from typing import Protocol as Protocol, TypedDict as TypedDict, cast as cast
+from typing import Literal as Literal, NamedTuple, Protocol as Protocol, TypedDict as TypedDict, cast as cast
 
 import sd
 from PySide6 import QtCore as QtCore, QtGui as QtGui, QtWidgets as QtWidgets
@@ -15,6 +17,7 @@ from sd.api.apiexception import APIException as APIException
 from sd.api.qtforpythonuimgrwrapper import QtForPythonUIMgrWrapper
 from sd.api.sbs.sdsbscompgraph import SDSBSCompGraph as SDSBSCompGraph
 from sd.api.sbs.sdsbscompnode import SDSBSCompNode as SDSBSCompNode
+from sd.api.sbs.sdsbsfunctiongraph import SDSBSFunctionGraph as SDSBSFunctionGraph
 from sd.api.sdapplication import SDApplication, SDApplicationPath as SDApplicationPath
 from sd.api.sdbasetypes import float2
 from sd.api.sdconnection import SDConnection
@@ -27,7 +30,7 @@ from sd.api.sdproperty import SDProperty as SDProperty, SDPropertyCategory as SD
 from sd.api.sdresource import SDResource as SDResource
 from sd.api.sdresourcefolder import SDResourceFolder as SDResourceFolder
 from sd.api.sdtexture import SDTexture as SDTexture
-from sd.api.sdtype import SDType
+from sd.api.sdtype import SDType as SDType
 from sd.api.sdtypeenum import SDTypeEnum as SDTypeEnum
 from sd.api.sduimgr import SDUIMgr
 from sd.api.sdvalue import SDValue as SDValue
@@ -292,11 +295,54 @@ def fmt(value: SDValue | None) -> Shown:
 
 
 def node_kind(node: SDNode) -> str:
+    """'instance:<graph>' for an instance of a graph or a function graph, else the node's definition without its module:
+    'levels' for sbs::compositing::levels, 'add' for sbs::function::add."""
     ref = node.getReferencedResource()
     # an FX-Map also refers to a resource, its own graph, which has no identifier
     if ref is not None and ref.getIdentifier():
         return 'instance:' + ref.getIdentifier()
-    return _definition_id(node).replace('sbs::compositing::', '')
+    return _definition_id(node).removeprefix('sbs::compositing::').removeprefix('sbs::function::')
+
+
+# _node_head, _links_text, _focused and _more: how describe_graph lists a graph's nodes, or a function's
+
+
+def _node_head(n: SDNode) -> str:
+    """A node's line as describe_graph starts it: '<id> <kind> @(x,y)'."""
+    x, y = _xy(n.getPosition())
+    return '%s %s @(%d,%d)' % (n.getIdentifier(), node_kind(n), x, y)
+
+
+def _links_text(n: SDNode) -> str:
+    """A node's incoming connections, as describe_graph lists them: '  in: input<-sourceNodeId.output, ...', '' when
+    it has none."""
+    links = []
+    for prop in n.getProperties(SDPropertyCategory.Input):
+        if not prop.isConnectable():
+            continue
+        for c in n.getPropertyConnections(prop):
+            other, other_prop = _other_end(c)
+            links.append('%s<-%s.%s' % (prop.getId(), other.getIdentifier(), other_prop.getId()))
+    return '  in: ' + ', '.join(links) if links else ''
+
+
+def _focused(nodes: list[SDNode], node_ids: list[str] | None) -> list[SDNode]:
+    """`nodes`, only those of `node_ids` when given, after a line naming the ids none of them has: said, not dropped
+    silently (REVIEW.md HLP-47)."""
+    if not node_ids:
+        return nodes
+    wanted = {str(i) for i in node_ids}
+    found = {n.getIdentifier() for n in nodes}
+    unknown = [str(i) for i in node_ids if str(i) not in found]
+    if unknown:
+        print('not found: %s' % ', '.join(unknown))
+    return [n for n in nodes if n.getIdentifier() in wanted]
+
+
+def _more(nodes: list[SDNode], limit: int) -> None:
+    """The line saying how many of `nodes` are past `limit`, when some are."""
+    if len(nodes) > limit:
+        print('... %d more nodes (raise limit or filter node_ids)' % (len(nodes) - limit))
 
 
 def _other_end(connection: SDConnection) -> tuple[SDNode, SDProperty]:
@@ -346,6 +392,34 @@ def _definition_id(node: SDNode) -> str:
 def _type(prop: SDProperty) -> SDType:
     """A parameter's type. sd types it as optional. A parameter always has one."""
     return cast(SDType, prop.getType())
+
+
+def _type_ids(prop: SDProperty | None) -> list[str]:
+    """Every type a property takes, by id: getType() gives only the first (GUIDE.md, Building a function graph). [] when
+    there is no property, or the types can't be read: sd's stub allows None for them (REVIEW.md HLP-237)."""
+    try:
+        return [t.getId() for t in prop.getTypes() or []] if prop is not None else []
+    except (Exception, APIException):
+        return []
+
+
+class _FunctionDefinition(NamedTuple):
+    """A definition of Designer's sbs::function module, with its label and its description, each '' where the module
+    gives None: sd's stub allows it, and none of Designer 16's 85 gives it (the functions category's facts; REVIEW.md
+    HLP-241)."""
+
+    sd_definition: SDDefinition
+    label: str
+    description: str
+
+
+def _function_definitions() -> dict[str, _FunctionDefinition]:
+    """Designer's function nodes, the sbs::function module's definitions, by id ('sbs::function::add'): what
+    list_atomic lists for search_nodes, and describe_node describes."""
+    module = _APP.getModuleMgr().getModuleFromId('sbs::function')
+    found = module.getDefinitions() if module is not None else None
+    # sd's getDefinitions() gives None when Designer sets no array, as getTypes() does (REVIEW.md HLP-248)
+    return {d.getId(): _FunctionDefinition(d, d.getLabel() or '', d.getDescription() or '') for d in found or []}
 
 
 def _value(owner: SDNode | SDGraph, prop: SDProperty) -> SDValue:

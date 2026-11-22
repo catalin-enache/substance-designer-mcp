@@ -1,5 +1,5 @@
-"""describe_graph, describe_node (library graphs, slider ranges) and node textures (previews,
-pixels)."""
+"""describe_graph (a graph; a function's nodes: describe_functions.py), describe_node (library graphs, slider ranges,
+function nodes) and node textures (previews, pixels)."""
 
 from .core import (
     _APP,
@@ -19,21 +19,29 @@ from .core import (
     Shown,
     _annotation_text,
     _default_output,
+    _focused,
+    _function_definitions,
+    _FunctionDefinition,
+    _links_text,
+    _more,
     _new_instance,
     _new_node,
+    _node_head,
     _nodes,
-    _other_end,
     _output_note,
     _texture,
     _type,
+    _type_ids,
     _usage_names,
-    _xy,
     cast,
     find_graph,
     fmt,
+    html,
     node_kind,
     os,
+    re,
 )
+from .describe_functions import _function_graphs_line
 from .edits import _node, atomic_definition_ids
 from .graph_inputs import _driver_text, _driving_graph, _fx_map_functions, _has_output
 from .layout import graph_objects_summary
@@ -60,6 +68,7 @@ def describe_graph(
     include_params: bool = False,
     limit: int = 400,
 ) -> None:
+    """Lists a graph's nodes, and its package's function graphs (a function's nodes: describe_function)."""
     from sd.api.sdvalueint2 import SDValueInt2
 
     g = find_graph(identifier)
@@ -77,28 +86,19 @@ def describe_graph(
             print('frames: %s | comments: %d' % (', '.join(repr(f) for f in frames) or '-', comments))
     except (Exception, APIException):
         pass
-    if node_ids:
-        wanted = {str(i) for i in node_ids}
-        found = {n.getIdentifier() for n in nodes}
-        unknown = [str(i) for i in node_ids if str(i) not in found]
-        if unknown:  # said, not dropped silently (REVIEW.md HLP-47)
-            print('not found: %s' % ', '.join(unknown))
-        nodes = [n for n in nodes if n.getIdentifier() in wanted]
+    if not node_ids:  # focused on node_ids, a description leaves them out (REVIEW.md HLP-242)
+        try:
+            listed = _function_graphs_line(g.getPackage())
+        except (Exception, APIException) as e:  # said, as a package with none says nothing
+            listed = 'function graphs of the package: not read (%s)' % e
+        if listed:
+            print(listed)
+    nodes = _focused(nodes, node_ids)
     for n in nodes[:limit]:
-        x, y = _xy(n.getPosition())
-        line = '%s %s @(%d,%d)' % (n.getIdentifier(), node_kind(n), x, y)
+        line = _node_head(n)
         if node_kind(n) == 'output':
             line += _output_tags_text(n)
-        links = []
-        for prop in n.getProperties(SDPropertyCategory.Input):
-            if not prop.isConnectable():
-                continue
-            for c in n.getPropertyConnections(prop):
-                other, other_prop = _other_end(c)
-                links.append('%s<-%s.%s' % (prop.getId(), other.getIdentifier(), other_prop.getId()))
-        if links:
-            line += '  in: ' + ', '.join(links)
-        print(line)
+        print(line + _links_text(n))
         if include_params:
             for inner_id, prop, fg in _fx_map_functions(n):
                 if _has_output(fg):
@@ -128,8 +128,7 @@ def describe_graph(
                     prop.getId() in ('$outputsize', '$pixelsize') and cur in ((0, 0), (1.0, 1.0))
                 ):
                     print('    %s = %r' % (prop.getId(), cur))
-    if len(nodes) > limit:
-        print('... %d more nodes (raise limit or filter node_ids)' % (len(nodes) - limit))
+    _more(nodes, limit)
 
 
 def _library_path(name: str) -> tuple[str, str]:
@@ -212,19 +211,26 @@ def _slider_range(node: SDNode, prop_id: str) -> str:
 
 
 def _short_description(prop: SDProperty) -> str:
-    import re
-
     try:
         desc = prop.getDescription() or ''
     except (Exception, APIException):
         return ''
-    desc = re.sub(r'<[^>]+>', '', desc).strip()
+    desc = html.unescape(re.sub(r'<[^>]+>', '', desc)).strip()  # its entities after its tags (REVIEW.md HLP-246)
     return (desc[:157] + '...') if len(desc) > 160 else desc
 
 
 def describe_node(definition: str) -> None:
-    """definition: atomic name ('levels' or 'sbs::compositing::levels') or library
-    '<package file>[/<graph id>]' (e.g. 'tile_generator', 'hbao.sbs/hbao', 'materials/pbr/bricks_001')."""
+    """definition: atomic name ('levels' or 'sbs::compositing::levels'), library
+    '<package file>[/<graph id>]' (e.g. 'tile_generator', 'hbao.sbs/hbao', 'materials/pbr/bricks_001') or a function
+    node's definition ('sbs::function::add': _describe_function_node). A name that is neither an atomic node nor a
+    library package, but a function node's kind as a function's listing gives it ('add'), is that function node. One
+    that is both ('pow', 'passthrough') is the other node, and a last line names the function node."""
+    if definition.startswith('sbs::function::'):
+        found = _function_definitions().get(definition)
+        if found is None:
+            raise RuntimeError('%r is no function node; search_nodes lists them' % definition)
+        _describe_function_node(found)
+        return
     before = _package_uids()
     try:
         try:
@@ -232,10 +238,15 @@ def describe_node(definition: str) -> None:
             g = SDSBSCompGraph.sNew(tmp)
             atomic_id = definition if definition.startswith('sbs::') else 'sbs::compositing::' + definition
             node = _new_node(g, atomic_id) if atomic_id in atomic_definition_ids(g) else None
+            # a kind as a function's listing gives it (REVIEW.md SRV-204); an id of another module is no key
+            function = 'sbs::function::' + definition
+            twin = _function_definitions().get(function)
             if node is None:
-                res = _library_graph(definition)
-                node = _new_instance(g, res)  # the resource was found just above
                 path, graph_id = _library_path(definition)
+                if twin is not None and not os.path.exists(path):
+                    _describe_function_node(twin)
+                    return
+                node = _new_instance(g, _library_graph(definition))  # _library_graph raises if it finds none
                 print('library node %s (%s)' % (graph_id, os.path.basename(path)))
             else:
                 print('atomic node %s' % atomic_id)
@@ -262,6 +273,8 @@ def describe_node(definition: str) -> None:
                         '      enum: '
                         + ', '.join('%s=%s' % (e.getId(), fmt(e.getDefaultValue())) for e in ptype.getEnumerators())
                     )
+            if twin is not None:  # pow, a library graph, passthrough, an atomic node (REVIEW.md SRV-205)
+                print("%s is a function node's kind too: describe_node(%r) describes that one" % (definition, function))
         finally:
             _unload_new_packages(before)
     except BaseException:
@@ -270,6 +283,27 @@ def describe_node(definition: str) -> None:
         # (REVIEW.md HLP-177)
         _unload_new_packages(before)
         raise
+
+
+def _describe_function_node(found: _FunctionDefinition) -> None:
+    """describe_node of a function node, read from its definition in Designer's sbs::function module: its label and
+    description, then its output and its inputs, each with every type it takes (getTypes(): getType() gives only the
+    first; GUIDE.md, Building a function graph), an input's label, and a constant's default."""
+    description = ' '.join(html.unescape(re.sub(r'<[^>]+>', ' ', found.description)).split())  # REVIEW.md HLP-246
+    shown = ': ' + description if description else ''
+    print('function node %s "%s"%s' % (found.sd_definition.getId(), found.label, shown))
+    print('outputs:')  # an output's label is the node's
+    for prop in found.sd_definition.getProperties(SDPropertyCategory.Output) or []:
+        print('  %-28s %s' % (prop.getId(), ','.join(_type_ids(prop)) or 'none'))
+    print('inputs:')
+    for prop in found.sd_definition.getProperties(SDPropertyCategory.Input) or []:
+        types = ','.join(_type_ids(prop)) or 'none'
+        line = '  %-28s %s' % (prop.getId(), ('CONNECTOR ' if prop.isConnectable() else '') + types)
+        if prop.getLabel():
+            line += ' "%s"' % prop.getLabel()
+        if not prop.isConnectable():
+            line += ' default=%r' % (fmt(prop.getDefaultValue()),)
+        print(line)
 
 
 def _with_node_texture(

@@ -11,7 +11,8 @@ the top), so editors and readers see where a name comes from. Those imports can'
 (the joined script is no package), so part_source() drops them: the names are already there.
 tests/unit/test_designer_helpers.py keeps them exact (each name a part uses from another part is
 imported, from the part that defines it). core comes first, since the others use its imports, _APP
-and _PM at load time; nothing else depends on the order.
+and _PM at load time. describe_functions comes after functions, whose types (_Kind, _Typed) its annotations read at
+load time. Nothing else depends on the order.
 """
 
 import ast
@@ -31,6 +32,8 @@ PARTS = (
     'quit',
     'editor',
     'graph_inputs',
+    'functions',
+    'describe_functions',
     'batch',
     'sweep',
     'layout',

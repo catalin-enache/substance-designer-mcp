@@ -44,6 +44,7 @@ from test_all_tools.common import (
     UNDO_FIRED,
     UNDO_REDO,
     Call,
+    ToolArgs,
     agents_designers,
     check,
     positions,
@@ -56,9 +57,40 @@ SENDS = 3  # sends at most, each after a read saying the one before never fired:
 READS_THE_FRONT = sys.platform == 'darwin'  # lsappinfo, as window_server reads the app in front
 
 
+async def function_graph_nodes(c: Call, G: ToolArgs, name: str) -> str:
+    """The function graph `name`'s nodes, as describe_graph's `function` says them: '3 nodes, output mul'; 'none' when
+    the package has none of that name; else the first line of its reply (REVIEW.md TST-740). A read with no Qt events,
+    made once an Undo or a Redo has shown, never between a send and the read that shows it (the module docstring)."""
+    r = await c('describe_graph', {**G, 'function': name})
+    said = text(r).strip()
+    if r.is_error and 'has no function graph %r' % name in said:
+        return 'none'
+    found = re.search(r': (\d+) nodes?, output node \S+ (\S+)', said)
+    if found and not r.is_error:
+        return '%s nodes, output %s' % found.groups()
+    return said.splitlines()[0] if said else 'no reply'
+
+
 def fields_back(described: str) -> bool:
     """Whether describe_graph's text shows the output's fields as before the set: identifier `height`, no usage."""
     return "identifier='height' usage=none" in described and 'undo_me' not in described
+
+
+def perpixel_driver(described: str) -> str | None:
+    """What describe_graph's text, with its parameters, says drives a Pixel Processor's perpixel: 'a function', "a
+    function reading '$time'"...; None when it shows none."""
+    found = re.search(r'^\s*perpixel <- (.*)$', described, re.M)
+    return found.group(1) if found else None
+
+
+async def input_values(c: Call, G: ToolArgs, node: str) -> str:
+    """The input values `node` has, as set_function's refusal of a #name it lacks lists them ('#u'), '' for none, or
+    'a read failed: <reply>' for a reply saying neither (REVIEW.md TST-731): a read, with no undo step of its own."""
+    r = text(await c('set_function', {'expression': '#lacking', 'node_id': node, 'parameter': 'opacitymult', **G}))
+    found = re.search(r'its input values are ([^.]*)\.', r)
+    if found:
+        return found.group(1)
+    return '' if ', nor any other:' in r else 'a read failed: ' + r.strip()
 
 
 def nodes_gone(*ids: str) -> Callable[[str], bool]:
@@ -189,10 +221,10 @@ class Sent:
         print('      the graph as last read: ' + ' / '.join(self.described.strip().splitlines()))
 
 
-async def send(c: Call, graph: dict[str, str], which: Which, shows: Callable[[str], bool]) -> Sent:
-    """Sends `which` ('Undo' or 'Redo') through the Edit menu of the self-test graph, and reads `graph` with
-    describe_graph until `shows` says its text shows it: sent again only when the action never fired (the module
-    docstring)."""
+async def send(c: Call, graph: ToolArgs, which: Which, shows: Callable[[str], bool]) -> Sent:
+    """Sends `which` ('Undo' or 'Redo') through the Edit menu of the self-test graph, and reads it with describe_graph,
+    `graph` its arguments, until `shows` says its text shows it: sent again only when the action never fired (the
+    module docstring)."""
     sent = Sent(which)
     while sent.sends < SENDS:
         front = FrontRead()
@@ -274,7 +306,7 @@ def recorded(sent: Sent, tool: str, name: str) -> bool:
     return shown
 
 
-async def put_back(c: Call, graph: dict[str, str], sent: Sent) -> None:
+async def put_back(c: Call, graph: ToolArgs, sent: Sent) -> None:
     """After an Undo that fired and never showed (send), which hit some other step: a Redo puts that back, sent and
     read as the Undo was, until `graph` changes from its last read; says when it never does (REVIEW.md TST-693)."""
     if sent.which == 'Undo' and sent.shown is None and sent.fired:

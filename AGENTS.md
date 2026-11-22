@@ -86,10 +86,10 @@ Docs changed alone run the docs tests instead, the final check included (`.claud
 for each run the user asks for: the `live-check` skill (`.claude/skills/live-check/SKILL.md`), The suites.
 
 **Unit tests while working:** only those added or modified for the change (for a refactor, the existing tests of the
-code it touches), as often as useful. **Lint and types always run too**, and the docs tests with any change of
-Markdown, a comment or a docstring, alone or with code. The commands: `.claude/rules/python.md` and
-`.claude/rules/docs-tests.md`. The rules for Python and for the unit tests: `.claude/rules/python.md` and
-`.claude/rules/unit-tests.md`.
+code it touches), and those that read the source of the files it changes (`.claude/rules/python.md`), as often as
+useful. **Lint and types always run too**, and the docs tests with any change of Markdown, a comment or a docstring,
+alone or with code. The commands: `.claude/rules/python.md` and `.claude/rules/docs-tests.md`. The rules for Python and
+for the unit tests: `.claude/rules/python.md` and `.claude/rules/unit-tests.md`.
 
 ### Delegating to subagents
 

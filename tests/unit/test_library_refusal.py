@@ -122,6 +122,10 @@ EDITS = [
     ('add_frame', lambda h: h.add_frame(None, ['1'], 't')),
     ('add_comment', lambda h: h.add_comment(None, 't')),
     ('sweep_param', lambda h: h.sweep_param(None, '1', 'p', [1], '/tmp')),
+    ('function_target', lambda h: h.function_target(None, '1', None)),
+    ('set_function', lambda h: h.set_function(None, {}, {})),
+    ('function_resource_target', lambda h: h.function_resource_target(None, 'f')),
+    ('set_function_resource', lambda h: h.set_function_resource(None, {}, [], {})),
 ]
 
 
@@ -140,6 +144,7 @@ def test_every_helper_either_edits_through_the_check_or_only_reads(helpers: type
         '_found_by_name',
         '_graph_to_edit',
         '_package_of',
+        'describe_function',
         'describe_graph',
         'dump_node_pixels',
         'export_outputs',

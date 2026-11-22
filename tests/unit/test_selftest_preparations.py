@@ -229,7 +229,7 @@ def _others_used(source: str, folder: str, folders: list[str]) -> set[str]:
 def test_no_category_uses_another_categorys_code() -> None:
     # a change to one category's checks, preparation or helpers can't reach any other (the user's choice, 2026-11-10)
     folders = _folders()
-    assert len(folders) == 23, folders
+    assert len(folders) == 24, folders
     used = [
         '%s/%s uses %s' % (folder, name, sorted(others))
         for folder in folders

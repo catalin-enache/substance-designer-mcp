@@ -85,8 +85,9 @@ addressed in one go (the ones the user named, or the batch in the plan) are hand
       parameter (HLP-31 fixed `'graph'` in two tools; HLP-41 later found eight more). Fix each one
       that has the defect, with its test, and list what you searched and what you found under **Also covered** in the
       resolution, so the next reviewer can see the scope.
-4. **Run the tests again: they must pass.** Only the tests added or modified for the group's findings, never the whole
-   suites, which run only when the user asks (AGENTS.md, Running the tests):
+4. **Run the tests again: they must pass.** Only the tests added or modified for the group's findings, and the unit
+   tests that read the source of the files the fixes change (`.claude/rules/python.md`), never the whole suites, which
+   run only when the user asks (AGENTS.md, Running the tests):
     - the unit tests by name, always with lint and types, and the docs tests with any change of Markdown, a comment
       or a docstring: the commands are in `.claude/rules/python.md` and `.claude/rules/docs-tests.md`;
     - the live checks in the group's scratch script. Plugin changes only reach Designer after `install.py` and a

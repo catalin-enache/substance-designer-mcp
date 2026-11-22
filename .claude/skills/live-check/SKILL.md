@@ -135,8 +135,9 @@ the test's row (DECISIONS.md). One
 that fails alone too is a failure (DECISIONS.md, Project rules).
 Each failure goes in `REVIEW.md` (the user, 2026-11-19). The runner reports the
 failures, the lead writes each one, as a new finding or a reopened one (the `address-review` skill, step 4), and the
-developer fixes them. The developer reruns only the failing tests until they pass: unit tests by name (the summary lists
-them) with lint and types; a live check in a scratch run (failing only in the full run: run it beside other Designers, with
+developer fixes them. The developer reruns only the failing tests until they pass, and the unit tests that read the
+source of the files the fixes change (`.claude/rules/python.md`): unit tests by name (the summary lists the failing ones)
+with lint and types; a live check in a scratch run (failing only in the full run: run it beside other Designers, with
 `port=`, or in a Designer just started, `alone.close()` first). Then the lead tells the user which suites failed, and
 recommends another review or those suites again, by the size of the fixes. The user decides. When only unit
 tests failed, the live self-test needs to run again only if the fixes touch code it reaches, a comment or a docstring

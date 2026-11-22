@@ -37,13 +37,19 @@ Parameters are described in each tool's schema; this is when to reach for which.
   graphs, not its function graphs: ready-made materials such as `materials/pbr/bricks_001` included, hidden ones on
   `include_hidden`; an empty result says how many match; returns the exact `definition`), then `describe_node` for
   connector ids, parameter types, **enum values**, library slider ranges and descriptions. Never guess ids or enum
-  numbers; pick values inside the slider range.
+  numbers; pick values inside the slider range. `search_nodes` finds the function nodes too (`sbs::function::lr`,
+  "Lower"), and `describe_node` gives every type each of their inputs takes: what a function's nodes do.
 - **Inspect a graph:** `describe_graph`, `list_graph_inputs`. Graphs are found by identifier; several open graphs with
   the same one (every new graph is "New_Graph") are refused as ambiguous unless one is open in the editor.
+  `describe_graph` of a whole graph names the package's function graphs too. With `node_id` (and `parameter`), or `function`, it lists a
+  function's nodes instead, to read back what `set_function` built. A node's function also says what feeds each
+  `#name` it reads, so that a connection changed since it was built shows: one fed another type, which Designer reads
+  wrongly, or one with nothing connected.
 - **Safety net:** `snapshot_graph`, `list_snapshots`, `diff_graph` (the rules).
 - **Look:** `preview_node` (any node, even one feeding no output), `screenshot_designer` (what the user sees),
   `open_graph` (open the graph first, so the user and screenshots see it; `frame=` or `node_ids=` zooms to one
-  section). A screenshot costs about width × height / 750 tokens: keep `max_size` small, `crop`, and zoom with
+  section; `function=` opens a function graph of the package, but Designer's editor can't open a node's function, so
+  `describe_graph` lists that one). A screenshot costs about width × height / 750 tokens: keep `max_size` small, `crop`, and zoom with
   `open_graph` rather than shooting the whole graph big. A material on a mesh, in Designer's own renderer:
   `screenshot_designer('3d', graph=...)`; `mesh='Plane'`, `view='Top'` and `tiling=2` show how it repeats.
   `environment_rotation` sets the light's angle around the mesh, to see relief lit from the side. The 3D view draws only while Designer's window is on screen, so on macOS the tool puts it there for the
@@ -62,6 +68,16 @@ Parameters are described in each tool's schema; this is when to reach for which.
   maps), `set`, `connect`, `disconnect`, `move`, `delete`, `expose` (a parameter as a graph input). One call is one undo
   step; refs name nodes added earlier in the batch; which mistakes refuse the whole batch and which stop it partway: its
   description. Also `create_graph`, `remove_graph_input`, `set_graph_size`.
+- **Write a function:** `set_function` compiles an expression into a Pixel Processor's per-pixel function, a Value
+  Processor's function or any parameter's (such as a levels' `leveloutlow` from graph inputs), in one undo step. Its
+  `expression` gives the grammar; every name and type is checked before anything is built. A Value Processor drives
+  another node's parameter through an input value of that node: `apply_edits`' `connect` into `#name` makes it, and
+  the parameter's function reads `#name`. With `function` and `inputs` instead of `node_id`, it makes or replaces a
+  function graph stored in the package, which any expression of the package then calls by name, such as
+  `paint($pos, 0.6)`: write a function once and call it from several nodes. A Pixel or Value Processor's function, and
+  a function graph it calls, sample its input images with `sample(index, pos)`, such as a normal map's Z rebuilt from
+  its R and G. Its second and later inputs are `input:1`, `input:2`...: `apply_edits`' `connect` adds each once the one
+  before it is connected.
 - **Make graphs readable** (every graph you build or restructure): `arrange_graph` (positions only), then `add_frame`
   per logical section and `add_comment` for non-obvious choices.
   - **Portals when the wires get cluttered.** Check with `screenshot_designer('graph')` after `open_graph`. Signs: one
@@ -244,8 +260,8 @@ The rules and the first pitfalls are in the core, `get_guide()`.
   |---|---|---|---|---|
   | None | stored value | sets it | - | set, sweep, expose |
   | Empty | stored value | sets it, **deletes the graph** | stored value stays reset | set, sweep, expose (reuses it) |
-  | Nodes, no output node | stored value | sets it, **deletes the graph and its nodes** | stored value stays reset | refuse, and say it drives nothing |
-  | Nodes and an output node | the function | sets it, **deletes the graph and its nodes** | stored value stays reset | refuse |
+  | Nodes, no output node | stored value | sets it, **deletes the graph and its nodes** | stored value stays reset | refuse, and say it drives nothing; `set_function` replaces it |
+  | Nodes and an output node | the function | sets it, **deletes the graph and its nodes** | stored value stays reset | refuse; `set_function` replaces it |
 
   `$` parameters differ: `deletePropertyGraph` switches any of them back to the node's default inheritance (relative to
   input on a levels node, all six; relative to parent on an instance node, `$outputsize` measured), so put the inheritance
@@ -260,6 +276,176 @@ The rules and the first pitfalls are in the core, `get_guide()`.
   `$outputsize`), but `SDGraph` has no `getPropertyGraph`, so the tools read those from the package's file, as last
   saved. Removing an input that a connected `get` reads changes the output with no error, so `remove_graph_input`
   refuses while a function other than a plain binding (one `get`, its output) names it.
+- **Building a function graph** ("designer facts", the `functions` checks):
+  - **The definitions:** `app.getModuleMgr().getModuleFromId('sbs::function').getDefinitions()` lists 85. Each has
+    its inputs and one output, `unique_filter_output`. Read a property's types with `getTypes()`. `getType()` gives
+    only the first: `int` for an unconnected `add`, which lists all eight number types. Every input but `__constant__`
+    connects.
+  - **Input ids:** `a` and `b` on operators and comparisons, `a` alone on one-argument functions. `mulscalar` takes `a`
+    and `scalar`, `lerp` `a`, `b` and `x`, `ifelse` `condition`, `ifpath` and `elsepath`, `cartesian` `rho` and
+    `theta`. Vectors take `componentsin` and `componentslast`, swizzles `vector`, the casts (`tofloat*`, `toint*`)
+    `value`, `samplecol` and `samplelum` `pos`. `atan2` takes one float2, `a`. There is no `clamp`, `length`,
+    `normalize`, `step`, `frac`, `asin` or `acos`.
+  - **`atan2`** of a float2 (x, y) gives atan2(y, x) in radians: (1, 0) gives 0, (0, 1) π/2, (-1, 0) π and (0, -1)
+    -π/2. So y is the second component, a `vector2`'s `componentslast`.
+  - **Variables:** a `get_*` node whose `__constant__` is a variable's name reads it. In a Pixel Processor of an 8 px
+    graph, `get_float2` reads `$pos` as the pixel's centre over the size, y from the top row: (0.06, 0.06) at pixel
+    (0, 0) and (0.69, 0.31) at pixel (5, 2), read at 8 bits. `get_float2` reads `$size` as (8, 8) and `$sizelog2` as
+    (3, 3), and `get_integer1` reads `$tiling` as 3. In a Value Processor's function of that graph, `$pos` reads (0, 0)
+    and `$size` (8, 8). In a parameter's (a blend's `opacitymult`), `$size` reads (8, 8), and `$pos` isn't the pixel's:
+    at pixel (5, 2), where a Pixel Processor's reads (0.69, 0.31), it reads something else. So `$pos` is the pixel's
+    only in a Pixel Processor's function and the function graphs one calls. `set_function` refuses it in a Value
+    Processor's function and in a parameter's. It takes it in a function graph's, which can't know its callers, and a
+    call to that function graph from either of those isn't checked. Adobe's system-variables page gives these types, and
+    a float for `$time`, which isn't measured. Adobe's page lists `$depth` and `$number` under the FX-Map, and
+    Designer's own packages read them only in FX-Map graphs.
+  - **Types:** an `add`'s first connection settles its inputs and output: a float2 into its `a`, or into its `b`, makes
+    `a`, `b` and the output float2. **A connection of the wrong type is made anyway, raising nothing**, such
+    as a float into that `add`'s `b`, or into `samplecol`'s float2 `pos`: the input then holds that one connection.
+    That `add` of a float2 and a float computes the float2 alone, so check the types before connecting. `gt` takes int
+    or float and gives a bool. `ifelse` lists eleven types until `ifpath` is connected, then takes its type. `dot` of a
+    float2 gives a float, and `mulscalar` of a float3 a float3.
+  - **Constants:** `__constant__` takes the value class of the node's type: `SDValueFloat` on `const_float1`,
+    `SDValueFloat2` to `SDValueFloat4` on `const_float2` to `const_float4`, and so on for `const_int*` (`SDValueInt`
+    on `const_int1`), `const_bool` and `const_string`. Another class raised `APIException` `InvalidType`: an
+    `SDValueFloat` on `const_float2`, an `SDValueInt` on `const_float1`.
+  - **Swizzles:** `swizzle1`'s `__constant__` is an int, 0 for x up to 3 for w. `swizzle2` to `swizzle4` take an int2
+    to int4, one index per component of the result: (2, 0) gives (z, x), (2, 0, 1) gives (z, x, y), and (3, 2, 1, 0)
+    gives (w, z, y, x).
+  - **Vectors:** `vector3` and `vector4` put `componentsin` first. `vector3` takes a float or a float2 on each input,
+    `vector4` a float, a float2 or a float3. Sizes that don't add up connect too, raising nothing: the missing
+    components compute 0, and the extra ones are dropped.
+  - **What nodes compute**, of asymmetric constants, against Python's values:
+    - as Python does: the order of `vector2` to `vector4`, `ivector2` to `ivector4`, the swizzles and the `iswizzle`s;
+      `sub`, `div`, `pow`, `mod` and `lerp` (`x` weighs `b`), and `sub`, `div`, `pow`, `mod`, `min` and `max` of two
+      float2 component by component; `lr`, `lreq`, `gt`, `gteq`, `eq` and `noteq` as `<`, `<=`, `>`, `>=`, `==` and
+      `!=`; `and`, `or` and `not`. Float `mod` of -0.3 by 1 gives 0.7, as Python's `%`;
+    - so do `abs`, `sqrt`, `sin`, `cos`, `tan` (angles in radians), `exp`, `log` (the natural one), `log2`, `floor`
+      and `ceil` (-0.3 gives -1 and 0), `neg`, `min`, `max` and `dot` of floats. `rand` of 0.1 gave a value from 0 to
+      0.1. `rand` of 1 in a Pixel Processor gave values varying from pixel to pixel: more than 8 among the 16 pixels
+      of a 4 px graph;
+    - `ifelse` takes `ifpath` when the condition is true. `cartesian` takes (rho, theta), theta in radians. `mul` of
+      two float2 multiplies them component by component. `toint1` to `toint4` truncate (1.7 gives 1, 2.5 gives 2), and
+      so does `div` of the ints 7 and 2 (3);
+    - **a negative int computes a wrong value** (measured on macOS arm64): `lr` of -1 and 1 is false, `div` of 7 by
+      -2, `mod` of -7 by 3 and `neg` of 3 give 0, and a constant -7 cast to a float gives 5 or more, as does `sub` of
+      the ints 2 and 5. `toint1` of a negative float gives 0. Signed values need floats.
+  - **A processor's function:** a new Pixel or Value Processor has none: `getPropertyGraph` and
+    `getReferencedResource()` give None. `newPropertyGraph(prop, 'SDSBSFunctionGraph')` makes it.
+  - **`perpixel`** lists float4 whatever `colorswitch` says (on by default), also once its function's output node is a
+    float, with `colorswitch` on or off. What that output computes:
+    - `colorswitch` on gives a colour texture (RGBA8 in an 8-bit graph): a float4 is the colour, a float a grey;
+    - `colorswitch` off gives a grayscale one (LUM8 in an 8-bit graph): a float is the value, a float4 the mean of its
+      R, G and B, alpha left out;
+    - a float2, a float3, a bool, or an int to int4 computes black either way, raising nothing. Of these number and
+      bool types, only a float or a float4 makes a value.
+  - **A Value Processor's** `function` lists bool, int to int4 and float to float4. Its output takes the type of its
+    function's output node: float with none, then float2, bool, int3 or float4 as that node changed.
+  - **Replacing a Pixel Processor's function** keeps the node's connections, its `$randomseed` and an Absolute
+    `$outputsize`, and computes the new function, each of three ways:
+    - new nodes built beside the old ones, the output node moved to them, then the old ones deleted;
+    - the old nodes deleted, then new ones built;
+    - `deletePropertyGraph` on `perpixel`, then `newPropertyGraph`. Unlike a `$` parameter's own function (above),
+      deleting `perpixel`'s left the `$outputsize` inheritance as it was.
+  - **A function on a `$` parameter** of a uniform colour in a 64 px graph: at the uniform's default inheritance,
+    RelativeToParent, one on `$outputsize` gives an offset (the int2 (1, 1) computed 128 px), and one on `$format` is
+    ignored (the int 1 left RGBA8). Made Absolute after the function is built, the function stays and both take effect:
+    2 px, and RGBA16. `set_function` makes them Absolute, as `apply_edits`' `set` does.
+  - **A Pixel Processor's size:** its `$outputsize` defaults to RelativeToParent 0,0, so it computes at the graph's
+    size, not its input's: 64 px in a 64 px graph from an 8 px input, where a levels node computes 8 px. RelativeToInput
+    sizes it from the graph too: 64 px at 0,0, 128 px at 1,1. Only Absolute gives it a size of its own.
+  - **Input values** carry a value from one node into another's functions:
+    - `node.newProperty('#x', SDTypeFloat.sNew(), SDPropertyCategory.Input)` makes one: a connector of that type,
+      which `getProperties` lists. A name without `#` gets one added (`y` gives `#y`). The type of a Value Processor's
+      output makes one of that type, for each of the nine it gives (bool, int to int4, float to float4);
+    - on an instance of a library graph (`contrast_luminosity_grayscale`), `apply_edits`' `connect` into `#v` makes it
+      on the node alone: the library graph has no `#v` after it, and its package doesn't read as modified. The node's
+      `Luminosity`, its function reading `#v`, followed the Value Processor: 0, then 0.3;
+    - `vp.newPropertyConnectionFromId('unique_filter_output', node, '#x')` connects into it, and a second connection
+      replaces the first. Connecting into `x` raises `ItemNotFound`;
+    - a `get_*` node whose `__constant__` is `#x` reads the node's own `#x`: in a parameter's function (a blend's
+      `opacitymult` followed the Value Processor, 0.25 then 0.75), in a Pixel Processor's `perpixel` and in a Value
+      Processor's `function`. In a Pixel Processor, a name the node lacks reads 0. In a Pixel Processor's `perpixel`
+      and a Value Processor's `function`, a float `#x` with nothing connected, never or after a disconnect, reads 0
+      too: each read + 0.5 gave 0.5. Other types aren't measured;
+    - **a mismatch connects and computes a wrong value, raising nothing:**
+      - an image, or a float2, into a float `#x` made `opacitymult` compute 1, not the value. So did a `#x` with
+        nothing connected, never or after a disconnect, read in `opacitymult`'s function;
+      - a float `#x` read with `get_float2`, in a `vector4` with (0, 1), gave (0, 1, 0, 0);
+      - when the Value Processor's output changes type, the connection stays and `#x` keeps its own type. Reading it
+        then computed 1 too.
+
+      So `apply_edits`' `connect` refuses an image or a value of another type, and `set_function` reads `#x` with the
+      getter of its type. `set_function` also refuses a `#name` fed another type, one with nothing connected in a
+      parameter's function, and a Value Processor's result of another type than an input value it drives. In a
+      processor's own function, it says that a `#name` has nothing connected, and that a float one reads 0;
+    - the drive survives a save with `savePackageAs` (what `save_package` calls given a path) and a reload: `#x`, its
+      connection and the function. After the reload, the blend read the value saved, not one changed after the save,
+      and followed the Value Processor;
+    - one Undo of `apply_edits`' connect into a new `#x` removes the connection and `#x`, and Redo brings both back
+      (the `undo` category).
+  - **Function graphs of the package** (the `resources` part of the `functions` checks):
+    - `SDSBSFunctionGraph.sNew(package)` makes one, and `setIdentifier` names it. An identifier the package has already
+      gets `_1` added: a second `paint` is `paint_1`, and so is one named like the package's compositing graph.
+      `delete()` removes one. `getType()` gives the class, `SDSBSFunctionGraph`, not what it returns;
+    - `fn.newProperty('uv', SDTypeFloat2.sNew(), SDPropertyCategory.Input)` makes an input, of each type: bool, int to
+      int4, float to float4 and string. `getProperties` lists them in the order they were made, also after a save and
+      a reload. Ids such as `Uv`, `_k`, `k_`, `a1` and `x_2` are kept as given. Its body reads one with a `get_*` node
+      whose `__constant__` is the input's id, as a graph input is read: measured with float, float2, int and bool
+      inputs. Read there, `$pos`, `$size`, `$sizelog2` and `$tiling` read as in the calling Pixel Processor (a 4 px
+      one measured);
+    - a function graph has no output of its own: a call gives its output node's type (a float, float4, bool and int
+      measured), which follows that node as it changes;
+    - `fg.newInstanceNode(fn)` makes an `sbs::function::instance` node: one input per input of `fn`, of the same id and
+      type, in its order, and the output `unique_filter_output`. `getReferencedResource()` gives `fn`. It computes
+      `fn` with the values connected in a Pixel Processor's `perpixel`, a Value Processor's `function`, a parameter's
+      function (a blend's `opacitymult`) and another function graph. An input left unconnected reads 0, (0, 0, 0) for a
+      float3;
+    - replacing `fn`'s nodes the way a node's function is replaced (built beside, the output moved, the old nodes
+      deleted) after a compute, a call computes the new function. The call follows `fn`'s inputs at once: one added
+      shows on it, and one deleted, or deleted and made again of another type, goes with the call's connection into
+      it. The connections into the others stay, one after an input deleted too. An input made again is listed last.
+      After such a change, some of the call's inputs listed no types until a save and a reload. The call follows a
+      change of `fn`'s output's type too;
+    - the call survives a save with `savePackageAs` and a reload;
+    - one Undo of `set_function`'s `function` removes the function graph it made, and one Undo of a replacement brings
+      back its inputs and nodes before; Redo brings each back (the `undo` category).
+
+    `set_function`'s `function` builds one so: once the output node has moved, it keeps each input a function graph
+    has that is the next one wanted, so that calls keep their connections into those, and it names what calls it when
+    its inputs or output change.
+  - **Sampling an image** (the `sampling` part of the `functions` checks): `samplecol` gives a float4, and `samplelum`
+    a float, of a Pixel Processor's input image at `pos` (a Value Processor's: the last bullet):
+    - `__constant__` is an int2: the input's index (0 for `input`, 1 for `input:1`...), then the mode. The mode is 1
+      for bilinear (else nearest) plus 2 for clamp (else repeat), measured on a 4 px image at -0.1, 0.3, 0.7 and 1.1:
+      along x with both nodes, along y with `samplecol`. A new node's is (0, 0): nearest, repeating. It holds an index
+      up to 2147483647; 2147483648 wraps around to -2147483648;
+    - `pos` is a float2 in `$pos`'s frame: (0, 0) the top-left corner, (1, 1) the bottom-right. Sampled at `$pos`, a
+      pixel reads the input's same pixel (two measured);
+    - `samplelum` gives the mean of R, G and B, as `perpixel` does with `colorswitch` off;
+    - an index with nothing connected, beyond the inputs or between two connected ones, reads (0, 0, 0, 0): 70,
+      2147483647 and -1 with `input` alone connected too, Designer answering after them. Index 39 of 40 inputs
+      connected reads `input:39`;
+    - a Value Processor's function samples its own input images: index 0 and 1 measured, nearest and repeating. A
+      function graph samples its caller's: called from a Pixel Processor, and from a Value Processor.
+
+    `set_function`'s `sample` and `sample_lum` build them, refusing a sample in a parameter's function, which has no
+    input images, and an index above 2147483647. A sample of an input with nothing connected is built, and the result
+    says it reads (0, 0, 0, 0) until an image is connected. A function graph's result says so for each node whose own
+    function calls it, directly or through other function graphs; an FX-Map's inner nodes aren't read.
+  - **A processor's input images** (the `image_inputs` part): a Pixel or Value Processor's second and later inputs are
+    `input:1`, `input:2`...:
+    - `newProperty` makes none: `input:1`, `input` and `input1`, of the input's type, raise `InvalidType`, and
+      `isVariadic()` of `input` gives False;
+    - `newPropertyConnectionFromId` connects into an input once the node lists it. A new node lists `input`, and a
+      connection into the last one listed adds the next one, empty. One into an input not listed raises
+      `ItemNotFound`. After 40 connections, `input:40` is listed next. A disconnected input stays listed while a later
+      one is connected; once the later ones are disconnected too, the list ends with one empty input after the last
+      connected;
+    - the connections survive a save and a reload.
+
+    So `apply_edits`' `connect` reaches `input:1` once `input` is connected, and its refusal of an input not listed
+    names the one to connect first.
 - **Graph size** is set with `graph.setInputPropertyValueFromId('$outputsize', SDValueInt2.sNew(int2(11, 11)))`;
   `setDefaultParentSize()` takes **pixels**. A node's `$format` and an absolute `$outputsize` only take effect with
   inheritance set to Absolute. The graph's own `$format` too (a new graph's follows its parent: 16 bits
@@ -324,7 +510,10 @@ The rules and the first pitfalls are in the core, `get_guide()`.
   Dot of a package unloaded since, the next edit in another graph crashed Designer.
 - Current graph: `getQtForPythonUIMgr().getCurrentGraph()`; editor control via **`app.getUIMgr()`**:
   `openResourceInEditor(graph)`, `focusGraphNode(graphViewID, node)` (ids via `getGraphViewIDCount/At`,
-  `getGraphFromGraphViewID`), `getGraphNodeBBox`, `setExplorerSelection`. The dock's "Fit in view (selection)" (F) fits
+  `getGraphFromGraphViewID`), `getGraphNodeBBox`, `setExplorerSelection`. `openResourceInEditor` opens a function
+  graph of the package too: it is then the current graph, and the graph panel's title is its identifier. A node's
+  function (a Pixel Processor's `perpixel`, a levels node's `leveloutlow`) it opens as the node's graph instead, also
+  from a function graph open (the `editor` part of the `functions` checks), so `open_graph` refuses one. The dock's "Fit in view (selection)" (F) fits
   the selection, or everything when nothing is selected; `open_graph` fits every node, frame and free comment by wheel
   zoom instead.
 - **Quitting:** through `quit_designer` (the rules), not from a script: `QApplication.exit(0)` has crashed Designer and

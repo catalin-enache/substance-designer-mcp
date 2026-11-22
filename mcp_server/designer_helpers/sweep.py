@@ -16,8 +16,10 @@ from .core import (
 from .describe import _with_node_texture
 from .edits import _make_value, _node, _target
 from .graph_inputs import (
+    _REPLACE,
     _driving_graph,
     _offset_note,
+    _plain_binding,
     _refuse_bad_size_on_input,
     _refuse_no_input,
     _refuse_no_output,
@@ -49,8 +51,14 @@ def sweep_param(
         _refuse_no_input(g, driven, node_id, param)
         raise RuntimeError(
             '%s.%s is driven by a graph input or function; sweep the graph input '
-            'instead (node_id="graph", param=<input id>, see list_graph_inputs)%s'
-            % (node_id, param, _offset_note(target, prop))
+            'instead (node_id="graph", param=<input id>, see list_graph_inputs)%s%s'
+            % (
+                node_id,
+                param,
+                _offset_note(target, prop),
+                # a function, which set_function replaces (REVIEW.md HLP-230)
+                '; or ' + _REPLACE if _plain_binding(driven) is None else '',
+            )
         )
     _refuse_bad_size_on_input(target, prop, values)  # before any value is set
     view = _node(g, view_node or node_id) if (view_node or node_id != 'graph') else None

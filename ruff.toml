@@ -28,7 +28,7 @@ ignore = [
 
 [lint.isort]
 # imported by bare name through sys.path entries (mypy.ini's mypy_path lists the same folders)
-known-first-party = ["project_constants", "server", "server_tools", "designer_helpers", "test_all_tools",
+known-first-party = ["project_constants", "server", "server_tools", "designer_helpers", "function_compiler", "test_all_tools",
                      "conftest", "sd_run"]
 combine-as-imports = true
 

@@ -5,6 +5,7 @@ real Designer: this is what a run that passes can't show."""
 
 import ast
 import asyncio
+import json
 import os
 import re
 import sys
@@ -500,3 +501,66 @@ def test_the_undisturbed_zooms_failure_says_its_shots_and_their_renders_when_bot
     assert out[settled].startswith('FAIL')
     assert '      a plain shot after, the tool said: ' + UNDRAWN in out[settled + 1 : settled + 4], out
     assert shots.said[0] == (('undisturbed', undisturbed), ('a plain shot after', after)), shots.said
+
+
+@pytest.mark.parametrize(
+    'printed, wrong',
+    [
+        ('[]', 'the whole: Input should be an object'),
+        ('{"sbs::function::add": {"outputs": []}}', 'add.inputs: Field required'),
+        ('{"sbs::function::add": {"inputs": [{"id": "a", "types": "float"}], "outputs": []}}', 'add.inputs.0.types'),
+        ('{"sbs::function::add": {"inputs": [], "outputs": [{"types": []}]}}', 'add.outputs.0.id: Field required'),
+        (
+            '{"sbs::function::add": {"inputs": [{"id": "a", "types": [], "connectable": 1}], "outputs": []}}',
+            'add.inputs.0.connectable',
+        ),
+    ],
+)
+def test_definitions_of_another_shape_fail_a_check_that_says_what_is_wrong(
+    capsys: pytest.CaptureFixture[str], printed: str, wrong: str
+) -> None:
+    # REVIEW.md TST-699: the definitions' JSON was typed without a check, so another shape raised a KeyError or a
+    # TypeError in a comprehension instead of failing a check that names it
+    functions = fresh('functions.checks')
+
+    async def c(name: str, args: ToolArgs | None = None) -> SimpleNamespace:
+        return tool_result('DEFINITIONS=' + printed)
+
+    asyncio.run(functions.check_the_function_definitions(SimpleNamespace(c=c)))
+    failed = [line for line in capsys.readouterr().out.splitlines() if line.startswith('FAIL')]
+    assert any('the printed definitions have the shape the checks read' in line and wrong in line for line in failed), (
+        failed
+    )
+
+
+ADD_TAKES = 'int,int2,int3,int4,float,float2,float3,float4'  # the table's types of add's inputs
+
+
+@pytest.mark.parametrize(
+    'changed, detail',
+    [
+        ({}, ''),
+        ({'add': ('b', ['int', 'float'])}, 'add: input b: Designer int,float; the table %s' % ADD_TAKES),
+        ({'add': ('b', ['int']), 'pow2': None}, 'add: input b: Designer int; the table %s; also pow2' % ADD_TAKES),
+        ({'pow2': None}, 'pow2: not in Designer'),
+    ],
+)
+def test_the_definitions_check_names_the_first_difference_in_short(
+    capsys: pytest.CaptureFixture[str], changed: dict[str, tuple[str, list[str]] | None], detail: str
+) -> None:
+    # REVIEW.md TST-701: the detail printed both whole entries, which common.check cuts at 150 characters
+    functions = fresh('functions.checks')
+    printed = functions.compiler_table()
+    for name, change in changed.items():
+        if change is None:
+            del printed[name]
+        else:
+            next(p for p in printed[name]['inputs'] if p['id'] == change[0])['types'] = change[1]
+
+    async def c(name: str, args: ToolArgs | None = None) -> SimpleNamespace:
+        return tool_result('DEFINITIONS=' + json.dumps({'sbs::function::' + k: v for k, v in printed.items()}))
+
+    asyncio.run(functions.check_the_function_definitions(SimpleNamespace(c=c)))
+    line = next(l for l in capsys.readouterr().out.splitlines() if "gives the compiler's table" in l)
+    assert line.startswith('FAIL' if changed else 'PASS'), line
+    assert line.split(' | ', 1)[1] == detail
