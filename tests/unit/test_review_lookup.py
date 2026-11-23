@@ -885,8 +885,8 @@ def test_the_second_branch_renumbers_from_mains_counters(tmp_path: Path) -> None
 # a test naming one of these docs, or a folder of .claude that holds docs (its skills, agents and rules), validates the
 # docs. The tests of .claude's hooks name .claude too, and validate code
 DOC_TESTS = re.compile(
-    r"""['"](?:AGENTS|GUIDE|README|ROADMAP|DECISIONS|REVIEW)\.md['"]"""
-    r"""|['"]\.claude['"],\s*['"](?:skills|agents|rules)['"]"""
+    r"""(['"])(?:AGENTS|GUIDE|README|ROADMAP|DECISIONS|REVIEW)\.md\1"""
+    r"""|(['"])\.claude\2,\s*(['"])(?:skills|agents|rules)\3"""
 )
 
 
@@ -910,7 +910,12 @@ def _reads_a_doc(source: str) -> bool:
     'source, reads',
     [
         ("Path(ROOT, 'AGENTS.md')", True),
+        ('read("GUIDE.md")', True),
         ("os.path.join('.claude', 'skills')", True),
+        ('os.path.join(".claude", "rules")', True),
+        # a docstring's opening quote and an apostrophe after the name name no doc (REVIEW.md TST-773)
+        ('"""GUIDE.md\'s recipe, end to end."""', False),
+        ('"""See \'.claude", "rules" in ..."""', False),
         ('from docs_text import agents_md', True),
         ('from docs_text import (\n    flat,\n    skill,\n)', True),
         ('import docs_text', True),

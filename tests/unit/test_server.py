@@ -134,6 +134,7 @@ HINTS: dict[str, Hints] = {
     'diff_graph': (True, False, True, False),
     'sbsar_info': (True, False, True, False),
     'preview_maps': (True, False, True, False),
+    'analyze_reference': (True, False, True, False),
     # destructive: they can overwrite or remove the user's work or files
     'quit_designer': (False, True, True, False),
     'arrange_graph': (False, True, True, False),
@@ -560,6 +561,7 @@ def test_the_json_parameters_keep_the_schemas_agents_saw(tool: str, name: str) -
 _FIXED: dict[tuple[str, str], tuple[int, int, str]] = {  # (least, most, the values' JSON type)
     ('add_comment', 'position'): (2, 2, 'number'),
     ('add_frame', 'color'): (3, 4, 'number'),
+    ('analyze_reference', 'reference_region'): (4, 4, 'integer'),
     ('arrange_graph', 'spacing'): (2, 2, 'number'),
     ('compare_to_reference', 'region'): (4, 4, 'integer'),
     ('compare_to_reference', 'reference_region'): (4, 4, 'integer'),
@@ -632,6 +634,7 @@ def test_a_list_of_items_of_a_fixed_length_says_it_in_its_schema(tool: str, name
 _REQUIRED: dict[str, dict[str, Json]] = {
     'add_comment': {'text': 't'},
     'add_frame': {'node_ids': ['a'], 'title': 't'},
+    'analyze_reference': {'reference_path': 'r.png'},
     'arrange_graph': {},
     'compare_to_reference': {'node_id': 'n', 'reference_path': 'r.png'},
     'node_stats': {'node_id': 'n'},

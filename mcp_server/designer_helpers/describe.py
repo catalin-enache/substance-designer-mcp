@@ -16,6 +16,7 @@ from .core import (
     SDSBSCompGraph,
     SDTexture,
     SDTypeEnum,
+    SDValueArray,
     Shown,
     _annotation_text,
     _default_output,
@@ -60,6 +61,9 @@ def _output_tags_text(node: SDNode) -> str:
         return text + ' usage=%s' % (','.join(names) or 'none')
     except (Exception, APIException):  # one node's annotations mustn't cost the whole description
         return ''
+
+
+KEYS_SHOWN = 16  # the most keys a whole graph's listing shows of a parameter; node_ids, set's result and fmt give all
 
 
 def describe_graph(
@@ -122,8 +126,15 @@ def describe_graph(
                     # the stored constant is hidden and unused while a function drives the value
                     print('    %s <- %s' % (prop.getId(), _driver_text(g, driven)))
                     continue
-                cur = fmt(n.getPropertyValue(prop))
-                default = fmt(prop.getDefaultValue())
+                value = n.getPropertyValue(prop)
+                default: Shown
+                if isinstance(value, SDValueArray):
+                    # keys have no default (None, measured): a new node has none. A long list shows as its count in a
+                    # whole graph's listing; focused on its node, every key
+                    count = value.getSize()
+                    cur, default = fmt(value) if count <= KEYS_SHOWN or node_ids else '<%d keys>' % count, ()
+                else:
+                    cur, default = fmt(value), fmt(prop.getDefaultValue())
                 if cur != default and not (
                     prop.getId() in ('$outputsize', '$pixelsize') and cur in ((0, 0), (1.0, 1.0))
                 ):

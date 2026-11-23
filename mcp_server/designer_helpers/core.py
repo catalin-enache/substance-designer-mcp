@@ -31,9 +31,13 @@ from sd.api.sdresource import SDResource as SDResource
 from sd.api.sdresourcefolder import SDResourceFolder as SDResourceFolder
 from sd.api.sdtexture import SDTexture as SDTexture
 from sd.api.sdtype import SDType as SDType
+from sd.api.sdtypearray import SDTypeArray as SDTypeArray
 from sd.api.sdtypeenum import SDTypeEnum as SDTypeEnum
+from sd.api.sdtypestruct import SDTypeStruct as SDTypeStruct
 from sd.api.sduimgr import SDUIMgr
 from sd.api.sdvalue import SDValue as SDValue
+from sd.api.sdvaluearray import SDValueArray as SDValueArray
+from sd.api.sdvaluestruct import SDValueStruct as SDValueStruct
 from sd.api.sdvaluetexture import SDValueTexture
 
 _APP: SDApplication = sd.getContext().getSDApplication()
@@ -240,8 +244,9 @@ def _output_note(how: str) -> str:
 
 # A JSON value, as the tools' arguments reach the helpers (the server writes them into the call as Python literals)
 type Json = bool | int | float | str | list[Json] | dict[str, Json] | None
-# fmt()'s forms of a value: None, a bool, number or string, a vector's or colour's components, or '<its type>'
-Shown = bool | int | float | str | tuple[bool | int | float, ...] | None
+# fmt()'s forms of a value: None, a bool, number or string, a vector's or colour's components, an array's keys
+# (_shown_keys), or '<its type>'
+type Shown = bool | int | float | str | tuple[Shown, ...] | None
 
 
 MAX_SIZE_LOG2 = 13  # 8192 px; 14 and 15 compute 8192 px too ("designer facts")
@@ -259,7 +264,13 @@ def _refuse_bad_size(name: str, sizes: Sequence[int], shown: Json | Shown, inher
         raise RuntimeError('%s is %s, not %r' % (name, _OFFSET_UNIT if inherited else _SIZE_UNIT, shown))
 
 
-def _position(value: Json | Sequence[float], what: str = 'position') -> tuple[float, float]:
+def _finite(v: float) -> bool:
+    """Not 'nan', 'inf' or '1e400', which float() takes from a string: Designer would take them, the print after
+    wouldn't (REVIEW.md HLP-51)."""
+    return math.isfinite(v) and abs(v) < 1e30
+
+
+def _position(value: Json | Shown | Sequence[float], what: str = 'position') -> tuple[float, float]:
     """[x, y] as two numbers, checked before anything is created or moved: read after, a bad one
     left the new node (or comment) behind (REVIEW.md HLP-46). `value` is an op's JSON, or a tool's position."""
     if isinstance(value, (list, tuple)) and len(value) == 2 and not any(isinstance(v, bool) for v in value):
@@ -268,8 +279,8 @@ def _position(value: Json | Sequence[float], what: str = 'position') -> tuple[fl
             xy = float(pair[0]), float(pair[1])
         except (TypeError, ValueError):
             pass
-        else:  # not 'nan', 'inf', '1e400': Designer would take them, the print after wouldn't (HLP-51)
-            if all(math.isfinite(v) and abs(v) < 1e30 for v in xy):
+        else:
+            if all(_finite(v) for v in xy):
                 return xy
     shown = list(value) if isinstance(value, tuple) else value  # as the agent sent it (REVIEW.md HLP-188)
     raise RuntimeError('%s must be [x, y], two numbers, not %r' % (what, shown))
@@ -279,6 +290,8 @@ def fmt(value: SDValue | None) -> Shown:
     """Compact, printable form of an SDValue."""
     if value is None:
         return None
+    if isinstance(value, SDValueArray):
+        return _shown_array(value)
     try:
         x = value.get()  # type: ignore[attr-defined]  # every concrete SDValue has get()
     except (Exception, APIException):
@@ -292,6 +305,45 @@ def fmt(value: SDValue | None) -> Shown:
     if isinstance(x, (bool, int, str)):
         return x
     return '<%s>' % type(x).__name__
+
+
+# A Gradient Map's keys and a Curve's points, by their item type: what set takes and fmt reads back (GUIDE.md, Gradient
+# Map keys and Curve points)
+_GRADIENT_KEY, _CURVE_KEY = 'sbs::compositing::gradient_key_rgba', 'sbs::compositing::curve_key'
+
+
+def _shown_array(array: SDValueArray) -> Shown:
+    """fmt of an array: its keys as _shown_keys gives them, () for none, '<SDArray>' for an array of anything else.
+    Every key is shown: describe_graph's whole-graph listing cuts a long list (KEYS_SHOWN)."""
+    if not array.getSize():
+        return ()
+    first = array.getItem(0)
+    item = first.getType() if isinstance(first, SDValueStruct) else None  # a struct's type is a struct type
+    if not isinstance(item, SDTypeStruct) or item.getId() not in (_GRADIENT_KEY, _CURVE_KEY):
+        return '<SDArray>'
+    members = [m.getId() for m in item.getMembers()]
+    keys = [cast(SDValueStruct, array.getItem(i)) for i in range(array.getSize())]  # an array's items share its type
+    return _shown_keys(item.getId(), [{m: fmt(key.getPropertyValueFromId(m)) for m in members} for key in keys])
+
+
+def _shown_keys(item_id: str, keys: list[dict[str, Shown]]) -> tuple[Shown, ...]:
+    """Keys of `item_id` as set takes them (edits._given_keys), each key's members {id: fmt's form} in `keys`, in their
+    order:
+    - a Gradient Map's (position, colour), with its midpoint third when it isn't 0, which a new key has;
+    - a Curve's (x, y) when both handles are on the point, else ((x, y), left handle, right handle). A side marked
+      broken (isLeftBroken, isRightBroken) computes as if its handle were on the point (measured), so it reads back so.
+      isLocked changes nothing computed (measured), and is left out. set leaves the three False."""
+    if item_id == _GRADIENT_KEY:
+        return tuple(
+            (k['position'], k['value']) if k['midpoint'] == 0 else (k['position'], k['value'], k['midpoint'])
+            for k in keys
+        )
+    points: list[Shown] = []
+    for k in keys:
+        left = k['position'] if k['isLeftBroken'] else k['left']
+        right = k['position'] if k['isRightBroken'] else k['right']
+        points.append(k['position'] if left == right == k['position'] else (k['position'], left, right))
+    return tuple(points)
 
 
 def node_kind(node: SDNode) -> str:

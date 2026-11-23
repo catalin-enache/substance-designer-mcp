@@ -1,18 +1,17 @@
 """What functions' set_function checks (checks.py) expect and read: the result's first line, the pixels Python computes
-for the normal map they build and for $pos, the pixels node_stats reads, how close those must be, and what
-describe_graph shows, of a graph and of a function; and the Pixel Processor a check builds, to call function graphs from
-or to sample images."""
+for the normal map they build and for $pos, the pixels node_stats reads, and what describe_graph shows of a function;
+and the Pixel Processor a check builds, to call function graphs from or to sample images. How close a pixel must be,
+and describe_graph of the graph's nodes: common.py (near, described)."""
 
 import ast
 import math
 import re
 
 from function_compiler import Constant, Function, Node, Resource, compile_expression, image_input
-from test_all_tools.common import Ctx, Json, Ops, ToolArgs, pixel_values, refs, text
+from test_all_tools.common import Ctx, Json, Ops, near, pixel_values, refs, text
 from test_all_tools.functions.parsing import listed_nodes
 
 POINTS = [[0, 0], [3, 3], [5, 2]]  # pixels of the 8 px Pixel Processor: Z is 0, 0.98 and 0.85 there
-CLOSE = 1 / 255 + 1e-3  # an 8-bit pixel's step, and a little
 
 
 def built(
@@ -63,13 +62,6 @@ def normal(x: int, y: int) -> list[float]:
     return [px, py, math.sqrt(max(0.0, 1 - nx * nx - ny * ny)), 1.0]
 
 
-def near(got: list[float] | None, want: list[float]) -> bool:
-    """Whether a pixel read has the values wanted, within CLOSE."""
-    return (
-        got is not None and len(got) == len(want) and all(abs(g - w) <= CLOSE for g, w in zip(got, want, strict=True))
-    )
-
-
 def all_near(got: dict[tuple[int, int], list[float]], want: dict[tuple[int, int], list[float]]) -> bool:
     """Whether every pixel wanted was read, near its values; never with none wanted, such as a baseline read that failed
     (REVIEW.md TST-722)."""
@@ -84,12 +76,6 @@ async def pixels(ctx: Ctx, node: str, points: list[list[int]] = POINTS) -> dict[
 async def pixel_at(ctx: Ctx, node: str) -> list[float] | None:
     """`node`'s values at pixel (0, 0), as pixels reads them, or None if none were read."""
     return (await pixels(ctx, node)).get((0, 0))
-
-
-async def described(ctx: Ctx, node_ids: list[str] | None = None) -> str:
-    """describe_graph of the self-test graph, or of `node_ids`, its parameters included."""
-    focus: ToolArgs = {'node_ids': node_ids} if node_ids else {}
-    return text(await ctx.c('describe_graph', {'include_params': True, **focus, **ctx.G}))
 
 
 async def sampler(ctx: Ctx, sources: list[str], size_log2: int | None = None) -> dict[str, str]:

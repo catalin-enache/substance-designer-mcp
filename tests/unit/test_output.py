@@ -157,6 +157,14 @@ def test_preview_maps_explains_what_is_missing(tmp_path: Path, case: str) -> Non
     )
 
 
+def test_preview_maps_names_a_map_pillow_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md SRV-229: a map over Pillow's size limit raised its DecompressionBombError, shown with no reason
+    Image.new('L', (32, 16)).save(tmp_path / 'height.png')
+    monkeypatch.setattr(Image, 'MAX_IMAGE_PIXELS', 100)  # refused over twice this many: the map has 512
+    with pytest.raises(server.ToolError, match=r'cannot read .*height\.png: .*decompression bomb'):
+        server.preview_maps(str(tmp_path))
+
+
 @pytest.mark.parametrize(
     'crop, message', [([30, 0, 10, 8], 'empty'), ([100, 100, 120, 120], 'empty')]
 )  # [0, 0, 4]: its schema refuses it (test_server.py, REVIEW.md SRV-177)

@@ -1,4 +1,5 @@
-"""Measuring pixels: node_stats, sweep_param, check_tiling, and the pixel decoding they share."""
+"""Measuring pixels: node_stats, sweep_param, check_tiling, and the pixel decoding they share. Reading image files is
+image_reading.py's."""
 
 import io
 import json
@@ -6,7 +7,7 @@ import os
 import re
 import shutil
 import tempfile
-from typing import Annotated, TypedDict
+from typing import Annotated, Literal, TypedDict
 
 import numpy as np
 import numpy.typing as npt
@@ -14,6 +15,8 @@ from mcp.server.mcpserver import Image
 from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image as PILImage
 from pydantic import Field
+
+from project_constants import Json
 
 from .core import (
     AnyJson,
@@ -31,6 +34,9 @@ from .core import (
 
 # decoded pixels: (H, W, C) floats
 Pixels = npt.NDArray[np.float64]
+Values = npt.NDArray[np.float64]  # one channel of them, (H, W) or flattened
+# what decoded pixels hold: colour ('RGBA', 3 or 4 channels) or grey ('L', 1 channel, or 2 with alpha)
+PixelLayout = Literal['RGBA', 'L']
 # the type of one channel of a raw pixel, by Designer's pixel format (_PIXEL_TYPES)
 PixelType = type[np.uint8 | np.uint16 | np.float16 | np.float32]
 
@@ -76,13 +82,13 @@ class _NodePixels(_Layout):
 class _SweepTile(_Layout):
     """sweep_param's SWEEP= line, one per value tried: the layout, the value's index (its file is <index>.raw) and the
     value as the parameter holds it, only printed here: the helpers' fmt() form, a vector's or colour's components read
-    back as a list."""
+    back as a list, and a Gradient Map's keys or a Curve's points as nested lists."""
 
     index: int
-    value: bool | int | float | str | list[bool | int | float] | None
+    value: Json
 
 
-def _decode_pixels(raw: bytes, meta: _Layout) -> tuple[Pixels, str]:
+def _decode_pixels(raw: bytes, meta: _Layout) -> tuple[Pixels, PixelLayout]:
     """Raw Designer pixel buffer -> (float array (H, W, C), values normalised to 0..1 for ints;
     'RGBA' for colour (3 or 4 channels, B and R swapped back for BGR formats) or 'L' for
     grayscale (1 channel, or 2 with alpha))."""
@@ -120,7 +126,9 @@ def _crop(data: Pixels, region: Box, what: str) -> Pixels:
     return data[y0:y1, x0:x1]
 
 
-def _node_pixels(node_id: str, graph: str | None, output: str | None, tool: str) -> tuple[Pixels, str, _NodePixels]:
+def _node_pixels(
+    node_id: str, graph: str | None, output: str | None, tool: str
+) -> tuple[Pixels, PixelLayout, _NodePixels]:
     """A node's output computed in Designer: (pixels 0..1 as (H, W, C) floats, 'RGBA' or 'L', meta);
     see _decode_pixels."""
     tmp_dir = tempfile.mkdtemp(prefix='sd_px_')
@@ -182,19 +190,31 @@ def node_stats(
     return '\n'.join(lines)
 
 
-def _to_display(data: Pixels, layout: str) -> PILImage.Image:
+def _rgb(data: Pixels, layout: PixelLayout) -> Pixels:
+    """Decoded pixels -> their R, G, B as (H, W, 3): a grey image's one channel three times, alpha left out."""
+    return data[:, :, :3] if layout == 'RGBA' else np.repeat(data[:, :, :1], 3, axis=2)
+
+
+def _to_display(data: Pixels, layout: PixelLayout) -> PILImage.Image:
     """Decoded pixels (0..1 floats) -> 8-bit RGB PIL image for previews."""
-    rgb = data[:, :, :3] if layout == 'RGBA' else np.repeat(data[:, :, :1], 3, axis=2)
-    return PILImage.fromarray((np.clip(rgb, 0, 1) * 255 + 0.5).astype(np.uint8), 'RGB')
+    return PILImage.fromarray((np.clip(_rgb(data, layout), 0, 1) * 255 + 0.5).astype(np.uint8), 'RGB')
 
 
-def _labelled(im: PILImage.Image, label: str) -> PILImage.Image:
-    """Image with a dark caption bar on top."""
+LABEL_CHARS = 48  # the most characters of a tile's label drawn
+
+
+def _labelled(im: PILImage.Image, label: str, short: str | None = None) -> PILImage.Image:
+    """Image with a dark caption bar on top: `label` on one line, its newlines as spaces (Pillow can't measure a
+    newline), or `short` where `label` would be cut: longer than LABEL_CHARS, or wider than the image."""
     from PIL import ImageDraw
 
     tile = PILImage.new('RGB', (im.width, im.height + 18), (30, 30, 30))
     tile.paste(im, (0, 18))
-    ImageDraw.Draw(tile).text((4, 3), label[:48], fill=(230, 230, 230))
+    draw = ImageDraw.Draw(tile)
+    shown = ' '.join(label.splitlines())
+    if short is not None and (len(shown) > LABEL_CHARS or draw.textlength(shown) > im.width - 4):
+        shown = short
+    draw.text((4, 3), shown[:LABEL_CHARS], fill=(230, 230, 230))
     return tile
 
 
@@ -251,7 +271,8 @@ def sweep_param(
     ] = 256,
 ) -> list[str | Image]:
     """Try several values of one parameter and see them side by side: returns a labelled image
-    strip plus per-value channel ranges, then restores the original value. node_id='graph' with
+    strip plus per-value channel ranges, then restores the original value. A value too long for its
+    tile's label, such as keys, is labelled by its place in values (#1, #2...). node_id='graph' with
     param=<input id> sweeps an exposed graph input (then view_node is required). Values are converted as in apply_edits' set op, but a $ parameter is made Absolute for the sweep
     even where a set op refuses it or leaves it inherited (an overridable graph's $outputsize, the
     graph's $randomseed), so its values are absolute ones. The parameter ends where it started,
@@ -298,7 +319,9 @@ def sweep_param(
             )
             im = _to_display(data, layout)
             im.thumbnail((tile_size, tile_size))
-            tiles.append(_labelled(im, '%s = %s' % (param, meta['value'])))
+            # a value too long for its label, such as keys, is labelled by its place in values, first so that a narrow
+            # tile keeps it: cut, every tile would show its first key (REVIEW.md SRV-222, SRV-223)
+            tiles.append(_labelled(im, '%s = %s' % (param, meta['value']), '#%d %s' % (meta['index'] + 1, param)))
         if '--- ERROR ---' in text:
             error = text.split('--- ERROR ---', 1)[1].strip().splitlines()
             lines.append(

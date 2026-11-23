@@ -28,6 +28,7 @@ async def run(ctx: Ctx) -> None:
         await check_one_undo_reverts_a_whole_code_run(ctx)
         await check_one_undo_reverts_a_set_function(ctx)
         await check_one_undo_reverts_a_function_graph(ctx)
+        await check_one_undo_reverts_a_set_of_gradient_keys(ctx)
         await check_one_undo_reverts_a_connect_into_a_new_input_value(ctx)
     finally:  # after the last clean-up, or a check that raised before its send read the action (REVIEW.md TST-690)
         await read_left_armed(ctx.c)
@@ -217,3 +218,60 @@ async def check_one_undo_reverts_a_function_graph(ctx: Ctx) -> None:
                 new = 'a function graph given another input: Redo brings back the new nodes too'
                 nodes_are(new, await nodes(), REPLACED_NODES)
         await put_back(c, G, undo)
+
+
+# what describe_graph(include_params) reads of the Gradient Map's keys and the Curve's points the keys check sets: as
+# added, then as the set changes them
+KEYS_BEFORE = 'gradientrgba = ((0.0, (1.0, 0.0, 0.0, 1.0)), (1.0, (0.0, 0.0, 1.0, 1.0)))'
+POINTS_BEFORE = 'curveluminance = ((0.0, 1.0), (1.0, 0.0))'
+KEYS_AFTER = 'gradientrgba = ((0.0, (0.0, 1.0, 0.0, 1.0)), (0.5, (1.0, 1.0, 1.0, 1.0)), (1.0, (0.0, 0.0, 0.0, 1.0)))'
+POINTS_AFTER = 'curveluminance = ((0.0, 0.0), (1.0, 1.0))'
+
+
+async def check_one_undo_reverts_a_set_of_gradient_keys(ctx: Ctx) -> None:
+    """apply_edits' set of a Gradient Map's keys and of a Curve's points, two set ops of one call, is one undo step: one
+    Undo brings back the keys and the points the add gave, and Redo the new ones. describe_graph(include_params) reads
+    both. The nodes are deleted after it."""
+    c, G = ctx.c, ctx.G
+    ops: Ops = [
+        {
+            'op': 'add',
+            'definition': 'gradient',
+            'ref': 'gm',
+            'position': [0, 1000],
+            'params': {'gradientrgba': [[0, [1, 0, 0]], [1, [0, 0, 1]]]},
+        },
+        {
+            'op': 'add',
+            'definition': 'curve',
+            'ref': 'cv',
+            'position': [200, 1000],
+            'params': {'curveluminance': [[0, 1], [1, 0]]},
+        },
+    ]
+    t = text(await c('apply_edits', {'ops': ops, **G}))
+    added = refs(t)
+    tool = 'apply_edits'
+    try:
+        if not {'gm', 'cv'} <= set(added):  # an add refused its keys: no node is left for it
+            check(tool, 'set of keys and points, before the Undo', False, t[-150:])
+            return
+        gm, cv = added['gm'], added['cv']
+        described: ToolArgs = {**G, 'node_ids': [gm, cv], 'include_params': True}
+        changes: Ops = [
+            {'op': 'set', 'node': gm, 'params': {'gradientrgba': [[0, [0, 1, 0]], [0.5, [1, 1, 1]], [1, [0, 0, 0]]]}},
+            {'op': 'set', 'node': cv, 'params': {'curveluminance': [[0, 0], [1, 1]]}},
+        ]
+        await c('apply_edits', {'ops': changes, **G})
+        said = text(await c('describe_graph', described))
+        changed = KEYS_AFTER in said and POINTS_AFTER in said
+        check(tool, 'set of keys and points, before the Undo', changed, said[-150:])
+        if changed:
+            undo = await send(c, described, 'Undo', lambda d: KEYS_BEFORE in d and POINTS_BEFORE in d)
+            if recorded(undo, tool, 'set: one Undo brings back the keys and points before'):
+                redo = await send(c, described, 'Redo', lambda d: KEYS_AFTER in d and POINTS_AFTER in d)
+                recorded(redo, tool, 'set: Redo brings back the new keys and points')
+            await put_back(c, described, undo)
+    finally:
+        if added:
+            await c('apply_edits', {'ops': [{'op': 'delete', 'node': n} for n in added.values()], **G})

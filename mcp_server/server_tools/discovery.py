@@ -30,7 +30,8 @@ def describe_graph(
             description="Adds, for a graph's nodes, every parameter that differs from its default, and each one driven "
             "by a graph input or a function (`param <- graph input 'x'`, `param <- a function`); a function with no "
             "output node drives nothing and is noted beside the parameter's value; an FX-Map's inner functions are "
-            "listed too. A function's nodes always show their constant."
+            "listed too. A function's nodes always show their constant. A Gradient Map's keys or a Curve's points "
+            'past 16 show as their count, unless node_ids focuses on the node.'
         ),
     ] = False,
     limit: Annotated[int, Field(description='Caps how many nodes are listed (the rest are counted).')] = 400,

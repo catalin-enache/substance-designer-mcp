@@ -17,6 +17,7 @@ from PIL import Image as PILImage
 from pydantic import Field
 
 from .core import SBSCOOKER, SBSRENDER, Box, Graph, NoneIfEmpty, _bridge, _checked, _helpers_call, _local_path, _tool
+from .image_reading import _integer_scale, _open_image
 from .measure import _crop_box, _sheet
 from .snapshots import _v
 
@@ -315,12 +316,10 @@ def sbsar_info(sbs_path: Annotated[str, Field(description='The .sbs or .sbsar fi
 
 
 def _load_8bit(path: str) -> PILImage.Image:
-    im: PILImage.Image = PILImage.open(path)
-    if im.mode.startswith('I'):
-        a = np.array(im).astype('float32')
-        # a 16-bit PNG is 0..65535 however dark it is; plain 'I' has no fixed range
-        scale = 65535.0 if im.mode.startswith('I;16') or a.max() > 255 else 255.0
-        a = (a / scale * 255).clip(0, 255).astype('uint8')
+    im = _open_image(path)
+    scale = _integer_scale(im)  # a 16-bit PNG is 0..65535 however dark it is; plain 'I' has no fixed range
+    if scale:
+        a = (np.array(im).astype('float32') / scale * 255).clip(0, 255).astype('uint8')
         im = PILImage.fromarray(a)
     return im.convert('RGB')
 

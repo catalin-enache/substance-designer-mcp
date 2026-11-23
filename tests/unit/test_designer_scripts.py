@@ -2,6 +2,7 @@
 what they do on a failure, which a passing self-test doesn't show."""
 
 import os
+import re
 import sys
 import traceback
 from pathlib import Path
@@ -137,3 +138,19 @@ def test_undos_output_is_put_back_as_its_preparation_made_it(monkeypatch: pytest
         ('label', strings.return_value),
         ('usages', usages.return_value),
     ]
+
+
+def test_the_keys_facts_unload_their_package_when_its_graph_cant_be_made(monkeypatch: pytest.MonkeyPatch) -> None:
+    """params/designer_scripts/keys.py: a failure making its graph, after the package is made, unloads the package
+    (REVIEW.md TST-766: the graph was made before the `try`)."""
+    with open(script_path('params/keys'), encoding='utf-8') as f:
+        imported = re.findall(r'^from (sd\.\S+) import', f.read(), re.M)
+    made = _stand_in(monkeypatch, 'sd', *imported)
+    manager = made['sd'].getContext.return_value.getSDApplication.return_value.getPackageMgr.return_value
+    package = manager.newUserPackage.return_value
+    package.getUID.return_value = 'keys'
+    manager.getUserPackages.return_value = [package]
+    made['sd.api.sbs.sdsbscompgraph'].SDSBSCompGraph.sNew.side_effect = RuntimeError('no graph')
+    _, error = _run('params/keys', {})
+    assert 'no graph' in error
+    manager.unloadUserPackage.assert_called_once_with(package)

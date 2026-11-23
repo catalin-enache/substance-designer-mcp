@@ -75,6 +75,20 @@ def check(tool: str, name: str, ok: bool, detail: str = '') -> None:
     print('%s  %-22s %s | %s' % ('PASS' if ok else 'FAIL', tool, name, detail.strip()[:150].replace('\n', ' / ')))
 
 
+def said(t: str, label: str) -> str:
+    """What the line of `t` starting with `label |` says after it, or a note that there is none."""
+    found = re.search(r'^%s \| (.*)$' % re.escape(label), t, re.M)
+    return found.group(1) if found else 'no line %r: %s' % (label, t.strip()[-200:])
+
+
+def expect(t: str, name: str, lines: dict[str, str]) -> None:
+    """One "designer facts" check per line of `lines`, {label: what it must say}, named `name: <label>`: a facts
+    script's lines, `label | what it measured`, read from its output `t`."""
+    for label, expected in lines.items():
+        got = said(t, label)
+        check('designer facts', '%s: %s' % (name, label), got == expected, got)
+
+
 def skip(tool: str, name: str, why: str) -> None:
     results.setdefault(tool, [])
     skipped.append((tool, name))
@@ -121,6 +135,16 @@ def _mean_png(path: str) -> float:
 
     a = np.array(Image.open(path)).astype(float)
     return float(a.mean() / (65535.0 if a.max() > 255 else 255.0))
+
+
+CLOSE = 1 / 255 + 1e-3  # an 8-bit pixel's step, and a little
+
+
+def near(got: list[float] | None, want: list[float], within: float = CLOSE) -> bool:
+    """Whether a pixel read has the values wanted, within `within`: CLOSE by default, for an 8-bit pixel."""
+    return (
+        got is not None and len(got) == len(want) and all(abs(g - w) <= within for g, w in zip(got, want, strict=True))
+    )
 
 
 def pixel_values(t: str) -> dict[tuple[int, int], list[float]]:
@@ -654,6 +678,9 @@ class Ctx:
     lv: str
     out: str
     pp: str  # a Pixel Processor
+    ramp: str  # a Pixel Processor whose grey ramp feeds `gradient` and `curve`
+    gradient: str  # a Gradient Map node
+    curve: str  # a Curve node
     vp: str  # a Value Processor
     blend: str  # a blend node
     img: str  # a bitmap node of an image to sample
@@ -671,6 +698,12 @@ class Ctx:
         scratch = os.path.join(self.scratch, category)
         os.makedirs(scratch, exist_ok=True)
         return Ctx(c=self.c, s=self.s, scratch=scratch, helper_source=self.helper_source, was_running=self.was_running)
+
+
+async def described(ctx: Ctx, node_ids: list[str] | None = None) -> str:
+    """describe_graph of the self-test graph, or of `node_ids`, its parameters included."""
+    focus: ToolArgs = {'node_ids': node_ids} if node_ids else {}
+    return text(await ctx.c('describe_graph', {'include_params': True, **focus, **ctx.G}))
 
 
 class Unprepared(Exception):

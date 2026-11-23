@@ -14,11 +14,15 @@ from test_all_tools.common import (
     ToolArgs,
     added_id,
     check,
+    described,
     designer_script,
+    expect,
     is_image,
+    near,
     picture,
     positions,
     refs,
+    said,
     text,
 )
 from test_all_tools.functions.parsing import compiler_table, definitions_in, described_differs, difference
@@ -28,11 +32,9 @@ from test_all_tools.functions.results import (
     all_near,
     at,
     built,
-    described,
     differing,
     function_built,
     function_differs,
-    near,
     normal,
     nothing,
     pixel_at,
@@ -100,19 +102,6 @@ async def run(ctx: Ctx) -> None:
     await check_describe_graph_lists_a_parameter_set_function_refuses(ctx)
     await check_describe_graph_shows_a_function_graph_of_the_package(ctx)
     await check_open_graph_opens_a_function_graph(ctx)
-
-
-def said(t: str, label: str) -> str:
-    """What the line of `t` starting with `label |` says after it, or a note that there is none."""
-    found = re.search(r'^%s \| (.*)$' % re.escape(label), t, re.M)
-    return found.group(1) if found else 'no line %r: %s' % (label, t.strip()[-200:])
-
-
-def expect(t: str, name: str, lines: dict[str, str]) -> None:
-    """One check per line of `lines`, {label: what it must say}, named `name: <label>`."""
-    for label, expected in lines.items():
-        got = said(t, label)
-        check(F, '%s: %s' % (name, label), got == expected, got)
 
 
 async def check_the_function_definitions(ctx: Ctx) -> None:

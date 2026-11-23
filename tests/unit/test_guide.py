@@ -1055,12 +1055,16 @@ def test_a_guide_that_isnt_text_opens_nothing(monkeypatch: pytest.MonkeyPatch, t
         'float4 and enum parameters of atomic nodes, float4 of an instance node',
         'relative to input on a levels node, all six; relative to parent on an instance node, `$outputsize` measured',
         "on a node's `$outputsize` and the graph's `$randomseed`, both directions",
-        'caused no crash in five tries',
     ],
 )
 def test_a_claim_keeps_the_scope_it_was_measured_on(scope: str) -> None:
     # REVIEW.md TST-207
     assert scope in flat(guide_md())
+
+
+def test_the_examples_claim_keeps_the_scope_it_was_measured_on() -> None:
+    # REVIEW.md TST-207; the example's notes for whoever changes it are in its docstring (REVIEW.md TST-782)
+    assert 'caused no crash in five tries' in flat(read('examples', 'build_dwarf_trimsheet.py'))
 
 
 def test_what_a_helper_cites_for_a_measurement_states_it() -> None:

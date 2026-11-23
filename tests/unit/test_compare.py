@@ -4,11 +4,12 @@ from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 import pytest
+from image_files import png, tiff_32, tiff_float
 from PIL import Image
 
 from conftest import server
-from server_tools.compare import Values, _compare_report
-from server_tools.measure import Pixels
+from server_tools.compare import _compare_report
+from server_tools.measure import PixelLayout, Pixels, Values
 
 
 def _rgba(color: list[float], w: int = 8, h: int = 8) -> npt.NDArray[np.float64]:
@@ -18,7 +19,7 @@ def _rgba(color: list[float], w: int = 8, h: int = 8) -> npt.NDArray[np.float64]
 
 
 def _report(
-    node: Pixels, node_layout: str, ref: Pixels, ref_layout: str, aligned: bool = False
+    node: Pixels, node_layout: PixelLayout, ref: Pixels, ref_layout: PixelLayout, aligned: bool = False
 ) -> tuple[str, Values | None]:
     lines, diff = _compare_report(node, node_layout, ref, ref_layout, aligned)
     return '\n'.join(lines), diff
@@ -41,13 +42,50 @@ def test_load_reference_modes(tmp_path: Path) -> None:
 def test_load_reference_region_and_errors(tmp_path: Path) -> None:
     a = np.zeros((10, 20), np.uint8)
     a[2:4, 5:9] = 255
-    Image.fromarray(a).save(tmp_path / 'm.png')
-    data, _ = server._load_reference(str(tmp_path / 'm.png'), [5, 2, 9, 4])
+    path = png(tmp_path / 'm.png', a)
+    data, _ = server._load_reference(path, [5, 2, 9, 4])
     assert data.shape == (2, 4, 1) and data.min() == 1
     with pytest.raises(server.ToolError, match='is empty'):
-        server._load_reference(str(tmp_path / 'm.png'), [30, 30, 40, 40])
+        server._load_reference(path, [30, 30, 40, 40])
     with pytest.raises(server.ToolError, match='cannot read'):
         server._load_reference(str(tmp_path / 'missing.png'))
+
+
+def test_a_region_of_a_32_bit_image_keeps_the_whole_images_range(tmp_path: Path) -> None:
+    # a plain 'I' image is 16-bit when any of its values is over 255: a dark region of it is too
+    a = np.full((4, 8), 100, np.int32)
+    a[:, 4:] = 40000
+    data, _ = server._load_reference(tiff_32(tmp_path / 'i32.tif', a), (0, 0, 4, 4))
+    assert data[0, 0, 0] == pytest.approx(100 / 65535)
+
+
+def test_a_reference_holding_non_finite_pixels_is_refused(tmp_path: Path) -> None:
+    # REVIEW.md SRV-231: a float reference's NaN gave NaN statistics and "luma distributions: different"
+    values = np.full((4, 8), 0.5, np.float32)
+    values[0, 0], values[1, 1] = np.nan, np.inf
+    path = tiff_float(tmp_path / 'float.tif', values)
+    with pytest.raises(server.ToolError, match=r'the reference holds 2 non-finite pixels \(NaN or infinite\)'):
+        server._load_reference(path)
+    data, _ = server._load_reference(path, (2, 2, 8, 4))  # a region without them
+    assert np.isfinite(data).all()
+
+
+@pytest.mark.parametrize(
+    ('name', 'region', 'refusal'),
+    [('missing.tif', None, 'cannot read'), ('ref.tif', (30, 30, 40, 40), 'is empty'), ('ref.tif', None, 'non-finite')],
+    ids=['missing', 'empty region', 'non-finite'],
+)
+def test_a_refused_reference_sends_nothing_to_designer(
+    tmp_path: Path, sent: list[str], name: str, region: tuple[int, int, int, int] | None, refusal: str
+) -> None:
+    """REVIEW.md SRV-236: the node was computed in Designer, through a temporary output, before the reference was read
+    and refused. The reference file holds a NaN: an empty region is refused before it."""
+    values = np.full((4, 8), 0.5, np.float32)
+    values[0, 0] = np.nan
+    tiff_float(tmp_path / 'ref.tif', values)
+    with pytest.raises(server.ToolError, match=refusal):
+        server.compare_to_reference('n', str(tmp_path / name), reference_region=region)
+    assert sent == []
 
 
 def test_identical_images() -> None:

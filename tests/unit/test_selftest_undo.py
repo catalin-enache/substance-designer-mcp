@@ -37,6 +37,11 @@ LINKED, UNLINKED = '8 blend @(200,800)  in: #u<-7.unique_filter_output', '8 blen
 INPUT_VALUE = 'check_one_undo_reverts_a_connect_into_a_new_input_value'
 INPUT_VALUE_UNDO = 'connect into a new #name: one Undo removes the connection'
 INPUT_VALUE_REDO = 'connect into a new #name: Redo brings the connection back'
+KEYS = 'check_one_undo_reverts_a_set_of_gradient_keys'
+KEYS_UNDO, KEYS_REDO = (
+    'set: one Undo brings back the keys and points before',
+    'set: Redo brings back the new keys and points',
+)
 # a graph as describe_graph reads it: the number of sends of the Undo and of the Redo so far, the reads since the last
 Graph = Callable[[int, int, int], str]
 
@@ -101,8 +106,10 @@ def _designer(
     the text `values` gives (an answer starting 'Error' is an error). A read of a function graph's nodes answers what
     `nodes` gives, by the Undos and Redos sent."""
     calls: list[str] = []
-    # an add's refs: the Value Processor and the blend the input value check adds
-    answers = {'apply_edits': "added 7\n  ref 'vp' = 7\n  ref 'bl' = 8", 'Redo': SCHEDULED, 'two nodes': 'IDS=7,8'}
+    # an add's refs: the Value Processor and the blend the input value check adds, the Gradient Map and the Curve the
+    # keys check adds
+    added = "added 7\n  ref 'vp' = 7\n  ref 'bl' = 8\n  ref 'gm' = 7\n  ref 'cv' = 8"
+    answers = {'apply_edits': added, 'Redo': SCHEDULED, 'two nodes': 'IDS=7,8'}
     fires = list(fired)
     undos = [undo] if isinstance(undo, str) else list(undo)
     since = [0]  # the graph's reads since the last call of another kind, a read of the action's state not counted
@@ -659,8 +666,9 @@ def test_a_read_of_the_action_that_failed_fails_the_check_naming_it(
         (SET_FUNCTION, lambda u, r, since: _graph(*BEFORE) if u > r else _graph(*REPLACED)),
         (INPUT_VALUE, lambda u, r, since: _graph(UNLINKED) if u > r else _graph(LINKED)),
         (FUNCTION_GRAPH, None),
+        (KEYS, lambda u, r, since: _keys(u > r, u > r)),
     ],
-    ids=['add', 'set', 'code run', 'set_function', 'input value', 'function graph'],
+    ids=['add', 'set', 'code run', 'set_function', 'input value', 'function graph', 'keys'],
 )
 def test_no_check_runs_qts_events_or_reads_a_node_by_code(undo: ModuleType, step: str, graph: Graph | None) -> None:
     c, calls = _designer(graph) if graph else _function_graphs()
@@ -863,3 +871,55 @@ def test_the_redo_putting_back_an_undo_that_never_showed_is_read_until_it_shows(
         assert said == [
             "the Redo putting it back: the Edit menu's action fired; describe_graph didn't show the Redo within 10 s"
         ], out
+
+
+# --- the set of a Gradient Map's keys and a Curve's points
+
+
+def _keys(keys_before: bool, points_before: bool) -> str:
+    """describe_graph(include_params) of the Gradient Map (7) and the Curve (8) the keys check adds: each with its keys
+    or points as added (before the set), or as the set changes them."""
+    return _graph(
+        '7 gradient @(0,1000)',
+        '    ' + (KEYS_BEFORE if keys_before else KEYS_AFTER),
+        '8 curve @(200,1000)',
+        '    ' + (POINTS_BEFORE if points_before else POINTS_AFTER),
+    )
+
+
+KEYS_BEFORE = 'gradientrgba = ((0.0, (1.0, 0.0, 0.0, 1.0)), (1.0, (0.0, 0.0, 1.0, 1.0)))'
+POINTS_BEFORE = 'curveluminance = ((0.0, 1.0), (1.0, 0.0))'
+KEYS_AFTER = 'gradientrgba = ((0.0, (0.0, 1.0, 0.0, 1.0)), (0.5, (1.0, 1.0, 1.0, 1.0)), (1.0, (0.0, 0.0, 0.0, 1.0)))'
+POINTS_AFTER = 'curveluminance = ((0.0, 0.0), (1.0, 1.0))'
+
+
+def test_the_keys_check_reads_its_undo_and_redo_with_describe_graph(
+    undo: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    c, calls = _designer(lambda u, r, since: _keys(u > r, u > r))
+    asyncio.run(undo.check_one_undo_reverts_a_set_of_gradient_keys(_ctx(c)))
+    out = capsys.readouterr().out
+    for name in ('set of keys and points, before the Undo', KEYS_UNDO, KEYS_REDO):
+        assert _line(out, name).startswith('PASS'), out
+    # the two set ops one call, the nodes deleted after
+    assert calls == [
+        'apply_edits',
+        'apply_edits',
+        'describe_graph',
+        'Undo',
+        'describe_graph',
+        'Redo',
+        'describe_graph',
+        'apply_edits',
+    ]
+
+
+@pytest.mark.parametrize(
+    'keys, points', [(True, False), (False, True)], ids=['the points not back', 'the keys not back']
+)
+def test_the_keys_check_fails_unless_one_undo_brings_back_both(
+    undo: ModuleType, capsys: pytest.CaptureFixture[str], keys: bool, points: bool
+) -> None:
+    c, _ = _designer(lambda u, r, since: _keys(keys and u > r, points and u > r))
+    asyncio.run(undo.check_one_undo_reverts_a_set_of_gradient_keys(_ctx(c)))
+    assert _line(capsys.readouterr().out, KEYS_UNDO).startswith('FAIL')

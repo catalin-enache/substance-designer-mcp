@@ -62,12 +62,26 @@ Parameters are described in each tool's schema; this is when to reach for which.
   `bitmap` op if wanted). Compare **like with like**: a `reference_region` of plain, lit material against the matching
   `region`. A whole product shot is dominated by its background, and lit renders or photos include shading, so their
   contrast is higher than a baseColor's. The suggested `x*gain + bias` is a starting point for levels, not a target.
+  `analyze_reference` reads a photo's palette as Gradient Map keys; its result says how to read its errors. A lit
+  photo's luminance holds its shading, so give it a `reference_region` of flat-lit material, without a minority colour
+  at one luminance (red flecks took 3 close keys of 5), or with it transparent. Map a grey spanning 0..1, or the
+  photo's own: Grayscale Conversion at its default weights (not the Advanced one, whose default is Desaturation), then
+  a `levels` whose `levelinlow` and `levelinhigh` are the printed range's ends in all four components. That gives back
+  the part read (its `reference_region`) within the fit error. The reference tools turn a JPEG (an MPO too) by its
+  EXIF orientation, as its bitmap node does. They read any other format as stored, a PNG and a TIFF as Designer keeps
+  them. A `reference_region` is in the image as the tools read it, turned, at the file's own pixel size.
 - **Tune a value:** `sweep_param`, not edit-rebuild-look loops; `view_node` watches the final output while sweeping an
   early node.
 - **Edit:** `apply_edits` for every node edit, one or many: ops `add`, `bitmap` (reference images, masks, painted
   maps), `set`, `connect`, `disconnect`, `move`, `delete`, `expose` (a parameter as a graph input). One call is one undo
   step; refs name nodes added earlier in the batch; which mistakes refuse the whole batch and which stop it partway: its
   description. Also `create_graph`, `remove_graph_input`, `set_graph_size`.
+- **Gradients and curves:** `apply_edits`' `set` takes a Gradient Map's keys (`gradientrgba`) and a Curve's points
+  (on a grey input only `curveluminance` acts; on a colour one `curveluminance` acts on R, G and B, each other array
+  on its own channel, and `curvered` acts before `curveluminance`): their shape and read-back are in its description.
+  The Gradient Map's own `interpmode` is linear at 0, the default, where midpoints change nothing, eases at 1, where
+  they act, and at 3 holds each key's colour up to the next. Of two keys at one position, the first listed shows. Fed
+  a colour input, every pixel computed the colour of the key at position 0, which was also listed first.
 - **Write a function:** `set_function` compiles an expression into a Pixel Processor's per-pixel function, a Value
   Processor's function or any parameter's (such as a levels' `leveloutlow` from graph inputs), in one undo step. Its
   `expression` gives the grammar; every name and type is checked before anything is built. A Value Processor drives
@@ -112,24 +126,19 @@ Fallback without MCP: `client/sd_run.py script.py [--timeout N]`, `-c CODE`, `--
   (`getQtForPythonUIMgr().getMainWindow()`, `raise_()`, `activateWindow()`): in a Designer just started, with another
   Designer in front, Undo of an output's fields sometimes did nothing without it. It leaves the other app in front.
 - Timeouts and cancel use a trace hook in the plugin: the abort happens the next time Python runs, so one long C++ call
-  (a huge `graph.compute()`) completes first. A script catching `BaseException` swallows the abort: don't. An abort
-  landing where Python only reports an exception (a finalizer such as every sd object's `__del__`, a weakref callback,
-  a Qt slot) is raised again at the next traced event (in the script, a module it imports or a loop driven from C), also
-  when the finalizer raises an error of its own or runs long. A job still queued after 15 minutes is dropped, never run
-  late.
+  (a huge `graph.compute()`) completes first. A script catching `BaseException` swallows the abort: don't. A job still
+  queued after 15 minutes is dropped, never run late.
 
 ## Environment facts
 
 - No `pysbs` (the Automation Toolkit is enterprise-licensed): everything goes through the in-app `sd` API via the
   bridge, plus `sbscooker`/`sbsrender`.
 - Code runs on Designer's main thread, so the UI freezes while a script runs. Keep scripts finite.
-- Library graphs are `.sbs` files in `app.getPath(SDApplicationPath.DefaultResourcesDir)/packages` and its subfolders.
-  In scripts: `pkgMgr.loadUserPackage(path)` (check `getPackages()` first to reuse an open one),
-  `pkg.findResourceFromUrl('<graph id>')`, `graph.newInstanceNode(resource)`. Loaded library packages count as user
-  packages; the tools skip them when looking a graph up by name, and refuse to save them, edit their files or change
-  their graphs, with one message (`_library_refusal`). The graph open in the editor can still be one: reading it and
-  `snapshot_graph` with no graph given work. Your own code isn't checked: Designer takes an edit to a library graph, and
-  a package using it sees it at once (seen by hand).
+- Library graphs are `.sbs` files in Designer's `packages` folder and its subfolders (in a script: the scripting part,
+  Library graphs in a script). Loaded library packages count as user packages; the tools skip them when looking a graph
+  up by name, and refuse to save them, edit their files or change their graphs, with one message (`_library_refusal`).
+  The graph open in the editor can still be one: reading it and `snapshot_graph` with no graph given work. Your own code
+  isn't checked: Designer takes an edit to a library graph, and a package using it sees it at once (seen by hand).
 - Plugin tracebacks land in Designer's log (`read_designer_log`; "since the last start" means after the "Python SDK
   Version" line logged once per start, or, while Designer is still starting, from its "===== New Session =====", a
   session that ended at once, a process handing over to the running Designer, not counting). Read it when the bridge misbehaves or a plugin change doesn't seem to load.
@@ -186,11 +195,9 @@ Fallback without MCP: `client/sd_run.py script.py [--timeout N]`, `-c CODE`, `--
 - **A cooked .sbsar forgets the default parent size:** sbscooker writes `$outputsize` default `8,8` (256 px) whatever
   the graph's `defaultParentSize` (no cooker option changes it), so a .sbsar renders at 256 px here and in other
   Substance apps unless a size is set. `render_sbs` on a .sbsar says so (it reads the archive's .xml with `tar`).
-- Pixel precision: grayscale 16-bit PNGs load in PIL as `I;16` (normalise by 65535), but PIL loads 16-bit **RGBA**
-  PNGs as 8-bit. For exact values use `node_stats`, which reads the raw buffer: little-endian, uint8 / uint16 / float16 /
-  float32 per `getPixelFormat()`, row stride `getRowPitch()`. Outputs seen so far are `RGBA*` or `LUM*` (even an
-  imported RGB JPG or grey+alpha PNG computes as `RGBA8`); the other `SBSPixelFormat` layouts (`RGB*`, `BGR8`, `BGRA8`,
-  `LUMALPHA*`) are decoded too, untested against Designer.
+- For exact values use `node_stats`, which reads Designer's raw pixel buffer, not an exported file (the scripting
+  part, Pixel buffers). PIL reads a 16-bit grey PNG as `I;16` (normalise by 65535), but a 16-bit **RGBA** one as
+  8-bit.
 - Verify orientation and conventions numerically (sample known pixels), not just visually.
 
 ## Example
@@ -201,10 +208,7 @@ helpers, type-safe parameter setting, rebuild-safe package handling, and a reada
 as built, laid out by data flow inside each, one titled frame per section (its description carries the notes), portals
 for long links between sections, an overridable size (2048 by default). Re-running it closes the previous build (the
 package at `OUT_SBS`) and builds a fresh graph, so later edits are lost: change the script instead. It refuses while
-that build has unsaved changes, and leaves other packages with a graph of that name open (a copy saved elsewhere, an
-unsaved one). Re-running with the previous build open in an editor tab (an unload and a reload in one call) caused no
-crash in five tries, and the self-test's re-runs do it too. The self-test builds a copy with its `OUT_SBS = ...` and
-`GRAPH_ID = ...` lines rewritten, so keep each of those assignments on one line.
+that build has unsaved changes (more, for whoever changes it: its docstring).
 
 # Scripting: raw `sd` and Qt code
 
@@ -216,6 +220,9 @@ The rules and the first pitfalls are in the core, `get_guide()`.
 - Atomic nodes: `graph.newNode('sbs::compositing::<name>')`, output connector `unique_filter_output`. Common inputs:
   `input1` (levels, blur, normal, warp, directionalwarp, transformation…), blend `source` / `destination` / `opacity`,
   warp `inputgradient`, directionalwarp `inputintensity`, output node `inputNodeOutput`.
+- Library graphs in a script: they are in `app.getPath(SDApplicationPath.DefaultResourcesDir)/packages`;
+  `pkgMgr.loadUserPackage(path)` loads one (check `getPackages()` first to reuse an open one), then
+  `pkg.findResourceFromUrl('<graph id>')` and `graph.newInstanceNode(resource)`.
 - Instance (library) nodes: connector ids are the library graph's identifiers (bevel: in `input`, outs `height` /
   `normal`; tile_generator: out `TileGenerator`).
 - Property types matter (`node.getPropertyFromId(id, SDPropertyCategory.Input).getType()`): levels `levelin*/levelout*`
@@ -230,7 +237,20 @@ The rules and the first pitfalls are in the core, `get_guide()`.
   into `<package>.resources/` with an `XXXXXX-` prefix (before the package's first save, into
   `<QDir.tempPath()>/Adobe/Adobe Substance 3D Designer/` (Designer's own temp folder), moved on saving; copies there
   stay after an unsaved package closes, and a later copy of a taken name gets `1-`, `2-`... in front); `BinaryEmbedded`
-  raises `NotSupported`. The node's `$outputsize` is the image's own size (log2).
+  raises `NotSupported`. The node's `$outputsize` is the log2 of each of the image's sides, rounded up, and the image
+  is stretched to that size with a bilinear filter, not padded: a 50x10 image computed 64x16, its two halves meeting
+  at x 32 with two pixels blended. A side computes 8192 px at most, even where `$outputsize` reads 14, the image shrunk
+  to it: a 9000x10 image computed 8192x16, two pixels blended at its halves' boundary ("designer facts", the `bitmaps`
+  check of bitmap sizes). A JPEG's EXIF orientation is applied (3, 6 and 8 measured, and a multi-picture JPEG's, saved
+  as .jpg), and a PNG's (eXIf) and a TIFF's are kept in the stored frame (the `bitmaps` check of orientations). How
+  the reference tools read a file's orientation: the core, Which tool for what, Measure.
+- **Pixel buffers:** a texture's raw buffer, which `node_stats` reads: little-endian, uint8 / uint16 / float16 / float32
+  per `getPixelFormat()`, row stride `getRowPitch()`. Outputs seen so far are `RGBA*` or `LUM*` (even an imported RGB
+  JPG or grey+alpha PNG computes as `RGBA8`); the other `SBSPixelFormat` layouts (`RGB*`, `BGR8`, `BGRA8`,
+  `LUMALPHA*`) are decoded too, untested against Designer.
+- **An abort landing where Python only reports an exception** (a finalizer such as every sd object's `__del__`, a
+  weakref callback, a Qt slot) is raised again at the next traced event (in the script, a module it imports or a loop
+  driven from C), also when the finalizer raises an error of its own or runs long (the core, Undo and timeouts).
 - **Output nodes:** annotation `usages` = `SDValueArray` of `SDValueUsage.sNew(SDUsage.sNew('baseColor', 'RGBA',
   'sRGB'))`; annotations `identifier` / `label` via `SDValueString`. The identifier becomes the exported/rendered file
   name; `apply_edits` sets all three. In your own code Designer checks little: a new output gets a name of its own
@@ -446,6 +466,55 @@ The rules and the first pitfalls are in the core, `get_guide()`.
 
     So `apply_edits`' `connect` reaches `input:1` once `input` is connected, and its refusal of an input not listed
     names the one to connect first.
+- **Gradient Map keys and Curve points** ("designer facts", the `params` check of keys; Undo, the `undo` category).
+  Measured on a 16 px ramp in 32-bit float:
+  - **The types:** a gradient's `gradientrgba` is an `SDTypeArray<sbs::compositing::gradient_key_rgba>`, whose
+    members are `value` (ColorRGBA), `position` and `midpoint` (floats). A curve's `curveluminance`, `curvered`,
+    `curvegreen`, `curveblue` and `curvealpha` are `SDTypeArray<sbs::compositing::curve_key>`, whose members are
+    `position`, `left` and `right` (float2), and `isLocked`, `isLeftBroken` and `isRightBroken` (bools).
+    `interpmode` (an int, 0) and `smoothness` (a float, 0.5) are the gradient node's own parameters, not a key's.
+  - **A new node** has no keys, and `getDefaultValue()` of these parameters is None. A new `gradient_key_rgba` holds
+    the colour (0, 0, 0, 1), position 0 and midpoint 0. A new `curve_key` holds (0, 0) in all three points, and False
+    in each bool.
+  - **Setting:** `node.setPropertyValue(prop, array)` takes an `SDValueArray` built with `SDValueArray.sNew(item, 0)`
+    and `pushBack` of `SDValueStruct.sNew(item)` structs, and keeps the keys in the order given. It takes an array of
+    another item type too, raising nothing: an array of `curve_key` became one key of the new key's values, and an
+    array of floats no key. An empty array removes every key. A curve point's `isLocked` and broken flags read back as
+    set. A value read is a copy: a set after the read leaves it
+    as it was, and changing it changes nothing on the node. The array set is copied too. One Undo of `apply_edits`'
+    set reverts a gradient's keys and a curve's points, and Redo brings them back (the `undo` category). The keys and
+    their order survive a save and a reload.
+  - **A gradient computes** its keys sorted by position, each key's colour exact at its position:
+    - with no keys, it gives its input as a grey colour; with one key, that colour everywhere;
+    - outside the first and last keys, the nearest key's colour;
+    - a colour beyond 0..1 is kept in a float format, and alpha is interpolated too;
+    - a key below position 0 (-0.1) made every pixel the last key's colour. One above 1 (1.5) is taken;
+    - with `colorswitch` off, it gives the mean of the colour's R, G and B. The midpoints, the `interpmode`s, two keys
+      at one position, and a colour image fed: Which tool for what, Gradients and curves.
+  - **A curve computes** its points sorted by x, joined by Bezier segments whose handles are absolute points:
+    - with no points it gives its input as it is, and with one point, its handles on it, that y everywhere;
+    - handles on their point give straight lines. A point made from its position alone keeps its handles at (0, 0),
+      which bend the curve: (0, 1) and (1, 0) so gave 0.072 at 0.2, where the line gives 0.8;
+    - `isLocked` changes nothing computed. A side marked broken (`isLeftBroken`, `isRightBroken`) computes as if its
+      handle were on its point, each side on its own: the first point's right side broken gave the curve with that
+      handle on its point, and so did the second point's left side. Both sides of every point broken gave the
+      straight line. A side facing no segment, the first point's left, its handle off its point, changed nothing,
+      broken or not;
+    - two points at one x make a step, each side of it the point given on that side;
+    - outside the first and last points, the nearest point's y. A y beyond 0..1 is kept in a float format. A point at
+      x -0.2 made the pixel at 0 compute 0, off the line through the points;
+    - which arrays act on a grey input and on a colour one: Which tool for what, Gradients and curves.
+
+  `apply_edits`' `set` and `fmt` follow these facts: `designer_helpers/edits.py` (`_given_keys`) and `core.py`
+  (`_shown_keys`).
+- **The greys of a colour image** ("designer facts", the `bitmaps` check of greys), measured in 32-bit float:
+  - Grayscale Conversion's default `channelsweights`, (0.33, 0.33, 0.33, 0) as `describe_node` shows them, compute the
+    mean of R, G and B, and so do those values set: red gave 0.3333 and white 1. Other weights are taken as given,
+    not divided by their sum: (0.34, 0.33, 0.33, 0), summing to 1, gave 0.34 on red, and (0.5, 0.5, 0.5, 0) and
+    (0.1, 0.1, 0.1, 0) gave 1.5 and 0.3 on white. `analyze_reference` reads its palette on the mean.
+  - Grayscale Conversion Advanced's `grayscale_type`: 0 Desaturation, the mean of the largest and the smallest of R, G
+    and B; 1 Luma, Rec.601's weights (0.299, 0.587, 0.114); 2 Average, the mean; 3 Max; 4 Min. Its default: Which tool
+    for what, Measure.
 - **Graph size** is set with `graph.setInputPropertyValueFromId('$outputsize', SDValueInt2.sNew(int2(11, 11)))`;
   `setDefaultParentSize()` takes **pixels**. A node's `$format` and an absolute `$outputsize` only take effect with
   inheritance set to Absolute. The graph's own `$format` too (a new graph's follows its parent: 16 bits

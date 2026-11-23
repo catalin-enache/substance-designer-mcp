@@ -4,6 +4,12 @@ Dwarf stonework trim sheet generator for Substance 3D Designer (sd API).
 Run inside Designer: Windows > Python Editor > open this file > Run (or the run_designer_script
 tool). Builds a new package with a 2048x2048 compositing graph and saves it to OUT_SBS.
 
+Re-running it closes the previous build (the package at OUT_SBS) and builds a fresh graph. It refuses while that
+build has unsaved changes, and leaves other packages with a graph of that name open (a copy saved elsewhere, an unsaved
+one). Re-running with the previous build open in an editor tab (an unload and a reload in one call) caused no crash in
+five tries, and the self-test's re-runs do it too. The self-test builds a copy with its `OUT_SBS = ...` and
+`GRAPH_ID = ...` lines rewritten, so keep each of those assignments on one line.
+
 The graph is laid out for reading: one titled frame per section (a frame per strip, then the
 height, normal/AO, base colour, roughness and output stages) whose description explains the
 non-obvious choices, nodes left to right by data flow inside each frame, and portals instead of the long wires

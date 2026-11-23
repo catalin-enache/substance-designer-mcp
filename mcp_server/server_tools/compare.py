@@ -1,4 +1,5 @@
-"""compare_to_reference: tones of a node against a reference image."""
+"""compare_to_reference: tones of a node against a reference image. The reference is read by image_reading.py's
+_open_image, and its reference_region taken in the image it returns."""
 
 import os
 from typing import Annotated, cast
@@ -11,36 +12,23 @@ from PIL import Image as PILImage
 from pydantic import Field
 
 from .core import Box, Graph, NoneIfEmpty, Output, _tool
-from .measure import Pixels, _crop, _labelled, _node_pixels, _sheet, _to_display
-
-Values = npt.NDArray[np.float64]  # one channel, (H, W) or flattened
+from .image_reading import _alpha, _finite, _integer_scale, _non_finite, _opaque, _open_image, _reference_pixels
+from .measure import PixelLayout, Pixels, Values, _crop, _labelled, _node_pixels, _sheet, _to_display
 
 _LUMA: npt.NDArray[np.float64] = np.array([0.2126, 0.7152, 0.0722])
 
 
-def _load_reference(path: str, region: Box | None = None) -> tuple[Pixels, str]:
-    """Image file -> (pixels 0..1 as (H, W, C) floats, 'RGBA' or 'L'; a grayscale image with alpha
-    is 'L' with alpha as a second channel). PIL reads 16-bit RGBA PNGs as 8-bit; 16-bit grayscale
-    and float (mode F) keep their precision."""
-    path = os.path.abspath(os.path.expanduser(path))
-    try:
-        im = PILImage.open(path)
-        im.load()
-    except (OSError, ValueError) as e:
-        raise ToolError('cannot read %s: %s' % (path, e)) from e
-    if im.mode in ('I', 'I;16', 'I;16B', 'I;16L', 'F'):
-        a = np.array(im).astype(np.float64)
-        if im.mode != 'F':
-            a /= 65535.0 if im.mode.startswith('I;16') or a.max() > 255 else 255.0
-        data, layout = a[:, :, None], 'L'
-    elif im.mode in ('1', 'L'):
-        data, layout = np.array(im.convert('L')).astype(np.float64)[:, :, None] / 255.0, 'L'
-    elif im.mode in ('LA', 'La'):
-        data, layout = np.array(im.convert('LA')).astype(np.float64) / 255.0, 'L'
-    else:
-        data, layout = np.array(im.convert('RGBA')).astype(np.float64) / 255.0, 'RGBA'
+def _load_reference(path: str, region: Box | None = None) -> tuple[Pixels, PixelLayout]:
+    """Image file -> its pixels as _reference_pixels gives them, cut to `region` [x0, y0, x1, y1] in pixels (clamped to
+    the image: _crop_box). The cut comes after the conversion, so a plain 32-bit image's range is the whole image's."""
+    im = _open_image(path)
+    data, layout = _reference_pixels(im, _integer_scale(im))
     if region:
         data = _crop(data, region, 'reference_region')
+    if im.mode == 'F':  # only a float image holds NaN or infinite values, which give NaN statistics (REVIEW.md SRV-231)
+        _, not_finite = _finite(data)
+        if not_finite:
+            raise ToolError('the reference holds %s: give a reference_region without them' % _non_finite(not_finite))
     return data, layout
 
 
@@ -75,24 +63,16 @@ def _resize(data: Pixels, size: tuple[int, int]) -> Pixels:
     ).astype(np.float64)
 
 
-def _alpha(data: Pixels) -> Values | None:
-    """The alpha channel of decoded pixels (4 channels, or 'L' with alpha), or None."""
-    return data[:, :, -1] if data.shape[2] in (2, 4) else None
-
-
 def _compare_report(
-    node: Pixels, node_layout: str, ref: Pixels, ref_layout: str, aligned: bool = False
+    node: Pixels, node_layout: PixelLayout, ref: Pixels, ref_layout: PixelLayout, aligned: bool = False
 ) -> tuple[list[str], Values | None]:
     """Compare a node's pixels with a reference: value distributions always, pixel by pixel when
     aligned. Returns (text lines, absolute luma difference image or None)."""
     lines: list[str] = []
     mask_n: npt.NDArray[np.bool_] | None = None
-    mask_r: npt.NDArray[np.bool_] | None = None
-    if _alpha(ref) is not None and (cast(Values, _alpha(ref)) < 0.5).any():
-        mask_r = cast(Values, _alpha(ref)) >= 0.5
-        if not mask_r.any():
-            raise ToolError('the reference is fully transparent')
-        lines.append('ignoring %.1f%% transparent reference pixels' % (100 - 100 * mask_r.mean()))
+    mask_r, left_out = _opaque(ref)
+    if left_out:
+        lines.append(left_out)
     diff: Values | None = None
     if aligned:
         h, w = node.shape[:2]
@@ -217,13 +197,14 @@ def compare_to_reference(
     mean, std, percentiles, the mean shift, the contrast ratio and the earth mover's distance
     (EMD: how far values must move on average, 0..1), plus a linear map (x*gain + bias) that
     would match mean and contrast. R, G, B are compared when both are colour, luma always.
-    Transparent reference pixels (alpha < 0.5) are ignored.
+    Transparent reference pixels (alpha < 0.5) are ignored, and a reference holding NaN or infinite pixels (a float
+    image's) is refused.
     Returns the numbers and an image: node | reference | luma histograms | difference.
     The call may add a temporary output node and delete it, within one undo step."""
+    ref, ref_layout = _load_reference(reference_path, reference_region)  # first: a refused one costs Designer nothing
     data, layout, meta = _node_pixels(node_id, graph, output, 'compare_to_reference')
     if region:
         data = _crop(data, region, 'region')
-    ref, ref_layout = _load_reference(reference_path, reference_region)
     lines, diff = _compare_report(data, layout, ref, ref_layout, aligned)
     lines.insert(
         0,
@@ -245,8 +226,8 @@ def compare_to_reference(
         im.thumbnail((tile_size, tile_size))
         tiles.append(_labelled(im, label))
     chans = _compare_channels(data, layout, ref, ref_layout)
-    alpha = _alpha(ref)
-    ref_luma = chans[-1][2] if alpha is None or (alpha >= 0.5).all() else chans[-1][2][alpha >= 0.5]
+    opaque, _ = _opaque(ref)
+    ref_luma = chans[-1][2] if opaque is None else chans[-1][2][opaque]
     tiles.append(
         _labelled(
             _histogram_tile(

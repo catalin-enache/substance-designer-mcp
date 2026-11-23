@@ -1,10 +1,13 @@
+import json
 import os
 
 import numpy as np
 import numpy.typing as npt
 import pytest
+from PIL import ImageDraw
 
 from conftest import fake_bridge, server
+from project_constants import Json
 from server_tools import measure
 from server_tools.measure import Pixels, PixelType
 
@@ -137,3 +140,72 @@ def test_sweep_reports_a_value_that_failed(monkeypatch: pytest.MonkeyPatch, temp
     fake_bridge(monkeypatch, bridge)
     text = server.sweep_param('n', 'p', [0.1, 'bogus', 0.9])[0]
     assert 'RuntimeError: bad value for p' in text and 'stopped' in text
+
+
+def _swept_labels(
+    monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], param: str, values: list[Json], tile_size: int
+) -> list[str]:
+    """The labels sweep_param draws on its tiles, one value of `values` read back per tile, each a row of `tile_size`
+    px, so its tile is that wide."""
+
+    def bridge(code: str) -> str:
+        lines = []
+        for i, value in enumerate(values):
+            with open(os.path.join(temp_folders[-1], '%d.raw' % i), 'wb') as f:  # the folder the server made
+                f.write(bytes([128] * tile_size))
+            meta = {
+                'index': i,
+                'value': value,
+                'width': tile_size,
+                'height': 1,
+                'pitch': tile_size,
+                'bpp': 1,
+                'format': 'LUM8',
+            }
+            lines.append('SWEEP=' + json.dumps(meta))
+        return '\n'.join([*lines, 'restored n.%s to ()' % param])
+
+    drawn: list[str] = []
+    draw_text = ImageDraw.ImageDraw.text
+
+    def text_of(self: ImageDraw.ImageDraw, xy: tuple[float, float], text: str, fill: tuple[int, int, int]) -> None:
+        drawn.append(text)  # _labelled's call: its position, its text and its colour
+        draw_text(self, xy, text, fill=fill)
+
+    fake_bridge(monkeypatch, bridge)
+    monkeypatch.setattr(ImageDraw.ImageDraw, 'text', text_of)
+    server.sweep_param('n', param, values, tile_size=tile_size)
+    return drawn
+
+
+KEYS: list[Json] = [
+    [[0.0, [1.0, 0.0, 0.0, 1.0]], [1.0, [0.0, 0.0, 1.0, 1.0]]],
+    [[0.0, [1.0, 0.0, 0.0, 1.0]], [1.0, [0.0, 1.0, 0.0, 1.0]]],
+]
+VECTORS: list[Json] = [[0.4, 0.4, 0.4, 0.4], [0.4, 0.4, 0.4, 0.5]]
+
+
+@pytest.mark.parametrize(
+    'param, values, tile_size, labels',
+    [
+        # REVIEW.md SRV-222: keys were cut to the first key, so every tile read the same
+        ('gradientrgba', KEYS, 256, ['#1 gradientrgba', '#2 gradientrgba']),
+        # REVIEW.md SRV-223: wide enough for its 75 characters, the label was still cut to 48
+        ('gradientrgba', KEYS, 512, ['#1 gradientrgba', '#2 gradientrgba']),
+        ('levelouthigh', VECTORS, 256, ['levelouthigh = [0.4, 0.4, 0.4, 0.4]', 'levelouthigh = [0.4, 0.4, 0.4, 0.5]']),
+        # the place first, so a narrow tile that clips the label keeps it (REVIEW.md SRV-223)
+        ('levelouthigh', VECTORS, 64, ['#1 levelouthigh', '#2 levelouthigh']),
+        # Pillow refuses to measure a newline (REVIEW.md SRV-223): one is drawn as a space
+        ('name', ['a\nb', 'c'], 256, ['name = a b', 'name = c']),
+    ],
+    ids=['keys', 'keys on a wide tile', 'vectors', 'vectors on a narrow tile', 'a newline'],
+)
+def test_a_value_too_long_for_its_tile_is_labelled_by_its_place(
+    monkeypatch: pytest.MonkeyPatch,
+    temp_folders: list[str],
+    param: str,
+    values: list[Json],
+    tile_size: int,
+    labels: list[str],
+) -> None:
+    assert _swept_labels(monkeypatch, temp_folders, param, values, tile_size) == labels

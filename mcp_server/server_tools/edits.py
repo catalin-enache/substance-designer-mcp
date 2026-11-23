@@ -88,7 +88,8 @@ bitmap: an image file (png, jpg, tga, exr, tif, psd...) as a Bitmap node (output
   `unique_filter_output`), for references, masks and hand-painted maps. embed: "link"
   references the file where it is (an existing link to the same file is reused); "copy" copies
   it into `<package>.resources/` (into a temp folder until the package is saved). Embedding the
-  image in the .sbs is not available through the API. The node keeps the image's own size; set
+  image in the .sbs is not available through the API. The node's size is each side rounded up to
+  a power of 2, 8192 px at most, the image stretched or shrunk to it (50x10 computes 64x16); set
   its `$outputsize` to change it. name: resource identifier (default: the file name).
 set: node "graph" = the graph itself, e.g. a fixed-size graph's $outputsize (an overridable
   graph's size is refused: use set_graph_size). Values are converted to the parameter's type:
@@ -102,6 +103,13 @@ set: node "graph" = the graph itself, e.g. a fixed-size graph's $outputsize (an 
   is: inherited, its value counts (added to the parent's seed), and only an inherited seed
   follows the graph's seed and the cooked .sbsar's Random Seed. To fix a seed on purpose,
   change its inheritance with execute_designer_code. Prints old -> new for params. $outputsize is log2 of the size in pixels (11 is 2048 px; above 13 or below 0 is refused).
+  A Gradient Map's gradientrgba takes keys [[position, [r, g, b(, a)]], ...], position 0 to 1, alpha 1 if left out; an
+  optional third item is the midpoint, 0 if left out. A Curve's curveluminance, curvered, curvegreen, curveblue and
+  curvealpha take points [[x, y], ...], x 0 to 1, joined by straight lines; [[x, y], [left x, y], [right x, y]] gives a
+  point Bezier handles, as absolute points, and set makes every point unlocked and unbroken. The list replaces every
+  key, [] removes them. The result and describe_graph(include_params) read them back in this shape, a broken side with
+  its handle on its point; past 16 keys, a whole graph's listing gives their count, and node_ids on the node gives
+  every key.
 connect: from's output (default: the one tagged base colour, else its first; the result says which) to to's input connector; replaces an existing
   link on that input. An input "#name" (a letter after the #) is an input value of the to node, which set_function's
   expressions on that node read as #name. It is made with the output's type if missing; the output must be a value (a

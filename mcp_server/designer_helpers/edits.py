@@ -1,6 +1,9 @@
 """One-off edits: set_params, add_node, connect, disconnect, delete_nodes, import_bitmap."""
 
 from .core import (
+    _CURVE_KEY,
+    _GRADIENT_KEY,
+    MAX_SIZE_LOG2,
     APIException,
     Callable,
     Json,
@@ -10,14 +13,20 @@ from .core import (
     SDPropertyCategory,
     SDSBSCompGraph,
     SDSBSCompNode,
+    SDTypeArray,
     SDTypeEnum,
+    SDTypeStruct,
     SDValue,
+    SDValueArray,
+    SDValueStruct,
     Sequence,
     Shown,
+    TypedDict,
     _annotation_text,
     _default_output,
     _definition_id,
     _find_node,
+    _finite,
     _graph_to_edit,
     _new_instance,
     _new_node,
@@ -121,6 +130,10 @@ def _make_value(prop: SDProperty, value: Json | Shown, inherited: bool = False) 
     from sd.api.sdvaluestring import SDValueString
 
     ptype = _type(prop)
+    if isinstance(ptype, SDTypeArray):
+        item = cast(SDTypeStruct, ptype.getItemType())  # an array parameter's items are structs (keys)
+        if item.getId() in _KEY_READERS:
+            return _new_keys(prop, item, value)
     if isinstance(ptype, SDTypeEnum):
         options = [(e.getId(), cast(SDValueEnum, e.getDefaultValue())) for e in ptype.getEnumerators()]
         for eid, ev in options:
@@ -173,6 +186,124 @@ def _make_value(prop: SDProperty, value: Json | Shown, inherited: bool = False) 
     if prop.getId() == '$outputsize' and seq:  # as the builder converts them, so numbers sent as strings count
         _refuse_bad_size('$outputsize', [as_int(v) for v in seq], value, inherited)
     return builders[tid]()
+
+
+class _GradientKey(TypedDict):
+    """A Gradient Map key as _gradient_key checks it: its members, by id."""
+
+    position: float
+    value: list[float]
+    midpoint: float
+
+
+class _CurvePoint(TypedDict):
+    """A Curve point as _curve_point checks it: its members, by id (its flags keep a new key's False)."""
+
+    position: list[float]
+    left: list[float]
+    right: list[float]
+
+
+type _GivenKey = _GradientKey | _CurvePoint
+
+
+def _new_keys(prop: SDProperty, item: SDTypeStruct, value: Json | Shown) -> SDValueArray:
+    """A Gradient Map's keys or a Curve's points, an array of `item` structs, from `value` as _given_keys takes it.
+    Designer takes an array of another item type, raising nothing, and converts it (GUIDE.md, Gradient Map keys and
+    Curve points), so each key is built of the parameter's own item type. Members left out keep a new key's value."""
+    members = {m.getId(): m for m in item.getMembers()}
+    keys = cast(SDValueArray, SDValueArray.sNew(item, 0))  # the casts: sNew's type allows None
+    for given in _given_keys(prop.getId(), item.getId(), value):
+        # a curve point's isLocked and broken flags are left as a new key has them, False: every point set comes out
+        # unlocked and unbroken, as the set text says (the lead's choice, the user, 2026-11-22)
+        key = cast(SDValueStruct, SDValueStruct.sNew(item))
+        for member_id, member_value in given.items():
+            # the cast: a TypedDict's items() gives its values as object; each is a float or a list of floats
+            key.setPropertyValue(members[member_id], _make_value(members[member_id], cast(Json, member_value)))
+        keys.pushBack(key)
+    return keys
+
+
+_UNIT = (0.0, 1.0)  # a key's position and midpoint, and a point's x
+
+
+def _number(where: str, v: Json | Shown, bounds: tuple[float, float] | None = None) -> float:
+    """`v` as a float, a number or one written as a string (as the other parameters take them), within `bounds` when
+    given; refused naming `where` otherwise, and so is one that isn't finite (_finite). A bool is no number here: True
+    would be a position of 1."""
+    shown = '%s is a number%s, not %r' % (where, ' from %g to %g' % bounds if bounds else '', v)
+    if isinstance(v, bool) or not isinstance(v, (int, float, str)):
+        raise RuntimeError(shown)
+    try:
+        number = float(v)
+    except ValueError:
+        raise RuntimeError(shown) from None
+    if not _finite(number) or (bounds and not bounds[0] <= number <= bounds[1]):
+        raise RuntimeError(shown)
+    return number
+
+
+def _given_keys(pid: str, item_id: str, value: Json | Shown) -> list[_GivenKey]:
+    """The keys given for the array parameter `pid` of `item_id` structs, each as {member id: its value}, every key
+    checked before any is built; a mistake names its key, `pid[i]` (_gradient_key, _curve_point). fmt reads them back
+    in this form (_shown_keys). An empty list gives no keys."""
+    shape, read = _KEY_READERS[item_id]
+    if not isinstance(value, (list, tuple)):
+        raise RuntimeError('%s takes a list of %s, not %r' % (pid, shape, value))
+    return [read('%s[%d]' % (pid, i), key) for i, key in enumerate(value)]
+
+
+def _gradient_key(where: str, key: Json | Shown) -> _GradientKey:
+    """A Gradient Map key, [position, [r, g, b(, a)]] or [position, [r, g, b(, a)], midpoint]: position and midpoint
+    from 0 to 1, the midpoint 0 when left out, as a new key has. A position below 0 makes every pixel the last key's
+    colour (measured), and one above 1 is no grey of a 0..1 input."""
+    if not isinstance(key, (list, tuple)) or len(key) not in (2, 3):
+        raise RuntimeError(
+            '%s: a key is [position, [r, g, b(, a)]] or [position, [r, g, b(, a)], midpoint], not %r' % (where, key)
+        )
+    colour = key[1]
+    wrong = '%s: colour is [r, g, b] or [r, g, b, a], not %r' % (where, colour)
+    if not isinstance(colour, (list, tuple)) or len(colour) not in (3, 4):
+        raise RuntimeError(wrong)
+    try:
+        rgba = [_number(where, c) for c in colour]
+    except RuntimeError:
+        raise RuntimeError(wrong) from None
+    return {
+        # above 1 is refused, though Designer computes it, to catch a 0..255 or percent mistake (the lead's choice, the
+        # user, 2026-11-22)
+        'position': _number(where + ': position', key[0], _UNIT),
+        'value': rgba,
+        'midpoint': _number(where + ': midpoint', key[2], _UNIT) if len(key) == 3 else 0.0,
+    }
+
+
+def _curve_point(where: str, key: Json | Shown) -> _CurvePoint:
+    """A Curve point: [x, y], its handles put on the point, which joins the points by straight lines (a new key's
+    handles, at (0, 0), bend the curve: measured); or [[x, y], [left x, y], [right x, y]], the handles absolute points.
+    x from 0 to 1, as one below 0 computes a wrong value at 0 (measured); y any number."""
+    wrong = '%s: a point is [x, y] or [[x, y], [left x, y], [right x, y]], not %r' % (where, key)
+    if not isinstance(key, (list, tuple)) or len(key) not in (2, 3):
+        raise RuntimeError(wrong)
+    handled = len(key) == 3
+    point = key[0] if handled else key
+    if not isinstance(point, (list, tuple)) or len(point) != 2 or any(isinstance(c, (list, tuple)) for c in point):
+        raise RuntimeError(wrong)
+    # x above 1 is refused, to catch a 0..255 or percent mistake (the lead's choice, the user, 2026-11-22)
+    position = [_number(where + ': x', point[0], _UNIT), _number(where + ': y', point[1])]
+    if not handled:
+        return {'position': position, 'left': position, 'right': position}
+    handles = [
+        [*_position(h, '%s: the %s handle' % (where, side))] for side, h in zip(('left', 'right'), key[1:], strict=True)
+    ]
+    return {'position': position, 'left': handles[0], 'right': handles[1]}
+
+
+# what each item type's list holds, as a refusal names it, and the function reading one of its keys
+_KEY_READERS: dict[str, tuple[str, Callable[[str, Json | Shown], _GivenKey]]] = {
+    _GRADIENT_KEY: ('keys, [[position, [r, g, b(, a)]], ...], an optional midpoint third', _gradient_key),
+    _CURVE_KEY: ('points, [[x, y], ...], each with optional handles [[x, y], [left x, y], [right x, y]]', _curve_point),
+}
 
 
 def set_params(graph_id: str | SDSBSCompGraph | None, node_id: str | None, params: dict[str, Json]) -> None:
@@ -472,6 +603,7 @@ def import_bitmap(
     Embedding into the .sbs itself isn't supported by the API (NotSupported)."""
     from sd.api.sdresource import EmbedMethod
     from sd.api.sdresourcebitmap import SDResourceBitmap
+    from sd.api.sdvalueint2 import SDValueInt2
 
     if position is not None:
         position = _position(position)
@@ -505,10 +637,17 @@ def import_bitmap(
         print('bitmap resource %s (%s): %s' % (res.getIdentifier(), embed, res.getFilePath()))
     node = _new_instance(g, res)  # of the resource made or found just above
     position = _place(node, position, existing)
-    size = fmt(node.getPropertyValue(_size_property(node)))
+    size = cast(SDValueInt2, node.getPropertyValue(_size_property(node)))
+    sides = size.get()
+    # a side's log2 above 13 still computes 8192 px, the image shrunk to it ("designer facts"; REVIEW.md SRV-239)
+    largest = (
+        '; a side computes 8192 px at most (%d): the image is shrunk to it' % MAX_SIZE_LOG2
+        if max(sides.x, sides.y) > MAX_SIZE_LOG2
+        else ''
+    )
     print(
-        "added %s bitmap @(%d,%d), size %s (log2, the image's own; set $outputsize to change)"
-        % (node.getIdentifier(), position[0], position[1], size)
+        'added %s bitmap @(%d,%d), size %s (log2 of each side, rounded up: the image is stretched to it%s; set '
+        '$outputsize to change)' % (node.getIdentifier(), position[0], position[1], fmt(size), largest)
     )
     print('outputs:', [p.getId() for p in node.getProperties(SDPropertyCategory.Output)])
     return node.getIdentifier()

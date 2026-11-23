@@ -36,23 +36,28 @@ CATEGORIES: list[Step] = [
     # 136 s (2026-11-22, two scratch runs, with their server's start: 150.0 s, 122.7 s): function graphs' Designer facts,
     # set_function, function graphs of the package, sampling images, the tools reading functions
     functions.run,
+    # 46 s (2026-11-22, two scratch runs, with their server's start: 45.3 s, 46.3 s): set ops, inheritance and seed
+    # facts, a Gradient Map's keys and a Curve's points
+    params.run,
     # 40 s (2026-11-12, a scratch run: 46 s with its server's start): every panel's screenshot, the clipboard, fitting
     # the whole graph, the 3D view set up
     editor_panels_and_fit.run,
+    # 39 s (2026-11-23, two scratch runs, with their server's start: 39.1 s, 39.0 s): bitmap ops, their sizes and
+    # orientations, compare_to_reference, analyze_reference, the greys of a colour image, a photo's palette on a Gradient
+    # Map
+    bitmaps.run,
     render.run,  # 35 s: export_outputs, sbsar_info, render_sbs, preview_maps
     facts.run,  # 35 s: Designer facts GUIDE.md relies on
     safeguards.run,  # 23 s: refusals and failure paths
     graph_edit_wire.run,  # 21 s: connect/move/disconnect/delete ops, execute_designer_code, describe_graph, preview_node
     link_display.run,  # 16 s: set_link_display
     inputs.run,  # 15 s: set_graph_size, expose ops, list_graph_inputs, remove_graph_input
-    params.run,  # 15 s: set ops, inheritance and seed facts
     bridge.run,  # 11 s: designer_status, cancel_designer_job, bridge security and queue, sd_run.py
     example.run,  # 10 s: examples/build_dwarf_trimsheet.py
     measure.run,  # 9 s: node_stats, sweep_param, check_tiling, read_designer_log
     lookup.run,  # 6 s: same-named and library graphs; a node with several outputs
     discovery.run,  # 5 s: search_nodes, describe_node
     editor_open_and_zoom.run,  # 4 s: open_graph, screenshot_designer('graph') and crops
-    bitmaps.run,  # 4 s: bitmap ops, compare_to_reference
     graph_edit_create.run,  # 3 s: create_graph, add ops
     layout.run,  # 2 s: snapshot_graph, list_snapshots, diff_graph, arrange_graph, add_frame, add_comment
     save.run,  # 2 s: save_package, snapshots of a saved package, copied bitmaps

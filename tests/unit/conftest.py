@@ -239,8 +239,9 @@ def selftest_check_sources() -> dict[str, str]:
 @pytest.fixture
 def faked_helpers(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
     """The helpers as Designer runs them (designer_helpers.source(), one script) in a module of their own, every sd and
-    PySide6 module they import faked by one MagicMock, and sd's APIException a BaseException, as in Designer. A test
-    file's `helpers` fixture takes it and adds what its tests need."""
+    PySide6 module they import faked by one MagicMock, and sd's APIException a BaseException, as in Designer. fmt,
+    describe_graph and _make_value tell an array apart by its class (SDValueArray, SDTypeArray, SDValueStruct), which a
+    MagicMock can't stand for in isinstance: here each is a class no fake value belongs to. A test file's `helpers` fixture takes it and adds what its tests need."""
     fake = mock.MagicMock()
     imported = re.findall(r'^\s*(?:from|import) ((?:sd|PySide6)(?:\.\w+)*)', designer_helpers.source(), re.M)
     for name in sorted({'.'.join(m.split('.')[:i]) for m in imported for i in range(1, m.count('.') + 2)}):
@@ -248,6 +249,7 @@ def faked_helpers(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
     module = types.ModuleType('helpers_under_test')
     exec(compile(designer_helpers.source(), 'designer_helpers', 'exec'), module.__dict__)
     vars(module)['APIException'] = type('APIException', (BaseException,), {})
+    vars(module).update({name: type(name, (), {}) for name in ('SDTypeArray', 'SDValueArray', 'SDValueStruct')})
     return module
 
 
