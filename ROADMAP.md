@@ -9,8 +9,8 @@ Numbers are stable IDs (other docs cite them); within a section, the order of th
 priority. Items should come from real use (item 31) more than from reviewing the project itself.
 
 **Faster test runs:** the live self-test runs each category in a Designer of its own, several at once
-(`tests/test_all_tools/workers.py`), which took a full pass from about 12 minutes to about 3.4. Items here that this work
-found say so.
+(`tests/test_all_tools/workers.py`), which took a full pass from about 12 minutes to about 3.4 (2026-11-10).
+`workers.py`'s docstring gives the latest time of a full pass. Items here that this work found say so.
 
 **Fewer tools.** The server went from 43 tools to 35 by turning the single-edit tools into `apply_edits`
 ops (fewer choices make the right one easier to pick, and the tool list costs every session tokens).

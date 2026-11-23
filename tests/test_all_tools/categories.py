@@ -33,6 +33,9 @@ from test_all_tools.undo import checks as undo
 # in the pool's order (SOLO's start last), slowest first, so a pool's last ones are short (measured 2026-11-10, each
 # category's preparation, checks and clean-up: a run's summary lists them); one run (Windows) runs them in this order too
 CATEGORIES: list[Step] = [
+    # 425 s (2026-11-23, two full runs, 4 Designers side by side: 425.3 s, 425.9 s; 420.2 s alone, 2026-11-21): every
+    # panel's screenshot, the clipboard, fitting the whole graph, the 3D view set up
+    editor_panels_and_fit.run,
     # 136 s (2026-11-22, two scratch runs, with their server's start: 150.0 s, 122.7 s): function graphs' Designer facts,
     # set_function, function graphs of the package, sampling images, the tools reading functions
     functions.run,
@@ -41,9 +44,6 @@ CATEGORIES: list[Step] = [
     # 46 s (2026-11-22, two scratch runs, with their server's start: 45.3 s, 46.3 s): set ops, inheritance and seed
     # facts, a Gradient Map's keys and a Curve's points
     params.run,
-    # 40 s (2026-11-12, a scratch run: 46 s with its server's start): every panel's screenshot, the clipboard, fitting
-    # the whole graph, the 3D view set up
-    editor_panels_and_fit.run,
     # 39 s (2026-11-23, two scratch runs, with their server's start: 39.1 s, 39.0 s): bitmap ops, their sizes and
     # orientations, compare_to_reference, analyze_reference, the greys of a colour image, a photo's palette on a Gradient
     # Map

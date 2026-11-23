@@ -193,9 +193,10 @@ context on it:
 
 Check every tool end to end against the real Designer. On macOS it runs each category of checks (below) in a Designer
 started for it and closed after it, several at once (how many: `--help`), with the unit tests (`pytest`) beside them,
-their result one line of its summary: about 3.2 minutes for both, 10.5 one at a time. With a Designer of yours open
-it starts nothing and asks you to close it first: they would share its settings. On Windows it is one run in one
-Designer, without the unit tests: it starts Designer if none runs and leaves it open at the end, as it leaves yours.
+their result one line of its summary: about 8.7 minutes for both, four Designers side by side (2026-11-23). With
+a Designer of yours open it starts nothing and asks you to close it first: they would share its settings. On Windows
+it is one run in one Designer, without the unit tests: it starts Designer if none runs and leaves it open at the end,
+as it leaves yours.
 
 ### Running it
 
@@ -226,7 +227,7 @@ or, in a full run, a tool no check exercised; 2: nothing was run (a Designer of 
 
 | Category | What it checks |
 |---|---|
-| `lifecycle` | Quitting and starting Designer, also forced, on other ports, in Designers of its own (the longest, about 4 minutes) |
+| `lifecycle` | Quitting and starting Designer, also forced, on other ports, in Designers of its own (about 3 minutes, 2026-11-23) |
 | `render` | Output: `export_outputs`, `sbsar_info`, `render_sbs` (seeds, sizes, formats) and `preview_maps` |
 | `facts` | The Designer behaviour the agent guide relies on, so a Designer update that changes it shows up |
 | `safeguards` | Refusals and failure paths: unsaved changes never unloaded, bad node ids, failed restores |
@@ -242,7 +243,7 @@ or, in a full run, a tool no check exercised; 2: nothing was run (a Designer of 
 | `discovery` | Finding nodes: `search_nodes` and `describe_node` |
 | `editor_open_and_zoom` | The editor: `open_graph`'s targets and zoom, `screenshot_designer('graph')` with crops |
 | `bitmaps` | Bitmaps: `apply_edits`' bitmap op, `compare_to_reference` and `analyze_reference`; the greys Designer's nodes make of a colour image, and a photo's palette on a Gradient Map |
-| `editor_panels_and_fit` | The editor: every panel's screenshot, the clipboard, `open_graph` fitting the whole graph, the 3D view set up |
+| `editor_panels_and_fit` | The editor: every panel's screenshot, the clipboard, `open_graph` fitting the whole graph, the 3D view set up (the longest, about 7 minutes, 2026-11-23) |
 | `graph_edit_create` | `create_graph` and `apply_edits`' add op |
 | `layout` | Snapshots, diffs and readable graphs: `snapshot_graph`, `list_snapshots`, `diff_graph`, `arrange_graph` |
 | `save` | Saving: `save_package`, snapshots of a saved package, a diff against a `.sbs`, copied bitmaps |

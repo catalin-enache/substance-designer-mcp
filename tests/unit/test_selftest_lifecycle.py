@@ -475,8 +475,9 @@ def test_ending_the_runs_designer_survives_a_failing_ps(
 
 
 def test_lifecycle_waits_for_crash_dumps_once_not_after_each_quit() -> None:
-    """new_crash_dumps waits 10 s after each quit with no dump: eight of them were about 80 s of lifecycle, the longest
-    worker. Its checks go through one CrashWatch (crash_watch.watching_crashes), settled once at the end of run()."""
+    """new_crash_dumps waits 10 s after each quit with no dump: eight of them were about 80 s of lifecycle, then the
+    longest worker. Its checks go through one CrashWatch (crash_watch.watching_crashes), settled once at the end of
+    run()."""
     source = Path(SELFTEST_DIR, 'lifecycle', 'checks.py').read_text(encoding='utf-8')
     assert not re.search(r'\bnew_crash_dumps\b', source)
     run = source[source.index('async def run(ctx: Ctx)') :]

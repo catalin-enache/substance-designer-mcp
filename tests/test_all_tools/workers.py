@@ -1,17 +1,18 @@
 """The live self-test as a pool, the default on macOS: every category in a Designer of its own, started for it and
 closed after it, `--workers N` of them at once (AT_ONCE by default), the next starting as soon as any ends, rather
-than in batches waiting for their slowest (simulated with 4: 2.8 to 3.7 min against 5.9 to 6.5). Each is a worker,
-`python tests/test_all_tools --worker <category>`, a process of its own (the check record and common.PORT are module
-globals) with a bridge port, an MCP server, a Designer and folders of its own; this parent shows each worker's lines
-and merges their results into one summary. A run is the same with 1 worker (one after the other) or 4: no category
-sees what another did. Both suites took about 12 minutes one after the other before the pool; with it 4 minutes with 4
-at once (2026-11-11), lifecycle (about 3.8 minutes) and then undo alone setting the time; 5.6 with 2 and 10.5 with 1
-(2026-11-10, with a shorter lifecycle). A Designer took about 1.9 GB after a run, about 11 GB after a heavy compute
-(2026-11-05); the peak of four at once wasn't measured (ROADMAP item 66).
+than in batches waiting for their slowest. Each is a worker, `python tests/test_all_tools --worker <category>`, a
+process of its own (the check record and common.PORT are module globals) with a bridge port, an MCP server, a Designer
+and folders of its own; this parent shows each worker's lines and merges their results into one summary. A run is the
+same with 1 worker (one after the other) or 4: no category sees what another did. Both suites took about 12 minutes
+one after the other before the pool, which came on 2026-11-11. With it, they took about 8.7 minutes with 4 side by
+side (2026-11-23, two full runs: 527 s, 521 s). editor_panels_and_fit (about 7 minutes), facts and undo set that time:
+the first two never run at once, and undo runs alone at the end. A Designer took about 1.9 GB after a run, about 11 GB
+after a heavy compute (2026-11-05); the peak of four at once wasn't measured (ROADMAP item 66).
 
-- **lifecycle starts first** (the longest), and holds launch_lock's lock over its two windows: while it does, no
-  other worker's Designer starts or quits. editor_panels_and_fit holds it too while its window checks read; lifecycle's
-  own launches and quits within its checks go on then (REVIEW.md TST-467).
+- **lifecycle starts first** (the longest category after editor_panels_and_fit, which starts next), and holds
+  launch_lock's lock over its two windows: while it does, no other worker's Designer starts or quits.
+  editor_panels_and_fit holds it too while its window checks read; lifecycle's own launches and quits within its checks
+  go on then (REVIEW.md TST-467).
 - **The clipboard:** facts and editor_panels_and_fit never run at once (categories.CLIPBOARD).
 - **undo** runs last, alone (categories.SOLO): beside the others its Undo failed (the reason there).
 - **The run's start checks** (get_guide, the Home screen) run once, in the first category to start after lifecycle
