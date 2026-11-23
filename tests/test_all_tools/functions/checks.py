@@ -744,18 +744,21 @@ NORMAL = 'xy = $pos * 2 - 1; float4(xy * 0.5 + 0.5, sqrt(max(0, 1 - dot(xy, xy))
 
 
 async def check_set_function_computes_known_pixels(ctx: Ctx) -> None:
-    """The Pixel Processor's perpixel: Z alone is a float, grey with colorswitch on, as Python computes it at three
-    pixels. Replaced after that compute by the whole normal, a float4, the pixels read again are the normal's, so a
-    function left stale shows."""
+    """The Pixel Processor's perpixel: Z alone is a float, in R, G and B with colorswitch on, as Python computes it at
+    three pixels. Replaced after that compute by the whole normal, a float4, the pixels read again are the normal's, so
+    a function left stale shows."""
     c, G = ctx.c, ctx.G
     t = text(await c('set_function', {'expression': Z, 'node_id': ctx.pp, **G}))
-    expected = built(ctx.pp, Z) + '\ncolorswitch is on: the float is grey.'
+    expected = (
+        built(ctx.pp, Z) + '\ncolorswitch is on: the output is a colour image, the float in R, G and B. '
+        "A blend's opacity reads a colour image as 0, so a mask needs colorswitch off."
+    )
     check(S, "a Pixel Processor's float: the result says what was built and how it shows", t == expected, t)
     got = await pixels(ctx, ctx.pp)
     want = {(x, y): [normal(x, y)[2]] * 3 + [1.0] for x, y in POINTS}
     check(
         S,
-        "a Pixel Processor's float: the pixels are Z, grey",
+        "a Pixel Processor's float: the pixels are Z in R, G and B, alpha 1",
         all_near(got, want),
         str(got),
     )

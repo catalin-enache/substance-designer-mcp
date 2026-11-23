@@ -132,9 +132,11 @@ NO_PARAMETER = "parameter is a node's: a function graph has none."
 PIXEL = ('float', 'float4')
 # the results a Value Processor's function takes
 VALUE = ('bool', *NUMBERS)
-# how a Pixel Processor shows its result, by colorswitch and the result's type (GUIDE.md, Building a function graph)
+# how a Pixel Processor shows its result, by colorswitch and the result's type (GUIDE.md, Building a function graph;
+# a colour image into a blend's opacity: Library node facts)
 SHOWN = {
-    (True, 'float'): 'colorswitch is on: the float is grey.',
+    (True, 'float'): 'colorswitch is on: the output is a colour image, the float in R, G and B. '
+    "A blend's opacity reads a colour image as 0, so a mask needs colorswitch off.",
     (True, 'float4'): 'colorswitch is on: the float4 is the colour.',
     (False, 'float'): 'colorswitch is off: the float is the grayscale value.',
     (False, 'float4'): 'colorswitch is off: the float4 is averaged to grey (the mean of R, G and B, alpha left out).',
@@ -392,7 +394,7 @@ def set_function(
 ) -> str:
     """Replace a node's function with an expression, compiled into Designer's function nodes: a Pixel Processor's
     perpixel, a Value Processor's function, or any parameter's (such as a levels' leveloutlow from graph inputs). One
-    undo step. The result must be a float (grey) or a float4 (colour) for a Pixel Processor, as other types compute
+    undo step. The result must be a float or a float4 for a Pixel Processor, as other types compute
     black; any number or bool for a Value Processor, whose output takes its type, and one that drives input values
     must give their type (give it its function before connecting it); the parameter's own type for a parameter. An
     input value read must have a value of its type connected: a parameter's function refuses one with nothing, and a

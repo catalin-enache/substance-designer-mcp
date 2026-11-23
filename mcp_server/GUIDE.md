@@ -183,6 +183,12 @@ Fallback without MCP: `client/sd_run.py script.py [--timeout N]`, `-c CODE`, `--
 - Atomic `warp` intensity is strong: ~0.05–0.1 gives a gentle wave; 1.5 destroys the pattern.
 - Atomic `normal`: `inversedy=True` gives **OpenGL** normals (Blender): where height rises towards the top of the image,
   green is below 0.5 (a raised band's top chamfer is above 0.5).
+- Atomic `blend`'s `opacity` input, `opacitymult` at 1, its default, in every `blendingmode`: a grey image there is
+  the opacity. A colour one gave the `destination`, as opacity 0, also with R = G = B. Grey and colour are the image's
+  type, LUM or RGBA, as `node_stats` names its format. A Pixel Processor's float with `colorswitch` on, its default,
+  is RGBA, and so is the bitmap of an RGB PNG. The bitmap of an 8-bit grey PNG is LUM, a mask as it is. For a mask,
+  turn a Pixel Processor's `colorswitch` off, or add Grayscale Conversion. The cases measured: the scripting part, A
+  blend's opacity.
 
 ## Rendering and verifying
 
@@ -354,7 +360,8 @@ The rules and the first pitfalls are in the core, `get_guide()`.
     `getReferencedResource()` give None. `newPropertyGraph(prop, 'SDSBSFunctionGraph')` makes it.
   - **`perpixel`** lists float4 whatever `colorswitch` says (on by default), also once its function's output node is a
     float, with `colorswitch` on or off. What that output computes:
-    - `colorswitch` on gives a colour texture (RGBA8 in an 8-bit graph): a float4 is the colour, a float a grey;
+    - `colorswitch` on gives a colour texture (RGBA8 in an 8-bit graph): a float4 is the colour, a float its value in
+      R, G and B, alpha 1;
     - `colorswitch` off gives a grayscale one (LUM8 in an 8-bit graph): a float is the value, a float4 the mean of its
       R, G and B, alpha left out;
     - a float2, a float3, a bool, or an int to int4 computes black either way, raising nothing. Of these number and
@@ -515,6 +522,22 @@ The rules and the first pitfalls are in the core, `get_guide()`.
   - Grayscale Conversion Advanced's `grayscale_type`: 0 Desaturation, the mean of the largest and the smallest of R, G
     and B; 1 Luma, Rec.601's weights (0.299, 0.587, 0.114); 2 Average, the mean; 3 Max; 4 Min. Its default: Which tool
     for what, Measure.
+- **A blend's opacity** ("designer facts", the `facts` check of a blend's opacity): an atomic blend, `blendingmode`
+  copy, `opacitymult` at its default. Its sides are colour, a white `source` over a `destination` of (0.2, 0.4, 0.6,
+  1), or grey, white over 0.2, in 8-bit, 16-bit and 32-bit float graphs. Fed into its `opacity` input:
+  - grey images (LUM) gave their value as the opacity: a `uniform` and a Pixel Processor's float, each with
+    `colorswitch` off, the bitmap of an 8-bit grey PNG (mode L), and Grayscale Conversion of three colour images: a
+    `uniform`, a Pixel Processor's float with `colorswitch` on, and the bitmap of an RGB PNG whose R, G and B are
+    equal;
+  - colour images (RGBA) gave the `destination`, as opacity 0: `uniform`s with `colorswitch` on of grey, white, red,
+    green and blue, white at alpha 0.5, a Pixel Processor's float with `colorswitch` on, and the bitmap of an RGB PNG
+    whose R, G and B are equal;
+  - with nothing connected, the blend gave its `source`.
+
+  Every `blendingmode` was measured too, in a 32-bit float graph, a source of (0.7, 0.5, 0.3, 1) over that
+  destination. In each, a grey `uniform` 0.5 gave the blend that `opacitymult` 0.5 gives with nothing connected. A
+  colour `uniform` (0.5, 0.5, 0.5, 1) gave the one `opacitymult` 0 gives, the `destination`. The blends of
+  `opacitymult` 0.5 and 0 differ in each mode.
 - **Graph size** is set with `graph.setInputPropertyValueFromId('$outputsize', SDValueInt2.sNew(int2(11, 11)))`;
   `setDefaultParentSize()` takes **pixels**. A node's `$format` and an absolute `$outputsize` only take effect with
   inheritance set to Absolute. The graph's own `$format` too (a new graph's follows its parent: 16 bits

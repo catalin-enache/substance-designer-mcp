@@ -306,7 +306,12 @@ def test_a_parameter_takes_its_own_type(
 @pytest.mark.parametrize(
     ('read', 'expression', 'shown'),
     [
-        (PIXEL, '0.5', 'colorswitch is on: the float is grey.'),
+        (
+            PIXEL,
+            '0.5',
+            'colorswitch is on: the output is a colour image, the float in R, G and B. '
+            "A blend's opacity reads a colour image as 0, so a mask needs colorswitch off.",
+        ),
         (PIXEL, 'float4(0.1, 0.2, 0.3, 1)', 'colorswitch is on: the float4 is the colour.'),
         (PIXEL_GREY, '0.5', 'colorswitch is off: the float is the grayscale value.'),
         (
@@ -316,7 +321,7 @@ def test_a_parameter_takes_its_own_type(
         ),
         (VALUE, 'float2(0.1, 0.2)', "The Value Processor's output is a float2 now."),
     ],
-    ids=['grey', 'a colour', 'a grayscale value', 'a colour averaged', 'a Value Processor'],
+    ids=['a float as a colour', 'a colour', 'a grayscale value', 'a colour averaged', 'a Value Processor'],
 )
 def test_the_result_says_how_the_processor_gives_the_output(
     monkeypatch: pytest.MonkeyPatch, read: _Target, expression: str, shown: str

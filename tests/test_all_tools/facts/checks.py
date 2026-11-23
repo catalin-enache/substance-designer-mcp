@@ -12,11 +12,70 @@ from test_all_tools.common import (
     added_id,
     check,
     designer_script,
+    expect,
     is_image,
     pixel_values,
     skip,
     text,
 )
+from test_all_tools.facts.blend_cases import (
+    COLOURS,
+    DESTINATION,
+    HALF,
+    MODES,
+    MODES_DEPTH,
+    MODES_GRAPH,
+    Feeds,
+    by_mode,
+    expected_lines,
+    image,
+    listed,
+    pngs,
+)
+
+
+async def check_a_blend_opacity_fed_a_colour_image(ctx: Ctx) -> None:
+    """What an atomic blend, copy, its opacitymult at its default, 1, gives with its opacity input fed each image of
+    `feeds`, a row each: the opacity the blend takes from it, and the image it computes, LUM or RGBA. Its sides are
+    colour, white over (0.2, 0.4, 0.6, 1), or grey, white over 0.2, each in an 8-bit, a 16-bit and a 32-bit float graph
+    (facts/designer_scripts/blend_opacity.py). Then, in the float graph, each blendingmode, the enum listing MODES:
+    a grey uniform 0.5 gives the blend opacitymult 0.5 gives with nothing connected, and a colour uniform (0.5, 0.5,
+    0.5, 1) the one opacitymult 0 gives, the destination; those two blends differ. The cases, as GUIDE.md states
+    them: A blend's opacity; Grayscale Conversion's mean: The greys of a colour image."""
+    c = ctx.c
+    t = text(await designer_script(c, 'facts/blend_opacity', **pngs(ctx.scratch)))
+    feeds: Feeds = {
+        'nothing': (1, ()),
+        'a grey uniform 0.5': (0.5, (0.5,)),
+        **{'a colour uniform %s' % listed(rgba): (0, rgba) for rgba in COLOURS},
+        "a Pixel Processor's float 0.5, colorswitch on": (0, HALF),
+        "a Pixel Processor's float 0.5, colorswitch off": (0.5, (0.5,)),
+        'Grayscale Conversion of a colour uniform (0.2, 0.4, 0.6, 1)': (0.4, (0.4,)),
+        'a bitmap of an 8-bit grey PNG at 128': (0.5, (0.5,)),
+        'a bitmap of an RGB PNG at (128, 128, 128)': (0, HALF),
+        # the two colour images GUIDE.md's core gives Grayscale Conversion for
+        "Grayscale Conversion of a Pixel Processor's float 0.5, colorswitch on": (0.5, (0.5,)),
+        'Grayscale Conversion of a bitmap of an RGB PNG at (128, 128, 128)': (0.5, (0.5,)),
+    }
+    expect(t, "a blend's opacity", {**expected_lines(feeds), '%s, blendingmode ids' % MODES_GRAPH: ', '.join(MODES)})
+    destination = 'blend ' + image(MODES_DEPTH, *DESTINATION)
+    for mode in MODES:
+        got = by_mode(t, mode)
+        told = 'grey %(grey)s; colour %(colour)s; opacitymult 0.5 %(half)s; opacitymult 0 %(zero)s' % got
+        apart = got['half'] != got['zero']
+        check(
+            'designer facts',
+            "a blend's opacity, %s mode: a grey uniform 0.5 gives what opacitymult 0.5 gives" % mode,
+            apart and got['grey'] == got['half'],
+            told,
+        )
+        check(
+            'designer facts',
+            "a blend's opacity, %s mode: a colour uniform (0.5, 0.5, 0.5, 1) gives what opacitymult 0 gives, the "
+            'destination' % mode,
+            apart and got['colour'] == got['zero'] == destination,
+            told,
+        )
 
 
 async def check_unsaved_bitmap_copies(ctx: Ctx) -> None:
@@ -331,6 +390,7 @@ async def run(ctx: Ctx) -> None:
     check(F, 'API inheritance: RelativeToInput 0, RelativeToParent 1, Absolute 2', 'API_INHERIT=0,1,2' in t, t)
     await check_unsaved_bitmap_copies(ctx)
     await check_the_largest_output_size(ctx)
+    await check_a_blend_opacity_fed_a_colour_image(ctx)
     t = text(await c('describe_node', {'definition': 'tile_generator'}))
     ids_ok = all(
         re.search(r'^\s+%s\s' % re.escape(i), t, re.M)

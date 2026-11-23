@@ -36,6 +36,8 @@ CATEGORIES: list[Step] = [
     # 136 s (2026-11-22, two scratch runs, with their server's start: 150.0 s, 122.7 s): function graphs' Designer facts,
     # set_function, function graphs of the package, sampling images, the tools reading functions
     functions.run,
+    # 50 s (2026-11-23, two scratch runs, with their server's start: 53.8 s, 46.7 s): Designer facts GUIDE.md relies on
+    facts.run,
     # 46 s (2026-11-22, two scratch runs, with their server's start: 45.3 s, 46.3 s): set ops, inheritance and seed
     # facts, a Gradient Map's keys and a Curve's points
     params.run,
@@ -47,7 +49,6 @@ CATEGORIES: list[Step] = [
     # Map
     bitmaps.run,
     render.run,  # 35 s: export_outputs, sbsar_info, render_sbs, preview_maps
-    facts.run,  # 35 s: Designer facts GUIDE.md relies on
     safeguards.run,  # 23 s: refusals and failure paths
     graph_edit_wire.run,  # 21 s: connect/move/disconnect/delete ops, execute_designer_code, describe_graph, preview_node
     link_display.run,  # 16 s: set_link_display
