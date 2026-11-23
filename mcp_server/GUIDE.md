@@ -44,7 +44,8 @@ Parameters are described in each tool's schema; this is when to reach for which.
   `describe_graph` of a whole graph names the package's function graphs too. With `node_id` (and `parameter`), or `function`, it lists a
   function's nodes instead, to read back what `set_function` built. A node's function also says what feeds each
   `#name` it reads, so that a connection changed since it was built shows: one fed another type, which Designer reads
-  wrongly, or one with nothing connected.
+  wrongly, or one with nothing connected. `selected=True` lists only the nodes selected in the editor; opening another
+  graph there drops the selection.
 - **Safety net:** `snapshot_graph`, `list_snapshots`, `diff_graph` (the rules).
 - **Look:** `preview_node` (any node, even one feeding no output), `screenshot_designer` (what the user sees),
   `open_graph` (open the graph first, so the user and screenshots see it; `frame=` or `node_ids=` zooms to one
@@ -538,6 +539,17 @@ The rules and the first pitfalls are in the core, `get_guide()`.
   destination. In each, a grey `uniform` 0.5 gave the blend that `opacitymult` 0.5 gives with nothing connected. A
   colour `uniform` (0.5, 0.5, 0.5, 1) gave the one `opacitymult` 0 gives, the `destination`. The blends of
   `opacitymult` 0.5 and 0 differ in each mode.
+- **A blend of a grey image and a colour one** ("designer facts", the `facts` check of a blend of a grey image and a
+  colour one): an atomic blend whose `source` and `destination` differ in type, LUM and RGBA, gives the
+  `destination`'s type. Its `source` blends as a zero of that type:
+  - a grey `source` 0.3 over a colour `destination` of (0.2, 0.4, 0.6, 1) gave what a colour `uniform` (0, 0, 0, 0)
+    gives there. In every `blendingmode` but switch, that was the `destination`;
+  - a colour `source` of (0.3, 0.3, 0.3, 1) over a grey `destination` 0.2 gave what a grey `uniform` 0 gives there.
+
+  Both were measured in a 32-bit float graph, in every `blendingmode`, with nothing in `opacity` and with a grey
+  `uniform` 0.5 there. Each differed from the blend of a `source` 0.3 of the `destination`'s type. Designer drew the
+  link of a LUM16 grey `source` into an RGBA8 colour `destination` red and dotted, and solid once the `destination`
+  was grey (seen once, in a demo).
 - **Graph size** is set with `graph.setInputPropertyValueFromId('$outputsize', SDValueInt2.sNew(int2(11, 11)))`;
   `setDefaultParentSize()` takes **pixels**. A node's `$format` and an absolute `$outputsize` only take effect with
   inheritance set to Absolute. The graph's own `$format` too (a new graph's follows its parent: 16 bits
@@ -596,10 +608,19 @@ The rules and the first pitfalls are in the core, `get_guide()`.
   does this. **Don't send it synthetic key events or right-clicks**: twice (right-click menus, then a sent Ctrl+C, which
   copied nothing, as sent key events bypass Qt's shortcuts) the view went empty, its nodes intact, and only unloading
   the package brought it back. A synthetic left click on a node selected it and switched the Parameters panel to it
-  (seen twice); `setSelected(True)` on its scene item selects it too (the API reports it) but leaves the panel as it was
-  (seen by hand). The API itself can't select nodes in the view (`focusGraphNode` only centres one). After such
-  experiments, restart Designer before real work (the user's: ask them): once, with the Parameters panel still showing a
-  Dot of a package unloaded since, the next edit in another graph crashed Designer.
+  (seen twice); `setSelected(True)` on its scene item selects it too (the API reports it) but leaves the panel as it
+  was, and so does `clearSelection()`. The `editor_open_and_zoom` check of the Parameters panel ("designer facts")
+  measures this on a node, a Dot, a frame and a comment, reading the panel after one `processEvents()` pass. It starts
+  from the panel on the graph in the editor, then from the panel on another graph, which `setExplorerSelection` turns
+  it to while the editor keeps its graph. The API itself can't select nodes in the view (`focusGraphNode` only centres
+  one). After such experiments, restart Designer before real work (the user's: ask them): once, with the Parameters
+  panel still showing a Dot of a package unloaded since, the next edit in another graph crashed Designer.
+- **Unloading a package leaves the Parameters panel showing its graph**, even the graph that was in the editor
+  ("designer facts", the `editor_open_and_zoom` check of the Parameters panel). `setExplorerSelection` of a graph still
+  loaded turns the panel to it and keeps the graph in the editor, so a script can turn the panel off a package it
+  unloads. The crash above didn't recur in 21 trials on macOS, in a Designer an agent started (2026-11-23), with the
+  panel left on a graph, a Dot or a node of an unloaded package. Each trial went on with edits and computes in another
+  graph through the tools, and a paint of the panel and a quit crashed nothing either.
 - Current graph: `getQtForPythonUIMgr().getCurrentGraph()`; editor control via **`app.getUIMgr()`**:
   `openResourceInEditor(graph)`, `focusGraphNode(graphViewID, node)` (ids via `getGraphViewIDCount/At`,
   `getGraphFromGraphViewID`), `getGraphNodeBBox`, `setExplorerSelection`. `openResourceInEditor` opens a function
@@ -608,6 +629,22 @@ The rules and the first pitfalls are in the core, `get_guide()`.
   from a function graph open (the `editor` part of the `functions` checks), so `open_graph` refuses one. The dock's "Fit in view (selection)" (F) fits
   the selection, or everything when nothing is selected; `open_graph` fits every node, frame and free comment by wheel
   zoom instead.
+- **The editor's selection**, which `describe_graph(selected=True)` reads ("designer facts", the `editor_open_and_zoom`
+  checks of the selection getters):
+  - `getQtForPythonUIMgr().getCurrentGraphSelectedNodes()` gives the selected nodes, a Dot too.
+    `getCurrentGraphSelectedObjects()` gives the selected frames, comments (a node's own too) and pins. Each is
+    empty, not None, when nothing is selected. A selected link is in neither. The sd API marks
+    `getCurrentGraphSelection()` deprecated in favour of the first (`sd/api/qtforpythonuimgrwrapper.py`).
+  - They read the graph in the editor, and show a `setSelected` at once, before any event is processed. Opening the
+    graph already there keeps its selection. Opening another gives that graph's, and the first graph's selection is
+    gone when it is opened again.
+  - Once the editor's graph is closed and Designer's event loop has removed its view (`getGraphViewIDCount()` 0),
+    `getCurrentGraph()` gives None and both getters raise `APIException` (`InvalidArgument`). So check
+    `getCurrentGraph()` first.
+- **Never call `parentItem()` on the graph view's scene items** ("designer facts", the `editor_open_and_zoom` check of
+  `parentItem`). On a node's comment item, it made the node's item Python's (`shiboken6.Shiboken.ownedByPython` turned
+  True). Python then deleted the item with its wrapper: the node left the view, still in the graph, and a later
+  deletion crashed Designer (seen 2026-11-23). `Shiboken.invalidate()` on that wrapper at once left the item in the view.
 - **Quitting:** through `quit_designer` (the rules), not from a script: `QApplication.exit(0)` has crashed Designer and
   left it hung. The plugin answers status from another thread, so a main thread frozen outside a job reads as idle.
   How: `server_tools/lifecycle.py`.

@@ -75,10 +75,13 @@ def check(tool: str, name: str, ok: bool, detail: str = '') -> None:
     print('%s  %-22s %s | %s' % ('PASS' if ok else 'FAIL', tool, name, detail.strip()[:150].replace('\n', ' / ')))
 
 
+NO_LINE = 'no line '  # how said()'s note on a missing line starts
+
+
 def said(t: str, label: str) -> str:
-    """What the line of `t` starting with `label |` says after it, or a note that there is none."""
+    """What the line of `t` starting with `label |` says after it, or a note that there is none, starting NO_LINE."""
     found = re.search(r'^%s \| (.*)$' % re.escape(label), t, re.M)
-    return found.group(1) if found else 'no line %r: %s' % (label, t.strip()[-200:])
+    return found.group(1) if found else '%s%r: %s' % (NO_LINE, label, t.strip()[-200:])
 
 
 def expect(t: str, name: str, lines: dict[str, str]) -> None:

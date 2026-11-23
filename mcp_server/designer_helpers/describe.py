@@ -3,6 +3,7 @@ function nodes) and node textures (previews, pixels)."""
 
 from .core import (
     _APP,
+    _MORE_HINT,
     _PM,
     APIException,
     Callable,
@@ -19,6 +20,7 @@ from .core import (
     SDValueArray,
     Shown,
     _annotation_text,
+    _current_graph,
     _default_output,
     _focused,
     _function_definitions,
@@ -33,6 +35,7 @@ from .core import (
     _texture,
     _type,
     _type_ids,
+    _ui,
     _usage_names,
     cast,
     find_graph,
@@ -71,8 +74,10 @@ def describe_graph(
     node_ids: list[str] | None = None,
     include_params: bool = False,
     limit: int = 400,
+    hint: str = _MORE_HINT,
 ) -> None:
-    """Lists a graph's nodes, and its package's function graphs (a function's nodes: describe_function)."""
+    """Lists a graph's nodes, and its package's function graphs (a function's nodes: describe_function). `hint` is
+    what the line past `limit` says to do."""
     from sd.api.sdvalueint2 import SDValueInt2
 
     g = find_graph(identifier)
@@ -139,7 +144,49 @@ def describe_graph(
                     prop.getId() in ('$outputsize', '$pixelsize') and cur in ((0, 0), (1.0, 1.0))
                 ):
                     print('    %s = %r' % (prop.getId(), cur))
-    _more(nodes, limit)
+    _more(nodes, limit, hint)
+
+
+def describe_selected(identifier: str | None = None, include_params: bool = False, limit: int = 400) -> None:
+    """describe_graph(selected=True): the graph in the editor, only its nodes selected there (describe_graph's
+    node_ids), then a line naming the frames, comments and pins selected too. A graph given must be the one in the
+    editor. The getters read the graph in the editor, and raise once no graph view is left there, so the graph is
+    checked first (GUIDE.md, Designer UI)."""
+    from sd.api.sdgraphobjectcomment import SDGraphObjectComment
+    from sd.api.sdgraphobjectframe import SDGraphObjectFrame
+    from sd.api.sdgraphobjectpin import SDGraphObjectPin
+
+    g = _current_graph()
+    if g is None:
+        raise RuntimeError("No graph is open in Designer's editor, so nothing is selected there.")
+    if not isinstance(g, SDSBSCompGraph):
+        raise RuntimeError(
+            "The graph open in Designer's editor (%s) is not a compositing graph: selected reads a compositing graph's "
+            'selection only.' % g.getIdentifier()
+        )
+    if identifier and identifier != g.getIdentifier():
+        raise RuntimeError(
+            "selected reads the selection of the graph in Designer's editor, which is %r, not %r. To read one in %r, "
+            'open it there with open_graph and have the user select in it.'
+            % (g.getIdentifier(), identifier, identifier)
+        )
+    ui = _ui()
+    node_ids = [n.getIdentifier() for n in ui.getCurrentGraphSelectedNodes() or []]
+    objects = list(ui.getCurrentGraphSelectedObjects() or [])
+    named = ['frame %r' % o.getTitle() for o in objects if isinstance(o, SDGraphObjectFrame)]
+    for label, kind in (('comment', SDGraphObjectComment), ('pin', SDGraphObjectPin)):
+        count = sum(isinstance(o, kind) for o in objects)
+        if count:
+            named.append('%d %s%s' % (count, label, 's' if count > 1 else ''))
+    if not node_ids:  # describe_graph lists every node for no node_ids
+        if named:
+            print('graph %s: no node selected in the editor, only %s' % (g.getIdentifier(), ', '.join(named)))
+        else:
+            print('graph %s: nothing selected in the editor' % g.getIdentifier())
+        return
+    describe_graph(g, node_ids, include_params, limit, hint='raise limit')  # selected refuses node_ids (HLP-254)
+    if named:
+        print('also selected: ' + ', '.join(named))
 
 
 def _library_path(name: str) -> tuple[str, str]:

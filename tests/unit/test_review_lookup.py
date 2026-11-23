@@ -394,10 +394,11 @@ def test_decisions_and_roadmap_are_proposed_while_reviewing_and_addressing_never
     for path in ('AGENTS.md', 'DECISIONS.md', os.path.join('.claude', 'rules', 'docs.md')):
         assert 'at a cleanup' not in flat(read(path)), path
     # REVIEW.md AGT-107: `docs.md`, which every agent loads, had it add new ideas to ROADMAP.md itself. It points to the
-    # skill by its path, as a reviewer has no Skill tool to load it
+    # skill by its path, as a reviewer has no Skill tool to load it. AGT-128: it proposes only the ideas the branch
+    # can't take on (the `delegate` skill, What looks like a ROADMAP proposal)
     docs = flat(rule('docs.md'))
     assert 'add new ideas there' not in docs
-    assert 'Propose new ideas to the user, who decides each one.' in docs
+    assert "Propose the ideas the branch can't take on to the user, who decides each one." in docs
     assert "as the `address-review` skill's After a group says (`.claude/skills/address-review/SKILL.md`)" in docs
 
 

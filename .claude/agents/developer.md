@@ -121,8 +121,8 @@ At the end, return to the lead, densely:
   found, with its evidence;
 - the coverage still missing;
 - the Designer facts you measured, and where you recorded them;
-- what the lead should propose to the user (the `address-review` skill, After a group): a ROADMAP.md item, a won't
-  fix to ask for, with the criteria it meets (the `address-review` skill, step 7);
+- what the lead should propose to the user (the `address-review` skill, After a group): a ROADMAP.md item the branch
+  can't take on, a won't fix to ask for, with the criteria it meets (the `address-review` skill, step 7);
 - after the fixes a failed final check needs: which suites must run again (the `live-check` skill, When the final
   check fails). The lead tells the user, who asks for them;
 - any blocker: an impossible requirement, a conflict with a decision, a unit that can't pass without silencing a

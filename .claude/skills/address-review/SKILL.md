@@ -115,7 +115,8 @@ addressed in one go (the ones the user named, or the batch in the plan) are hand
       to, GUIDE.md or README.md that the fix made untrue, a name or path in DECISIONS.md it made stale, or a new
       sentence that claims more than the test measures.
       Adjust what you find, then step back and review the adjusted change the same way, again and
-      again, until a fresh look finds nothing a reviewer could report. Only then go on.
+      again, until a fresh look finds nothing a reviewer could report that is worth a fix (AGENTS.md, Keep it
+      simple). Only then go on.
       When a sentence claims more than its test measures, prefer narrowing the sentence to writing a
       stronger test, unless the extra claim is something an agent needs in order to act. For an entry
       marked generation 3 or later (`.claude/agents/reviewer.md`, Follow-up chains), narrowing the claim is
@@ -141,12 +142,13 @@ addressed in one go (the ones the user named, or the batch in the plan) are hand
           reproducible* instead.
         - **Fixing it is never worth it, not just "not now".** One of these applies:
             - the fix costs far more than the harm: a rare defect with a small effect, against much more code, a new
-              moving part or slower runs;
+              moving part or slower runs. A very unlikely case whose fix needs complex code isn't even a finding (the
+              `project-code-review` skill, step 4);
             - the fix goes against a choice of the user's;
             - it can't be fixed from this project: it is Designer's or Claude Code's own behaviour, and stating the
               limit where agents read it is all that can be done.
-        - **It isn't work for later.** Work worth doing one day is a ROADMAP.md item instead, which closes the finding
-          (**Moved to ROADMAP.md**, below).
+        - **It isn't work for later.** Work worth doing one day that the branch can't take on is a ROADMAP.md item
+          instead, which closes the finding (**Moved to ROADMAP.md**, below).
 
       When **Fixing it is never worth it** fails, or the lead is unsure whether it holds, the finding is fixed, or moved
       to ROADMAP.md (below). A fix closes it for good, while a won't fix adds a DECISIONS.md entry that every later
@@ -155,11 +157,12 @@ addressed in one go (the ones the user named, or the batch in the plan) are hand
       lead's), since the finding stays open. The lead uses *won't fix* only once the user agrees, then records it
       (below).
     - **Moved to ROADMAP.md is the user's decision too** (the user, 2026-11-20). It closes a real finding whose fix is
-      work worth doing one day, outside the branch's scope. A leftover in the branch's own code is fixed in the branch
-      instead (the `delegate` skill, The loop is the lead's). The developer may propose the item in its report, and the
-      lead may propose one itself. The lead asks the user at once, as for a won't fix, since the finding stays open
-      until they answer. Once the user approves the item, the lead adds it to ROADMAP.md, citing the finding's ID, so
-      `scripts/review_lookup.py` finds the entry after a cleanup. Then the lead checks the entry with
+      work worth doing one day, which the branch can't take on (the `delegate` skill, What looks like a ROADMAP
+      proposal). A leftover in the branch's own code is fixed in the branch instead (the `delegate` skill, The loop is
+      the lead's). The developer may propose the item in its report, and the lead may propose one itself. The lead
+      asks the user at once, as for a won't fix, since the finding stays open until they answer. Once the user approves
+      the item, the lead adds it to ROADMAP.md, citing the finding's ID, so `scripts/review_lookup.py` finds the entry
+      after a cleanup. Then the lead checks the entry with
       `**Resolution: moved to ROADMAP.md** (item N, the user, <date>)`.
 
 ## Recording decisions
@@ -168,12 +171,16 @@ addressed in one go (the ones the user named, or the batch in the plan) are hand
 the whole project, where they can't, so only what is settled goes there, and only what a reviewer could plausibly
 raise again:
 
-- **What the user decides goes in, if a reviewer could raise it again:** their answer when asked to decide on a
-  finding, or what they say about one unprompted: won't fix, a rule to follow from now on, one option out of several,
-  how something should work. A choice that AGENTS.md, a rule or skill AGENTS.md points to, or the code's comments
+- **What the user decides goes in, if a reviewer could raise it again, with real weight (below):** their answer when
+  asked to decide on a finding, or what they say about one unprompted: won't fix, a rule to follow from now on, one
+  option out of several, how something should work. A choice that AGENTS.md, a rule or skill AGENTS.md points to, or the code's comments
   already answer stays in `REVIEW.md` and the code. It can come with a fix: a rule chosen over closing a finding as
   won't fix is both. Keep the entry to the decision, the reason the user gave or agreed to in a few words, the date
   and the reopen condition. A cleanup of `REVIEW.md` moves nothing to `DECISIONS.md`, so this is the time.
+- **An entry is proposed only when it has real weight** (the user, 2026-11-23: "adding into decisions should be
+  proposed wisely and only if it has a real weight"). A choice the lead or the developer makes in the user's name, of
+  how to do something, is proposed as an entry only with that weight. That choice takes the simplest way (AGENTS.md,
+  Keep it simple), and PLAN.md or the developer's report records it.
 - **A false finding stays in `REVIEW.md` only** (the user, 2026-11-20). A *not a bug* or *not reproducible* answer is
   a review's finding that didn't hold, not a decision, so it gets no `DECISIONS.md` entry. If a reviewer raises it
   again after a cleanup, the test kept as its guard (step 2) is the evidence that settles it again.
@@ -197,8 +204,9 @@ For what goes in:
   `project-code-review` skill, Who settles what), then writes it as a new entry (that skill's rules: append, the next
   free ID, the header's **Last used**) or rejects it. Every developer run gets a row in the table by model, with its
   cost, and its new findings count there (TEMPLATE.md, Reviews by model).
-- Work for later that isn't a finding (a follow-up, an idea): propose it to the user for `ROADMAP.md` in your report.
-  A leftover in the branch's own code is reported for a fix in the branch instead (the `delegate` skill, The loop is
-  the lead's). The lead asks the user about the proposals when the reviews look converged, unless the next step needs
-  the answer first (the `delegate` skill, The loop is the lead's), and adds what they approve. A cleanup
-  of `REVIEW.md` moves nothing there.
+- Work that isn't a finding (a follow-up, an idea) is first tried in the branch (the `delegate` skill, What looks like
+  a ROADMAP proposal): report it for a fix or a step there. Only for that rule's valid reasons, propose it to the user
+  for `ROADMAP.md` in your report. A leftover in the branch's own code is reported for a fix in the branch instead (the
+  `delegate` skill, The loop is the lead's). The lead asks the user about the proposals when the reviews look
+  converged, unless the next step needs the answer first (the `delegate` skill, The loop is the lead's), and adds what
+  they approve. A cleanup of `REVIEW.md` moves nothing there.

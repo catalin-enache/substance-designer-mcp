@@ -94,14 +94,15 @@ in it. A cleanup empties the table at its end, and git keeps the rows (the `clea
 - **Scope:** <the commits reviewed, as the command that printed the diff
   (`git diff <last> <this> -- . ':(exclude)PLAN.md'`), or the files of a whole-project review or an area>.
 - **How:** <who reviewed which areas; no tests run; the lead agent's scratch probes in Designer, and what they measured;
-  the suspicions settled as wrong, and why>.
+  the suspicions settled as wrong or not worth a fix, and why>.
 - **Not verified:** <only suspicions a limitation kept from being checked here (not ones a scratch probe could check):
   the suspicion, what was tried, the limitation, what would check it; none, if none>.
 - **Resolutions assessed:** <earlier resolved entries checked; which hold up, and which were
   questioned (by which new ID)>.
 - **Findings:** <IDs added, with counts per severity; duplicates merged>.
 - **Suggested order:** <optional: which findings to address first, and why>.
-- **Simplifications:** <optional: worthwhile refactors that aren't defects; those for later proposed for `ROADMAP.md`>.
+- **Simplifications:** <optional: worthwhile refactors that aren't defects; those the branch can't take on proposed for
+  `ROADMAP.md` (the `delegate` skill, What looks like a ROADMAP proposal)>.
 - **Checked and found fine:** <what was examined and holds, so the next review needn't redo it>.
 
 ---

@@ -56,20 +56,35 @@ def describe_graph(
             'with node_id.'
         ),
     ] = None,
+    selected: Annotated[
+        bool,
+        Field(
+            description="Lists only the nodes selected in Designer's editor, as node_ids lists them, then names the "
+            "frames, comments and pins selected too; a selected link isn't read. A graph given must be the one in the "
+            'editor. Not with node_ids, node_id, parameter or function.'
+        ),
+    ] = False,
 ) -> str:
     """List a graph's nodes: id, type (atomic name or instance:<library graph>), position,
     an output node's identifier, label and usage, and incoming connections (`input<-sourceNodeId.output`); and, but
     focused on node_ids, its package's function graphs, each with its inputs and its output's type. With node_id or function, it lists a
     function's nodes instead, in the same form, each with its constant and its output's types, and the output node. A
     node's function also says each input value (#name) it reads and what feeds it, so that one left reading another
-    type, or nothing, shows."""
+    type, or nothing, shows. With selected, it lists the nodes the user selected in the editor, or says none is."""
+    if selected and (node_ids or node_id or parameter or function):
+        raise ToolError(
+            "selected lists the nodes selected in Designer's editor, so it takes no node_ids, node_id, parameter or "
+            'function.'
+        )
     if node_id and function:
         raise ToolError(NODE_OR_FUNCTION + ', not both.')
     if parameter and function:
         raise ToolError(NO_PARAMETER)
     if parameter and not node_id:
         raise ToolError("parameter is a node's: give node_id too.")
-    if node_id or function:
+    if selected:
+        call = 'describe_selected(%r, %r, %d)' % (graph, include_params, limit)
+    elif node_id or function:
         call = 'describe_function(%r, %r, %r, %r, %r, %d)' % (
             graph,
             node_id or None,

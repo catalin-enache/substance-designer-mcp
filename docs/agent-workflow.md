@@ -106,6 +106,14 @@ when it reports convergence. That covers a change the developer proposes within 
 severity, whether a finding is real, the order of the work, a fix's scope, where a fact goes in the docs, and fixing
 the branch's own leftovers in the branch rather than proposing them for later.
 
+**A choice made in the user's name takes the simplest way** (AGENTS.md, Working on this project). The lead and the
+developer leave out very unlikely cases that need complex code.
+
+**What looks like a ROADMAP item is tried in the branch first,** at every stage of the branch. It becomes a proposal
+only when it would make too many unrelated changes, or is too complex for the branch's focus. A proposal that isn't
+a finding waits for the convergence report (the `delegate` skill, What looks like a ROADMAP proposal). The user didn't
+want ROADMAP.md to fill up as fast as the branches consumed it.
+
 **The loop stops for the user** only for:
 
 - a change to what the branch delivers that a user would see, beyond the plan;
@@ -123,9 +131,10 @@ nothing waits in PLAN.md's Waiting for the user, and the lead asks it at converg
 **A won't fix is the user's decision.** The developer or the lead may propose one. The lead judges it against three
 criteria, which must all hold: the finding is real; fixing it is never worth it, not just "not now", because the fix
 costs far more than the harm, goes against a choice of the user's, or can't be made from this project; and it isn't
-work for later, which is a ROADMAP item instead. When fixing could be worth it, or the lead is unsure, the finding
-is fixed; a false one is answered "not a bug", and work for later outside the branch goes to ROADMAP.md, which closes
-the finding once the user approves the item (the `address-review` skill, step 7). When all hold, the lead asks the user at once, since the finding stays open meanwhile.
+work for later, which is a ROADMAP item instead when the branch can't take it on. When fixing could be worth it, or
+the lead is unsure, the finding is fixed; a false one is answered "not a bug", and work for later the branch can't take
+on goes to ROADMAP.md, which closes the finding once the user approves the item (the `address-review` skill, step 7).
+When all hold, the lead asks the user at once, since the finding stays open meanwhile.
 
 **A false finding is no decision.** A finding that turns out not to hold is answered "not a bug" or "not reproducible"
 in REVIEW.md, with the test kept as its guard. It never goes in DECISIONS.md.
@@ -136,7 +145,7 @@ in REVIEW.md, with the test kept as its guard. It never goes in DECISIONS.md.
 |---|---|---|---|
 | PLAN.md | The branch's steps, what is done and left, the lead's decisions, what waits for the user | The lead | The branch: deleted in its last commit |
 | REVIEW.md | Every finding of the branch's reviews, with its resolution and who found it on which model; the review log; a table by model of the findings, tokens and time of each round and each developer run | The lead, from the reports | Until the user asks for a cleanup; then git |
-| DECISIONS.md | What is settled for the whole project that a reviewer could raise again: the user's won't fixes, rules and choices | The lead, with the user's approval; the names and paths an entry points at, the agent whose change renames or moves them | For good |
+| DECISIONS.md | What is settled for the whole project that a reviewer could raise again, with real weight: the user's won't fixes, rules and choices | The lead, with the user's approval; the names and paths an entry points at, the agent whose change renames or moves them | For good |
 | ROADMAP.md | Work for later, ideas, items needing another machine | The lead, with the user's approval | For good, items checked when done |
 | AGENTS.md | What every session and every agent needs, and pointers to the rest | Any change that alters a rule | For good, kept small |
 | Agent files | Each agent's tools, model, effort and own rules | Changes to the setup | For good |
@@ -217,7 +226,7 @@ Copy these files and adapt them. Keep the rules that are about the setup; replac
 
 | File | What to change |
 |---|---|
-| [AGENTS.md](../AGENTS.md) | Keep the opening's commit rule; in Working on this project, the tests first, the review of one's own work and the paragraphs on PLAN.md and REVIEW.md; Running the tests, with its two stages; Delegating to subagents; and Deploying and diagnosing's pointer for an edited agent file. Replace the project's own rules and pointers, here those about the product, its guide, the IDE's tools and the live self-test, and list the new project's rules |
+| [AGENTS.md](../AGENTS.md) | Keep the opening's commit rule; in Working on this project, the tests first, the review of one's own work, Keep it simple, and the paragraphs on PLAN.md and REVIEW.md; Running the tests, with its two stages; Delegating to subagents; and Deploying and diagnosing's pointer for an edited agent file. Replace the project's own rules and pointers, here those about the product, its guide, the IDE's tools and the live self-test, and list the new project's rules |
 | [.claude/agents/](../.claude/agents/) | The tools each agent may use (drop this project's own: here the IDE's and the product's), the models and effort, the commands each may run. Their descriptions and bodies hold this project's parts too: where the analyst looks, what the reviewer cites and hunts for, the developer's triage of a new tool and its section on the product, the runner's sections on what it runs and on diagnosing the product |
 | [delegate](../.claude/skills/delegate/SKILL.md) | Little: it is about the setup. Its passages about the product: the program a developer's brief lets it use, the user's program among what stops the loop, the runner's diagnosis of a program that crashed or hung, and the tools a developer's criteria name (the linter, lint and types) |
 | [project-code-review](../.claude/skills/project-code-review/SKILL.md) and its [TEMPLATE.md](../.claude/skills/project-code-review/TEMPLATE.md) | The finding prefixes, one per area of the new project; the probes in the product and the live checks; the product's guide as a reviewer's context; the unit tests it names; the examples from this project's reviews |

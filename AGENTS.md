@@ -55,7 +55,13 @@ and after; they must pass both times.
 node as well as the graph, the other parameter, the other code path); would each test fail without the change it guards
 (not pass on state an earlier check left, a value already there, or a comparison any rule satisfies); does every test
 clean up on failure too; did the change weaken an older test; does any comment, docstring or doc say more than the code
-and tests show? Fix what you find and look again, until a fresh look finds nothing a reviewer could report.
+and tests show? Fix what you find and look again, until a fresh look finds nothing a reviewer could report that is
+worth a fix (**Keep it simple**, below).
+
+**Keep it simple** when you decide in the user's name how something is done: choose the way that won't make the code
+complex in the long run. Don't address very extreme cases that won't likely happen and need complex code. Prefer
+simplicity whenever the complexity weighs far more than the value added (the user, 2026-11-23: "chose simplicity
+(KISS)"; "Dont be tempted to fix extreme cases that wont likely happen").
 
 **A branch's plan is in PLAN.md** (repo root), the lead's: the main session, which talks with the user. If it is
 there, read it before anything else, at the start of a session and after a compaction, and continue from it. How the

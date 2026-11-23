@@ -52,13 +52,16 @@ CATEGORIES: list[Step] = [
     safeguards.run,  # 23 s: refusals and failure paths
     graph_edit_wire.run,  # 21 s: connect/move/disconnect/delete ops, execute_designer_code, describe_graph, preview_node
     link_display.run,  # 16 s: set_link_display
+    # 16 s (2026-11-23, two scratch runs, with their server's start: 15.5 s, 16.7 s): open_graph,
+    # screenshot_designer('graph') and crops, describe_graph(selected=True), the Designer facts of the Parameters panel,
+    # the selection getters and parentItem
+    editor_open_and_zoom.run,
     inputs.run,  # 15 s: set_graph_size, expose ops, list_graph_inputs, remove_graph_input
     bridge.run,  # 11 s: designer_status, cancel_designer_job, bridge security and queue, sd_run.py
     example.run,  # 10 s: examples/build_dwarf_trimsheet.py
     measure.run,  # 9 s: node_stats, sweep_param, check_tiling, read_designer_log
     lookup.run,  # 6 s: same-named and library graphs; a node with several outputs
     discovery.run,  # 5 s: search_nodes, describe_node
-    editor_open_and_zoom.run,  # 4 s: open_graph, screenshot_designer('graph') and crops
     graph_edit_create.run,  # 3 s: create_graph, add ops
     layout.run,  # 2 s: snapshot_graph, list_snapshots, diff_graph, arrange_graph, add_frame, add_comment
     save.run,  # 2 s: save_package, snapshots of a saved package, copied bitmaps

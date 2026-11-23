@@ -159,12 +159,14 @@ line of the review log, with the decision's title. An answer in `REVIEW.md` can 
      skill says;
    - what to look for beyond its rules, if anything;
    - the findings in its area, by ID, whose resolutions it rechecks (step 2), and the review log's notes on what was
-     found fine, so it doesn't report them again;
+     found fine, settled as wrong or named not worth a fix, so it doesn't report them again;
    - the generation of each finding that questions a resolution (**Follow-up chains**).
 4. **Settle every suspicion yourself** (**Every finding is settled before it is written**, above), the developer's
    new problems included (**Who settles what**): read the lines each one quotes; probe those reading can't settle, as
    **Who settles what** says. Mark each finding *confirmed* or *measured*, drop the ones settled as wrong (the review log's entry says
-   which, and why), and put the ones a limitation keeps from being checked under **Not verified**. Merge duplicates
+   which, and why), and put the ones a limitation keeps from being checked under **Not verified**. A real suspicion
+   that is a very unlikely case whose fix needs complex code isn't written as a finding: the review log names it as not
+   worth a fix (AGENTS.md, Keep it simple). Merge duplicates
    into one entry, its title line naming both reviewers and their models, and check every finding against
    `DECISIONS.md` and the `REVIEW.md` entries it touches once more before writing it.
 5. **Write** each new finding as one entry in its severity section, after the entries already
@@ -201,8 +203,9 @@ line of the review log, with the decision's title. An answer in `REVIEW.md` can 
 8. **Propose to the user** what the review brings up for later and for good, in the report saying the reviews look
    converged, or at once when the next step needs it (the `delegate` skill, The loop is the lead's). Until then it
    waits in PLAN.md, Waiting for the user:
-   - a `ROADMAP.md` item for each simplification or follow-up worth doing later. A leftover in the branch's own code
-     is fixed in the branch instead (the `delegate` skill, The loop is the lead's);
+   - a `ROADMAP.md` item for each simplification or follow-up worth doing later that the branch can't take on (the
+     `delegate` skill, What looks like a ROADMAP proposal). A leftover in the branch's own code is fixed in the branch
+     instead (the `delegate` skill, The loop is the lead's);
    - a `DECISIONS.md` entry only for a decision of the user's that would stop reviewers raising the same finding
      again, never for a false finding (the `address-review` skill, Recording decisions);
    - the reviewers' **Unspecified** items, what no doc decides (`.claude/agents/reviewer.md`): the user decides each,

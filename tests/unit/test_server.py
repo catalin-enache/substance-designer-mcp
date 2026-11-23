@@ -751,8 +751,20 @@ def test_open_graph_refuses_a_parameter_with_no_node_in_one_answer(
         ),
         ({'function': 'paint', 'node_ids': ['3']}, "describe_function('g', None, None, 'paint', ['3'], 400)"),
         ({'node_id': '', 'function': ''}, "describe_graph('g', None, False, 400)"),
+        ({'selected': True}, "describe_selected('g', False, 400)"),
+        ({'selected': True, 'include_params': True, 'limit': 5}, "describe_selected('g', True, 5)"),
+        ({'selected': True, 'node_ids': [], 'node_id': '', 'function': ''}, "describe_selected('g', False, 400)"),
     ],
-    ids=['the graph', "a processor's function", "a parameter's function", 'a function graph', 'empty ones'],
+    ids=[
+        'the graph',
+        "a processor's function",
+        "a parameter's function",
+        'a function graph',
+        'empty ones',
+        "the editor's selection",
+        'the selection with its parameters and a limit',
+        'the selection with empty ones',
+    ],
 )
 def test_describe_graph_sends_the_function_it_shows(sent: list[str], arguments: dict[str, Json], sent_as: str) -> None:
     asyncio.run(server.server.call_tool('describe_graph', {'graph': 'g', **arguments}))
@@ -779,3 +791,29 @@ def test_describe_graph_refuses_a_function_named_two_ways_before_designer(
     with pytest.raises(server.ToolError) as raised:
         server.describe_graph('g', node_id=node_id, parameter=parameter, function=function)
     assert str(raised.value) == says and sent == []
+
+
+def test_selected_says_a_selected_link_is_not_read() -> None:
+    # REVIEW.md SRV-243: with only a link selected, the result says nothing is (a link is in neither getter: GUIDE.md,
+    # Designer UI, its designer facts check)
+    assert "a selected link isn't read" in _described('describe_graph', 'selected')
+
+
+@pytest.mark.parametrize(
+    ('node_ids', 'node_id', 'parameter', 'function'),
+    [(['3'], None, None, None), (None, '7', None, None), (None, None, None, 'paint'), (None, None, 'perpixel', None)],
+    ids=['node_ids', 'node_id', 'function', 'parameter'],
+)
+def test_describe_graph_refuses_the_selection_with_nodes_named_another_way_before_designer(
+    sent: list[str], node_ids: list[str] | None, node_id: str | None, parameter: str | None, function: str | None
+) -> None:
+    # parameter alone is refused here too, not sent to "give node_id too", which this refuses next
+    with pytest.raises(server.ToolError) as raised:
+        server.describe_graph(
+            'g', node_ids=node_ids, node_id=node_id, parameter=parameter, function=function, selected=True
+        )
+    assert str(raised.value) == (
+        "selected lists the nodes selected in Designer's editor, so it takes no node_ids, node_id, parameter or "
+        'function.'
+    )
+    assert sent == []

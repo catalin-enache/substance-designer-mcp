@@ -1,13 +1,15 @@
 """What check_a_blend_opacity_fed_a_colour_image (checks.py) feeds and reads: the colours fed into a blend's opacity,
 a grey PNG (mode L) and an RGB PNG whose R, G and B are equal, saved for it, the lines
-facts/designer_scripts/blend_opacity.py is expected to print, and the lines of each blendingmode it compares."""
+facts/designer_scripts/blend_opacity.py is expected to print, and the lines of each blendingmode it compares. Also the
+lines check_a_blend_of_a_grey_image_and_a_colour_one compares: each blendingmode's blends of two types. Both checks
+read one run of that script (blend_lines)."""
 
 import os
 from typing import TypedDict
 
 from PIL import Image as PILImage
 
-from test_all_tools.common import said
+from test_all_tools.common import Ctx, designer_script, said, text
 
 Rgba = tuple[float, float, float, float]
 # a feed's label: the opacity the blend takes from it, and the image it computes, one value for LUM, four for RGBA,
@@ -41,6 +43,8 @@ MODES = (
     'screen',
     'softlight',
 )
+# what each blend of two types has in its opacity (blend_opacity.py's TYPE_FEEDS)
+TYPE_FEEDS = ('nothing', 'a grey uniform 0.5')
 
 
 class ModeBlends(TypedDict):
@@ -64,6 +68,48 @@ def by_mode(t: str, mode: str) -> ModeBlends:
         half=line('opacity nothing, opacitymult 0.5'),
         zero=line('opacity nothing, opacitymult 0'),
     )
+
+
+class TypeBlends(TypedDict):
+    """A mode's six blends of two types in MODES_GRAPH, one feed in their opacity, each as blend_opacity.py printed
+    it."""
+
+    grey_over_colour: str  # a grey source 0.3 over the colour destination
+    clear_over_colour: str  # a colour source (0, 0, 0, 0) over it
+    colour_over_colour: str  # a colour source (0.3, 0.3, 0.3, 1) over it
+    colour_over_grey: str  # a colour source (0.3, 0.3, 0.3, 1) over the grey destination
+    black_over_grey: str  # a grey source 0 over it
+    grey_over_grey: str  # a grey source 0.3 over it
+
+
+def by_types(t: str, mode: str, feed: str) -> TypeBlends:
+    """What blend_opacity.py printed of `mode`'s six blends of two types with `feed` in their opacity, each found by
+    the name ending its label, its key in TYPE_CASES."""
+
+    def line(name: str) -> str:
+        return said(t, '%s, %s mode, opacity %s, %s' % (MODES_GRAPH, mode, feed, name))
+
+    return TypeBlends(
+        grey_over_colour=line('grey_over_colour'),
+        clear_over_colour=line('clear_over_colour'),
+        colour_over_colour=line('colour_over_colour'),
+        colour_over_grey=line('colour_over_grey'),
+        black_over_grey=line('black_over_grey'),
+        grey_over_grey=line('grey_over_grey'),
+    )
+
+
+# each category run's lines of blend_opacity.py, by its scratch folder (blend_lines)
+_LINES: dict[str, str] = {}
+
+
+async def blend_lines(ctx: Ctx) -> str:
+    """What facts/designer_scripts/blend_opacity.py printed, run once per category run, as both blend checks read its
+    lines."""
+    c, scratch = ctx.c, ctx.scratch
+    if scratch not in _LINES:
+        _LINES[scratch] = text(await designer_script(c, 'facts/blend_opacity', **pngs(scratch)))
+    return _LINES[scratch]
 
 
 def pngs(folder: str) -> dict[str, str]:

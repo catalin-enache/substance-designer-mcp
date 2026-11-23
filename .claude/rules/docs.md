@@ -29,7 +29,7 @@ the rule's wording or figures.
 | Architecture: what the plugin, server, helpers and CLI tools each do | **README.md**, "How it works" |
 | How to deploy changes, diagnostics an **agent** needs | **AGENTS.md**, Deploying and diagnosing, or the rule or skill it points to for that work |
 | New or changed tool | Its entry and the tool count in README.md's Tools table, and checks in `tests/test_all_tools/` |
-| What is settled for the whole project that a reviewer could plausibly raise again: the user's won't fix, rule or choice. A false finding (not a bug, not reproducible) stays in REVIEW.md | **DECISIONS.md** (read by the review skills; agents may update its names and paths, anything else takes the user) |
+| What is settled for the whole project that a reviewer could plausibly raise again, with real weight: the user's won't fix, rule or choice. A false finding (not a bug, not reproducible) stays in REVIEW.md | **DECISIONS.md** (read by the review skills; agents may update its names and paths, anything else takes the user) |
 | Work still to do, ideas, follow-ups | **ROADMAP.md** (check an item when done; checked items can be deleted later, git keeps the record) |
 | The plan of the branch in progress: what is done, what is left, the decisions waiting | **PLAN.md**, the lead's (AGENTS.md, Working on this project) |
 | A rule only some files need | A path-scoped rule in **`.claude/rules/`**, listed in AGENTS.md (Working on this project) |
@@ -39,9 +39,11 @@ the rule's wording or figures.
 AGENTS.md has a byte budget (`AGENTS_MD_BUDGET` in `tests/unit/test_guide.py`), so what only some work needs goes in a
 rule or a skill.
 
-Open work lives in [ROADMAP.md](../../ROADMAP.md): check it before proposing improvements. Propose new ideas to the
-user, who decides each one. An idea goes in ROADMAP.md only once they approve it, as the `address-review` skill's
-After a group says (`.claude/skills/address-review/SKILL.md`).
+Open work lives in [ROADMAP.md](../../ROADMAP.md): check it before proposing improvements. A branch first tries a new
+idea in the branch itself, as the `delegate` skill's What looks like a ROADMAP proposal says
+(`.claude/skills/delegate/SKILL.md`). Propose the ideas the branch can't take on to the user, who decides each one.
+An idea goes in ROADMAP.md only once they approve it, as the `address-review` skill's After a group says
+(`.claude/skills/address-review/SKILL.md`).
 
 ## Writing docs and comments
 

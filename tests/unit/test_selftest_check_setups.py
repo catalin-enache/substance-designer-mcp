@@ -1,7 +1,7 @@
 """What live checks do with the answers they get, on fakes: a capture ending on the client's side first (REVIEW.md
 TST-256), a view not visible in a Designer the self-test started (TST-258), the state a check is about not reached
-(TST-259), and what the 3D zoom's checks say when they fail (TST-664 to TST-666). The checks themselves run against the
-real Designer: this is what a run that passes can't show."""
+(TST-259), what the 3D zoom's checks say when they fail (TST-664 to TST-666), and a check skipped in the user's Designer
+(TST-817). The checks themselves run against the real Designer: this is what a run that passes can't show."""
 
 import ast
 import asyncio
@@ -14,7 +14,7 @@ from types import ModuleType, SimpleNamespace
 from typing import NoReturn
 
 import pytest
-from selftest_fakes import FakeCall, code_of, fresh, tool_result
+from selftest_fakes import Designer, FakeCall, code_of, fresh, tool_result
 
 from project_constants import ToolArgs
 
@@ -94,6 +94,16 @@ def test_a_view_not_visible_is_a_skip_only_in_the_users_designer(
     asyncio.run(getattr(editor, name)(SimpleNamespace(c=c, was_running=was_running)))
     assert bool(_common().skipped) == was_running
     assert (False in _common().results['screenshot_designer']) != was_running
+
+
+@pytest.mark.parametrize('was_running', [True, False], ids=['the users Designer', 'one the self-test started'])
+def test_the_parent_item_facts_run_only_in_a_designer_the_self_test_started(was_running: bool) -> None:
+    # REVIEW.md TST-817
+    checks = fresh('editor_open_and_zoom.checks')
+    c = Designer('')
+    asyncio.run(checks.check_parent_item_hands_a_scene_item_to_python(SimpleNamespace(c=c, was_running=was_running)))
+    assert bool(c.calls) != was_running, c.calls
+    assert bool(_common().skipped) == was_running
 
 
 def _measure_designer(calls: list[str], broken: str = '') -> FakeCall:

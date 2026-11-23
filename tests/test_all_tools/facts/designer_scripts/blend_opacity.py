@@ -1,10 +1,12 @@
-"""Runs inside Designer (run_designer_script), for facts' check of a blend's opacity (checks.py): what an atomic blend,
-`blendingmode` copy, its `opacitymult` at its default, gives with its `opacity` input fed each grey and colour image.
-Its `source` is white and its `destination` (0.2, 0.4, 0.6, 1), each a colour uniform; or, for grey sides, grey
-uniforms, white over 0.2. Every feed goes into a blend of each kind of sides, in a graph of each format (8-bit,
-16-bit and 32-bit float), each graph in a package of its own, unloaded at the end, read after one graph.compute().
+"""Runs inside Designer (run_designer_script), for facts' checks of a blend's opacity and of a blend of a grey image and
+a colour one (checks.py). First, what an atomic blend, `blendingmode` copy, its `opacitymult` at its default, gives
+with its `opacity` input fed each grey and colour image. Its `source` is white and its `destination` (0.2, 0.4, 0.6,
+1), each a colour uniform; or, for grey sides, grey uniforms, white over 0.2. Every feed goes into a blend of each
+kind of sides, in a graph of each format (8-bit, 16-bit and 32-bit float), each graph in a package of its own, unloaded
+at the end, read after one graph.compute().
 In the float graph, each blendingmode the blend's enum lists also blends (0.7, 0.5, 0.3, 1) over that destination four
-times, as MODE_CASES says. ARGS: grey_png and rgb_png, two PNGs fed as bitmap nodes.
+times, as MODE_CASES says, and blends sides of two types: each source of TYPE_CASES over the destination of colour or
+of grey sides, with each feed of TYPE_FEEDS in its opacity. ARGS: grey_png and rgb_png, two PNGs fed as bitmap nodes.
 
 Prints, for each graph:
 - the `opacitymult` of its first blend;
@@ -181,6 +183,17 @@ MODE_CASES: tuple[tuple[str, float | None], ...] = (
     ('nothing', 0.5),
     ('nothing', 0),
 )
+# each blend of two types in a mode, by the name ending its label: its source, a uniform of that colour and colorswitch,
+# and the sides whose destination it goes over
+TYPE_CASES: dict[str, tuple[Rgba, bool, str]] = {
+    'grey_over_colour': ((0.3, 0.3, 0.3, 1), False, 'colour'),
+    'clear_over_colour': ((0, 0, 0, 0), True, 'colour'),
+    'colour_over_colour': ((0.3, 0.3, 0.3, 1), True, 'colour'),
+    'colour_over_grey': ((0.3, 0.3, 0.3, 1), True, 'grey'),
+    'black_over_grey': ((0, 0, 0, 1), False, 'grey'),
+    'grey_over_grey': ((0.3, 0.3, 0.3, 1), False, 'grey'),
+}
+TYPE_FEEDS = ('nothing', 'a grey uniform 0.5')  # the feeds of FEEDS into each blend of two types' opacity
 
 for format_id, format_name in FORMATS:
     package = pm.newUserPackage()
@@ -214,6 +227,11 @@ for format_id, format_name in FORMATS:
                 label = '%s, %s mode, opacity %s%s' % (format_name, mode, feed_label, opacitymult)
                 n = blend(graph, mode_source, mode_destination, feeds[feed_label], mode, multiplier)
                 mode_blends.append((label, n))
+            for type_name, (rgba, colorswitch, side) in TYPE_CASES.items():
+                type_source = uniform(graph, rgba, colorswitch)
+                for mode, feed_label in product(modes, TYPE_FEEDS):
+                    label = '%s, %s mode, opacity %s, %s' % (format_name, mode, feed_label, type_name)
+                    mode_blends.append((label, blend(graph, type_source, sides[side][1], feeds[feed_label], mode)))
         graph.compute()
         for label, n, feed in built:
             print('%s | blend %s | opacity %s' % (label, pixel(n), '-' if feed is None else pixel(feed)))

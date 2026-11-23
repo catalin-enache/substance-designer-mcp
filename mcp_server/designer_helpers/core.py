@@ -391,10 +391,13 @@ def _focused(nodes: list[SDNode], node_ids: list[str] | None) -> list[SDNode]:
     return [n for n in nodes if n.getIdentifier() in wanted]
 
 
-def _more(nodes: list[SDNode], limit: int) -> None:
-    """The line saying how many of `nodes` are past `limit`, when some are."""
+_MORE_HINT = 'raise limit or filter node_ids'
+
+
+def _more(nodes: list[SDNode], limit: int, hint: str = _MORE_HINT) -> None:
+    """The line saying how many of `nodes` are past `limit`, when some are, and `hint`: what to do about it."""
     if len(nodes) > limit:
-        print('... %d more nodes (raise limit or filter node_ids)' % (len(nodes) - limit))
+        print('... %d more nodes (%s)' % (len(nodes) - limit, hint))
 
 
 def _other_end(connection: SDConnection) -> tuple[SDNode, SDProperty]:

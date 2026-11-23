@@ -1,6 +1,6 @@
 ---
 name: delegate
-description: Use in this repository before starting or resuming an agent (the Agent tool, or SendMessage), as the lead or as the developer starting an analyst, and before continuing the loop from PLAN.md (a session's start, a compaction) or while the lead runs it. Says which agent does what, the lead's loop (writing PLAN.md, what stops it for the user, an agent that stops to ask, a long run's timer, what comes back, the merge), what the brief gives the agent (the objective, the read set, the precedents, a developer's acceptance criteria, the Designer it may use, a reviewer's claim), since the brief is its only context about the task, and how a changed agent file reaches the agents.
+description: Use in this repository before starting or resuming an agent (the Agent tool, or SendMessage), as the lead or as the developer starting an analyst, and before continuing the loop from PLAN.md (a session's start, a compaction) or while the lead runs it. Says which agent does what, the lead's loop (writing PLAN.md, what stops it for the user, what looks like a ROADMAP proposal, an agent that stops to ask, a long run's timer, what comes back, the merge), what the brief gives the agent (the objective, the read set, the precedents, a developer's acceptance criteria, the Designer it may use, a reviewer's claim), since the brief is its only context about the task, and how a changed agent file reaches the agents.
 ---
 
 # Delegating: which agent, the lead's loop, the brief
@@ -55,10 +55,27 @@ stops the loop for the user:
 - any other decision of the user's that blocks the next step.
 
 In doubt whether a decision is its own, the lead asks the user at once. A decision of the user's that doesn't block the
-next step waits in PLAN.md, Waiting for the user: a DECISIONS.md entry, a ROADMAP.md item. The lead asks them together when it
-tells the user the reviews converged, and adds what the user approves. Independent agents start in one message. During
-the loop, analysts answer what needs reading across many files and do the developer's research, but add no detail to a
-step. No review starts while the developer edits.
+next step waits in PLAN.md, Waiting for the user: a DECISIONS.md entry, a ROADMAP.md item the branch can't take on
+(**What looks like a ROADMAP proposal**, below). The lead asks them together when it tells the user the reviews
+converged, and adds what the user approves. Independent agents start in one message. During the loop, analysts answer
+what needs reading across many files and do the developer's research, but add no detail to a step. No review starts
+while the developer edits.
+
+**What looks like a ROADMAP proposal** is first tried in the branch, at every stage of it: planning, implementation,
+review and addressing findings (the user, 2026-11-23). The lead has it done there, as a fix or a step of PLAN.md. A
+step that changes what the branch delivers waits for the user's word first, as the list of what stops the loop says
+(above). The idea becomes a ROADMAP.md proposal only for a valid reason:
+
+- it makes too many changes unrelated to the branch;
+- it is too complex for the branch's focus.
+
+Such an idea is proposed only if it makes much sense (the user, 2026-11-23: "Only bring the idea to me if it actually
+makes much sense"). An idea that doesn't is neither done nor proposed (AGENTS.md, Keep it simple). A proposal that isn't
+a finding waits for the report that the reviews converged, as the `project-code-review` skill's step 8 says. A finding
+to move to ROADMAP.md is asked at once, as the list of what stops the loop says. The user's words: "i do not want the
+roadmap to fill in in the same time as it is consumed from. we will not ever end it", and "the first instinct should be
+lets try doing it now, and if there are valid reasons not to, because it does too many unrelated changes, it becomes too
+complex for this branch focus then yes, it makes sense to be a roadmap, but else address it on the spot".
 
 **An agent that stops to ask** (the developer's triage, a missing criterion, a change to the plan, a decision only the
 user can take) ends with its report. The lead brings back the answer with SendMessage to that agent, which goes on with

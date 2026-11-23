@@ -34,7 +34,7 @@ report.
 - **Read `DECISIONS.md`.** A finding that contradicts an entry isn't reported, unless the entry's **Reopen if** holds.
   Then report it naming the entry, with the evidence.
 - **Read `REVIEW.md`'s entries in your scope,** open and resolved, and its review log's notes on what earlier reviews
-  found fine, which needn't be redone. Don't report a known finding again:
+  found fine, settled as wrong or named not worth a fix, which needn't be redone. Don't report a known finding again:
   - an open one seen again gets at most a note with something new: another scenario, a better location;
   - a done one is reported only if the bug is back, as a regression naming the old ID and what brought it back;
   - a not-a-bug or not-reproducible one: don't raise the same finding again. Questioning its answer, with a reason or

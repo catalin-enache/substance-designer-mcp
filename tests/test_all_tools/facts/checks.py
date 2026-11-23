@@ -3,10 +3,12 @@
 import base64
 import os
 import re
+from itertools import product
 from textwrap import dedent
 from typing import cast
 
 from test_all_tools.common import (
+    NO_LINE,
     TEST_GRAPH,
     Ctx,
     added_id,
@@ -25,12 +27,14 @@ from test_all_tools.facts.blend_cases import (
     MODES,
     MODES_DEPTH,
     MODES_GRAPH,
+    TYPE_FEEDS,
     Feeds,
+    blend_lines,
     by_mode,
+    by_types,
     expected_lines,
     image,
     listed,
-    pngs,
 )
 
 
@@ -42,8 +46,7 @@ async def check_a_blend_opacity_fed_a_colour_image(ctx: Ctx) -> None:
     a grey uniform 0.5 gives the blend opacitymult 0.5 gives with nothing connected, and a colour uniform (0.5, 0.5,
     0.5, 1) the one opacitymult 0 gives, the destination; those two blends differ. The cases, as GUIDE.md states
     them: A blend's opacity; Grayscale Conversion's mean: The greys of a colour image."""
-    c = ctx.c
-    t = text(await designer_script(c, 'facts/blend_opacity', **pngs(ctx.scratch)))
+    t = await blend_lines(ctx)
     feeds: Feeds = {
         'nothing': (1, ()),
         'a grey uniform 0.5': (0.5, (0.5,)),
@@ -74,6 +77,40 @@ async def check_a_blend_opacity_fed_a_colour_image(ctx: Ctx) -> None:
             "a blend's opacity, %s mode: a colour uniform (0.5, 0.5, 0.5, 1) gives what opacitymult 0 gives, the "
             'destination' % mode,
             apart and got['colour'] == got['zero'] == destination,
+            told,
+        )
+
+
+async def check_a_blend_of_a_grey_image_and_a_colour_one(ctx: Ctx) -> None:
+    """What an atomic blend gives when its source and destination differ in type, LUM and RGBA (ROADMAP item 127), in
+    the float graph of facts/designer_scripts/blend_opacity.py: in each blendingmode of MODES, with nothing in its
+    opacity and with a grey uniform 0.5 there. A grey source 0.3 over the colour destination (0.2, 0.4, 0.6, 1) gives
+    what a colour source (0, 0, 0, 0) gives, the destination in every mode but switch. A colour source (0.3, 0.3, 0.3,
+    1) over the grey destination 0.2 gives what a grey source 0 gives. Each differs from the blend of a source 0.3 of
+    the destination's type. The case, as GUIDE.md states it: A blend of a grey image and a colour one."""
+    t = await blend_lines(ctx)
+    destination = 'blend ' + image(MODES_DEPTH, *DESTINATION)
+    for mode, feed in product(MODES, TYPE_FEEDS):
+        got = by_types(t, mode, feed)
+        told = '; '.join('%s %s' % item for item in got.items())
+        # every line compared is there: said() gives a note starting NO_LINE for a missing one, which differs from any
+        # line (REVIEW.md TST-824)
+        present = NO_LINE not in told
+        name = 'a blend of a grey image and a colour one, %s mode, opacity %s: ' % (mode, feed)
+        gives_destination = mode != 'switch'
+        check(
+            'designer facts',
+            name + 'a grey source over a colour destination gives what a colour source (0, 0, 0, 0) gives, '
+            '%sthe destination' % ('' if gives_destination else 'not '),
+            present
+            and got['grey_over_colour'] == got['clear_over_colour'] != got['colour_over_colour']
+            and (got['grey_over_colour'] == destination) == gives_destination,
+            told,
+        )
+        check(
+            'designer facts',
+            name + 'a colour source over a grey destination gives what a grey source 0 gives',
+            present and got['colour_over_grey'] == got['black_over_grey'] != got['grey_over_grey'],
             told,
         )
 
@@ -391,6 +428,7 @@ async def run(ctx: Ctx) -> None:
     await check_unsaved_bitmap_copies(ctx)
     await check_the_largest_output_size(ctx)
     await check_a_blend_opacity_fed_a_colour_image(ctx)
+    await check_a_blend_of_a_grey_image_and_a_colour_one(ctx)
     t = text(await c('describe_node', {'definition': 'tile_generator'}))
     ids_ok = all(
         re.search(r'^\s+%s\s' % re.escape(i), t, re.M)
