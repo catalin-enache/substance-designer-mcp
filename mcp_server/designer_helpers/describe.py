@@ -378,9 +378,9 @@ def _with_node_texture(
     if output:
         outs = [p for p in outs if p.getId() == output]
     if not outs:
-        raise RuntimeError(
-            'output %r not found; outputs: %s'
-            % (output, [p.getId() for p in node.getProperties(SDPropertyCategory.Output)])
+        raise RuntimeError(  # its node named, as node_stats(against=...) reads two (REVIEW.md HLP-255)
+            'output %r not on node %s; outputs: %s'
+            % (output, node.getIdentifier(), [p.getId() for p in node.getProperties(SDPropertyCategory.Output)])
         )
     if not output and len(outs) > 1:
         chosen, how = _default_output(node, [p.getId() for p in outs])

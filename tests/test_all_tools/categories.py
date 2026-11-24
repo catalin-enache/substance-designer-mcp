@@ -39,6 +39,9 @@ CATEGORIES: list[Step] = [
     # 136 s (2026-11-22, two scratch runs, with their server's start: 150.0 s, 122.7 s): function graphs' Designer facts,
     # set_function, function graphs of the package, sampling images, the tools reading functions
     functions.run,
+    # 88 s (2026-11-24, two scratch runs, with their server's start: 88.2 s, 87.6 s): node_stats, sweep_param,
+    # check_tiling, read_designer_log
+    measure.run,
     # 50 s (2026-11-23, two scratch runs, with their server's start: 53.8 s, 46.7 s): Designer facts GUIDE.md relies on
     facts.run,
     # 46 s (2026-11-22, two scratch runs, with their server's start: 45.3 s, 46.3 s): set ops, inheritance and seed
@@ -59,7 +62,6 @@ CATEGORIES: list[Step] = [
     inputs.run,  # 15 s: set_graph_size, expose ops, list_graph_inputs, remove_graph_input
     bridge.run,  # 11 s: designer_status, cancel_designer_job, bridge security and queue, sd_run.py
     example.run,  # 10 s: examples/build_dwarf_trimsheet.py
-    measure.run,  # 9 s: node_stats, sweep_param, check_tiling, read_designer_log
     lookup.run,  # 6 s: same-named and library graphs; a node with several outputs
     discovery.run,  # 5 s: search_nodes, describe_node
     graph_edit_create.run,  # 3 s: create_graph, add ops

@@ -17,9 +17,11 @@ from test_all_tools.common import (
     designer_script,
     helper_lines,
     is_image,
+    near,
     refs,
     text,
 )
+from test_all_tools.measure.parsing import compared, diffs, refusal
 
 
 def _a_feeding_pair(G: dict[str, str]) -> dict[str, Json]:
@@ -283,6 +285,101 @@ async def check_an_abort_removing_a_measures_temporary_output_still_removes_it(c
         await c('apply_edits', {'ops': [{'op': 'delete', 'node': alone}], **G})
 
 
+async def check_node_stats_against(ctx: Ctx) -> None:
+    """node_stats(against=...) on uniform colours, whose 8-bit values are exact (the 'exact known colour' check in
+    `run`). A node against itself differs nowhere. Against one whose R is 0.2 higher, R differs by 0.2 at each of the
+    graph's 512x512 px and the other channels nowhere, and no pixel by more than a tolerance of 0.3. Against one of
+    another size, or a grey one, it is refused, naming both. Against an output its node lacks, the refusal names that
+    node. An rgba_split of the first, against itself, compares two of its outputs: its R against its G, 0.2 apart at
+    every pixel. Fresh nodes, removed at the end."""
+    c, G = ctx.c, ctx.G
+    colour: list[Json] = [0.2, 0.4, 0.6, 0.8]
+    ops: list[Json] = [
+        {'op': 'add', 'definition': 'uniform', 'ref': 'base', 'params': {'outputcolor': colour}},
+        {'op': 'add', 'definition': 'uniform', 'ref': 'redder', 'params': {'outputcolor': [0.4, 0.4, 0.6, 0.8]}},
+        {
+            'op': 'add',
+            'definition': 'uniform',
+            'ref': 'small',
+            'params': {'outputcolor': colour, '$outputsize': [8, 8]},
+        },
+        {'op': 'add', 'definition': 'uniform', 'ref': 'grey', 'params': {'colorswitch': False, 'outputcolor': colour}},
+        {'op': 'add', 'definition': 'rgba_split', 'ref': 'split'},
+        {'op': 'connect', 'from': 'base', 'to': 'split', 'input': 'RGBA'},
+    ]
+    added = refs(text(await c('apply_edits', {'ops': ops, **G})))
+    try:
+        base, redder, small, grey, split = (added[ref] for ref in ('base', 'redder', 'small', 'grey', 'split'))
+        nowhere = (0.0, 0.0, 0)  # a channel's diffs() where nothing differs
+        t = text(
+            await c('node_stats', {'node_id': base, 'against': base, 'against_output': 'unique_filter_output', **G})
+        )
+        found = diffs(t)
+        check(
+            'node_stats',
+            'against itself: no difference in any channel',
+            'against %s ' % base in t and found == dict.fromkeys('RGBA', nowhere),
+            compared(t),
+        )
+        t = text(await c('node_stats', {'node_id': base, 'against': redder, **G}))
+        found = diffs(t)
+        r = found.get('R')
+        check(
+            'node_stats',
+            'against R 0.2 higher: R 0.2 at every pixel, the other channels 0',
+            r is not None
+            and near(list(r[:2]), [0.2, 0.2])
+            and r[2] == 512 * 512
+            and all(found.get(n) == nowhere for n in 'GBA'),
+            compared(t),
+        )
+        t = text(await c('node_stats', {'node_id': base, 'against': redder, 'tolerance': 0.3, **G}))
+        r = diffs(t).get('R')
+        check(
+            'node_stats',
+            'against R 0.2 higher, tolerance 0.3: no pixel over it',
+            r is not None and r[2] == 0,
+            compared(t),
+        )
+        r_ = await c('node_stats', {'node_id': base, 'against': small, **G})
+        check(
+            'node_stats',
+            'against another size: refused, naming both sizes',
+            r_.is_error and '512x512' in text(r_) and '256x256' in text(r_),
+            refusal(text(r_)),
+        )
+        r_ = await c('node_stats', {'node_id': base, 'against': grey, **G})
+        check(
+            'node_stats',
+            'against a grey node: refused, naming both formats',
+            r_.is_error and 'RGBA8' in text(r_) and 'LUM' in text(r_),
+            refusal(text(r_)),
+        )
+        # REVIEW.md HLP-255: of the two nodes read, the error names the one lacking the output
+        r_ = await c('node_stats', {'node_id': base, 'against': redder, 'against_output': 'nope', **G})
+        check(
+            'node_stats',
+            'against an output its node lacks: refused, naming that node',
+            r_.is_error and "'nope'" in text(r_) and redder in text(r_),
+            refusal(text(r_)),
+        )
+        # node_id itself, to compare two of its outputs (the user, 2026-11-24)
+        t = text(await c('node_stats', {'node_id': split, 'output': 'R', 'against': split, 'against_output': 'G', **G}))
+        grey_diff = diffs(t).get('L')
+        check(
+            'node_stats',
+            "against itself, another output: an rgba_split's R against its G, 0.2 apart at every pixel",
+            re.match(r'%s \S+\.R: ' % split, t) is not None
+            and re.search(r'^against %s \S+\.G: ' % split, t, re.M) is not None
+            and grey_diff is not None
+            and near(list(grey_diff[:2]), [0.2, 0.2])
+            and grey_diff[2] == 512 * 512,
+            '\n'.join([t.splitlines()[0], compared(t)]),
+        )
+    finally:
+        await c('apply_edits', {'ops': [{'op': 'delete', 'node': node} for node in added.values()], **G})
+
+
 async def run(ctx: Ctx) -> None:
     c, G, clouds, slope, lv = ctx.c, ctx.G, ctx.clouds, ctx.slope, ctx.lv
     await check_an_output_added_right_after_the_node_feeding_it_was_measured(ctx)
@@ -302,6 +399,7 @@ async def run(ctx: Ctx) -> None:
     t = text(await c('node_stats', {'node_id': uni, 'points': [[1, 1]], **G}))
     check('node_stats', 'exact known colour', 'R=0.2000, G=0.4000, B=0.6000, A=0.8000' in t, t.splitlines()[-1])
     await c('apply_edits', {'ops': [{'op': 'delete', 'node': uni}], **G})
+    await check_node_stats_against(ctx)
 
     # --- parameter sweep, tiling, log
     before = text(await c('describe_graph', {'node_ids': [clouds], 'include_params': True, **G}))

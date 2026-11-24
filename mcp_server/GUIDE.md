@@ -32,8 +32,8 @@ Parameters are described in each tool's schema; this is when to reach for which.
   renderer: `screenshot_designer('3d', graph=...)`; `mesh='Plane'`, `view='Top'` and `tiling=2` show how it repeats.
 - **Measure:** `node_stats` (exact numbers; prefer them to eyeballing), `check_tiling` (trim sheets only need
   horizontal), `compare_to_reference` for tones against a reference image (add it to the graph with an `apply_edits`
-  `bitmap` op if wanted). `analyze_reference` reads a photo's palette as Gradient Map keys; its result says how to read
-  its errors.
+  `bitmap` op if wanted). `node_stats(against=...)` compares two outputs pixel by pixel, of two nodes or of one.
+  `analyze_reference` reads a photo's palette as Gradient Map keys; its result says how to read its errors.
 - **Tune a value:** `sweep_param`, not edit-rebuild-look loops.
 - **Edit:** `apply_edits` for every node edit, one or many. Also `create_graph`, `remove_graph_input`,
   `set_graph_size`.

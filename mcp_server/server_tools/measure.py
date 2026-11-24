@@ -154,31 +154,100 @@ def _node_pixels(
     return data, layout, meta
 
 
+def _diff_lines(a: Pixels, a_names: str, b: Pixels, b_names: str, box: Box, tolerance: float) -> list[str]:
+    """One line per channel both images have, by name (_channel_names), in a's order. Each line gives the largest
+    absolute difference and where it is, the mean, and how many pixels differ by more than `tolerance`. a and b are
+    whole images of one size, and box (x0, y0, x1, y1) the part compared. The location is in the whole image's pixels,
+    on a tie the first pixel in row order."""
+    x0, y0, x1, y1 = box
+    lines = []
+    for name in (n for n in a_names if n in b_names):
+        d = a[y0:y1, x0:x1, a_names.index(name)] - b[y0:y1, x0:x1, b_names.index(name)]
+        np.abs(d, out=d)
+        y, x = np.unravel_index(np.argmax(d), d.shape)
+        over = np.count_nonzero(d > tolerance)
+        lines.append(
+            '%s diff: max %.6f at (%d,%d)  mean %.6f  over %g: %d px (%.2f%%)'
+            % (name, d[y, x], x + x0, y + y0, d.mean(), tolerance, over, 100 * over / d.size)
+        )
+    return lines
+
+
 @_tool(read_only=False, destructive=False, idempotent=True, open_world=False)
 def node_stats(
     node_id: Annotated[str, Field(description='The node whose output is measured.')],
     graph: Graph = None,
     output: Output = None,
-    region: Annotated[NoneIfEmpty[Box], Field(description='[x0, y0, x1, y1] in pixels to restrict the stats.')] = None,
-    points: Annotated[list[Pixel] | None, Field(description='[[x, y], ...] pixel values to sample.')] = None,
+    region: Annotated[
+        NoneIfEmpty[Box],
+        Field(description='[x0, y0, x1, y1] in pixels to restrict the stats, and the comparison with against.'),
+    ] = None,
+    points: Annotated[
+        list[Pixel] | None, Field(description="[[x, y], ...] pixel values of node_id's output to sample.")
+    ] = None,
+    against: Annotated[
+        str | None,
+        Field(
+            description='A node of the same graph, whose output is compared pixel by pixel. node_id itself compares two '
+            'of its outputs: output and against_output.'
+        ),
+    ] = None,
+    against_output: Annotated[
+        str | None,
+        Field(
+            description="Which of against's outputs (default: the one tagged base colour, else the first; the result "
+            'says which).'
+        ),
+    ] = None,
+    tolerance: Annotated[
+        float,
+        Field(
+            ge=0,
+            description='With against: a pixel counts as differing where a channel differs by more than this, in 0..1 '
+            'units (the default is about half an 8-bit step).',
+        ),
+    ] = 0.002,
 ) -> str:
     """Exact pixel statistics of any node's output (computed in Designer, read from the raw
     buffer, so 16-bit/float precision is kept). Per channel: min, max, mean, std.
     Values are 0..1 for integer formats. Use it to verify results numerically.
-    The call may add a temporary output node and delete it, within one undo step."""
+    With against, it also compares the output with another node's, or with another output of node_id, pixel by pixel,
+    over the channels both have (in region if given). Per channel it gives the largest absolute difference and where
+    it is, the mean, and how many pixels differ by more than tolerance. Two outputs of different sizes, or a grey one
+    against a colour one (with alpha or not), are refused, naming both.
+    The call may add a temporary output node and delete it, one undo step per output read."""
     data, layout, meta = _node_pixels(node_id, graph, output, 'node_stats')
     h, w, _ = data.shape
     lines = ['%s: %dx%d %s' % (meta['node'], w, h, meta['format'])]
     if meta['note']:
         lines.append(meta['note'])
-    area = data
+    box = _crop_box(region or (0, 0, w, h), w, h, 'region')
+    x0, y0, x1, y1 = box
+    area = data[y0:y1, x0:x1]
     if region:
-        area = _crop(data, region, 'region')
         lines.append('region %s (%dx%d px)' % (list(region), area.shape[1], area.shape[0]))
     names = _channel_names(data, layout)
     for ch, name in enumerate(names):
         a = area[:, :, ch]
         lines.append('%s: min %.4f  max %.4f  mean %.4f  std %.4f' % (name, a.min(), a.max(), a.mean(), a.std()))
+    if against:
+        other, other_layout, other_meta = _node_pixels(against, graph, against_output, 'node_stats')
+        oh, ow, _ = other.shape
+        if (ow, oh) != (w, h):
+            raise ToolError(
+                "can't compare outputs of different sizes: %s is %dx%d, %s is %dx%d"
+                % (meta['node'], w, h, other_meta['node'], ow, oh)
+            )
+        if other_layout != layout:
+            raise ToolError(
+                '%s is %s and %s is %s: one is grey and the other colour. Compare one channel of the colour output, '
+                'taken with an rgba_split node, or another output'
+                % (meta['node'], meta['format'], other_meta['node'], other_meta['format'])
+            )
+        lines.append('against %s: %dx%d %s' % (other_meta['node'], ow, oh, other_meta['format']))
+        if other_meta['note']:
+            lines.append(other_meta['note'])
+        lines += _diff_lines(data, names, other, _channel_names(other, other_layout), box, tolerance)
     for x, y in points or []:
         if 0 <= x < w and 0 <= y < h:
             lines.append(

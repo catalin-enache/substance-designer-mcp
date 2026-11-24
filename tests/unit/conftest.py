@@ -1,5 +1,6 @@
 """Unit tests that run without Designer: import server.py and test its pure-Python parts."""
 
+import ast
 import builtins
 import configparser
 import errno
@@ -158,6 +159,16 @@ def fake_bridge(monkeypatch: pytest.MonkeyPatch, answer: Callable[[str], str]) -
         return answer(code)
 
     patch_server(monkeypatch, '_bridge', bridge)
+
+
+def undone(code: str) -> str:
+    """The code inside an undo group (`_with_undo`'s text), as a tool sends it: the argument of its compile()."""
+    wrapped = next(
+        n for n in ast.walk(ast.parse(code)) if isinstance(n, ast.Call) and getattr(n.func, 'id', None) == 'compile'
+    )
+    inner = wrapped.args[0]
+    assert isinstance(inner, ast.Constant) and isinstance(inner.value, str), ast.dump(inner)
+    return inner.value
 
 
 @pytest.fixture

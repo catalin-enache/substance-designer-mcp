@@ -11,7 +11,7 @@ from typing import TypeGuard, cast
 import pytest
 
 import designer_helpers
-from conftest import fake_bridge, server
+from conftest import fake_bridge, server, undone
 
 
 def _part_files() -> list[str]:
@@ -286,10 +286,7 @@ def _sent_by_tools(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     fake_bridge(monkeypatch, bridge)
     server.describe_graph('g')
     server.apply_edits([{'op': 'add', 'definition': 'levels'}], graph='g')
-    wrapped = next(
-        n for n in ast.walk(ast.parse(sent[1])) if isinstance(n, ast.Call) and getattr(n.func, 'id', None) == 'compile'
-    )
-    return [sent[0], cast(str, cast(ast.Constant, wrapped.args[0]).value)]
+    return [sent[0], undone(sent[1])]
 
 
 def test_tools_send_the_joined_parts_ahead_of_their_call(monkeypatch: pytest.MonkeyPatch) -> None:

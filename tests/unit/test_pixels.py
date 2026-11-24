@@ -209,3 +209,57 @@ def test_a_value_too_long_for_its_tile_is_labelled_by_its_place(
     labels: list[str],
 ) -> None:
     assert _swept_labels(monkeypatch, temp_folders, param, values, tile_size) == labels
+
+
+def _diff(a: Pixels, b: Pixels, names: str = 'RGBA', box: tuple[int, int, int, int] | None = None) -> list[str]:
+    """node_stats(against=...)'s lines for a against b, both of `names`, over the whole image or `box`, at the default
+    tolerance."""
+    return measure._diff_lines(a, names, b, names, box or (0, 0, a.shape[1], a.shape[0]), 0.002)
+
+
+def _same(names: str) -> list[str]:
+    return ['%s diff: max 0.000000 at (0,0)  mean 0.000000  over 0.002: 0 px (0.00%%)' % n for n in names]
+
+
+def test_identical_outputs_differ_nowhere() -> None:
+    a = np.random.default_rng(1).random((3, 4, 4))
+    assert _diff(a, a.copy()) == _same('RGBA')
+
+
+def test_an_offset_in_one_channel_is_its_max_and_mean_at_every_pixel() -> None:
+    a = np.random.default_rng(2).integers(0, 128, (4, 5, 4)) / 256  # exact in binary, so the offset is too
+    b = a.copy()
+    b[:, :, 1] += 0.25
+    lines = _diff(a, b)
+    assert lines[1] == 'G diff: max 0.250000 at (0,0)  mean 0.250000  over 0.002: 20 px (100.00%)'
+    assert [lines[0], *lines[2:]] == _same('RBA')
+
+
+def test_the_largest_difference_in_a_region_is_located_in_the_whole_image() -> None:
+    a = np.zeros((8, 10, 4))
+    b = a.copy()
+    b[5, 6, 2] = 0.5  # (6,5), inside the region
+    b[0, 0, 2] = 1.0  # outside it
+    lines = _diff(a, b, box=(4, 3, 9, 7))  # 5x4 px from (4,3)
+    assert lines[2] == 'B diff: max 0.500000 at (6,5)  mean 0.025000  over 0.002: 1 px (5.00%)'
+
+
+def test_a_tie_is_located_at_the_first_pixel_in_row_order() -> None:
+    a = np.zeros((4, 5, 1))
+    b = a.copy()
+    b[1, 3, 0] = b[2, 1, 0] = 0.5  # (3,1) comes first in row order, (1,2) in column order
+    assert _diff(a, b, 'L')[0].startswith('L diff: max 0.500000 at (3,1) ')
+
+
+def test_a_difference_equal_to_the_tolerance_is_not_counted() -> None:
+    a = np.zeros((1, 3, 1))
+    b = np.array([0.002, 0.0021, 0.001]).reshape(1, 3, 1)
+    assert _diff(a, b, 'L') == ['L diff: max 0.002100 at (1,0)  mean 0.001700  over 0.002: 1 px (33.33%)']
+
+
+def test_colour_with_alpha_against_colour_compares_r_g_and_b() -> None:
+    a = np.zeros((2, 2, 4))
+    b = np.zeros((2, 2, 3))
+    b[:, :, 0] = 0.1
+    lines = measure._diff_lines(a, 'RGBA', b, 'RGB', (0, 0, 2, 2), 0.002)
+    assert lines == ['R diff: max 0.100000 at (0,0)  mean 0.100000  over 0.002: 4 px (100.00%)', *_same('GB')]
