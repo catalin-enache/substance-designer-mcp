@@ -76,6 +76,7 @@ def preview_node(
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+# a 3D shot that may be the view's last frame (the docstring): ROADMAP item 83
 @_tool(read_only=False, destructive=False, idempotent=False, open_world=False)
 def screenshot_designer(
     panel: Annotated[
@@ -146,7 +147,7 @@ def screenshot_designer(
         float | None,
         Field(
             description='The angle in degrees the environment is set to around the mesh, -180 to 180 (not added to '
-            'the angle before, unlike orbit).'
+            'the angle before, unlike orbit). Set it to see relief lit from the side.'
         ),
     ] = None,
     environment_exposure: Annotated[
@@ -159,9 +160,12 @@ def screenshot_designer(
     '3d' goes through the clipboard: its text is put back, anything else on it may be lost. The 3D view draws only while Designer's window is on screen: on macOS '3d'
     puts a minimized, covered or hidden window there for the shot, transparent so the user doesn't see it, never
     taking focus, then puts it back as it was, and says so. It is left up if the user switched to Designer during
-    the shot and Designer is still the app in front as it ends. After a set-up that moved the camera, switched the
+    the shot and Designer is still the app in front as it ends. Tell the user when the result says it left Designer's
+    window up or in front. After a set-up that moved the camera, switched the
     mesh, or changed the tiling or the light, a render identical to the one before is said, and so is a 3D view that
     hadn't settled within 3 s: shoot again with no set-up (pan, orbit and zoom move from where the camera is).
+    A 3D shot that doesn't show what the call set (the mesh, the view, the material) may be the view's last frame
+    too. Shoot again with no set-up before judging it.
     '3d' can set up the view first with graph, mesh, view, orbit, pan, zoom, tiling and the light, and says what it set
     (stopped partway, the steps it began); it stays set, for later shots and in the user's view.
     Each wheel step waits for the 3D view to be at rest, then for its sign of taking the step; each drag waits for its

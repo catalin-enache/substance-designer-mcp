@@ -124,8 +124,9 @@ def active_shows_a_window(active: int | None, windows: Sequence[Window]) -> bool
 
 
 def pid_of(info: str) -> int | None:
-    """The process in what `lsappinfo info -only pid` printed ("pid"=1234); None when there is none."""
-    m = re.search(r'"pid"\s*=\s*(\d+)', info)
+    """The process in what `lsappinfo info -only pid` printed; None when there is none. macOS 26 printed "pid"=1234,
+    macOS 27.2.1 pid = 1234 (REVIEW.md TST-836)."""
+    m = re.search(r'\bpid"?\s*=\s*(\d+)', info)
     return int(m.group(1)) if m else None
 
 

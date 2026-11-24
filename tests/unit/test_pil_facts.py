@@ -1,4 +1,4 @@
-"""GUIDE.md, Rendering and verifying (REVIEW.md TST-3): how PIL loads Designer's 16-bit PNGs.
+"""export_outputs' docstring (REVIEW.md TST-3): how PIL loads Designer's 16-bit PNGs.
 Grayscale stays 16-bit ('I;16'); RGBA comes back as 8 bits per channel, so exact values need
 node_stats. And what the image opener (image_reading.py's _open_image) relies on: the failed EXIF read a test of it
 uses (REVIEW.md SRV-232), and Pillow turning a TIFF by its orientation as it loads it. Measured with the Pillow in

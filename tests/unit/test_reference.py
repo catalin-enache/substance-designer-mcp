@@ -146,7 +146,7 @@ def test_a_least_error_at_one_keys_means_the_colour_doesnt_follow_luminance() ->
 
 
 def test_a_small_colour_of_its_own_at_one_luminance_takes_keys_as_a_spike() -> None:
-    """The recipe in GUIDE.md (Which tool for what, Measure): red flecks, every 20th pixel of a brown ramp, take three close
+    """analyze_reference's reference_region description: red flecks, every 20th pixel of a brown ramp, take three close
     keys of 5, the middle one red, and raise the least error. With 2 keys they show as a fit error far above the least
     error. The ramp alone has neither."""
     t = np.linspace(0, 1, 2000)
@@ -320,7 +320,7 @@ def test_the_result_names_the_luminance_weights(tmp_path: Path) -> None:
 
 def test_the_description_says_the_keys_are_for_interpmode_0() -> None:
     """The fit is linear between keys and the nearest key's colour outside them, which a Gradient Map computes at its
-    default interpmode 0 (GUIDE.md, Which tool for what, Gradients and curves; REVIEW.md SRV-240)."""
+    default interpmode 0 (apply_edits' ops, the set op; REVIEW.md SRV-240)."""
     assert 'interpmode 0' in ' '.join((server.analyze_reference.__doc__ or '').split())
 
 

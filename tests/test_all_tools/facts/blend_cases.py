@@ -28,7 +28,8 @@ DEPTHS = (('8-bit', '8'), ('16-bit', '16'), ('float', '32F'))
 # says why)
 MODES_GRAPH = 'float'
 MODES_DEPTH = dict(DEPTHS)[MODES_GRAPH]
-# every blendingmode of the atomic blend, by enum id, in its order (GUIDE.md, First sd pitfalls)
+# every blendingmode of the atomic blend, by enum id, in its order (GUIDE.md, First sd pitfalls). One public SD MCP
+# lists 4 = Max / 5 = Min / 6 = Difference, which is wrong (there is no Difference)
 MODES = (
     'copy',
     'add',

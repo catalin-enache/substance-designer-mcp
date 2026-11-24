@@ -146,7 +146,7 @@ async def run(ctx: Ctx) -> None:
 
     exported = np.array(Image.open(os.path.join(scratch, 'export', 'height.png'))).astype(int)
     rendered = np.array(Image.open(os.path.join(render_dir, 'height.png'))).astype(int)
-    # the same to within a few 16-bit steps at a few pixels (GUIDE.md, Output; seen: 27 of
+    # the same to within a few 16-bit steps at a few pixels (export_outputs' docstring; seen: 27 of
     # 262144 pixels off by <= 3/65535); parallel renders aren't bit-identical, so allow 8
     worst = np.abs(exported - rendered).max() if exported.shape == rendered.shape else -1
     check(

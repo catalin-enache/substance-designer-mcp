@@ -98,7 +98,9 @@ def read_designer_log(
     since_last_start: Annotated[bool, Field(description="Ignore lines from before Designer's last start.")] = True,
     port: Port = None,
 ) -> str:
-    """Read the end of Designer's log, where every plugin/Python traceback lands. A Designer an agent
+    """Read the end of Designer's log, where every plugin/Python traceback lands. Read it when the bridge misbehaves or
+    a plugin change doesn't seem to load. Creating an exposed input logs "Some Get nodes don't have a variable name",
+    and may log "No output node defined", until the function node is named: harmless, the exposure works. A Designer an agent
     started on macOS writes a log of its own, also read after it has ended (unless a Designer of the user's started
     since, on that port or without the plugin saying which); just started, it has none yet, and this says so. The user's write one log together, their lines not
     told apart. The first line names the file read. Override the shared log's location with SD_DESIGNER_LOG."""

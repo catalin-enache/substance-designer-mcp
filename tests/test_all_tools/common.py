@@ -318,7 +318,7 @@ UNDO_REDO = dedent("""\
         if acts:
             # in a Designer just started, with another Designer in front, Undo of an output's fields sometimes did
             # nothing without this (8 in 8 beside one idle Designer, 3 pool runs in 4, 1 in 3 in scratch runs; with it 4 in 4); it leaves the other
-            # app in front (GUIDE.md, Undo)
+            # app in front (GUIDE.md, Undo from a script)
             mw=sd.getContext().getSDApplication().getQtForPythonUIMgr().getMainWindow()
             mw.raise_()
             mw.activateWindow()

@@ -91,7 +91,8 @@ def set_link_display(
     Designer's API can't do this, so the tool first takes a snapshot of
     the graph and copies the package's saved file (both in the snapshot folder), then saves the
     package, edits the .sbs and reloads it (the package's undo history is reset; the graph is
-    reopened). If no selected link would change, nothing is saved or reloaded. If the package is
+    reopened). When it saves and reloads the package, tell the user. If no selected link would change, nothing is saved
+    or reloaded. If the package is
     edited again before the reload, the reload is refused and those edits are kept. The package
     must have been saved to a file once, and is refused while it uses a graph of a never-saved package,
     as in save_package."""

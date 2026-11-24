@@ -624,8 +624,9 @@ def build_into(b: Builder) -> None:
     b.section('Normal, AO, curvature', 3, MAPS_FRAME, 'From the height; normals are OpenGL (Blender)')
     normal = b.link(height, b.atomic('normal', intensity=NORMAL_INTENSITY, inversedy=NORMAL_OPENGL), 'input1')
     ao = b.link(height, b.lib('hbao.sbs', 'hbao', height_depth=0.12, radius=1.0), 'input')
+    # curvature_smooth's normal_format: OpenGL 1, DirectX 0, as the normals fed (GUIDE.md, Library node facts)
     curvature = b.link(
-        normal, b.lib('curvature_smooth.sbs', 'curvature_smooth', normal_format=0 if NORMAL_OPENGL else 1), 'input'
+        normal, b.lib('curvature_smooth.sbs', 'curvature_smooth', normal_format=1 if NORMAL_OPENGL else 0), 'input'
     )
 
     # ---------------------------------------------------------- base color

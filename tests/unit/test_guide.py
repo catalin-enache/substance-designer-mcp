@@ -34,18 +34,16 @@ from conftest import ROOT, fake_bridge, patch_server, server
 from server_tools import scripting
 
 AGENTS_MD_BUDGET = 15_000  # bytes (test_agents_md_stays_within_its_budget)
+GUIDE_CORE_BUDGET = 14_000  # characters (test_the_core_of_the_guide_stays_within_its_budget)
 # the sections of each file, by the audience that reads it
 GUIDE_SECTIONS = (
     "## Rules that protect the user's work",
     '## Which tool for what',
-    '## Undo and timeouts',
     '## Environment facts',
     '## First sd pitfalls',
     '## Library node facts (Designer 16)',
-    '## Rendering and verifying',
-    '## Example',
 )
-SCRIPTING_SECTIONS = ('## sd API gotchas', '## Designer UI (Qt)')
+SCRIPTING_SECTIONS = ('## sd API gotchas', '## Designer UI (Qt)', '## Example')
 AGENTS_SECTIONS = (
     '## Working on this project',
     '### Running the tests',
@@ -54,8 +52,8 @@ AGENTS_SECTIONS = (
 )
 # what the guide holds, as a link to it names it: its sections and the bold paragraphs other files point to
 MOVED = (
-    r'Rules|rules|Which tool|Undo|Environment facts|sd API|Designer UI|Library node|Rendering and verifying|Example'
-    r'|Portals|Several Designers|Output nodes|Graph size|Screenshots|Quitting'
+    r'Rules|rules|Which tool|Undo|Environment facts|sd API|Designer UI|Library node|Example'
+    r'|Portals|Output nodes|Graph size|Screenshots|Quitting'
 )
 
 
@@ -122,6 +120,17 @@ def test_the_pitfalls_everyone_hits_are_in_the_core() -> None:
     core, scripting = map(flat, _parts())
     for fact in ('derives from `BaseException`', 'graph.getNodeDefinitions()', 'Blend modes: copy 0'):
         assert fact in core and fact not in scripting, fact
+
+
+def test_the_core_says_what_a_blend_of_a_grey_image_and_a_colour_one_gives() -> None:
+    # ROADMAP item 127: a grey source over a colour destination gave the destination, black, with no error. The cases
+    # measured, with their check, stay in the scripting part, which the core points to
+    core, scripting = _parts()
+    facts = flat(section(core, '## Library node facts (Designer 16)'))
+    assert "gives its `destination`'s type" in facts
+    assert 'a `source` of the other type blends as a zero of that type' in facts
+    assert 'the scripting part, A blend of a grey image and a colour one' in facts
+    assert '**A blend of a grey image and a colour one** ("designer facts"' in flat(scripting)
 
 
 # open whatever was read: stopping a runaway script must never wait for a guide
@@ -199,10 +208,20 @@ def test_the_resource_serves_the_guide_file() -> None:
 
 def test_guide_fits_in_one_tool_result() -> None:
     # Claude Code's default limit for one MCP tool result is 25,000 tokens; stay well below
-    core, scripting = _parts()
+    _, scripting = _parts()
     assert len(scripting) < 60000
-    # every Designer session reads the core, so it is held to much less
-    assert len(core) < 20000
+
+
+def test_the_core_of_the_guide_stays_within_its_budget() -> None:
+    # every Designer session reads the core whole (get_guide()) before any other tool works, so each character costs
+    # all of them. The budget leaves room for about 30 lines of 200 characters (7,667 characters on 2026-11-24, after
+    # ROADMAP item 126 trimmed it from 19,981; 7,885 with REVIEW.md INS-47's line)
+    core, _ = _parts()
+    assert len(core) <= GUIDE_CORE_BUDGET, (
+        'The core of GUIDE.md is %d characters, over its budget of %d: move what an agent using only the tools '
+        "doesn't need on its first try to where the table of `.claude/rules/docs.md` puts it"
+        % (len(core), GUIDE_CORE_BUDGET)
+    )
 
 
 def _within(text: str, limit: int) -> bool:
@@ -775,6 +794,54 @@ def test_a_tools_only_agent_is_told_the_units() -> None:
     assert 'log2' in ops and 'centre' in ops
 
 
+def test_the_core_names_the_tool_that_gives_the_slider_range_it_asks_for() -> None:
+    # REVIEW.md TST-827: the core asks for values inside the slider range, so it says which tool gives one
+    tools = flat(section(_parts()[0], '## Which tool for what'))
+    assert 'pick values inside the slider range' in tools
+    assert re.search(r'`describe_node` for [^.]*slider ranges', tools), tools
+
+
+def test_apply_edits_says_which_of_two_gradient_keys_at_one_position_shows() -> None:
+    # REVIEW.md SRV-245: an agent setting a hard edge with apply_edits reads its ops, not the scripting part. The
+    # `params` check of keys measures it at the default interpmode alone (tests/test_all_tools/params/checks.py), so
+    # the sentence names that mode, and so does the one on a colour input, measured there too (REVIEW.md SRV-246)
+    ops = flat(_described('apply_edits', 'ops'))
+    assert 'At interpmode 0, of two keys at one position, the first listed shows.' in ops
+    assert 'At interpmode 0, a colour input gave every pixel the colour of the key at position 0' in ops
+    assert 'first listed' not in flat(_parts()[1]), 'one place'
+
+
+def test_the_core_routes_a_misbehaving_bridge_to_the_log() -> None:
+    # REVIEW.md TST-835: no error message points to the log, and an agent reads read_designer_log's docstring only once
+    # it has picked the tool
+    assert '**Diagnose:** `read_designer_log`' in flat(section(_parts()[0], '## Which tool for what'))
+
+
+def test_export_outputs_says_which_map_was_measured_against_the_cooked_render() -> None:
+    # REVIEW.md SRV-247: the `render` check compares the height map alone (tests/test_all_tools/render/checks.py), and
+    # renders of an AO map differ far more (ROADMAP item 17)
+    _, tools = _tools()
+    said = flat(tools['export_outputs'])
+    assert 'An exported height map was within a few 1/65535 steps of the cooked render' in said
+    assert 'Its textures are within' not in said
+
+
+def test_the_default_of_grayscale_conversion_advanced_is_given_once() -> None:
+    # REVIEW.md SRV-248: the scripting part's list of the measured greys holds it (the `bitmaps` check of greys)
+    _, tools = _tools()
+    said = flat(tools['analyze_reference'])
+    assert '(not Grayscale Conversion Advanced)' in said and 'Desaturation' not in said
+    assert 'Its default is Desaturation.' in flat(section(_parts()[1], '## sd API gotchas'))
+
+
+def test_designer_status_says_the_library_packages_the_tools_loaded_are_listed() -> None:
+    # REVIEW.md SRV-249: describe_node and apply_edits' add load them as user packages, and they stay loaded
+    _, tools = _tools()
+    assert "library packages the tools loaded, their file in Designer's packages folder" in flat(
+        tools['designer_status']
+    )
+
+
 def test_the_core_says_when_outputsize_is_an_offset() -> None:
     # REVIEW.md TST-213: `expose` of a value read as log2 computed 8192 px on a 512 px graph
     core, scripting = map(flat, _parts())
@@ -802,6 +869,40 @@ def test_the_hot_reload_rule_is_among_the_rules() -> None:
     core = _parts()[0]
     assert 'Never hot-reload' in section(core, "## Rules that protect the user's work")
     assert core.count('Never hot-reload') == 1
+
+
+def test_the_core_gives_the_rules_the_servers_instructions_promise() -> None:
+    # REVIEW.md TST-830: every session reads them there, so a cut of the core for its budget keeps each one
+    assert "the rules that protect the user's work (Undo, the bridge token, quitting Designer, snapshots)" in flat(
+        server.INSTRUCTIONS
+    )
+    rules = flat(section(_parts()[0], "## Rules that protect the user's work"))
+    for promised in (
+        '**Never print, log or send the bridge token**',
+        "**Never trigger Undo while one of the user's graphs is open in the editor.**",
+        '**A Designer the user opened is theirs: never close it.**',
+        'A Designer an agent started is disposable: `quit_designer` ends it.',
+        '**`snapshot_graph` before risky or large edits**',
+    ):
+        assert promised in rules, promised
+
+
+def test_the_scripting_part_says_where_library_graphs_are_and_how_loaded_ones_count() -> None:
+    # REVIEW.md TST-828: some of Designer's library packages are in subfolders of `packages`, and a loaded one is among
+    # the user packages, as the API has no flag for it (`_is_library_package`, designer_helpers/core.py)
+    gotchas = flat(section(_parts()[1], '## sd API gotchas'))
+    assert '`app.getPath(SDApplicationPath.DefaultResourcesDir)/packages` and its subfolders' in gotchas
+    assert 'A loaded library package is among `getUserPackages()` too' in gotchas
+
+
+def test_the_core_names_the_seed_and_the_values_of_matching_tile_masks() -> None:
+    # REVIEW.md TST-832: the seed and the per-tile values the line means, as the example's planks use them
+    # (examples/build_dwarf_trimsheet.py, plank_layout)
+    facts = flat(section(_parts()[0], '## Library node facts (Designer 16)'))
+    assert (
+        'The same layout and `Offset_Random_Seed` twice give a matching per-tile random mask, with '
+        '`Luminance_Variation-Contrast` on the second.' in facts
+    )
 
 
 def test_the_file_level_pattern_comes_with_the_inheritance_numbers() -> None:

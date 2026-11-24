@@ -51,7 +51,8 @@ def set_graph_size(
         bool,
         Field(
             description='True (default) makes the size follow the parent with that default, so '
-            'render_sbs(size_log2=...) can override it; False fixes it.'
+            "render_sbs(size_log2=...) can override it; False fixes it. A fixed size isn't exposed, so size overrides "
+            'are ignored.'
         ),
     ] = True,
 ) -> str:
@@ -104,9 +105,13 @@ set: node "graph" = the graph itself, e.g. a fixed-size graph's $outputsize (an 
   follows the graph's seed and the cooked .sbsar's Random Seed. To fix a seed on purpose,
   change its inheritance with execute_designer_code. Prints old -> new for params. $outputsize is log2 of the size in pixels (11 is 2048 px; above 13 or below 0 is refused).
   A Gradient Map's gradientrgba takes keys [[position, [r, g, b(, a)]], ...], position 0 to 1, alpha 1 if left out; an
-  optional third item is the midpoint, 0 if left out. A Curve's curveluminance, curvered, curvegreen, curveblue and
-  curvealpha take points [[x, y], ...], x 0 to 1, joined by straight lines; [[x, y], [left x, y], [right x, y]] gives a
-  point Bezier handles, as absolute points, and set makes every point unlocked and unbroken. The list replaces every
+  optional third item is the midpoint, 0 if left out. The Gradient Map's own interpmode is linear at 0, its default,
+  where midpoints change nothing, eases at 1, where they act, and at 3 holds each key's colour up to the next. At
+  interpmode 0, of two keys at one position, the first listed shows. At interpmode 0, a colour input gave every pixel
+  the colour of the key at position 0, also listed first. A Curve's curveluminance, curvered, curvegreen, curveblue
+  and curvealpha take points [[x, y], ...], x 0 to 1, joined by straight lines; [[x, y], [left x, y], [right x, y]]
+  gives a point Bezier handles, as absolute points, and set makes every point unlocked and unbroken. Only curveluminance acts on a grey input. On a
+  colour one it acts on R, G and B after curvered, and each other array on its own channel. The list replaces every
   key, [] removes them. The result and describe_graph(include_params) read them back in this shape, a broken side with
   its handle on its point; past 16 keys, a whole graph's listing gives their count, and node_ids on the node gives
   every key.

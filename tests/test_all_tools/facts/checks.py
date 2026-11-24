@@ -11,12 +11,14 @@ from test_all_tools.common import (
     NO_LINE,
     TEST_GRAPH,
     Ctx,
+    Ops,
     added_id,
     check,
     designer_script,
     expect,
     is_image,
     pixel_values,
+    refs,
     skip,
     text,
 )
@@ -113,6 +115,54 @@ async def check_a_blend_of_a_grey_image_and_a_colour_one(ctx: Ctx) -> None:
             present and got['colour_over_grey'] == got['black_over_grey'] != got['grey_over_grey'],
             told,
         )
+
+
+async def check_curvature_smooth_takes_the_format_of_its_normals(ctx: Ctx) -> None:
+    """What library curvature_smooth gives on the crest of a horizontal ridge, from atomic normal's normals of it,
+    inversedy True and False, at each normal_format, DirectX 0 and OpenGL 1, as describe_node lists them. The ridge is
+    a Pixel Processor's exp(-60 d²), d the distance along y to the middle of the 512 px graph. Its crest reads above
+    0.5 where curvature_smooth takes it as convex, below where concave. normal_format 1 reads it convex from normals of
+    inversedy True, and 0 from those of False. The other format reads it concave. The fact, as GUIDE.md states it:
+    Library node facts, curvature_smooth (REVIEW.md INS-47)."""
+    c, G = ctx.c, ctx.G
+    F = 'designer facts'
+    t = text(await c('describe_node', {'definition': 'curvature_smooth'}))
+    check(
+        F,
+        'curvature_smooth normal_format ids: DirectX 0, OpenGL 1',
+        re.search(r'^\s+normal_format\s.*\n\s+enum: DirectX=0, OpenGL=1$', t, re.M) is not None,
+        '\n'.join(line for line in t.splitlines() if 'normal_format' in line or 'DirectX' in line),
+    )
+    curvatures = {(inversedy, fmt): 'c_%s_%d' % (inversedy, fmt) for inversedy, fmt in product((True, False), (0, 1))}
+    ops: Ops = [{'op': 'add', 'definition': 'pixelprocessor', 'ref': 'ridge', 'params': {'colorswitch': False}}]
+    for inversedy in (True, False):
+        normal = 'n_%s' % inversedy
+        ops += [
+            {'op': 'add', 'definition': 'normal', 'ref': normal, 'params': {'inversedy': inversedy}},
+            {'op': 'connect', 'from': 'ridge', 'to': normal, 'input': 'input1'},
+        ]
+        for fmt in (0, 1):
+            curvature = curvatures[inversedy, fmt]
+            ops += [
+                {'op': 'add', 'definition': 'curvature_smooth', 'ref': curvature, 'params': {'normal_format': fmt}},
+                {'op': 'connect', 'from': normal, 'to': curvature, 'input': 'input'},
+            ]
+    added = refs(text(await c('apply_edits', {'ops': ops, **G})))
+    try:
+        await c('set_function', {'node_id': added['ridge'], 'expression': 'd = $pos.y - 0.5; exp(-d * d * 60)', **G})
+        for (inversedy, fmt), curvature in curvatures.items():
+            got = text(await c('node_stats', {'node_id': added[curvature], 'points': [[256, 256]], **G}))
+            crest = pixel_values(got).get((256, 256))
+            convex = fmt == int(inversedy)  # OpenGL 1 for the normals of inversedy True, DirectX 0 for False
+            check(
+                F,
+                'curvature_smooth normal_format %d on normals of inversedy=%s: a horizontal ridge reads %s'
+                % (fmt, inversedy, 'convex' if convex else 'concave'),
+                crest is not None and (crest[0] > 0.505 if convex else crest[0] < 0.495),
+                'its crest %s' % crest,
+            )
+    finally:
+        await c('apply_edits', {'ops': [{'op': 'delete', 'node': node} for node in added.values()], **G})
 
 
 async def check_unsaved_bitmap_copies(ctx: Ctx) -> None:
@@ -483,9 +533,9 @@ async def run(ctx: Ctx) -> None:
         check(F, 'anisotropic noise streaks run horizontally by default', False, text(r_))
     await c('apply_edits', {'ops': [{'op': 'delete', 'node': aniso}], **G})
     # exposing a parameter logs these until the function node is named (both in this graph, which has an output node;
-    # the guide says no more of the first than that it may be logged, REVIEW.md TST-246): count each
-    # message before and after an exposure made here, so earlier lines can't satisfy the
-    # check (REVIEW.md TST-13: it once compared against a header it could never match)
+    # read_designer_log's docstring says no more of the first than that it may be logged, REVIEW.md TST-246): count
+    # each message before and after an exposure made here, so earlier lines can't satisfy the check (REVIEW.md TST-13:
+    # it once compared against a header it could never match)
     noise = ('No output node defined', "nodes don't have a variable name")  # logged as "Some <b>Get</b> nodes ..."
 
     async def noise_counts() -> list[int]:
@@ -592,6 +642,7 @@ async def run(ctx: Ctx) -> None:
         'OpenGL G=%.3f, DirectX G=%.3f' % (gl[1], dx[1]) if gl and dx else '%s / %s' % (t_gl[:150], t_dx[:150]),
     )
     await c('apply_edits', {'ops': [{'op': 'delete', 'node': grad}, {'op': 'delete', 'node': nrm}], **G})
+    await check_curvature_smooth_takes_the_format_of_its_normals(ctx)
     # a Dot node (passthrough) has no ID property: Designer's UI portals store it as <userId> in the
     # file and in Designer's memory, not exposed to the API, so the API can't make one (server_tools/layout.py). Any id-like property here would be new
     t = text(await designer_script(c, 'facts/dot_properties'))

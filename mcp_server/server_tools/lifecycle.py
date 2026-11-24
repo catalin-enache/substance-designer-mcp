@@ -142,7 +142,8 @@ def designer_status(port: Port = None) -> str:
     """Report Designer's version, the bridge state (idle/running) and the open user packages (an
     unsaved one by its UID, as list_snapshots names it), whether an agent started it, plus this server's Python and library versions. While a job runs or waits, the Designer
     version and package list are skipped: they would have to wait for the job. The result also lists
-    the Designers an agent started on other ports."""
+    the Designers an agent started on other ports. The user packages include the library packages the tools loaded,
+    their file in Designer's packages folder."""
     port = _port(port)
     state = _control('status', wait=10, port=port)
     if 'idle, 0 queued' not in state:  # the listing is a job too; it would queue (REVIEW.md SRV-22)
@@ -1039,13 +1040,14 @@ def launch_designer(
     own (other platforms not tried; on Windows nothing is recorded, and with any Designer running none is started);
     designer_status, quit_designer and read_designer_log take the same port. The other tools reach only this server's
     port: one on another is for a server or client/sd_run.py started with SD_BRIDGE_PORT set to it. None is started
-    next to a Designer the user opened, on another port (GUIDE.md, Several Designers). None is started on a
+    next to a Designer the user opened, on another port. None is started on a
     port the plugin couldn't listen on (another program holds it; the result gives the error), nor where its record
     can't be written (unrecorded, it would count as the user's); a plugin of another bridge protocol (another version)
     is reported at once. On macOS it saves Designer's preferences plist first (again if the user's own Designer ran
     since the last copy), which quit_designer puts back; a line before the result or error says what it did with them:
     a copy left behind put back or dropped, saved again, or not saved.
-    For tests and work on this project: if a task needs Designer and it is closed, ask the user to open it.
+    Use it for tests and work on this project. For any other task that needs Designer while it is closed, ask the
+    user to open it.
     Override the app location with SD_DESIGNER_APP (on macOS the .app, opened hidden; a binary there starts shown)."""
     port = _port(port)
     try:

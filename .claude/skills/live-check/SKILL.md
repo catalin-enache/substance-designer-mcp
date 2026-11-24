@@ -147,7 +147,7 @@ lead tells the user it must run again. Fixes only elsewhere (`tests/unit/`, `ins
 configs) need only the unit suite again.
 
 **When a Designer crashed or hung:** a crash leaves a dump in that Designer's `Sentry-Crashpad/completed` (`pending`
-while its upload waits; GUIDE.md, Several Designers). `python3 scripts/read_crash_dump.py [dump]` reads one (macOS
+while its upload waits; GUIDE.md, Environment facts). `python3 scripts/read_crash_dump.py [dump]` reads one (macOS
 arm64; with no dump, the newest of any Designer's): the exception, the messages Crashpad kept (often an abort's
 reason), the crashing thread's frames and Designer's log as it crashed. A crash can also open Adobe's crash window
 on the user's screen and keep the crashed process until the window closes (ROADMAP item 95): close it for a Designer

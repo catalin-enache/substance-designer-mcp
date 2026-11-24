@@ -42,6 +42,7 @@ def save_package(
     return _checked(_bridge(_helpers_call('save_package(%r, %r)' % (graph_or_path, _local_path(save_as))), timeout=120))
 
 
+# why renders differ run to run: ROADMAP item 17
 @_tool(read_only=False, destructive=True, idempotent=True, open_world=False)
 def export_outputs(
     output_dir: Annotated[str, Field(description='The folder the textures are saved to.')],
@@ -51,9 +52,11 @@ def export_outputs(
 ) -> str:
     """Compute a graph inside Designer and save its output nodes' textures directly (no
     sbscooker/sbsrender), named after the output identifiers. Reflects the current, possibly
-    unsaved, state of the graph; the result names the graph. Names in outputs that
+    unsaved, state of the graph; the result names the graph. An exported height map was within a few 1/65535
+    steps of the cooked render (render_sbs) at a few pixels. Names in outputs that
     match no output are listed, and so are outputs that computed no image. Two outputs with one
-    identifier are refused (one file each)."""
+    identifier are refused (one file each). PIL reads a 16-bit grey PNG as I;16 (normalise by 65535), but a 16-bit RGBA
+    one as 8-bit."""
     return _checked(
         _bridge(
             _helpers_call('export_outputs(%r, %r, %r, %r)' % (graph, _local_path(output_dir), outputs, file_format)),
@@ -78,7 +81,8 @@ def render_sbs(
         int | None,
         Field(
             description="Output size override (11 = 2048). Without it a .sbs renders at the graph's default parent "
-            'size (as in Designer) and a .sbsar at its own stored default (often 256 px).'
+            'size (as in Designer) and a .sbsar at its own stored default (often 256 px). It sets the parent size: a '
+            "graph's non-zero relative offset applies on top."
         ),
     ] = None,
     graph: Annotated[
@@ -93,7 +97,7 @@ def render_sbs(
 ) -> str:
     """Cook a .sbs in a temporary folder (or take a .sbsar) and render outputs to files named after
     the output nodes (graph_output when several graphs render, so same-named outputs don't collide).
-    Use sbsar_info to list graphs/inputs/outputs."""
+    Use sbsar_info to list graphs/inputs/outputs. PIL reads its 16-bit PNGs as export_outputs says."""
     if not (SBSCOOKER and SBSRENDER):
         raise ToolError(
             'sbscooker/sbsrender not found. Set SD_DESIGNER_BIN_DIR to the folder containing '
@@ -219,7 +223,8 @@ def _default_parent_log2(sbs_path: str, graph: str | None = None) -> int | None:
 def _sbsar_default_log2(sbsar: str, graph: str | None = None) -> int | None:
     """Default $outputsize (log2) stored in a .sbsar, or None. A .sbsar is a 7-zip archive whose
     .xml description lists each input's default; the system tar (bsdtar on macOS and Windows 10+)
-    can read it."""
+    can read it. sbscooker writes the default 8,8 (256 px) whatever the graph's defaultParentSize, and no cooker option
+    changes it."""
     tar = shutil.which('tar')
     if not tar:
         return None

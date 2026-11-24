@@ -35,7 +35,15 @@ from PIL import Image as PILImage
 from pydantic import Field
 
 from .core import Box, NoneIfEmpty, _tool
-from .image_reading import _finite, _integer_scale, _non_finite, _opaque, _open_image, _reference_pixels
+from .image_reading import (
+    REFERENCE_ORIENTATION,
+    _finite,
+    _integer_scale,
+    _non_finite,
+    _opaque,
+    _open_image,
+    _reference_pixels,
+)
 from .measure import Values, _crop_box, _rgb
 
 Colours = npt.NDArray[np.float64]  # (N, 3): R, G, B per row
@@ -151,8 +159,9 @@ def analyze_reference(
     reference_region: Annotated[
         NoneIfEmpty[Box],
         Field(
-            description='[x0, y0, x1, y1] in pixels: the part of the reference to read, e.g. a flat-lit area of a '
-            'photo.'
+            description='[x0, y0, x1, y1] in pixels: the part of the reference to read. Give a flat-lit area of a '
+            "photo, as a lit photo's luminance holds its shading. Leave out a minority colour at one luminance (red "
+            'flecks took 3 close keys of 5), or make it transparent. ' + REFERENCE_ORIENTATION
         ),
     ] = None,
     keys: Annotated[
@@ -169,7 +178,10 @@ def analyze_reference(
     between keys. The keys' positions stretch the image's luminance (the R, G, B weights of the result's
     luminance line) from its 1st to its 99th percentile to 0..1, or from its minimum to its maximum when those two are
     equal, and the result gives that range. Of two keys or more, the darkest is at 0, the brightest at 1, and the
-    others go where the colour bends most.
+    others go where the colour bends most. The keys map a grey spanning 0..1, or the image's own grey through
+    Grayscale Conversion at its default weights (not Grayscale Conversion Advanced), then a levels
+    whose levelinlow and levelinhigh are the ends of the range the result gives, in all four components. The image's
+    grey so mapped gives back the part read within the fit error.
     The result gives three errors, each the RMS over R, G, B (0..1) of a Gradient Map on the image's luminance against
     the image: the fit error, of these keys; the least error, of a key on every luminance level; and one key's error,
     of the image's mean colour everywhere, which the other two read against. A fit error near the least error means

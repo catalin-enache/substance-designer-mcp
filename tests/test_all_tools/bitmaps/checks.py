@@ -157,7 +157,7 @@ async def check_designer_greys(ctx: Ctx) -> None:
 
 
 async def check_photo_to_gradient_map(ctx: Ctx) -> None:
-    """The recipe in GUIDE.md (Which tool for what, Measure), end to end: a synthetic photo's palette
+    """The recipe in analyze_reference's description, end to end: a synthetic photo's palette
     (analyze_reference), its keys set on two Gradient Maps through apply_edits' set. One maps a grey ramp from 0 to 1:
     each pixel is the keys' colour at its grey. The other maps the photo's own grey, Grayscale Conversion at its
     default, through a levels from the luminance range the palette prints to 0..1: against the photo, its error is the

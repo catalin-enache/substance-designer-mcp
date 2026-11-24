@@ -12,6 +12,12 @@ from PIL import ExifTags, Image as PILImage, ImageOps, TiffImagePlugin
 
 from .measure import PixelLayout, Pixels, Values
 
+# how the reference tools read a file (_open_image), as their reference_region's description says it
+REFERENCE_ORIENTATION = (
+    'The tool turns a JPEG (an MPO too) by its EXIF orientation, as its bitmap node does. It reads any other format as '
+    'stored, a PNG and a TIFF as Designer keeps them. The box is in the image as the tool reads it, turned, at the '
+    "file's own pixel size."
+)
 # the formats Pillow reads whose EXIF orientation Designer's bitmap node applies ("designer facts", the bitmaps check of
 # orientations): a JPEG, and a multi-picture JPEG saved as .jpg
 _TURNED = ('JPEG', 'MPO')

@@ -2039,8 +2039,8 @@ def test_launch_on_a_port_next_to_an_agents_on_another(
 def test_launch_refuses_to_start_one_next_to_the_users(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_sleep: None
 ) -> None:
-    # Designers share the preferences plist (GUIDE.md, Several Designers), not measured to undo anything (REVIEW.md
-    # TST-189: the refusal said the last to quit writes every settings file)
+    # Designers share the preferences plist (server_tools/lifecycle.py's docstring, Several Designers side by side),
+    # not measured to undo anything (REVIEW.md TST-189: the refusal said the last to quit writes every settings file)
     started = _launch_fakes(monkeypatch, tmp_path)
     processes = _Processes(monkeypatch, 11)
     patch_server(monkeypatch, '_listening_ports', lambda pid: {server.PORT} if pid == 11 else set())

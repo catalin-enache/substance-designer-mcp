@@ -95,9 +95,25 @@ def test_a_window_counts_in_front_only_over_another_apps_window_it_overlaps(
     assert (window_server.covering(windows, PID) is not None) is covers
 
 
-def test_the_active_apps_process_is_read_from_lsappinfo(window_server: ModuleType) -> None:
-    assert window_server.pid_of('"pid"=1920\n') == 1920
-    assert window_server.pid_of('') is None
+# what `lsappinfo info -only pid <front>` printed on macOS 27.2.1 (26B131), its trailing spaces included (REVIEW.md
+# TST-836)
+LSAPPINFO_27 = (
+    '[ NULL ]  [ NULL ]  \n'
+    '    bundleID=[ NULL ] \n'
+    '    bundle path=[ NULL ] \n'
+    '    executable path=[ NULL ] \n'
+    '    pid = 2510 !cgsConnection !signalled type=[ NULL ]  flavor=[ NULL ]  Version=[ NULL ]  Arch=!!none \n'
+    '\n'
+)
+
+
+@pytest.mark.parametrize(
+    'info, pid',
+    [('"pid"=1920\n', 1920), (LSAPPINFO_27, 2510), ('', None)],
+    ids=['macOS 26', 'macOS 27.2.1', 'nothing printed'],
+)
+def test_the_active_apps_process_is_read_from_lsappinfo(window_server: ModuleType, info: str, pid: int | None) -> None:
+    assert window_server.pid_of(info) == pid
 
 
 def test_a_designer_never_active_nor_in_front_stayed_behind(window_server: ModuleType) -> None:

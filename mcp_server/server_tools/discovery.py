@@ -61,7 +61,8 @@ def describe_graph(
         Field(
             description="Lists only the nodes selected in Designer's editor, as node_ids lists them, then names the "
             "frames, comments and pins selected too; a selected link isn't read. A graph given must be the one in the "
-            'editor. Not with node_ids, node_id, parameter or function.'
+            'editor. Not with node_ids, node_id, parameter or function. Opening another graph in the editor drops the '
+            'selection.'
         ),
     ] = False,
 ) -> str:
@@ -111,8 +112,8 @@ def describe_node(
         ),
     ],
 ) -> str:
-    """Show a node type's connectors and parameters (ids, types, labels, defaults, enum values). For a function node,
-    every type each input and its output take."""
+    """Show a node type's connectors and parameters (ids, types, labels, defaults, enum values), and for a library
+    node, their slider ranges and descriptions. For a function node, every type each input and its output take."""
     return _checked(_bridge(_helpers_call('describe_node(%r)' % definition), timeout=60))
 
 

@@ -12,7 +12,16 @@ from PIL import Image as PILImage
 from pydantic import Field
 
 from .core import Box, Graph, NoneIfEmpty, Output, _tool
-from .image_reading import _alpha, _finite, _integer_scale, _non_finite, _opaque, _open_image, _reference_pixels
+from .image_reading import (
+    REFERENCE_ORIENTATION,
+    _alpha,
+    _finite,
+    _integer_scale,
+    _non_finite,
+    _opaque,
+    _open_image,
+    _reference_pixels,
+)
 from .measure import PixelLayout, Pixels, Values, _crop, _labelled, _node_pixels, _sheet, _to_display
 
 _LUMA: npt.NDArray[np.float64] = np.array([0.2126, 0.7152, 0.0722])
@@ -178,7 +187,7 @@ def compare_to_reference(
         NoneIfEmpty[Box],
         Field(
             description='[x0, y0, x1, y1] in pixels: the part of the reference to compare, e.g. the matching area of '
-            'a photo.'
+            'a photo. Compare like with like: plain, lit material against the matching region. ' + REFERENCE_ORIENTATION
         ),
     ] = None,
     aligned: Annotated[
@@ -196,7 +205,9 @@ def compare_to_reference(
     distributions (works for a photo that isn't pixel-aligned with the material): per channel
     mean, std, percentiles, the mean shift, the contrast ratio and the earth mover's distance
     (EMD: how far values must move on average, 0..1), plus a linear map (x*gain + bias) that
-    would match mean and contrast. R, G, B are compared when both are colour, luma always.
+    would match mean and contrast. That map is a starting point for levels, not a target. A whole product shot is
+    dominated by its background, and lit renders or photos include shading, so their contrast is higher than a
+    baseColor's. R, G, B are compared when both are colour, luma always.
     Transparent reference pixels (alpha < 0.5) are ignored, and a reference holding NaN or infinite pixels (a float
     image's) is refused.
     Returns the numbers and an image: node | reference | luma histograms | difference.

@@ -17,12 +17,28 @@ from test_all_tools.common import (
     text,
 )
 
+E = 'example script'
+
+
+async def check_the_curvature_takes_the_format_of_its_normals(ctx: Ctx) -> None:
+    """Each curvature_smooth of the example built by run reads the format of the atomic normal feeding it:
+    normal_format 1 (OpenGL) for that normal's inversedy True, 0 (DirectX) for False, as facts' check of
+    curvature_smooth measures (REVIEW.md INS-47)."""
+    c = ctx.c
+    t = text(await designer_script(c, 'example/curvature_formats', graph=EXAMPLE_GRAPH))
+    fed = re.findall(r'^CURVATURE fed by (\S+) inversedy=(\d) normal_format=(\d)$', t, re.M)
+    check(
+        E,
+        'each curvature_smooth takes the normal format of the normals it is fed',
+        bool(fed) and all(source == 'sbs::compositing::normal' and inversedy == fmt for source, inversedy, fmt in fed),
+        t.strip()[-200:],
+    )
+
 
 async def run(ctx: Ctx) -> None:
     c, scratch = ctx.c, ctx.scratch
     # --- README's full example: examples/build_dwarf_trimsheet.py, renamed so it can't touch
     # a trim sheet you have open (it closes earlier builds of its graph id) and saved to scratch
-    E = 'example script'
     with open(os.path.join(BUNDLE, 'examples', 'build_dwarf_trimsheet.py')) as f:
         source = f.read()
     example_sbs = os.path.join(scratch, 'example', EXAMPLE_GRAPH + '.sbs')
@@ -71,6 +87,7 @@ async def run(ctx: Ctx) -> None:
             'Saved trim sheet to' in t and 'ERROR' not in t and 'WARNING' not in t and os.path.isfile(example_sbs),
             t[-300:],
         )
+        await check_the_curvature_takes_the_format_of_its_normals(ctx)
         # the readable-graph finish (ROADMAP item, now in the script): a frame per
         # section, overridable size, portals written into the saved file
         t = text(await designer_script(c, 'example/frames_and_size', graph=EXAMPLE_GRAPH))

@@ -155,7 +155,7 @@ entry, takes the user (the `address-review` skill (`.claude/skills/address-revie
 
 - **`execute_designer_code` and `run_designer_script` aren't checked for edits to a library graph.**
   On purpose: the tools refuse such edits (`_graph_to_edit`, `designer_helpers/core.py`), and a person's
-  or agent's own code is not checked (`GUIDE.md`, Environment facts).
+  or agent's own code is not checked (`GUIDE.md`, sd API gotchas).
   Reopen if: the user wants scripts restricted.
 - **A definition naming a function or another resource isn't told apart from a graph**
   (`designer_helpers/describe.py`). The suggested fix would remove what works for bitmaps and SVGs. What
