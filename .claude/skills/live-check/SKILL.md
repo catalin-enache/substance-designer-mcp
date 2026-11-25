@@ -90,7 +90,16 @@ findings' tests first, run together**, point 4):
   If the user's Designer is open, ask them to close it: a probe's leftovers or crash would land in their work. Close
   the agent's Designer when its work is done (GUIDE.md, the rules).
 - **What it touches:** a new package of its own, with a graph name no other probe uses, unloaded at the end, never the
-  user's packages; GUIDE.md's rules apply (no Undo, no hot reload of the plugin).
+  user's packages; GUIDE.md's rules apply (no hot reload of the plugin). A probe undoes only a top step of its own:
+  measuring Designer, it is outside `undo_edits` by design.
+- **A Designer probed through its internal objects is tainted.** A probe taints its Designer when it connects Python
+  handlers to Designer's internal signals, holds wrappers of its internal widgets, or calls its internal slots.
+  Restart a tainted Designer before measuring any editing behaviour in it, and don't mix such probes with editing calls
+  in one Designer session. Such a mix crashed a Designer (2026-11-24): after probes that held wrappers of a toolbar's
+  widgets and connected handlers to internal signals, `set_graph_size` crashed it in `QWidget::setEnabled`, under
+  `EngineToolBar::updateEnableState()`. The rule applies to probes only. The self-test's history scripts,
+  such as `history_facts.py` and `undo_steps.py`, and the tools' own rollback and `undo_edits` are outside it: they
+  release the toolbar's wrappers with the job (the user, 2026-11-25).
 - **Where the code lives:** outside the repo (the session's scratchpad or a temp folder), run with
   `run_designer_script`, `execute_designer_code` or `client/sd_run.py`, and deleted afterwards. The session's own tools
   reach only the Designer on the session's port. On a port of its own, a probe runs `client/sd_run.py` with
@@ -148,8 +157,10 @@ configs) need only the unit suite again.
 
 **When a Designer crashed or hung:** a crash leaves a dump in that Designer's `Sentry-Crashpad/completed` (`pending`
 while its upload waits; GUIDE.md, Environment facts). `python3 scripts/read_crash_dump.py [dump]` reads one (macOS
-arm64; with no dump, the newest of any Designer's): the exception, the messages Crashpad kept (often an abort's
-reason), the crashing thread's frames and Designer's log as it crashed. A crash can also open Adobe's crash window
+arm64; with no dump, the newest of any Designer's): the crash handler's database the dump lies in (it names the
+Designer's home, and so its port), the exception, the messages Crashpad kept (often an abort's reason), the crashing
+thread's frames, its registers and the top of its stack as text (a string held there can name what was being changed),
+and Designer's log as it crashed. A crash can also open Adobe's crash window
 on the user's screen and keep the crashed process until the window closes (ROADMAP item 95): close it for a Designer
 an agent started. A Designer hung in its quit has its threads sampled before it is forced (macOS: `quit_designer`'s
 or `launch_designer`'s result names the file; ROADMAP item 70). `alone.close()` names any dump its quit left.

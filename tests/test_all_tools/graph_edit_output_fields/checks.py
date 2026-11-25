@@ -4,7 +4,7 @@ import os
 import re
 from textwrap import dedent
 
-from test_all_tools.common import TEST_GRAPH, Ctx, Ops, check, text
+from test_all_tools.common import ROLLED_BACK, TEST_GRAPH, Ctx, Ops, check, text
 
 
 async def run(ctx: Ctx) -> None:
@@ -174,29 +174,7 @@ async def run(ctx: Ctx) -> None:
             text(r_),
         )
 
-    # one name twice in a batch: refused when the op runs, so the first stays, and the error says what was added
-    r_ = await c(
-        'apply_edits',
-        {
-            'ops': [
-                {'op': 'add', 'definition': 'output', 'ref': 'd1', 'identifier': 'twice', 'position': [300, 600]},
-                {'op': 'add', 'definition': 'output', 'ref': 'd2', 'identifier': 'Twice', 'position': [300, 900]},
-            ],
-            **G,
-        },
-    )
-    described = text(await c('describe_graph', G))
-    check(
-        'apply_edits',
-        'add: one name twice in a batch stops at the second, and says the first was added',
-        r_.is_error
-        and 'already has' in text(r_)
-        and 'ops 0-0 were applied' in text(r_)
-        and "(ref 'd1')" in text(r_)
-        and described.count("identifier='twice'") == 1
-        and "identifier='Twice'" not in described,
-        text(r_),
-    )
+    await check_one_name_twice_in_a_batch_rolls_the_batch_back(ctx)
 
     # closed: the one edit left unsaved goes with it
     await c(
@@ -211,4 +189,32 @@ async def run(ctx: Ctx) -> None:
             % name,
             'undo_label': 'self-test: close the outputs graph',
         },
+    )
+
+
+async def check_one_name_twice_in_a_batch_rolls_the_batch_back(ctx: Ctx) -> None:
+    """One output name twice in a batch: refused when the second op runs, and the batch is rolled back, the first
+    output gone too, the error saying its step was taken back. Before the rollback, the first stayed and the error
+    named it. On the category's own graph."""
+    c, G = ctx.c, {'graph': TEST_GRAPH + '_outputs'}
+    r_ = await c(
+        'apply_edits',
+        {
+            'ops': [
+                {'op': 'add', 'definition': 'output', 'ref': 'd1', 'identifier': 'twice', 'position': [300, 600]},
+                {'op': 'add', 'definition': 'output', 'ref': 'd2', 'identifier': 'Twice', 'position': [300, 900]},
+            ],
+            **G,
+        },
+    )
+    described = text(await c('describe_graph', G))
+    check(
+        'apply_edits',
+        'add: one name twice in a batch stops at the second, and the batch is rolled back',
+        r_.is_error
+        and 'already has' in text(r_)
+        and ROLLED_BACK in text(r_)
+        and "identifier='twice'" not in described
+        and "identifier='Twice'" not in described,
+        text(r_),
     )

@@ -1596,17 +1596,19 @@ def test_a_new_function_graph_designer_doesnt_make_as_asked_is_deleted(
     assert made.deleted
 
 
-def test_an_input_not_made_leaves_an_existing_function_graph_with_its_new_function(package: types.ModuleType) -> None:
+def test_an_input_not_made_leaves_an_existing_function_graph_with_its_new_function(
+    package: types.ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
     # the output node has moved by then: the function stays, with the inputs set so far (the module docstring)
     paint = FakeFunction('paint', (('uv', 'float2'),), 'float4')
     failing_input(paint)
-    # the error says so (REVIEW.md HLP-238)
-    with pytest.raises(
-        RuntimeError, match=r'^newProperty failed; paint keeps its new function, and the inputs set so far$'
-    ):
+    with pytest.raises(RuntimeError, match=r'^newProperty failed$'):
         built_resource(package, paint, [('uv', 'float2'), ('k', 'float')])
     assert not paint.deleted and paint.setOutputNode.called
     assert [p.getId() for p in paint.inputs] == ['uv']
+    # said (REVIEW.md HLP-238) on a line of its own, which the server shows unless the call's rollback took the step
+    # back (REVIEW.md HLP-256)
+    assert server.KEPT_LINE + 'paint keeps its new function, and the inputs set so far' in capsys.readouterr().out
 
 
 def test_an_existing_function_graph_whose_input_designer_renames_is_refused(package: types.ModuleType) -> None:

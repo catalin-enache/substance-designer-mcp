@@ -140,6 +140,7 @@ HINTS: dict[str, Hints] = {
     'arrange_graph': (False, True, True, False),
     'set_link_display': (False, True, False, False),
     'apply_edits': (False, True, False, False),
+    'undo_edits': (False, True, False, False),  # it removes changes; a second call takes back the calls before
     'create_graph': (False, True, False, False),
     'set_graph_size': (False, True, True, False),
     'remove_graph_input': (False, True, True, False),

@@ -16,7 +16,7 @@ from typing import NoReturn
 import pytest
 from selftest_fakes import Designer, FakeCall, code_of, fresh, tool_result
 
-from project_constants import ToolArgs
+from project_constants import TAG_LENGTH, TAG_PREFIX, ToolArgs
 
 NOT_VISIBLE = 'the 3D View panel is not visible in Designer'
 
@@ -574,3 +574,15 @@ def test_the_definitions_check_names_the_first_difference_in_short(
     line = next(l for l in capsys.readouterr().out.splitlines() if "gives the compiler's table" in l)
     assert line.startswith('FAIL' if changed else 'PASS'), line
     assert line.split(' | ', 1)[1] == detail
+
+
+def test_the_timeout_check_commits_only_a_step_shown_open() -> None:
+    # REVIEW.md TST-887: a commit only when the call's node is there and the Undo top unchanged, never into a Designer
+    # whose top is a step of the user's
+    checks = fresh('batch.checks')
+    own, top = 'Claude: code' + TAG_PREFIX + 'a' * TAG_LENGTH, 'Claude: code' + TAG_PREFIX + 'b' * TAG_LENGTH
+    assert checks.step_shown(own, top, 4, 4) == 'listed'
+    assert checks.step_shown(top, top, 4, 4) == 'open'
+    assert checks.step_shown('Add Atomic Node', top, 4, 4) == 'other'  # the user's step on top
+    assert checks.step_shown(top, top, 3, 4) == 'other'  # the call's node isn't there
+    assert checks.step_shown(own, top, 3, 4) == 'other'

@@ -1,10 +1,13 @@
 """scripts/read_crash_dump.py: what a crash dump of Designer's says, read without a minidump parser (none at hand reads
-macOS arm64 ones): the exception, the messages Crashpad kept, the crashing thread's frames through its frame pointers,
-the first one outside the system's libraries, and Designer's log as it crashed; on synthetic dumps (minidumps.py)."""
+macOS arm64 ones): the crash handler's database, the exception, the messages Crashpad kept, the crashing thread's frames
+through its frame pointers, the first one outside the system's libraries, its registers and the top of its stack as
+text, and Designer's log as it crashed; on synthetic dumps (minidumps.py)."""
 
+import builtins
 import contextlib
 import glob
 import importlib.util
+import io
 import os
 import re
 import signal
@@ -16,6 +19,7 @@ import tracemalloc
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import FrameType, ModuleType, SimpleNamespace
+from unittest import mock
 
 import pytest
 from minidumps import (
@@ -75,7 +79,7 @@ def test_the_crashing_threads_frames_follow_its_frame_pointers(tmp_path: Path) -
     ]
     at = [said.find(line) for line in expected]
     assert -1 not in at and at == sorted(at), said
-    assert '4  ' not in said, 'the chain ends at a frame pointer of 0'
+    assert not re.search(r'^ +4  ', said, re.M), 'the chain ends at a frame pointer of 0'
 
 
 def test_the_first_frame_outside_the_systems_libraries_is_named(tmp_path: Path) -> None:
@@ -156,16 +160,105 @@ def test_a_file_that_isnt_a_minidump_is_refused(tmp_path: Path) -> None:
         reader.describe(str(path))
 
 
-def test_designers_log_as_it_crashed_ends_the_report_and_its_sentry_event_is_never_said(tmp_path: Path) -> None:
-    # the event attached beside it holds the user's Adobe account
+def test_designers_log_as_it_crashed_ends_the_report_and_its_sentry_event_is_never_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the event attached beside it holds the user's Adobe account: never opened, so never said
     path = _dump(tmp_path, name='a1b2.dmp')
     attachments = tmp_path / 'Sentry-Crashpad' / 'attachments' / 'a1b2'
     attachments.mkdir(parents=True)
     (attachments / 'log.txt').write_text('\n'.join('line %d' % i for i in range(1, 21)) + '\n')
     (attachments / '__sentry-event').write_text('email someone@example.com')
+    spy = mock.Mock(wraps=io.open)
+    # Path.open, read_bytes and read_text open through io.open, which builtins.open is (REVIEW.md TST-855)
+    monkeypatch.setattr(io, 'open', spy)
+    monkeypatch.setattr(builtins, 'open', spy)
     said = _said(path, name_frames=lambda path, base, addresses: [])
     assert said.index('line 20') > said.index('first frame outside') and 'line 13' in said and 'line 12' not in said
-    assert 'someone@example.com' not in said
+    opened = [os.path.abspath(str(call.args[0])) for call in spy.call_args_list]
+    assert 'someone@example.com' not in said and opened == [str(path), str(attachments / 'log.txt')], opened
+
+
+def test_the_crashing_threads_registers_are_said_with_their_printable_ascii(tmp_path: Path) -> None:
+    # a short string held in a register names what was being changed where the frames don't: `outputsi` + `ze`, the
+    # parameter $outputsize, in a crash under QWidget::setEnabled
+    crash = an_abort(registers={0: 0x10000, 11: int.from_bytes(b'outputsi', 'little'), 12: ord('e')})
+    lines = _said(_dump(tmp_path, crash), name_frames=_no_names).splitlines()
+    registers = [line.split() for line in lines if re.match(r'^ +x\d+ ', line)]
+    assert [r[0] for r in registers] == ['x%d' % i for i in range(31)], lines
+    assert registers[0] == ['x0', '0x0000000000010000'], 'no printable byte: no text'
+    assert registers[11] == ['x11', '0x697374757074756f', 'outputsi']
+    assert registers[12] == ['x12', '0x0000000000000065', 'e.......']
+    assert registers[29][1] == '%#018x' % (STACK + 0x20), 'the frame pointer'
+
+
+def test_the_top_of_the_crashing_threads_stack_is_said_as_text(tmp_path: Path) -> None:
+    # the string's characters spill over two words of the stack (`outputsi`, then `ze`): read as one text. From sp, which
+    # is above the stack range's start, as in a real dump: what lies below sp isn't said (REVIEW.md TST-860)
+    stack = bytearray(an_abort().stack)
+    stack[0x00:0x05] = b'BELOW'
+    stack[0x10:0x1A] = b'outputsize'
+    crash = an_abort(stack=bytes(stack), sp=STACK + 0x10)
+    lines = _said(_dump(tmp_path, crash), name_frames=_no_names).splitlines()
+    head = next(i for i, line in enumerate(lines) if line.startswith('the top of its stack'))
+    assert '%#x' % (STACK + 0x10) in lines[head], lines[head]
+    # the stack's 0x60 bytes from sp, as far as the dump holds them, 64 a line; then a frame record's bytes
+    assert lines[head + 1].startswith('  sp+0x000  outputsize' + '.' * 6), lines[head + 1]
+    assert len(lines[head + 1]) == len('  sp+0x000  ') + 64, lines[head + 1]
+    assert lines[head + 2].startswith('  sp+0x040  ') and len(lines[head + 2]) == len('  sp+0x040  ') + 0x20
+    assert not [line for line in lines[head + 3 :] if line.startswith('  sp+')], lines[head:]
+    assert 'BELOW' not in '\n'.join(lines), lines[head:]
+
+
+def test_only_the_top_of_the_stack_is_said(tmp_path: Path) -> None:
+    # REVIEW.md TST-869: a real dump holds the thread's whole stack, so reading to its end would print thousands of lines
+    reader = _reader()
+    stack = an_abort().stack + bytes(4 * reader.STACK_TOP)
+    lines = _said(_dump(tmp_path, an_abort(stack=stack)), name_frames=_no_names).splitlines()
+    shown = [line for line in lines if line.startswith('  sp+')]
+    assert len(shown) == reader.STACK_TOP // reader.TEXT_LINE, shown
+
+
+def test_a_range_of_the_memory_list_cut_short_gives_way_to_one_holding_the_bytes_whole(tmp_path: Path) -> None:
+    # REVIEW.md INS-49: the memory list's ranges are looked in before the thread's stack. One holding a frame record's
+    # first 12 bytes ended the walk, and one holding sp's first 16 bytes cut the stack's text, though the stack holds
+    # both whole
+    stack = an_abort().stack
+    crash = an_abort(memory=[(STACK, stack[:0x10]), (STACK + 0x40, stack[0x40:0x4C])])
+    lines = _said(_dump(tmp_path, crash), name_frames=_no_names).splitlines()
+    assert '   3  Adobe Substance 3D Designer +0x1234' in lines, lines
+    text = next(line for line in lines if line.startswith('  sp+0x000  '))
+    assert len(text) == len('  sp+0x000  ') + 64, text
+
+
+def test_a_stack_the_dump_doesnt_hold_is_said_so(tmp_path: Path) -> None:
+    crash = an_abort(sp=STACK + 0x100000)  # outside every memory range of the dump
+    said = _said(_dump(tmp_path, crash), name_frames=_no_names)
+    assert 'the top of its stack, from sp %#x: not in the dump' % (STACK + 0x100000) in said, said
+
+
+def test_the_crash_handlers_database_is_said(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # it names the Designer's home, and so the port of a Designer an agent started; from the dump's own folder too
+    path = _dump(tmp_path, name='a1b2.dmp')
+    database = tmp_path / 'Sentry-Crashpad'
+    line = "  the crash handler's database: %s" % database
+    assert line in _said(path, name_frames=_no_names).splitlines()
+    monkeypatch.chdir(path.parent)
+    assert line in _said(Path('a1b2.dmp'), name_frames=_no_names).splitlines()
+    waiting = _dump(tmp_path, name='c3d4.dmp', part='pending')
+    assert line in _said(waiting, name_frames=_no_names).splitlines()
+
+
+def test_a_dump_moved_out_of_crashpads_folders_names_no_database_nor_its_log(tmp_path: Path) -> None:
+    # REVIEW.md INS-48: a dump copied into a scratch folder named that folder's parent as the crash handler's database,
+    # and read a log there as Designer's
+    path = _dump(tmp_path, part='scratch')
+    attachments = tmp_path / 'Sentry-Crashpad' / 'attachments' / 'a1b2'
+    attachments.mkdir(parents=True)
+    (attachments / 'log.txt').write_text('a log not beside the dump\n')
+    said = _said(path, name_frames=_no_names)
+    assert "the crash handler's database" not in said and 'exception: EXC_CRASH' in said, said
+    assert 'a log not beside the dump' not in said, said
 
 
 def test_with_no_path_the_newest_dump_of_any_designer_is_read(

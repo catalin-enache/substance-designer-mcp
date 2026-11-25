@@ -16,7 +16,8 @@ def create_graph(
         int, Field(description='Output size 2^size_log2 (default 2048; 13 is 8192 px, the largest).')
     ] = 11,
 ) -> str:
-    """Create a new package with one empty compositing graph. One undo step."""
+    """Create a new package with one empty compositing graph. One undo step. If the save fails, Designer's Undo takes
+    that step back while it is the newest, the package with it, and the error says so."""
     return _edit('create_graph(%r, %r, %d)' % (name, _local_path(save_path), size_log2), 'Claude: create graph ' + name)
 
 
@@ -137,7 +138,9 @@ def apply_edits(ops: Annotated[list[JsonObject], Field(description=OPS)], graph:
     checked before any op runs: a field the op doesn't take, an unknown id, a ref not added by an earlier op, a node an
     earlier delete op removes, "graph" anywhere but a set op, a position that isn't [x, y], or a wrong identifier, label or
     usage (see ops) refuses the whole batch, nothing changed. Other mistakes (a missing field, a wrong connector or parameter id, a bad value) show only when their op
-    runs: ops run in order and stop at the first failing one (earlier ops stay applied, and the error
-    lists the nodes already added, with their refs; Ctrl+Z on the graph reverts the whole batch)."""
+    runs: ops run in order and stop at the first failing one. If the batch had changed something, Designer's Undo takes
+    it back and the error says so. If that Undo can't be made, the error says what stays applied, with the
+    nodes added; if it was sent but not seen landing, the error says to look first. An error saying none of these:
+    nothing before the failing op was applied."""
     ops = [{**op, 'path': _local_path(path)} if isinstance(path := op.get('path'), str) else op for op in ops]
     return _edit('apply_edits(%r, %r)' % (graph, ops), 'Claude: apply %d edits' % len(ops))

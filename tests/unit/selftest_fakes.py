@@ -18,7 +18,7 @@ import time
 from collections.abc import Awaitable, Callable, Collection, Iterable
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import TYPE_CHECKING, Protocol, TypedDict, Unpack, cast, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, TypedDict, Unpack, cast, runtime_checkable
 
 import pytest
 
@@ -29,6 +29,8 @@ if TYPE_CHECKING:  # for the checker only: fresh() imports the self-test's modul
     from test_all_tools.workers import Gating, Process, WorkerResults, _Start
 
 
+# common.Which, the self-test's Undo or Redo, for the tests' annotations: test_which_is_undo_or_redo pins it to common's
+Which = Literal['Undo', 'Redo']
 # A fake of the self-test's tool call, `c(name, args)`, answering with what stands for a CallToolResult
 FakeCall = Callable[[str, ToolArgs | None], Awaitable[SimpleNamespace]]
 

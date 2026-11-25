@@ -237,13 +237,16 @@ def apply_edits(identifier: str | SDSBSCompGraph | None, ops: list[dict[str, Jso
             else:  # _check_batch refused it already; kept so every path through the loop is defined
                 raise RuntimeError('unknown op %r (add, bitmap, set, connect, disconnect, move, delete, expose)' % kind)
         except (Exception, APIException) as e:
-            done = 'ops 0-%d were applied' % (i - 1) if i else 'no earlier op was applied'
-            if made:  # the nodes already added, so a retry needn't add them again (SRV-35, HLP-49)
-                done += ' (added: %s)' % ', '.join(made)
+            # What stays applied, said on a line of its own: the server adds it to the error unless the call's rollback
+            # took it back (server_tools/core.py, _failure). With nothing applied, nothing is said, so nothing points to
+            # undo_edits, which would take back the step before the batch
+            kept: list[str] = []
+            if i:  # with the nodes already added, so a retry needn't add them again (SRV-35, HLP-49)
+                kept.append('ops 0-%d were applied' % (i - 1) + (' (added: %s)' % ', '.join(made) if made else ''))
             # an add can fail after creating its node (in setting its params): say so only then
-            added = kind in ('add', 'bitmap') and g.getNodes().getSize() > nodes_before
-            raise RuntimeError(
-                'op %d (%s) failed: %s. %s%s; Ctrl+Z on this graph reverts the whole '
-                'batch.' % (i, kind, e, done, ' (its node was added before the failure)' if added else '')
-            ) from e
+            if kind in ('add', 'bitmap') and g.getNodes().getSize() > nodes_before:
+                kept.append('its node was added before the failure')
+            if kept:
+                print('KEPT=%s; undo_edits takes back the whole batch' % ', '.join(kept))
+            raise RuntimeError('op %d (%s) failed: %s' % (i, kind, e)) from e
     print('applied %d op(s); refs: %s' % (len(ops), refs))

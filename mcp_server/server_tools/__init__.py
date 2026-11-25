@@ -17,6 +17,7 @@ from . import (
     reference,
     scripting,
     snapshots,
+    undo,
     views,
 )
 
@@ -28,6 +29,7 @@ MODULES = (
     discovery,
     views,
     edits,
+    undo,
     functions,
     measure,
     image_reading,

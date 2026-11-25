@@ -13,9 +13,11 @@ paths:
 How the code that reaches Designer is laid out, and how a change reaches it (AGENTS.md, Deploying and diagnosing,
 points here). How they fit together: README.md, How it works.
 
-- **How changes reach Designer:** `server.py`, `server_tools/`, `designer_helpers/` and `designer_preferences.py` changes
-  take effect when the MCP server restarts (helpers are re-sent with every call; the user reconnects in `/mcp`, or test with a fresh MCP client
-  such as the self-test). **Plugin** changes must be copied into Designer's plugin folder (re-run `install.py`; paths in
+- **How changes reach Designer:** `server.py`, `server_tools/`, `designer_helpers/`, `designer_rollback.py` and
+  `designer_preferences.py` changes take effect when the MCP server restarts. The server reads the helpers and the
+  rollback once. It sends the helpers with the calls that use them, and the rollback with each call it wraps in an
+  undo step and with `undo_edits`. The user reconnects in `/mcp`, or test with a fresh MCP client such
+  as the self-test. **Plugin** changes must be copied into Designer's plugin folder (re-run `install.py`; paths in
   README.md, Install) and need a **Designer restart**: for a Designer an agent started, `quit_designer` then
   `launch_designer` without asking (say that you did); for the user's, ask them to save, close and reopen it.
 - **The helpers** (`mcp_server/designer_helpers/`) are parts joined into one script (README.md, How it works). A part

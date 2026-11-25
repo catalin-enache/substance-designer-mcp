@@ -1,6 +1,7 @@
 """The bridge plugin's server, run outside Designer: Qt's timer is replaced by a thread that
 drains the job queue, everything else (sockets, authentication, queue, timeouts) is real."""
 
+import builtins
 import gc
 import hashlib
 import hmac
@@ -15,13 +16,14 @@ import threading
 import time
 import types
 import typing
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from textwrap import dedent
 from typing import Protocol, TypedDict, Unpack, cast
 
 import pytest
 from aborts import Tracer
+from history_fakes import GroupEvent, Recorded, group_events, install_sd
 
 import project_constants
 from conftest import ROOT, DumpOptions, LoadOptions, patch_server, server
@@ -730,8 +732,9 @@ def test_a_job_never_starts_inside_the_running_one(plugin: types.ModuleType, mon
 
 
 def test_an_abort_lets_cleanup_code_finish(plugin: types.ModuleType) -> None:
-    # REVIEW.md PLG-2. The abort is raised once; finally blocks and context-manager exits (such
-    # as Designer's UndoGroup committing its transaction) must then run to the end.
+    # REVIEW.md PLG-2. The abort is raised once; finally blocks and context-manager exits after it must then run to
+    # the end. One the abort comes in instead stops there: _with_undo's commit is kept out of its reach (REVIEW.md
+    # SRV-273, test_an_abort_after_the_code_never_leaves_its_undo_step_open).
     cancel = threading.Event()
     cancel.set()
     code = dedent("""\
@@ -747,6 +750,89 @@ def test_an_abort_lets_cleanup_code_finish(plugin: types.ModuleType) -> None:
     result = plugin._run(code, None, None, cancel)
     assert not result['ok'] and 'ScriptAborted: cancelled by client' in result['error']
     assert 'cleanup finished 199990000' in result['output']
+
+
+def test_an_abort_never_stops_a_rollback_halfway(plugin: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The rollback of a failed call's step (server_tools/core.py, _with_undo) runs untraced: a cancel arriving as it runs
+    # leaves it to finish, and the reply's error is the call's own. Traced, the abort landed in it, and nothing was
+    # undone (measured in Designer, 2026-11-24).
+    cancel = threading.Event()
+    stand_in = dedent("""\
+        import rollback_cancel
+
+        def roll_back(label, limit_s):
+            rollback_cancel.set()  # cancel_designer_job, as the rollback runs
+            total = 0
+            for i in range(20000):  # traced, the abort would land here
+                total += i
+            return 'undone %d' % total
+    """)
+
+    install_sd(monkeypatch, [])
+    monkeypatch.setitem(sys.modules, 'rollback_cancel', types.SimpleNamespace(set=cancel.set))
+    patch_server(monkeypatch, 'ROLLBACK', stand_in)
+    code = server._with_undo("raise ValueError('the call failed')", 'Claude: apply 1 edits')
+    result = plugin._run(code, '<quick edit>', None, cancel)
+    assert not result['ok'] and result['error'].rstrip().endswith('ValueError: the call failed'), result['error']
+    assert server.ROLLBACK_LINE + 'undone 199990000' in result['output']
+
+
+def test_an_abort_after_the_code_never_leaves_its_undo_step_open(
+    plugin: types.ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # REVIEW.md SRV-273 (server_tools/core.py, _with_undo): the abort comes at the 64th traced event once the limit is
+    # past. The limit here is past from the start, and the code's own lines (k) move where that event falls, in the
+    # code or after it
+    patch_server(monkeypatch, 'ROLLBACK', 'def roll_back(label, limit_s):\n    return "undone"\n')
+    recorded: Recorded = []
+    install_sd(monkeypatch, recorded)
+    real_import = builtins.__import__
+
+    def designers_import(
+        name: str,
+        globals: Mapping[str, object] | None = None,
+        locals: Mapping[str, object] | None = None,
+        fromlist: Sequence[str] = (),
+        level: int = 0,
+    ) -> types.ModuleType:
+        # Designer's __import__ runs Python (feature_import, in a loader.py), so an import traces (core.py, _with_undo)
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, '__import__', designers_import)
+    left_open: list[tuple[int, list[GroupEvent]]] = []
+    for k in range(80):
+        recorded.clear()
+        plugin._run(server._with_undo('x = 1\n' * k, 'Claude: code'), '<job>', 1e-9, threading.Event())
+        events = group_events(recorded)
+        if [kind for kind, _ in events] != ['enter', 'commit']:
+            left_open.append((k, events))
+    assert left_open == [], left_open
+
+
+@pytest.mark.parametrize('end', ['sys.exit()', 'sys.exit(0)', 'sys.exit(None)'])
+def test_a_script_ending_with_sys_exit_of_0_or_none_ends_normally(plugin: types.ModuleType, end: str) -> None:
+    # a normal end (the user, 2026-11-24): no error, the output printed so far kept
+    result = plugin._run("import sys\nprint('before')\n%s\nprint('after')" % end, None, None, threading.Event())
+    assert result == {'ok': True, 'output': 'before\n', 'error': ''}
+
+
+@pytest.mark.parametrize(('end', 'says'), [('sys.exit(1)', 'SystemExit: 1'), ("sys.exit('no')", 'SystemExit: no')])
+def test_any_other_exit_of_a_script_is_a_failure(plugin: types.ModuleType, end: str, says: str) -> None:
+    result = plugin._run('import sys\n' + end, None, None, threading.Event())
+    assert not result['ok'] and result['error'].rstrip().endswith(says), result['error']
+
+
+@pytest.mark.parametrize(('end', 'ok'), [('sys.exit(0)', True), ('sys.exit(1)', False)])
+def test_a_calls_exit_is_rolled_back_only_when_it_is_a_failure(
+    plugin: types.ModuleType, monkeypatch: pytest.MonkeyPatch, end: str, ok: bool
+) -> None:
+    # the code a tool sends (server_tools/core.py, _with_undo) and the plugin agree: a normal end keeps the call's step,
+    # and any other exit takes it back
+    install_sd(monkeypatch, [])
+    patch_server(monkeypatch, 'ROLLBACK', "def roll_back(label, limit_s):\n    return 'undone'\n")
+    result = plugin._run(server._with_undo('import sys\n' + end, 'Claude: code'), '<code>', None, threading.Event())
+    assert result['ok'] is ok, result['error']
+    assert (server.ROLLBACK_LINE + 'undone' in result['output']) is not ok
 
 
 # What typing keeps of a job, and with it the job's scope: the globals of the job's functions and methods

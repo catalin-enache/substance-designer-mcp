@@ -408,7 +408,8 @@ def set_function(
 
     With `function` instead of `node_id`, it makes or replaces a function graph stored in the package, which any
     expression of the package then calls by name: the result gives its identifier, inputs and output's type, and names
-    what calls it when its inputs or output changed."""
+    what calls it when its inputs or output changed. If a function graph it replaces fails to take its new inputs,
+    Designer's Undo takes that step back while it is the newest, and the error says so."""
     if bool(node_id) == bool(function):
         raise ToolError('%s%s.%s' % (NODE_OR_FUNCTION, ', not both' if node_id else '', NOTHING))
     if function:

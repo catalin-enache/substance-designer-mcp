@@ -162,10 +162,10 @@ def fake_bridge(monkeypatch: pytest.MonkeyPatch, answer: Callable[[str], str]) -
 
 
 def undone(code: str) -> str:
-    """The code inside an undo group (`_with_undo`'s text), as a tool sends it: the argument of its compile()."""
-    wrapped = next(
-        n for n in ast.walk(ast.parse(code)) if isinstance(n, ast.Call) and getattr(n.func, 'id', None) == 'compile'
-    )
+    """The code inside an undo step (`_with_undo`'s text), as a tool sends it: the argument of its compile(), not the
+    rollback's `_builtins.compile`."""
+    tree = ast.parse(code)
+    wrapped = next(n for n in ast.walk(tree) if isinstance(n, ast.Call) and getattr(n.func, 'id', None) == 'compile')
     inner = wrapped.args[0]
     assert isinstance(inner, ast.Constant) and isinstance(inner.value, str), ast.dump(inner)
     return inner.value
@@ -295,11 +295,13 @@ def temp_folders(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 @pytest.fixture(autouse=True)
-def guide_read(monkeypatch: pytest.MonkeyPatch) -> None:
+def fresh_session(monkeypatch: pytest.MonkeyPatch) -> None:
     """Tools refuse until get_guide() was called, so tests run as a session that has read the guide, both parts
-    (test_guide.py covers the rest)."""
+    (test_guide.py covers the rest), and that has reloaded no package and remembers no call's undo step."""
     monkeypatch.setitem(server._session, 'guide_read', True)
     monkeypatch.setitem(server._session, 'scripting_read', True)
+    monkeypatch.setitem(server._session, 'package_reloaded', False)  # a test's reload doesn't reach the next
+    patch_server(monkeypatch, 'STEPS', [])  # nor do the names of its calls' undo steps (core.py, STEPS)
 
 
 @pytest.fixture

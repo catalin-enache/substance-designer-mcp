@@ -101,8 +101,9 @@ async def run(ctx: Ctx) -> None:
         all(aborted and not finished and took < 4 for aborted, finished, took in runs),
         str(runs),
     )
-    # the abort fires once (Python unsets a trace function that raises), so cleanup code
-    # such as UndoGroup committing its transaction runs to the end (REVIEW.md PLG-2)
+    # the abort fires once (Python unsets a trace function that raises), so cleanup code after it runs to the end
+    # (REVIEW.md PLG-2). A commit not yet reached can itself take the abort, so _with_undo's is out of its reach
+    # (server_tools/core.py; REVIEW.md SRV-273)
     t = text(
         await c(
             'execute_designer_code',

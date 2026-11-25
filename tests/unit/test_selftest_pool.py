@@ -18,11 +18,12 @@ from typing import IO, TYPE_CHECKING, NoReturn, TypedDict, Unpack, cast
 
 import pytest
 from fake_defaults import FakeDefaults
-from selftest_fakes import Designer, Done, FakeRun, OpenGate, fresh, part, pool, unit_log
+from selftest_fakes import Designer, Done, FakeRun, OpenGate, Which, fresh, part, pool, unit_log
 
 import designer_preferences
 import project_constants
-from conftest import SELFTEST_DIR
+from conftest import SELFTEST_DIR, patch_server
+from project_constants import TAG_ALPHABET, TAG_LENGTH, TAG_PREFIX
 
 if TYPE_CHECKING:  # for the checker only: each test imports the self-test's modules afresh (fresh())
     from test_all_tools.common import Step
@@ -1003,15 +1004,44 @@ def test_undo_and_redo_raise_and_activate_their_window_first() -> None:
     assert snippet.index('mw.raise_()') < snippet.index('mw.activateWindow()')
 
 
+STEP = 'Claude: apply 1 edits'  # the label of the check's call, whose step an Undo or a Redo is for
+# a tag of the constants' form, as the server's are (REVIEW.md TST-868), and a character outside their alphabet
+TAG = TAG_PREFIX + TAG_ALPHABET[0] * TAG_LENGTH
+OUTSIDE = chr(ord(max(TAG_ALPHABET)) + 1)  # past the alphabet's greatest character
+OWN = STEP + TAG  # that call's step, its tag of its own
+# the rollback (mcp_server/designer_rollback.py) standing in, as UNDO_REDO runs it to read Designer's history: its
+# history() is HISTORY_PROBE's, each dropdown a list of the steps' names, newest first
+HISTORY_PROBE = 'undo_history_probe'
+ROLLBACK_STAND_IN = """\
+import sys
+
+def history():
+    return sys.modules['undo_history_probe'].history
+
+def _top(menu):
+    return menu[0] if menu else None
+"""
+
+
 def _undo_redo_on_fakes(
-    monkeypatch: pytest.MonkeyPatch, unreadable: bool = False, current: str = 'mcp_selftest', enabled: bool = True
-) -> tuple[ModuleType, list[str], list[Callable[[], None]]]:
+    monkeypatch: pytest.MonkeyPatch,
+    unreadable: bool = False,
+    current: str = 'mcp_selftest',
+    enabled: bool = True,
+    undo: Sequence[str] = (OWN,),
+    redo: Sequence[str] = (OWN,),
+) -> tuple[ModuleType, list[Which], list[Callable[[], None]]]:
     """common, imported afresh, with fakes of sd and Qt for its UNDO_REDO snippet: `current` the graph in the editor,
-    the Edit menu's Undo `enabled`, Designer's state `unreadable` or not. Returns common, the actions triggered and the
-    timers scheduled."""
+    the Edit menu's Undo and Redo `enabled`, Designer's state `unreadable` or not, and Designer's history listing `undo`
+    and `redo` in its dropdowns, newest first (HISTORY_PROBE's `history`, through the rollback standing in). Returns
+    common, the actions triggered and the timers scheduled."""
     common = fresh('common')
-    fired: list[str] = []
+    patch_server(monkeypatch, 'ROLLBACK', ROLLBACK_STAND_IN)
+    history = SimpleNamespace(undo=list(undo), redo=list(redo))
+    monkeypatch.setitem(sys.modules, HISTORY_PROBE, SimpleNamespace(history=history))
+    fired: list[Which] = []
     timers: list[Callable[[], None]] = []
+    actions: tuple[Which, ...] = ('Undo', 'Redo')
 
     class QWidget:
         def __init__(self, name: str) -> None:
@@ -1029,7 +1059,10 @@ def _undo_redo_on_fakes(
 
         def actions(self) -> list[SimpleNamespace]:
             return [
-                SimpleNamespace(text=lambda: 'Undo', isEnabled=lambda: enabled, trigger=lambda: fired.append('Undo'))
+                SimpleNamespace(
+                    text=lambda w=which: w, isEnabled=lambda: enabled, trigger=lambda w=which: fired.append(w)
+                )
+                for which in actions
             ]
 
         def menuAction(self) -> SimpleNamespace:  # held by a menu bar, and by an object that is no widget
@@ -1088,8 +1121,9 @@ def test_undo_and_redo_keep_designers_state_as_scheduled_and_as_fired(
     # around the Undo (lsappinfo in the timer's callback kept it from landing): the self-test's client reads the app in
     # front (undo/edit_menu.py). The snippet runs on fakes of sd and Qt
     common, fired, timers = _undo_redo_on_fakes(monkeypatch, unreadable)
-    assert 'subprocess' not in common.UNDO_REDO and 'lsappinfo' not in common.UNDO_REDO
-    _run(common.UNDO_REDO % ('mcp_selftest', 'Undo'))
+    code = common.undo_redo('Undo', STEP)
+    assert 'subprocess' not in code and 'lsappinfo' not in code
+    _run(code)
     assert capsys.readouterr().out.splitlines() == ['AT_SCHEDULE ' + state, 'SCHEDULED']
     assert vars(sys)['_selftest_undo_fired'] is None and not fired and len(timers) == 1, 'nothing fired yet'
     timers[0]()
@@ -1103,7 +1137,7 @@ def test_a_read_of_an_action_not_fired_yet_disarms_it(
 ) -> None:
     # ROADMAP item 112: an action read as never fired is sent again; fired after that read, it would undo twice
     common, fired, timers = _undo_redo_on_fakes(monkeypatch)
-    _run(common.UNDO_REDO % ('mcp_selftest', 'Undo'))
+    _run(common.undo_redo('Undo', STEP))
     _run(common.UNDO_FIRED)
     assert capsys.readouterr().out.splitlines()[-2:] == ['ARMED True', 'FIRED None']
     timers[0]()
@@ -1117,10 +1151,9 @@ def test_a_read_of_an_action_not_fired_yet_disarms_it(
 def test_an_action_whose_graph_isnt_current_as_it_fires_doesnt_fire(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], now: str | None
 ) -> None:
-    # REVIEW.md TST-693: the self-test graph was checked only as the action was scheduled, and Edit > Undo acts on the
-    # document in focus as it fires
+    # REVIEW.md TST-693: the self-test graph was checked only as the action was scheduled, not as it fires
     common, fired, timers = _undo_redo_on_fakes(monkeypatch)
-    _run(common.UNDO_REDO % ('mcp_selftest', 'Undo'))
+    _run(common.undo_redo('Undo', STEP))
     ui = sys.modules['sd'].getContext().getSDApplication().getQtForPythonUIMgr()
     ui.getCurrentGraph = lambda: None if now is None else SimpleNamespace(getIdentifier=lambda: now)
     timers[0]()
@@ -1129,10 +1162,92 @@ def test_an_action_whose_graph_isnt_current_as_it_fires_doesnt_fire(
     assert capsys.readouterr().out.splitlines()[-2:] == ['ARMED True', 'FIRED NOT_CURRENT current=%s' % (now or 'none')]
 
 
+@pytest.mark.parametrize('which', ['Undo', 'Redo'])
+@pytest.mark.parametrize(
+    'top',
+    ['Add Node', OWN + '0', 'x' + OWN, None],
+    ids=["a step not the call's", 'its step and more', 'its step after more', 'no step'],
+)
+def test_an_action_whose_dropdowns_top_step_isnt_the_calls_own_as_it_fires_doesnt_fire(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], which: Which, top: str | None
+) -> None:
+    # the self-test's Edit > Undo takes only a top step of its own call (common.UNDO_REDO); a Redo would bring back
+    # another's step just as well. Each reads its own dropdown, the other's top being the call's
+    steps = [] if top is None else [top]
+    undo, redo = (steps, [OWN]) if which == 'Undo' else ([OWN], steps)
+    common, fired, timers = _undo_redo_on_fakes(monkeypatch, undo=undo, redo=redo)
+    _run(common.undo_redo(which, STEP))
+    timers[0]()
+    assert fired == [], 'not triggered'
+    _run(common.UNDO_FIRED)
+    assert capsys.readouterr().out.splitlines()[-2:] == ['ARMED True', 'FIRED NOT_OURS top=%r' % top]
+
+
+@pytest.mark.parametrize('which', ['Undo', 'Redo'])
+def test_an_action_fires_while_its_dropdowns_top_step_is_the_calls_own(
+    monkeypatch: pytest.MonkeyPatch, which: Which
+) -> None:
+    # the other dropdown's top isn't the call's: only the action's own is read
+    undo, redo = ([OWN], ['Add Node']) if which == 'Undo' else (['Add Node'], [OWN])
+    common, fired, timers = _undo_redo_on_fakes(monkeypatch, undo=undo, redo=redo)
+    _run(common.undo_redo(which, STEP))
+    timers[0]()
+    assert fired == [which]
+
+
+def test_the_top_step_is_read_as_the_action_fires(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # a step made between the schedule and the timer: the check's own was on top as it was scheduled
+    common, fired, timers = _undo_redo_on_fakes(monkeypatch)
+    _run(common.undo_redo('Undo', STEP))
+    sys.modules[HISTORY_PROBE].history.undo.insert(0, 'Add Node')
+    timers[0]()
+    _run(common.UNDO_FIRED)
+    assert fired == [] and capsys.readouterr().out.splitlines()[-1] == "FIRED NOT_OURS top='Add Node'"
+
+
+def test_an_action_without_designers_history_doesnt_fire(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    common, fired, timers = _undo_redo_on_fakes(monkeypatch)
+    monkeypatch.setitem(sys.modules, HISTORY_PROBE, SimpleNamespace(history=None))  # the rollback found none
+    _run(common.undo_redo('Undo', STEP))
+    timers[0]()
+    _run(common.UNDO_FIRED)
+    # not the text of an empty dropdown: a lookup that fails is said apart (REVIEW.md TST-858)
+    said = 'FIRED NOT_OURS top="no Undo and Redo dropdowns of Designer\'s history found"'
+    assert fired == [] and capsys.readouterr().out.splitlines()[-1] == said
+
+
+# names of a step, and whether they are the step of a call labelled STEP
+OWN_STEP_CASES = [
+    pytest.param(OWN, True, id='its step'),
+    pytest.param(STEP + TAG_PREFIX + TAG_ALPHABET[-1] * TAG_LENGTH, True, id='another tag'),
+    pytest.param(STEP, False, id='no tag'),
+    pytest.param(OWN[:-1], False, id='a character short'),
+    pytest.param(OWN + TAG_ALPHABET[0], False, id='one more'),
+    pytest.param(OWN[:-1] + OUTSIDE, False, id="not of the tag's alphabet"),
+    pytest.param('Claude: apply 2 edits' + TAG, False, id="another call's label"),
+    pytest.param('x' + OWN, False, id='after more'),
+    pytest.param('Add Node', False, id="a step not a call's"),
+]
+if TAG_PREFIX:  # with no prefix, there is none to cut short
+    OWN_STEP_CASES.append(pytest.param(STEP + TAG[1:], False, id="not after the tag's whole prefix"))
+
+
+@pytest.mark.parametrize('name, ours', OWN_STEP_CASES)
+def test_a_calls_own_step_is_its_label_then_a_tag(name: str, ours: bool) -> None:
+    common = fresh('common')
+    assert bool(re.fullmatch(common.own_step(STEP), name)) is ours
+    tagged = 'self-test: two nodes (a+b)' + project_constants.new_tag()  # a label's characters taken as they are
+    assert re.fullmatch(common.own_step('self-test: two nodes (a+b)'), tagged)
+
+
 def test_only_the_last_action_sent_fires(monkeypatch: pytest.MonkeyPatch) -> None:
     common, fired, timers = _undo_redo_on_fakes(monkeypatch)
     for _ in range(2):
-        _run(common.UNDO_REDO % ('mcp_selftest', 'Undo'))
+        _run(common.undo_redo('Undo', STEP))
     for timer in timers:
         timer()
     assert fired == ['Undo'], 'the first replaced by the second'
@@ -1155,7 +1270,7 @@ def test_an_undo_scheduling_nothing_says_the_state_seen(
 ) -> None:
     # the branch's rule 8: the check fails with it, where it skipped
     common, fired, timers = _undo_redo_on_fakes(monkeypatch, current=current, enabled=enabled)
-    _run(common.UNDO_REDO % ('mcp_selftest', 'Undo'))
+    _run(common.undo_redo('Undo', STEP))
     assert capsys.readouterr().out.splitlines() == [said] and timers == [] and fired == []
 
 

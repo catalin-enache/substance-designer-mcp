@@ -131,11 +131,11 @@ def test_no_snippet_loads_a_library_package_in_the_users_designer() -> None:
 def test_designer_scripts_are_grouped_by_the_category_that_runs_them() -> None:
     """designer_script(c, '<category>/<script>') from <category>/, its script in <category>/designer_scripts/, or
     'shared/<script>' from more than one category, in designer_scripts/shared/: every script exists, sits in the right
-    folder, and is run by something."""
+    folder, and is run by something. A script run outside any undo group is named by script_path(), for sd_run."""
     runners: dict[str, set[str]] = {}
     for name, source in selftest_sources().items():
         category = name.split(os.sep)[0] if os.sep in name else name.removesuffix('.py')
-        for script in re.findall(r"designer_script\(\s*c,\s*'([^']+)'", source):
+        for script in re.findall(r"(?:designer_script\(\s*c,\s*|script_path\(\s*)'([^']+)'", source):
             assert script.split('/')[0] in (category, 'shared'), '%s runs %s' % (name, script)
             runners.setdefault(script, set()).add(category)
     found = set()

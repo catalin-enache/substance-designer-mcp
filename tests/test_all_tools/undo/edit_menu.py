@@ -20,6 +20,8 @@ graph shows it, for the undo checks (checks.py; ROADMAP item 112):
 - A read of the action's state that fails may leave the action armed: the check says it may still fire.
 - An action that found another graph current as it fired didn't fire (common.UNDO_REDO): the check fails saying so,
   and it is neither sent again nor put back (REVIEW.md TST-693).
+- So does an action that found, as it fired, another step on top of its dropdown than one named with the label of
+  the check's call: each Undo and Redo is sent for that label (common.undo_redo), and fails naming the step found.
 - An action a check that raised left armed is read once nothing follows, at the end of the undo checks
   (read_left_armed; REVIEW.md TST-690).
 
@@ -35,20 +37,19 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
 
 from test_all_tools import common
 from test_all_tools.common import (
     POLL_S,
-    TEST_GRAPH,
     UNDO_FIRED,
-    UNDO_REDO,
     Call,
     ToolArgs,
+    Which,
     agents_designers,
     check,
     positions,
     text,
+    undo_redo,
 )
 from test_all_tools.window_server import active_app, process_name
 
@@ -128,15 +129,13 @@ class FrontRead:
         return '%s (%d)' % (os.path.basename(process_name(self._active)), self._active)
 
 
-Which = Literal['Undo', 'Redo']
-
-
 @dataclass
 class Sent:
-    """What became of an Undo or a Redo sent (send): how many times it was sent, and whether and when the graph showed
-    it, or why not."""
+    """What became of an Undo or a Redo sent (send) for the step of a call labelled `label`: how many times it was sent,
+    and whether and when the graph showed it, or why not."""
 
     which: Which
+    label: str
     sends: int = 0
     shown: float | None = None  # s from the last send to the read that showed it; None: never shown
     refused: str = ''  # what UNDO_REDO printed when it scheduled nothing (NOT_FOCUSED, NO_ACTION), with the state seen
@@ -175,7 +174,7 @@ class Sent:
             return 'not scheduled: ' + self.refused
         if self.error:
             return 'a read failed: ' + self.error
-        if self.fired_said.startswith(NOT_CURRENT):
+        if self.fired_said.startswith(NOT_FIRING):
             return "the Edit menu's action didn't fire: " + self.fired_said
         if self.fired is None:
             return "describe_graph didn't show the %s within %d s; whether the Edit menu's action fired wasn't said" % (
@@ -210,7 +209,7 @@ class Sent:
             )
         if self.unread:
             print("      the Edit menu's action may still fire: its state wasn't read: " + self.unread)
-        elif self.fired_said.startswith(NOT_CURRENT):
+        elif self.fired_said.startswith(NOT_FIRING):
             print("      the Edit menu's action didn't fire: " + self.fired_said)
         elif self.fired_said == 'None':
             print(
@@ -221,15 +220,15 @@ class Sent:
         print('      the graph as last read: ' + ' / '.join(self.described.strip().splitlines()))
 
 
-async def send(c: Call, graph: ToolArgs, which: Which, shows: Callable[[str], bool]) -> Sent:
-    """Sends `which` ('Undo' or 'Redo') through the Edit menu of the self-test graph, and reads it with describe_graph,
-    `graph` its arguments, until `shows` says its text shows it: sent again only when the action never fired (the
-    module docstring)."""
-    sent = Sent(which)
+async def send(c: Call, graph: ToolArgs, which: Which, shows: Callable[[str], bool], label: str) -> Sent:
+    """Sends `which` ('Undo' or 'Redo') through the Edit menu of the self-test graph, for the step of the check's call
+    labelled `label`, and reads it with describe_graph, `graph` its arguments, until `shows` says its text shows it:
+    sent again only when the action never fired (the module docstring)."""
+    sent = Sent(which, label)
     while sent.sends < SENDS:
         front = FrontRead()
         sent.begin_send()
-        sent.scheduled = text(await c('execute_designer_code', {'code': UNDO_REDO % (TEST_GRAPH, which)}))
+        sent.scheduled = text(await c('execute_designer_code', {'code': undo_redo(which, label)}))
         sent.sends += 1
         if 'SCHEDULED' not in sent.scheduled:
             sent.refused = ' '.join(sent.scheduled.split()) or 'nothing said'
@@ -262,7 +261,7 @@ async def send(c: Call, graph: ToolArgs, which: Which, shows: Callable[[str], bo
             sent.error = sent.unread = text(state).strip()
             return sent
         sent.fired_said = _fired(text(state))
-        if sent.fired_said.startswith(NOT_CURRENT):  # it didn't fire, and sent again it would find that graph current
+        if sent.fired_said.startswith(NOT_FIRING):  # it didn't fire, and sent again it would find the same
             return sent
         sent.fired = None if sent.fired_said == 'not read' else sent.fired_said != 'None'
         if sent.fired is not False:
@@ -270,8 +269,9 @@ async def send(c: Call, graph: ToolArgs, which: Which, shows: Callable[[str], bo
     return sent
 
 
-# what UNDO_FIRED says of an action that found another graph current as it fired, and didn't fire (common.UNDO_REDO)
-NOT_CURRENT = 'NOT_CURRENT'
+# what UNDO_FIRED says of an action that didn't fire, as it found another graph current, or another step than the
+# check's own on top of its dropdown (common.UNDO_REDO)
+NOT_FIRING = ('NOT_CURRENT', 'NOT_OURS')
 
 
 def _fired(said: str) -> str:
@@ -307,10 +307,11 @@ def recorded(sent: Sent, tool: str, name: str) -> bool:
 
 
 async def put_back(c: Call, graph: ToolArgs, sent: Sent) -> None:
-    """After an Undo that fired and never showed (send), which hit some other step: a Redo puts that back, sent and
-    read as the Undo was, until `graph` changes from its last read; says when it never does (REVIEW.md TST-693)."""
+    """After an Undo that fired and never showed (send), which took back a step of the check's label, possibly another
+    call's: a Redo puts that back, sent and read as the Undo was, until `graph` changes from its last read; says when it
+    never does (REVIEW.md TST-693)."""
     if sent.which == 'Undo' and sent.shown is None and sent.fired:
         before = sent.described
-        redo = await send(c, graph, 'Redo', lambda described: described != before)
+        redo = await send(c, graph, 'Redo', lambda described: described != before, sent.label)
         if redo.shown is None:
             print('      the Redo putting it back: ' + redo.detail())

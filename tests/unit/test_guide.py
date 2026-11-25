@@ -879,12 +879,78 @@ def test_the_core_gives_the_rules_the_servers_instructions_promise() -> None:
     rules = flat(section(_parts()[0], "## Rules that protect the user's work"))
     for promised in (
         '**Never print, log or send the bridge token**',
-        "**Never trigger Undo while one of the user's graphs is open in the editor.**",
+        '**Undo your own work with `undo_edits`, and only with it.**',
         '**A Designer the user opened is theirs: never close it.**',
         'A Designer an agent started is disposable: `quit_designer` ends it.',
         '**`snapshot_graph` before risky or large edits**',
     ):
         assert promised in rules, promised
+
+
+# The rule the user approved, word for word (2026-11-25: "all agnets will use it exclusively for undoing work")
+UNDO_RULE = (
+    '**Undo your own work with `undo_edits`, and only with it.** It takes back your calls, newest first. If steps that '
+    "aren't yours sit on top of them (the user's, or another session's), it stops and names them: ask the user whether "
+    'those may be undone too, and if they agree, call it again with `include_others`. With no such steps on top, undo '
+    'as you need.'
+)
+CODE_TOOLS_UNDO = "To undo, use `undo_edits`; don't trigger Undo in your code."  # the code tools' line of the rule
+
+
+# The user's rule on Redo, word for word in GUIDE.md's scripting part
+REDO_RULE = (
+    'Redo you may trigger from code when you need it, for example to bring back steps `undo_edits` undid (the user, '
+    '2026-11-25: "an agent can trigger redo from code as well if it needs it").'
+)
+
+
+def test_the_scripting_part_says_redo_may_be_triggered_from_code() -> None:
+    assert REDO_RULE in flat(section(_parts()[1], '## Designer UI (Qt)'))
+
+
+def test_the_rules_say_to_undo_with_undo_edits_only() -> None:
+    assert UNDO_RULE in flat(section(_parts()[0], "## Rules that protect the user's work"))
+
+
+def test_every_agent_is_told_to_undo_with_undo_edits_in_four_places() -> None:
+    # the guide's core, the server's instructions, undo_edits' description and the code tools' descriptions
+    _, tools = _tools()
+    assert UNDO_RULE in flat(_parts()[0])
+    assert 'Undo your own work with undo_edits, and only with it.' in server.INSTRUCTIONS
+    assert UNDO_RULE.replace('**', '').replace('`', '') in flat(tools['undo_edits']).replace('`', '')
+    for tool in ('execute_designer_code', 'run_designer_script'):
+        assert CODE_TOOLS_UNDO in flat(tools[tool]), tool
+
+
+def test_no_rule_steers_an_agent_from_undo_edits() -> None:
+    # REVIEW.md TST-881: the snapshot rule said "Prefer this over Undo", two bullets below the rule to undo with
+    # undo_edits; a snapshot reverts nothing
+    assert 'Prefer this over Undo' not in flat(guide_md())
+
+
+@pytest.mark.parametrize('path', ['README.md', 'mcp_server/GUIDE.md', 'ROADMAP.md'])
+def test_the_one_undo_history_is_said_shared_by_every_package(path: str) -> None:
+    # REVIEW.md TST-883: "one undo history for every package" read as one per package; Designer keeps one for the app
+    text = flat(read(path)).lower()
+    assert 'one undo history for every' not in text, path
+
+
+def test_no_part_of_the_guide_describes_triggering_undo_another_way() -> None:
+    # GUIDE.md's scripting part had a recipe (Edit > Undo's action, triggered from a timer): an Undo so triggered took
+    # the step on top as it landed, not the one checked before (REVIEW.md TST-873)
+    guide = flat(guide_md())
+    ways = (
+        'Edit > Undo',
+        '.trigger',
+        'singleShot',
+        'undo()',
+        'invokeMethod',
+        'Ctrl+Z',
+        'HistoryActionsMgr',
+        'undo-button',
+    )
+    for way in ways:
+        assert way not in guide, way
 
 
 def test_the_scripting_part_says_where_library_graphs_are_and_how_loaded_ones_count() -> None:
@@ -1352,3 +1418,11 @@ def test_these_docs_have_none_of_these_phrasings_of_four_at_once_or_by_default(n
         r'|\b(?:four|4) by default\b|\bdefault:? (?:four|4)\b|\bdefaults to (?:four|4)\b'
     )
     assert not re.search(pattern, text, re.I)
+
+
+def test_the_code_tools_and_the_scripting_part_say_not_to_open_an_undo_group() -> None:
+    # REVIEW.md SRV-275: the call is one undo step already, and a timeout inside a group of the code's own can leave it
+    # open
+    tools = _tools()[1]
+    for text in (tools['execute_designer_code'], tools['run_designer_script'], _parts()[1]):
+        assert 'undo group of your own' in flat(text), text[:80]

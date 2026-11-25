@@ -6,15 +6,18 @@ for raw `sd` and Qt code, at the end.
 ## Rules that protect the user's work
 
 - **Never print, log or send the bridge token** (`~/.sd_claude_bridge_kve_token`): it gives code execution in Designer.
-- **Never trigger Undo while one of the user's graphs is open in the editor.** Undo is per document and hits theirs (it
-  happened once; an immediate Redo restored it). To trigger it from code: the scripting part, Undo from a script.
+- **Undo your own work with `undo_edits`, and only with it.** It takes back your calls, newest first. If steps
+  that aren't yours sit on top of them (the user's, or another session's), it stops and names them: ask the user
+  whether those may be undone too, and if they agree, call it again with `include_others`. With no such steps on top,
+  undo as you need. Designer keeps one Undo history, shared by all packages, so any other Undo can hit the user's
+  step (it happened once; an immediate Redo restored it). A call that fails after it changed something takes back its
+  own step itself, only when that step, named with the call's tag, is on top (`_with_undo`, `server_tools/core.py`).
 - **A Designer the user opened is theirs: never close it.** If a task needs it closed or restarted, or needs Designer
   while it is closed, ask the user to save, close and reopen it, or to open it. Don't get around that with `kill` or a
   script, even when the user asks: tell them to close it, as Designer then asks them about unsaved work itself. A
   Designer an agent started is disposable: `quit_designer` ends it. Close yours when done, so the user doesn't start
   working in it.
-- **`snapshot_graph` before risky or large edits** to a user's graph, then `diff_graph` and report the diff. Prefer
-  this over Undo.
+- **`snapshot_graph` before risky or large edits** to a user's graph, then `diff_graph` and report the diff.
 - **Never hot-reload the sd_claude_bridge_kve plugin** (`importlib.reload` inside Designer): the running server keeps
   references to the old module and the bridge breaks until Designer restarts.
 
@@ -26,7 +29,7 @@ Parameters are described in each tool's schema; this is when to reach for which.
 - **Find and understand nodes:** `search_nodes`, then `describe_node` for connector ids, parameter types, **enum
   values**, library slider ranges. Never guess ids or enum numbers; pick values inside the slider range.
 - **Inspect a graph:** `describe_graph`, `list_graph_inputs`.
-- **Safety net:** `snapshot_graph`, `list_snapshots`, `diff_graph` (the rules).
+- **Safety net:** `undo_edits`, `snapshot_graph`, `list_snapshots`, `diff_graph` (the rules).
 - **Look:** `preview_node` (any node, even one feeding no output), `screenshot_designer` (what the user sees),
   `open_graph` (open the graph first, so the user and screenshots see it). A material on a mesh, in Designer's own
   renderer: `screenshot_designer('3d', graph=...)`; `mesh='Plane'`, `view='Top'` and `tiling=2` show how it repeats.
@@ -539,15 +542,12 @@ The rules and the first pitfalls are in the core, `get_guide()`. Changing this p
   `parentItem`). On a node's comment item, it made the node's item Python's (`shiboken6.Shiboken.ownedByPython` turned
   True). Python then deleted the item with its wrapper: the node left the view, still in the graph, and a later
   deletion crashed Designer (seen 2026-11-23). `Shiboken.invalidate()` on that wrapper at once left the item in the view.
-- **Undo from a script:** Undo history is per document: Edit > Undo reverts the last step of the graph in focus. Its
-  actions live in a `QMenu` (find them via `QApplication.instance().allWidgets()`, not `mainWindow.findChildren`) and
-  apply **asynchronously**: schedule them with `QTimer.singleShot(0, action.trigger)` (outside your own undo group),
-  then read the result in later calls (`describe_graph`) until it shows, with a limit, since it may land after the call
-  that scheduled it returns. Past the limit, don't send it again: the first may still land, and two steps would be
-  reverted. Tell the user, and look with `diff_graph` or `snapshot_graph` before anything else. Raise and activate the
-  main window first (`getQtForPythonUIMgr().getMainWindow()`, `raise_()`, `activateWindow()`): in a Designer just
-  started, with another Designer in front, Undo of an output's fields sometimes did nothing without it. It leaves the
-  other app in front.
+- **Undo from a script:** don't. Undo your own work with `undo_edits` (the rules, in the core). It undoes each step
+  only while it is on top of Designer's one Undo history, and waits in the same job until the step has landed, the
+  user's input held (`mcp_server/designer_rollback.py`). Redo you may trigger from code when you need it, for example
+  to bring back steps `undo_edits` undid (the user, 2026-11-25: "an agent can trigger redo from code as well if it
+  needs it"). Don't open an undo group of your own either (`SDHistoryUtils.UndoGroup`, `newTransaction`): each code
+  call is one step already, and a timeout or cancel inside your group can leave that step open (REVIEW.md SRV-275).
 - **Quitting:** through `quit_designer` (the rules), not from a script: `QApplication.exit(0)` has crashed Designer and
   left it hung. The plugin answers status from another thread, so a main thread frozen outside a job reads as idle.
   How: `server_tools/lifecycle.py`.

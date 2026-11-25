@@ -1,5 +1,5 @@
-"""What undo's checks read: the self-test graph, in the editor and focused (Undo acts on the document in focus: its
-checks fail otherwise, saying the graph in the editor), with an output identified `height`, no label, no usage (one
+"""What undo's checks read: the self-test graph, in the editor and focused (its checks send an Undo only while it is
+the graph in the editor, and fail otherwise, saying the graph there), with an output identified `height`, no label, no usage (one
 Undo must bring those fields back)."""
 
 from test_all_tools.common import TEST_GRAPH, Ctx, prepared_call, refs

@@ -16,7 +16,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from textwrap import dedent
-from typing import Annotated, Literal, ParamSpec, TypeVar
+from typing import Annotated, Literal, NamedTuple, ParamSpec, TypeVar
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -31,12 +31,17 @@ from project_constants import (  # noqa: E402  (the plugin's name and the bridge
     NONCE,
     PLUGIN,
     QUEUE_WAIT,
+    ROLLED_BACK,
+    TAG_ALPHABET,
+    TAG_LENGTH,
+    TAG_PREFIX,
     TOKEN_FILE,
     Json,
     JsonSent,
     Reply,
     Request,
     ScriptRequest,
+    new_tag,
 )
 
 # Folder holding sbscooker / sbsrender. Override with SD_DESIGNER_BIN_DIR.
@@ -102,7 +107,8 @@ INSTRUCTIONS = (
     'quitting Designer, snapshots) and the first sd pitfalls. Then tell the user in one line that you '
     'have read the Designer guide, and continue (if Designer is not running, ask the user to open it). '
     "Before writing raw sd or Qt code, also call get_guide('scripting'), read the whole result, then "
-    'tell the user in one line that you have read the scripting part.'
+    'tell the user in one line that you have read the scripting part. Undo your own work with undo_edits, and only '
+    'with it.'
 )
 GUIDE_NOT_READ = (
     'Not run: the Designer guide has not been read in this session. Call get_guide() and '
@@ -162,6 +168,8 @@ server = MCPServer(name='substance-designer', instructions=INSTRUCTIONS)
 _session: dict[str, bool] = {
     'guide_read': False,
     'scripting_read': False,
+    # set_link_display reloaded a package, which leaves steps of Designer's own (server_tools/undo.py)
+    'package_reloaded': False,
 }  # one server process per client session (stdio)
 
 
@@ -258,7 +266,10 @@ def _tool(
       else they see, such as Designer's view, the editor's graph or the clipboard. A package the tool makes for itself
       and unloads isn't the user's, nor is a library package it opens to read (`describe_node` leaves it open). A tool
       that adds a temporary node to the user's graph isn't read-only: the graph changes while the call runs, and a
-      library package can stay marked modified (DECISIONS.md, Library packages).
+      library package can stay marked modified (DECISIONS.md, Library packages). The undo step a read-only tool's call
+      can make (`describe_node`'s, `search_nodes`') isn't a change: it holds a temporary package and what was made in
+      it, made and removed within the call, and `undo_edits` undoes it along the way, uncounted. It changes no graph,
+      though, like any step, it clears Designer's Redo list.
     - `destructive`: the call can overwrite or remove the user's work or files. A change of the view, of the editor's
       graph or of the clipboard's text, put back, isn't one.
     - `idempotent`: a second call with the same arguments leaves the user's work as the first did.
@@ -303,13 +314,143 @@ def _output_note_in(text: str) -> str | None:
     return found.group(0) if found else None
 
 
-def _with_undo(code: str, label: str) -> str:
-    # Group everything the script does into one undo step in Designer
+# The tag that makes a call's undo step its own: project_constants.py's TAG_PREFIX, TAG_ALPHABET and TAG_LENGTH, and
+# its new_tag
+TAG_FORM = '%r, then %d random characters of %r' % (TAG_PREFIX, TAG_LENGTH, TAG_ALPHABET)  # for the docs
+# The rollback _with_undo sends, run inside Designer, read once as the helpers are
+ROLLBACK_FILE = os.path.join(HERE, 'designer_rollback.py')
+with open(ROLLBACK_FILE, encoding='utf-8') as _file:
+    ROLLBACK = _file.read()
+ROLLBACK_LIMIT_S = 60  # s at most for an undo to land: a safety net (2000 added nodes took 2.9 s)
+ROLLBACK_LINE = 'ROLLBACK='  # starts the line of a failed call's output saying what its rollback did
+KEPT_LINE = 'KEPT='  # starts a helper's line saying what a failed call left changed, unless the rollback took it back
+UNDONE = (
+    "Designer's Undo %s, with its edits. What the call did that the step doesn't hold stays, such as a file it wrote, "
+    'and its package may still show as modified.' % ROLLED_BACK
+)
+# A read's (SessionStep): no edits of its own, but a temporary node added to the user's graph or a value set and put
+# back can leave the package marked modified (REVIEW.md SRV-268, SRV-270; DECISIONS.md, Library packages)
+READ_UNDONE = "Designer's Undo %s, and the package it worked in may still show as modified." % ROLLED_BACK
+NOT_LANDED = (
+    "Designer's Undo of what the call had done before it failed was sent, but wasn't seen landing (%s): look with "
+    "describe_graph or diff_graph before anything else, and don't undo again."
+)
+NOT_RUN = "The call's rollback couldn't run (%s)."  # why, after what a helper said stays changed
+
+
+class SessionStep(NamedTuple):
+    """The undo step of one call this session wrapped (_with_undo): its name, the call's label and tag, whether
+    undo_edits counts it, and whether undo_edits undid it. A read's step (a temporary node added and removed, a value
+    set and put back) changes nothing once the call ends, so undo_edits undoes it on the way without counting it. A
+    step undone counts again once a Redo lists it (designer_rollback.undo_session)."""
+
+    name: str
+    edit: bool
+    undone: bool = False
+
+
+# The undo steps of this session's calls, oldest first: every call _with_undo wraps, whether or not it made a step. The
+# server is one session's (stdio), so a reconnect starts with none. undo_edits marks those it undoes, which stay, and
+# drops the others Designer's history no longer holds (server_tools/undo.py)
+STEPS: list[SessionStep] = []
+
+
+def _with_undo(code: str, label: str, edit: bool = True) -> str:
+    """The script that runs `code` in Designer as one undo step, named `label` and a tag of its own (new_tag), the
+    name remembered in STEPS (`edit` False for a read's call: SessionStep). If `code`
+    raises, once the step has committed (an undo inside its group does nothing), the script runs the rollback
+    (designer_rollback.py) in a scope of its own, prints what it did on a ROLLBACK_LINE of its own, after a newline,
+    and raises the error again. The SystemExit of sys.exit(), sys.exit(0) or sys.exit(None) is a normal end, as the
+    plugin's _run ends it too: it is raised again with no rollback. Any other exit is rolled back. How the step and the
+    rollback run:
+
+    - the step's transaction is opened and committed by sd's public SDHistoryUtils.newTransaction and
+      commitTransaction, the functions UndoGroup calls, which raise on a refused open or commit. Nothing traced comes
+      between `code`'s end and the commit, so the plugin's abort (a timeout, a cancel), which lands at a traced event,
+      can't skip the commit. The script's own frame stops being traced (its f_trace None) first. Python's tracing is
+      off around the open, and the plugin's tracer is put back before `code` runs; a refused open raises before it,
+      and the plugin puts its tracer back after the job. Tracing is turned off again before the commit, and left
+      off. Through UndoGroup, an abort landing in sd's Python after `code`'s last
+      line skipped the commit, and the transaction stayed open, taking in every later change (REVIEW.md SRV-273,
+      SRV-276; designer_rollback.py's docstring);
+    - the rollback runs untraced, so that no abort of the plugin's stops it halfway; the plugin puts its tracer back
+      after the job;
+    - what the script needs after `code` is bound before `code` runs, as `code` shares its globals and may rebind
+      print, exec or compile (`from re import *` does: REVIEW.md SRV-253). sys.settrace is bound too, so that turning
+      tracing off before the commit imports nothing: Designer's __import__, a builtin named __feature_import__, runs
+      Python (feature_import, in a loader.py), where the abort landed and the commit was skipped (measured 2026-11-25,
+      the batch category's timeout check);
+    - an error of the rollback's is said as its state ('failed: ...'), never raised in place of `code`'s. roll_back
+      catches its own, but the module's imports and classes run before it, unguarded there (REVIEW.md SRV-257), so the
+      script guards the whole rollback;
+    - the state is printed on one line, its whitespace collapsed, as _failure reads it to the end of its line and an
+      error's text can span several (PySide6's list signatures below: REVIEW.md SRV-258)."""
+    tagged = label + new_tag()
+    STEPS.append(SessionStep(tagged, edit))
     return dedent("""\
-        from sd.api.sdhistoryutils import SDHistoryUtils as _SDH
-        with _SDH.UndoGroup(%r):
+        import builtins as _builtins
+        import sys as _sys
+        from sd.api.sdhistoryutils import SDHistoryUtils as _mcp_history
+        _step = %r
+        _sys._getframe().f_trace = None
+        _mcp_settrace, _mcp_tracer = _sys.settrace, _sys.gettrace()
+        _mcp_settrace(None)
+        _mcp_history.newTransaction(_step)
+        _mcp_settrace(_mcp_tracer)
+        try:
             exec(compile(%r, __file__, "exec"), globals())
-    """) % (label, code)
+        except BaseException as _raised:
+            _mcp_settrace(None)
+            _mcp_history.commitTransaction()
+            if _builtins.isinstance(_raised, _builtins.SystemExit) and _raised.code in (None, 0):
+                raise
+            try:
+                _rollback = {}
+                _builtins.exec(_builtins.compile(%r, %r, "exec"), _rollback)
+                _state = _rollback["roll_back"](%r, %r)
+            except BaseException as _error:
+                _state = "failed: " + _builtins.type(_error).__name__ + ": " + _builtins.str(_error)
+            _builtins.print("\\n" + %r + " ".join(_state.split()))
+            raise
+        else:
+            _mcp_settrace(None)
+            _mcp_history.commitTransaction()
+    """) % (tagged, code, ROLLBACK, ROLLBACK_FILE, tagged, ROLLBACK_LIMIT_S, ROLLBACK_LINE)
+
+
+def _failure(output: str, error: str, code: str = '') -> tuple[str, str]:
+    """A failed call's output without the rollback's line and the helpers' KEPT_LINE lines, and its error saying what
+    the rollback did (designer_rollback.roll_back). The rollback's line is the last ROLLBACK_LINE printed after a
+    newline (_with_undo), so a line of the script's own, or one it left unfinished, can't hide it (REVIEW.md SRV-255).
+    `code` is the script sent, which names the call's step on its `_step = ...` line, opened with newTransaction:
+
+    - 'undone': that Designer's Undo took back the call's step (UNDONE; READ_UNDONE for a read's), and the step is
+      dropped from STEPS, as nothing is left to undo (REVIEW.md SRV-269);
+    - 'not landed: <why>': to look before anything else (NOT_LANDED);
+    - 'failed: <why>': the error as it was, then what a helper said stays changed, then why the rollback couldn't run
+      (NOT_RUN);
+    - 'not ours', or no rollback: the error as it was, then what a helper said stays changed, if anything."""
+    lines = list(re.finditer(r'\n%s(.*)' % re.escape(ROLLBACK_LINE), output))
+    state: str = lines[-1].group(1) if lines else ''
+    if lines:
+        output = output[: lines[-1].start()] + output[lines[-1].end() + 1 :]
+    kept: list[str] = re.findall(r'^%s(.*)$' % re.escape(KEPT_LINE), output, re.M)
+    output = re.sub(r'^%s.*\n?' % re.escape(KEPT_LINE), '', output, flags=re.M)
+    word, _, why = state.partition(': ')
+    if word == 'undone':
+        step = next((step for step in reversed(STEPS) if '\n_step = %r\n' % step.name in code), None)  # the newest
+        notes = [READ_UNDONE if step is not None and not step.edit else UNDONE]
+        if step is not None:
+            STEPS.remove(step)
+    elif word == 'not landed':
+        notes = [NOT_LANDED % why]
+    elif word == 'failed':
+        notes = [*kept, NOT_RUN % why]
+    else:
+        notes = kept
+    if not notes:
+        return output, error
+    return output, ' '.join([_sentence(error.rstrip())] + [_sentence(note) for note in notes])
 
 
 def _helpers_call(call: str) -> str:
@@ -420,7 +561,8 @@ def _bridge(
     reply = _send(request, wait=QUEUE_WAIT + (timeout or 900) + 60 if wait is None else wait, port=port)
     text = reply['output']
     if not reply['ok']:
-        text += '\n--- ERROR ---\n' + reply['error']
+        text, error = _failure(text, reply['error'], code)
+        text += '\n--- ERROR ---\n' + error
     return text or '(no output)'
 
 

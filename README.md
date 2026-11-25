@@ -45,8 +45,9 @@ There are two programs, plus Designer's own command-line tools:
 | Part | Runs where | What it does |
 |---|---|---|
 | **sd_claude_bridge_kve plugin** (`plugin/sd_claude_bridge_kve`) | Inside Designer, loaded at startup | A small, generic script runner. It listens on `127.0.0.1:9877`, checks that each request is signed with the secret token, queues the Python code it receives, runs it on Designer's main thread (the only place the `sd` API may be used), and sends back the printed output or the error. It also enforces timeouts, answers `status` / `cancel` while a script runs, and knows nothing about MCP or the individual tools. |
-| **MCP server** (`mcp_server/server.py`, the entry point; the code in `mcp_server/server_tools/`) | Its own process, started by Claude Code | Defines the 37 tools Claude sees, one module per area (`core.py`: configuration, the bridge connection and the tool decorator; `edits.py`, `views.py`, `output.py`...: the tools; `mcp_server/function_compiler.py`, pure Python, turns `set_function`'s expression into Designer's function nodes, every name and type checked before anything is built). Its instructions to Claude are one short paragraph (MCP clients cut long ones; the limit is in [`.claude/rules/designer-code.md`](.claude/rules/designer-code.md)): leave the Designer tools alone unless you ask for Designer work, and right before the first Designer tool call, call `get_guide()`, which returns the core of [mcp_server/GUIDE.md](mcp_server/GUIDE.md) (`get_guide('scripting')`, the sd API and Qt part, before writing raw code). Sessions started for other things never load the guide. Each tool does one or more of: send Python code to the plugin (most tools), run Designer's command-line tools (`render_sbs`, `sbsar_info`), or do the work itself outside Designer (decoding pixels, building preview images, reading a photo's palette, comparing `.sbs` files, reading the log, editing files for portals). |
-| **Designer helpers** (`mcp_server/designer_helpers/`) | Sent to Designer with each request | The library of functions that actually do the work inside Designer: describing nodes, editing graphs, computing previews, layout, exposing inputs and so on. One file per area (`edits.py`, `editor.py`, `screenshots.py`...), joined into one script in the order of `PARTS` in its `__init__.py`, so they share one namespace. Each part imports what it uses from the others (`from .core import ...`) so editors see where names come from; those lines are dropped when the parts are joined. It's re-sent with every call, so updating it never needs a Designer restart. |
+| **MCP server** (`mcp_server/server.py`, the entry point; the code in `mcp_server/server_tools/`) | Its own process, started by Claude Code | Defines the 38 tools Claude sees, one module per area (`core.py`: configuration, the bridge connection and the tool decorator; `edits.py`, `views.py`, `output.py`...: the tools; `mcp_server/function_compiler.py`, pure Python, turns `set_function`'s expression into Designer's function nodes, every name and type checked before anything is built). Its instructions to Claude are one short paragraph (MCP clients cut long ones; the limit is in [`.claude/rules/designer-code.md`](.claude/rules/designer-code.md)): leave the Designer tools alone unless you ask for Designer work, and right before the first Designer tool call, call `get_guide()`, which returns the core of [mcp_server/GUIDE.md](mcp_server/GUIDE.md) (`get_guide('scripting')`, the sd API and Qt part, before writing raw code); and undo its own work with `undo_edits` only. Sessions started for other things never load the guide. Each tool does one or more of: send Python code to the plugin (most tools), run Designer's command-line tools (`render_sbs`, `sbsar_info`), or do the work itself outside Designer (decoding pixels, building preview images, reading a photo's palette, comparing `.sbs` files, reading the log, editing files for portals). |
+| **Designer helpers** (`mcp_server/designer_helpers/`) | Sent to Designer with each call that uses them | The library of functions that actually do the work inside Designer: describing nodes, editing graphs, computing previews, layout, exposing inputs and so on. One file per area (`edits.py`, `editor.py`, `screenshots.py`...), joined into one script in the order of `PARTS` in its `__init__.py`, so they share one namespace. Each part imports what it uses from the others (`from .core import ...`) so editors see where names come from; those lines are dropped when the parts are joined. It's re-sent with every call that uses it, so updating it never needs a Designer restart. |
+| **The rollback** (`mcp_server/designer_rollback.py`) | Sent to Designer with each call the server wraps in an undo step, and with `undo_edits` | Read once by the server. It runs when a call fails: it takes back that call's own undo step, named with the call's tag, while that step is still the newest in Designer's history, and the error says so. `undo_edits` runs it to take back the session's last calls by the names the server remembers. Both undo each step only while it is the newest, and wait until it has landed. |
 | **sbscooker / sbsrender** | Separate processes | Designer's own tools for compiling a saved `.sbs` into `.sbsar` and rendering its outputs, independently of the open Designer. |
 | **CLI client** (`client/sd_run.py`) | Your terminal | The same connection to the plugin without MCP, for running scripts by hand. |
 | `designer_preferences.py` | The MCP server, `uninstall.py` and the self-test's pool | On macOS, Designer keeps your window layout and last session in a preferences file every Designer shares, the ones an agent starts too, which change it. So `launch_designer` saves it as the first one starts, and `quit_designer` puts it back once none runs (for ones that ended otherwise, the next launch or quit does, if the copy is under 6 hours old), and says so; if your own Designer ran meanwhile, the file is left as yours. |
@@ -56,7 +57,8 @@ There are two programs, plus Designer's own command-line tools:
 **One tool call, step by step** (`preview_node`, "show me this node's image"):
 
 1. Claude calls the tool; the MCP server builds a small Python program: the helpers plus a call
-   to the preview function, wrapped in a single undo step.
+   to the preview function, wrapped in a single undo step, with the rollback that takes that step back if the program
+   fails.
 2. The server sends it to the plugin, signed with the token, with a timeout.
 3. The plugin queues it, and Designer's main thread runs it: the graph is computed and the node's
    pixels are written to a temporary file.
@@ -80,7 +82,7 @@ for example showing a connection as a portal. For those, the server edits the sa
 directly and reloads it in Designer, after keeping a snapshot of the graph and a copy of your
 saved file (details: [mcp_server/GUIDE.md](mcp_server/GUIDE.md), Portals).
 
-## Tools (37)
+## Tools (38)
 
 | Area | Tools |
 |---|---|
@@ -88,18 +90,22 @@ saved file (details: [mcp_server/GUIDE.md](mcp_server/GUIDE.md), Portals).
 | Finding nodes | `search_nodes` (built-in nodes and Designer's library of compositing graphs, its ready-made materials included, the ones it hides on request, and Designer's function nodes, `sbs::function::*`), `describe_node` (parameters, types, ranges, descriptions, dropdown values; a function node's inputs and output, with the types each takes) |
 | Inspecting | `describe_graph` (a graph's nodes, and for a whole graph its package's function graphs; or only the nodes selected in the editor; or a function's nodes, constants and connections: a node's, with what feeds each `#name` input value it reads, or a function graph of the package), `list_graph_inputs`, `preview_node` (image of any node), `node_stats` (exact pixel numbers, or `against` another node or another output of the same node: how the two differ, pixel by pixel), `check_tiling` (does it tile seamlessly?), `compare_to_reference` (how far a node's tones are from a reference image, in numbers), `analyze_reference` (what a reference image holds, from its file alone: its palette as Gradient Map keys, with how far one Gradient Map lands from the image) |
 | Tuning | `sweep_param` (try several values of a parameter side by side; the original value is restored) |
-| Safety | `snapshot_graph`, `list_snapshots`, `diff_graph` (what changed vs the saved file or a snapshot) |
+| Safety | `undo_edits` (takes back Claude's own last calls, newest first; it stops at a step of yours on top of them, and Claude asks you before undoing it), `snapshot_graph`, `list_snapshots`, `diff_graph` (what changed vs the saved file or a snapshot) |
 | Readability | `arrange_graph` (tidy layout by data flow), `add_frame`, `add_comment`, `set_link_display` (show wires as portals to hide clutter; saves and reloads the package after a snapshot) |
 | Viewing | `screenshot_designer` (window, graph, 2D view, 3D view, panels; only Designer is captured, never other apps; the 3D view optionally set up first: a graph's outputs on a chosen mesh, viewpoint, the camera turned and panned, zoom and tiling, and the light: one of Designer's environment maps, its angle and its exposure), `open_graph` (open a graph or a function graph of its package, fitted whole, zoomed to a frame, nodes or rectangle, or centred on a node) |
-| Editing | `apply_edits` (add nodes and image files, set parameters (a Gradient Map's keys and a Curve's points too), name and tag output nodes, connect (a Value Processor's value into another node's `#name` input value, and a processor's second and later input images, too), disconnect, move, delete, expose parameters as graph inputs: one or many edits per call, one undo step; a typo'd node id changes nothing), `set_function` (an expression compiled into a Pixel Processor's, a Value Processor's or a parameter's function, reading graph inputs, the node's `#name` input values and a processor's input images, or into a function graph stored in the package, which any expression of the package calls by name; one undo step), `create_graph`, `set_graph_size` |
+| Editing | `apply_edits` (add nodes and image files, set parameters (a Gradient Map's keys and a Curve's points too), name and tag output nodes, connect (a Value Processor's value into another node's `#name` input value, and a processor's second and later input images, too), disconnect, move, delete, expose parameters as graph inputs: one or many edits per call, one undo step; a typo'd node id changes nothing, and a batch failing partway is undone whole while its step is the newest), `set_function` (an expression compiled into a Pixel Processor's, a Value Processor's or a parameter's function, reading graph inputs, the node's `#name` input values and a processor's input images, or into a function graph stored in the package, which any expression of the package calls by name; one undo step), `create_graph`, `set_graph_size` |
 | Controls | `remove_graph_input` (exposing a parameter is `apply_edits`' `expose` op) |
 | Scripting | `execute_designer_code`, `run_designer_script` (with timeout and `args`) |
 | Output | `save_package`, `export_outputs` (straight from Designer), `sbsar_info`, `render_sbs` (parameters, size, PNG/EXR…), `preview_maps` |
 
-Every change Claude makes through these tools is **one undo step** in Designer ("Claude: …"),
-so Ctrl+Z with that graph in focus reverts it. Undo history is per document. Two exceptions:
-`set_link_display` reloads the package, which clears its undo history (a snapshot is kept
-instead), and `quit_designer` ends only a Designer an agent started, dropping its unsaved changes; yours it refuses, and asks you to save, close and reopen it. Before bigger
+Every change Claude makes through these tools is **one undo step** in Designer ("Claude: …", ending with a short tag
+of its own), so Ctrl+Z reverts it while it is the newest step: Designer keeps one undo history, shared by all open
+packages. Claude undoes its own calls with `undo_edits`, and asks you first when a step of yours sits on top of them.
+A call that fails after it changed something takes its own step back at once, if that step is still the newest, and
+its error says so; a file the call wrote stays. Otherwise `apply_edits` and `set_function` say in their error what
+stays changed. Two exceptions:
+`set_link_display` saves and reloads the package, which adds steps of its own to the history and clears none (a
+snapshot is kept before it), and `quit_designer` ends only a Designer an agent started, dropping its unsaved changes; yours it refuses, and asks you to save, close and reopen it. Before bigger
 changes to your graphs, Claude can take a snapshot and afterwards show you exactly what changed.
 
 ## Requirements
@@ -152,7 +158,7 @@ Then:
 
 1. **Restart Substance Designer** (the plugin loads at startup). Don't also load it from
    Tools > Plugin Manager; a second copy can't open the port and stays inactive.
-2. Check Designer's console (Windows > Console) for `[sd_claude_bridge_kve] v8 listening on 127.0.0.1:9877`.
+2. Check Designer's console (Windows > Console) for `[sd_claude_bridge_kve] v9 listening on 127.0.0.1:9877`.
 3. **Start `claude` in this folder** and approve `substance-designer` when asked (once). Then
    `claude mcp list` here shows `substance-designer: … ✔ Connected`.
 
@@ -248,7 +254,7 @@ or, in a full run, a tool no check exercised; 2: nothing was run (a Designer of 
 | `layout` | Snapshots, diffs and readable graphs: `snapshot_graph`, `list_snapshots`, `diff_graph`, `arrange_graph` |
 | `save` | Saving: `save_package`, snapshots of a saved package, a diff against a `.sbs`, copied bitmaps |
 | `graph_edit_output_fields` | Naming and tagging output nodes with `apply_edits` |
-| `batch` | Several edits in one `apply_edits` call |
+| `batch` | Several edits in one `apply_edits` call; a failed call's undo step taken back (`apply_edits`, `create_graph`, `sweep_param` and the code tools), also with a cancel or another job arriving meanwhile; a script's `sys.exit(0)` as a normal end; Designer's undo history |
 | `undo` | One tool call is one undo step |
 | `script_runner` | `run_designer_script` |
 
@@ -267,8 +273,12 @@ too. On Windows, where Designer stays open, the folder is always left: deleting 
 crashed Designer twice. The output names each folder it keeps. Delete them by hand once Designer is closed (the system
 may clear old temporary files itself, but don't count on it). To check that
 one change is one undo step it triggers Undo through the Edit menu, and reads the graph until the step shows undone,
-then triggers Redo the same way. Such a check fails, naming the graph in the editor, when its own graph isn't the one there. An
-Undo that fired and never showed is redone. It also re-checks the Designer behaviour the
+then triggers Redo the same way. It triggers each only when its own graph is in the editor and the top step of
+Designer's Undo (or Redo) list bears its own call's name: the tool's label, then a tag. Otherwise the check fails,
+naming the graph in the editor or that step. That Undo lands a few tens of ms after it fires and takes the step on
+top then, so a change you make in your Designer at that moment (a run on Windows) would be undone instead. An Undo
+that fired and never showed is redone. The check of `undo_edits`' `include_others` undoes every step on top of its
+own call: a change you make between that check's refusal and its second call would be undone too. It also re-checks the Designer behaviour the
 agent notes rely on ("designer facts"), so a Designer update that changes it shows up, and it
 checks the Security promises below (unsigned and wrongly signed requests refused, not
 reachable from the network, private token file), the command-line client, that the plugin Designer loaded matches

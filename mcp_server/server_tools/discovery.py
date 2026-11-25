@@ -10,7 +10,7 @@ from typing import Annotated, TypedDict, cast
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from .core import Graph, _bridge, _checked, _helpers_call, _tool
+from .core import Graph, _bridge, _checked, _helpers_call, _tool, _with_undo
 from .functions import NO_PARAMETER, NODE_OR_FUNCTION
 
 
@@ -114,7 +114,10 @@ def describe_node(
 ) -> str:
     """Show a node type's connectors and parameters (ids, types, labels, defaults, enum values), and for a library
     node, their slider ranges and descriptions. For a function node, every type each input and its output take."""
-    return _checked(_bridge(_helpers_call('describe_node(%r)' % definition), timeout=60))
+    # one undo step of its own, a read's: its temporary package and node, and the library package it opens, made 8 or 9
+    # steps of Designer's own, which undo_edits took for someone else's (REVIEW.md SRV-265; core.py, SessionStep)
+    code = _with_undo(_helpers_call('describe_node(%r)' % definition), 'Claude: describe node', edit=False)
+    return _checked(_bridge(code, '<describe_node>', 60))
 
 
 class _LibraryEntry(TypedDict):
@@ -171,7 +174,10 @@ def _library_index() -> _LibraryIndex:
     """Scan Designer's library packages once: graph id, label, category, description."""
     if 'entries' in _LIBRARY_CACHE:
         return _LIBRARY_CACHE
-    lines = _checked(_bridge(_helpers_call('list_atomic()'), timeout=60)).splitlines()
+    # one undo step of its own, a read's: with no compositing graph in the editor, list_atomic's temporary package made
+    # 7 steps of Designer's own (REVIEW.md SRV-265's pattern; core.py, SessionStep)
+    code = _with_undo(_helpers_call('list_atomic()'), 'Claude: search nodes', edit=False)
+    lines = _checked(_bridge(code, '<search_nodes>', 60)).splitlines()
     resources = next(l.split('=', 1)[1] for l in lines if l.startswith('RESOURCES_DIR='))
     atomic = [l.split('=', 1)[1] for l in lines if l.startswith('ATOMIC=')]
     functions: list[_FunctionEntry] = [

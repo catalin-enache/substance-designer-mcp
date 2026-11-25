@@ -138,6 +138,7 @@ def _node_pixels(
             _with_undo(
                 _helpers_call('dump_node_pixels(%r, %r, %r, %r)' % (node_id, raw_path, graph, output)),
                 'Claude: ' + tool.replace('_', ' '),
+                edit=False,  # its step, a temporary node added and removed, changes nothing (core.py, SessionStep)
             ),
             '<%s>' % tool,
             300,
@@ -345,7 +346,8 @@ def sweep_param(
     param=<input id> sweeps an exposed graph input (then view_node is required). Values are converted as in apply_edits' set op, but a $ parameter is made Absolute for the sweep
     even where a set op refuses it or leaves it inherited (an overridable graph's $outputsize, the
     graph's $randomseed), so its values are absolute ones. The parameter ends where it started,
-    inheritance included, but the sweep is an undo step and marks the package as modified."""
+    inheritance included, but the sweep is an undo step and marks the package as modified. If the sweep fails after it
+    set a value, Designer's Undo takes that step back while it is the newest, and the error says so."""
     if not values:
         raise ToolError('values: give at least one value to try')  # REVIEW.md SRV-30
     tmp_dir = tempfile.mkdtemp(prefix='sd_sweep_')
@@ -357,6 +359,7 @@ def sweep_param(
                     % (graph, node_id, param, values, tmp_dir, view_node, output)
                 ),
                 'Claude: sweep ' + param,
+                edit=False,  # its step, the values set and the first put back, changes nothing (core.py, SessionStep)
             ),
             '<sweep_param>',
             600,

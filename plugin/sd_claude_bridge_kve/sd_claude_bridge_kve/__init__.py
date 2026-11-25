@@ -18,7 +18,8 @@ The server and client/sd_run.py send nothing to a greeting of another protocol.
           sooner than 30 ms after the one before ended: a job reaching an idle bridge wakes that
           thread, and starts once those 30 ms are over (at once after a pause); one queued
           behind another starts when they are over too. With "timeout" (seconds) the script is aborted once it
-          exceeds that time. A function the script hands `_after_reply(fn)`, a name in its scope, while
+          exceeds that time. A script ending with sys.exit(), sys.exit(0) or sys.exit(None) ends
+          normally; any other exit is an error. A function the script hands `_after_reply(fn)`, a name in its scope, while
           it runs, runs on the main thread after the reply, once its send is done or failed
           (quit_designer's close: REVIEW.md SRV-151). One handed over after the script ended never runs.
   cancel: {"cmd": "cancel"}              -> {"ok", "output"}
@@ -61,7 +62,7 @@ READ_TIMEOUT = 30  # seconds to receive a whole request
 MAX_REQUEST = 64 << 20  # bytes
 MAX_CLIENTS = 16  # connections not yet authenticated; more are closed straight away
 MAX_OUTPUT = 8 << 20  # characters of a script's output sent back (the last ones)
-VERSION = 8
+VERSION = 9
 # Between one job's end and the next one's start: started at once (about 1 ms after), a node measured right after the
 # one feeding it got no texture in 5 runs of 5; after 5 ms in 4 of 5, after 20 ms and 50 ms in none of 5 (REVIEW.md
 # PLG-38). Designer's own work after a job evidently needs that moment; what it is wasn't found. So no job starts sooner
@@ -148,9 +149,14 @@ def expected_auth(token: str, nonce: str, port: int, body: bytes | memoryview) -
 
 def _make_tracer(deadline: float | None, cancel: threading.Event, pending: list[bool]) -> _TraceFunc:
     """Raises ScriptAborted in the running script. Python unsets a trace function that raises
-    (sys.settrace docs), so the abort fires once and the script's finally blocks and context
-    exits, such as UndoGroup committing its transaction, run to the end. Where Python only reports
-    an exception (a __del__, a weakref callback, a Qt slot), the abort is dropped: _run's hooks set
+    (sys.settrace docs), so the abort fires once, and the script's finally blocks and context
+    exits that run after it run to the end. An abort that lands inside a context exit's own
+    Python code cuts that exit short: in UndoGroup's __exit__, before its C commit, it left the
+    transaction open. One on the `with` line as the block ends, before the exit is called, skips
+    the exit whole, even one written in C (REVIEW.md SRV-273, SRV-277). The server's calls commit
+    out of its reach: tracing is off from their code's end to the commit (server_tools/core.py,
+    _with_undo). Where Python only reports an exception (a __del__, a weakref callback, a Qt
+    slot), the abort is dropped: _run's hooks set
     `pending`, and the very next traced event raises it, wherever it is: dropped again in another
     finalizer, it is re-armed again, until it lands outside one (checking only every 64th event
     could land in the callback every time, in a loop of a fixed number of events; REVIEW.md PLG-25,
@@ -292,9 +298,10 @@ def _run(
             time.monotonic() - started,
             traceback.format_exc(limit=-3),
         )
-    except BaseException:
-        result['ok'] = False
-        result['error'] = traceback.format_exc()
+    except BaseException as e:
+        if not (isinstance(e, SystemExit) and e.code in (None, 0)):  # sys.exit(), (0) or (None): a normal end
+            result['ok'] = False
+            result['error'] = traceback.format_exc()
     result['output'] = buf.getvalue()
     return result
 

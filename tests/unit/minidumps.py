@@ -1,12 +1,12 @@
 """Synthetic minidumps, laid out as Designer's crash reporter (Crashpad) writes them on macOS arm64, holding only what
 scripts/read_crash_dump.py reads: the system, the modules (with their builds' UUIDs), one thread with its stack and
 registers, more memory, the exception and the messages Crashpad keeps per module; and Mach-O files holding only their
-UUID, for the modules on disk. For its tests (test_read_crash_dump.py, test_old_python.py)."""
+UUID, for the modules on disk. For its tests (test_read_crash_dump.py)."""
 
 import dataclasses
 import struct
 import uuid as uuids
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TypedDict, Unpack
 
@@ -45,6 +45,7 @@ class Crash:
     thread: int = 7
     other_threads: Sequence[int] = field(default_factory=list)
     memory: Sequence[tuple[int, bytes]] = ()  # the memory list's ranges, (start, bytes), beside the thread's stack
+    registers: Mapping[int, int] = field(default_factory=dict)  # x0..x28's values by number, 0 if not given
 
 
 class CrashFields(TypedDict, total=False):
@@ -65,6 +66,7 @@ class CrashFields(TypedDict, total=False):
     thread: int
     other_threads: Sequence[int]
     memory: Sequence[tuple[int, bytes]]
+    registers: Mapping[int, int]
 
 
 class _Writer:
@@ -152,7 +154,7 @@ def minidump(crash: Crash) -> bytes:
     if crash.memory:
         ranges = [(start, len(blob), w.add(blob)) for start, blob in crash.memory]
         stream(5, struct.pack('<I', len(ranges)) + b''.join(struct.pack('<QII', *r) for r in ranges))
-    regs = [0] * 31
+    regs = [crash.registers.get(i, 0) for i in range(31)]
     regs[29], regs[30] = crash.fp, crash.lr
     context = struct.pack('<II31QQQ', 0, 0, *regs, crash.sp, crash.pc) + bytes(640)
     context_rva = w.add(context)

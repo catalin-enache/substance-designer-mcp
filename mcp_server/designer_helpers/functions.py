@@ -18,7 +18,8 @@ calls make into them. An input is kept when it is the next one wanted, so that t
 deleted, and the rest made in the order given: Designer drops a call's connection into an input deleted, keeps the
 connections into the others, and lists an input made again last (GUIDE.md, Function graphs of the package). A failure
 while the inputs are set leaves an existing function graph with the new function and the inputs set so far, which its
-error says; a new function graph is deleted."""
+error says unless the call's rollback takes its step back (server_tools/core.py, _failure); a new function graph is
+deleted."""
 
 import json
 
@@ -552,7 +553,7 @@ def set_function_resource(
     functions calling it still find it. `target` must be as function_resource_target gave it: nothing is built
     otherwise. A failure deletes a function graph it made. On an existing one, a failure before the output node moves
     deletes the nodes it built and leaves the inputs as they were; one after leaves the new function, with the inputs
-    set so far (the module docstring)."""
+    set so far, said on a KEPT= line (the module docstring)."""
     g = _graph_to_edit(identifier)
     name = target['function']
     if _resource_target(g, name) != target:
@@ -590,12 +591,13 @@ def set_function_resource(
     try:
         if inputs is not None:
             _set_inputs(made, inputs)
-    except (Exception, APIException) as e:
+    except (Exception, APIException):
         if new:
             take_back([])
-            raise
-        # the output node has moved: say what is left (REVIEW.md HLP-238)
-        raise RuntimeError('%s; %s keeps its new function, and the inputs set so far' % (e, name)) from e
+        else:  # the output node has moved: say what is left (REVIEW.md HLP-238), on a line of its own, which the server
+            # shows only if the call's rollback didn't take it back (server_tools/core.py, _failure; REVIEW.md HLP-256)
+            print('KEPT=%s keeps its new function, and the inputs set so far' % name)
+        raise
     where = '%s(%s)' % (name, _shown([_input_of(p) for p in _graph_inputs(made)] if inputs is None else inputs))
     if new:
         where += ', a new function graph of %s' % target['package']

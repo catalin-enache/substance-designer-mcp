@@ -22,7 +22,20 @@ from typing import Annotated, cast
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from .core import XY, Color, Graph, Link, NoneIfEmpty, _bridge, _checked, _edit, _helpers_call, _sentence, _tool
+from .core import (
+    XY,
+    Color,
+    Graph,
+    Link,
+    NoneIfEmpty,
+    _bridge,
+    _checked,
+    _edit,
+    _helpers_call,
+    _sentence,
+    _session,
+    _tool,
+)
 from .snapshots import _new_snapshot_path, _note_package, _v, _whole_or_none, _xml_graph, snapshot_graph
 
 
@@ -90,9 +103,11 @@ def set_link_display(
     reduce wire clutter. Pick links by any of from_nodes, fanout_at_least, longer_than and links.
     Designer's API can't do this, so the tool first takes a snapshot of
     the graph and copies the package's saved file (both in the snapshot folder), then saves the
-    package, edits the .sbs and reloads it (the package's undo history is reset; the graph is
-    reopened). When it saves and reloads the package, tell the user. If no selected link would change, nothing is saved
-    or reloaded. If the package is
+    package, edits the .sbs and reloads it (Designer's undo history keeps its steps, the reload's own added on top; the
+    graph is reopened). The reload's steps are Designer's own, with no tag: undo_edits counts them as not this
+    session's, so taking back a call made before them needs `include_others`. Taking back the reload takes the display
+    change back in Designer, but the file keeps what it saved, the edits made before it included. When it saves and
+    reloads the package, tell the user. If no selected link would change, nothing is saved or reloaded. If the package is
     edited again before the reload, the reload is refused and those edits are kept. The package
     must have been saved to a file once, and is refused while it uses a graph of a never-saved package,
     as in save_package."""
@@ -227,7 +242,10 @@ def _reload_package_file(path: str, snapshot: str | None = None) -> None:
     created. The bridge runs Designer's event loop between two calls (the plugin's _drain), and every widget an unload
     removes was gone by the time the next call started, none later: no pause between them (measured; link_display's
     designer fact; REVIEW.md SRV-150). Measured in Designers an agent started: hidden, and on screen but not the active
-    app, its node_align_tools loaded, 5 of 5 alike, then 20 reloads with no crash (2026-11-16, REVIEW.md SRV-167)."""
+    app, its node_align_tools loaded, 5 of 5 alike, then 20 reloads with no crash (2026-11-16, REVIEW.md SRV-167).
+    The two calls' steps are Designer's own, so undo_edits names them so (REVIEW.md SRV-265): one undo group can't hold
+    both, being two calls."""
+    _session['package_reloaded'] = True
     _checked(_bridge(_helpers_call('unload_package_file(%r)' % path), timeout=180))
     try:
         _checked(_bridge(_helpers_call('load_package_file(%r)' % path), timeout=180))

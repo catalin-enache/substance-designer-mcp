@@ -50,6 +50,11 @@ STAYS: dict[tuple[str, str], tuple[int, str]] = {
         "the wait rule's named exception (`.claude/rules/waits.md`; the user, 2026-11-20)",
     ),
     ('mcp_server/designer_helpers/waits.py', 'end.start(int(limit * 1000)'): (1, "the wait's limit, a safety net"),
+    ('mcp_server/designer_rollback.py', 'limit.start(int(limit_s * 1000)'): (1, "the undo's limit, a safety net"),
+    ('tests/test_all_tools/batch/designer_scripts/history_facts.py', 'limit.start(60000)'): (
+        1,
+        "the undo's limit, a safety net, as the rollback's",
+    ),
     ('mcp_server/designer_helpers/view3d.py', 'timers[-1].start(after)'): (
         1,
         "the menu's look at once, and its guard's limit (MENU_GUARD), a safety net",
@@ -65,6 +70,7 @@ STAYS: dict[tuple[str, str], tuple[int, str]] = {
     ),
     # the check's subject: a job holding the bridge, the main thread or the thread pool, a slow shutdown, a timer's
     # firings counted
+    ('tests/test_all_tools/batch/checks.py', 'sleep(1)'): (1, 'code outlasting its timeout_s of 1 in one C call'),
     ('tests/test_all_tools/bridge/checks.py', 'time.sleep(0.05)'): (2, 'a job holding the bridge'),
     ('tests/test_all_tools/bridge/checks.py', 'time.sleep(0.01)'): (1, 'a job holding the bridge'),
     ('tests/test_all_tools/bridge/checks.py', 'time.sleep(0.3)'): (1, 'a long job, another queued behind it'),

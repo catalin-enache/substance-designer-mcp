@@ -1,6 +1,7 @@
 """README's full example: examples/build_dwarf_trimsheet.py, renamed so it can't touch a trim sheet
 you have open (it closes earlier builds of its graph id) and saved to the scratch folder."""
 
+import asyncio
 import os
 import re
 from textwrap import dedent
@@ -14,6 +15,7 @@ from test_all_tools.common import (
     check,
     designer_script,
     helpers_source,
+    sd_run,
     text,
 )
 
@@ -49,7 +51,8 @@ async def run(ctx: Ctx) -> None:
     else:
         # a run that fails before its first save closes its own unsaved package, so failed
         # runs don't pile up packages with the graph's name (REVIEW.md INS-13), also when it
-        # fails while setting the package up (INS-17)
+        # fails while setting the package up (INS-17). Run through sd_run, outside any undo group, as from Designer's
+        # Python Editor: run_designer_script's rollback would take back the package itself (REVIEW.md TST-884)
         for where, old, new in (
             ('in the build', '\n    b.layout()\n', "\n    raise RuntimeError('fails on purpose')\n"),
             ('setting up', 'self._set_graph_size()\n', "raise RuntimeError('fails on purpose')\n"),
@@ -57,7 +60,7 @@ async def run(ctx: Ctx) -> None:
             failing = os.path.join(scratch, 'build_example_failing.py')
             with open(failing, 'w') as f:
                 f.write(source.replace(old, new, 1))
-            r_ = await c('run_designer_script', {'path': failing, 'timeout_s': 300})
+            r_ = await asyncio.to_thread(sd_run, failing, '--timeout', '300', timeout=360)
             t = text(
                 await c(
                     'execute_designer_code',
@@ -70,7 +73,7 @@ async def run(ctx: Ctx) -> None:
                     },
                 )
             )
-            ran = text(r_)  # a script's traceback comes back as text, not a tool error
+            ran = r_.stdout + r_.stderr
             check(
                 E,
                 'a run failing %s closes its own unsaved package' % where,

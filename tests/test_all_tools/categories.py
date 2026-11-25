@@ -52,9 +52,16 @@ CATEGORIES: list[Step] = [
     # Map
     bitmaps.run,
     render.run,  # 35 s: export_outputs, sbsar_info, render_sbs, preview_maps
+    # 30 s (2026-11-25, two scratch runs, with their server's start: 20.6 s, 39.6 s): set_link_display, its reload's
+    # steps in Designer's undo history and in undo_edits' refusal
+    link_display.run,
+    # 30 s (2026-11-25, two scratch runs in a Designer just started, with their server's start: 31.0 s, 28.5 s):
+    # apply_edits, the rollback of a failed call (apply_edits, create_graph, sweep_param and the code tools, a cancel and
+    # a job queued during it, a timeout falling in or after the code), undo_edits (a step redone included), Designer's
+    # undo history
+    batch.run,
     safeguards.run,  # 23 s: refusals and failure paths
     graph_edit_wire.run,  # 21 s: connect/move/disconnect/delete ops, execute_designer_code, describe_graph, preview_node
-    link_display.run,  # 16 s: set_link_display
     # 16 s (2026-11-23, two scratch runs, with their server's start: 15.5 s, 16.7 s): open_graph,
     # screenshot_designer('graph') and crops, describe_graph(selected=True), the Designer facts of the Parameters panel,
     # the selection getters and parentItem
@@ -68,7 +75,6 @@ CATEGORIES: list[Step] = [
     layout.run,  # 2 s: snapshot_graph, list_snapshots, diff_graph, arrange_graph, add_frame, add_comment
     save.run,  # 2 s: save_package, snapshots of a saved package, copied bitmaps
     graph_edit_output_fields.run,  # 2 s: naming and tagging output nodes, on a graph of their own
-    batch.run,  # 1 s: apply_edits
     undo.run,  # 13 s (2026-11-22, two scratch runs: 14.2 s, 12.1 s): one tool call = one undo step
     script_runner.run,  # 1 s: run_designer_script
 ]

@@ -6,7 +6,7 @@ from typing import Annotated
 
 from pydantic import Field
 
-from .core import JsonObject, _bridge, _control, _tool, _with_undo
+from .core import TAG_FORM, JsonObject, _bridge, _control, _tool, _with_undo
 
 # the two code tools' timeout_s
 Timeout = Annotated[
@@ -29,14 +29,23 @@ def cancel_designer_job() -> str:
 @_tool(read_only=False, destructive=True, idempotent=False, open_world=True, scripting=True)
 def execute_designer_code(
     code: Annotated[str, Field(description='The Python code to run.')],
-    undo_label: Annotated[str, Field(description="The undo step's name.")] = 'Claude: code',
+    undo_label: Annotated[
+        str, Field(description="The undo step's name, followed by a tag of the call's own: %s." % TAG_FORM)
+    ] = 'Claude: code',
     timeout_s: Timeout = 120,
 ) -> str:
     """Run Python inside Substance Designer (full `sd` API) and return printed output and errors.
-    All changes form one undo step (Ctrl+Z in Designer reverts them). A script queued
+    All changes form one undo step. If the code raises after it changed something,
+    or a timeout or cancel_designer_job stops it, Designer's Undo takes that step back while it is the newest, and the
+    error says so. sys.exit(), sys.exit(0) and sys.exit(None) end the code normally, its changes kept; any other exit
+    fails as a raise does. To undo, use `undo_edits`; don't trigger Undo in your code. Don't open an undo group
+    of your own: the call is one already, and a timeout inside yours can leave its step open. A script queued
     behind another can wait up to 15 minutes before it starts, and one still queued then is dropped, never run late.
     This call stops waiting 15 minutes + `timeout_s` (15 minutes if 0) + 1 minute after it is sent, about 31 minutes
     for 0, while the script goes on (cancel_designer_job stops it)."""
+    # The code tools don't block an Undo triggered in their code: a check of the code's text is easy to get around, and
+    # would refuse harmless code that reads the Undo list. Their descriptions ask for undo_edits instead (the user,
+    # 2026-11-25)
     return _bridge(_with_undo(code, undo_label), '<execute_designer_code>', timeout_s)
 
 
@@ -55,9 +64,14 @@ def run_designer_script(
 ) -> str:
     """Run a Python file inside Substance Designer; `__file__` is set to its absolute path.
     Only this tool sets `ARGS`.
-    All changes form one undo step named after the file. A script queued behind another can wait up to 15 minutes before it
-    starts, and one still queued then is dropped, never run late. This call stops waiting 15 minutes + `timeout_s`
-    (15 minutes if 0) + 1 minute after it is sent, while the script goes on (cancel_designer_job stops it)."""
+    All changes form one undo step, named after the file and a tag of the call's own. If the script raises after it
+    changed something, or a timeout or cancel_designer_job stops it, Designer's Undo takes that step back while it is the
+    newest, and the error says so. sys.exit(), sys.exit(0) and sys.exit(None) end the script normally, its changes kept;
+    any other exit fails as a raise does. To undo, use `undo_edits`; don't trigger Undo in your code. Don't open an undo group
+    of your own: the call is one already, and a timeout inside yours can leave its step open. A script queued
+    behind another can wait up to 15 minutes before it starts, and one still queued then is dropped, never run late.
+    This call stops waiting 15 minutes + `timeout_s` (15 minutes if 0) + 1 minute after it is sent, while the script
+    goes on (cancel_designer_job stops it)."""
     path = os.path.abspath(os.path.expanduser(path))
     with open(path, encoding='utf-8') as f:
         script = _with_undo(f.read(), 'Claude: ' + os.path.basename(path))

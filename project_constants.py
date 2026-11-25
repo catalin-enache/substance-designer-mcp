@@ -6,11 +6,15 @@ takes its name from its own folder. So renaming the plugin means: change PLUGIN 
 both plugin/<PLUGIN>/ folders to match. tests/unit/test_constants.py checks that the folders
 match, that no other code spells the name out, and that README.md, GUIDE.md and
 .claude/rules/designer-code.md mention it.
+
+The self-test's Designer scripts import this file inside Designer, for new_tag. So it imports only the standard library
+(tests/unit/test_constants.py).
 """
 
 import json
 import os
 import re
+import secrets
 from collections.abc import Mapping, Sequence
 from typing import Literal, TypedDict
 
@@ -94,6 +98,21 @@ QUIT_CLOSED = '[%s] quit: every window closed' % PLUGIN
 # Before the path of the file a Designer an agent started had its threads sampled into, when it was about to be forced
 # (macOS: server_tools/lifecycle.py); a quit naming one keeps the self-test's folder of it (ROADMAP item 70)
 QUIT_SAMPLED = 'Its threads, sampled first:'
+# In a failed call's error once Designer's Undo took back the call's step (server_tools/core.py, UNDONE): the self-test's
+# rollback checks match it
+ROLLED_BACK = "took back the call's own undo step"
+# The tag that makes a call's undo step its own: TAG_PREFIX, then TAG_LENGTH characters of TAG_ALPHABET drawn at random
+# for each call (new_tag). Its form is these three only (the user, 2026-11-24). The self-test reads them too, its facts
+# of Designer's history included. An invisible tag is '', '\u200b\u200c\u200d\u2060' and 16: as many names
+# (4**16 = 16**8), and Designer's dropdowns show the label alone (measured 2026-11-24).
+TAG_PREFIX = ' #'
+TAG_ALPHABET = '0123456789abcdef'
+TAG_LENGTH = 8
+
+
+def new_tag() -> str:
+    """A tag of its own for one call's undo step: TAG_PREFIX, then TAG_LENGTH random characters of TAG_ALPHABET."""
+    return TAG_PREFIX + ''.join(secrets.choice(TAG_ALPHABET) for _ in range(TAG_LENGTH))
 
 
 # Where the records of the Designers an agent started go (agent_designer_file). In the home folder, as the temp folder

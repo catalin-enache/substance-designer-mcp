@@ -483,10 +483,12 @@ def add_node(
             try:
                 g.deleteNode(node)
             except (Exception, APIException) as removal:  # say both (REVIEW.md HLP-37)
-                raise RuntimeError(
-                    '%s; and node %s could not be removed again (%s), delete it by hand'
-                    % (e, node.getIdentifier(), removal)
-                ) from removal
+                # what is left, on a line of its own, which the server shows only if the call's rollback didn't take
+                # it back (server_tools/core.py, _failure; REVIEW.md HLP-256)
+                print(
+                    'KEPT=node %s could not be removed again (%s): delete it by hand' % (node.getIdentifier(), removal)
+                )
+                raise RuntimeError(str(e)) from removal
             raise RuntimeError('%s (the node was not added)' % e) from e
     return node.getIdentifier()
 

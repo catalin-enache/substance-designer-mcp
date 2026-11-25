@@ -12,8 +12,9 @@ the user's Designer open it starts nothing and asks for it to be closed. On Wind
 Designer, of every category but `lifecycle`, without the unit suite: it starts Designer if none runs
 (launch_designer) and leaves it open at the end, as it leaves one already running (ROADMAP item 65). Everything
 that changes state happens in temporary graphs ("mcp_selftest"), removed after each category; in the user's
-Designer the graph they had open in the editor is reopened. It triggers Undo and Redo through the Edit menu, which act
-on the document in focus: a check fails, naming the graph in the editor, when the self-test graph isn't the one there.
+Designer the graph they had open in the editor is reopened. It triggers Undo and Redo through the Edit menu, only while
+the self-test graph is the one in the editor and the top step of the Undo or Redo dropdown is named as the check's call
+names its step (the tool's label, then a tag): a check fails otherwise, naming the graph in the editor or that step.
 It reads the graph until its step shows undone, and an Undo that fired and never showed is redone. "designer facts"
 checks the Designer behaviour GUIDE.md documents.
 The 3D screenshot is skipped if no 3D View is visible in the user's Designer. Exits with code 1 if any check fails.

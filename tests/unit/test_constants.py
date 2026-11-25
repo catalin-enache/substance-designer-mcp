@@ -2,7 +2,9 @@
 Designer loads by name). A rename = change PLUGIN, rename the folders, and these tests point at
 anything left over."""
 
+import ast
 import os
+import sys
 
 import pytest
 from docs_text import repo_files
@@ -58,3 +60,13 @@ def test_docs_mention_the_current_name() -> None:
         with open(os.path.join(ROOT, doc), encoding='utf-8') as f:
             text = f.read()
         assert PLUGIN in text and os.path.basename(TOKEN_FILE) in text, doc
+
+
+def test_project_constants_imports_only_the_standard_library() -> None:
+    # Designer's Python imports it, for the self-test's Designer scripts, and so does install.py before any venv exists
+    with open(os.path.join(ROOT, 'project_constants.py'), encoding='utf-8') as f:
+        tree = ast.parse(f.read())
+    imported = {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
+    imported |= {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module}
+    outside = sorted(name for name in imported if name.split('.')[0] not in sys.stdlib_module_names)
+    assert not outside, outside

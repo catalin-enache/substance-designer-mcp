@@ -6,14 +6,22 @@ user's, or the home of a Designer an agent started (`/tmp/sd_mcp_<user ID>_<port
 Usage:
     python3 scripts/read_crash_dump.py [DUMP]   the newest dump of any of them when DUMP is omitted
 
-It prints the exception (an abort says its signal), the messages Crashpad kept per module (an abort's reason, often),
-the crashing thread's frames, newest first, through its frame pointers (the first two are the program counter and the
-link register: for a crash in a function that calls others, the second may be a stale return address within it), each
-as module + offset, named by `atos` where the module is a file outside the system's libraries (those are in the shared
-cache, where atos names nothing, or the wrong function) of the build that crashed (its UUID, in the dump, against the
-file's: an update since would give wrong names), the first frame outside the system's libraries, and the last
-lines of Designer's log as it crashed (attached beside the dump). The Sentry event attached there, which holds the
-user's Adobe account, is never read. macOS on arm64 only: other dumps are refused.
+It prints:
+- the crash handler's database, taken from the dump's path while the dump lies in its `pending/` or `completed/`
+  folder. It names the Designer's home, and so the port of a Designer an agent started;
+- the exception (an abort says its signal), and the messages Crashpad kept per module (an abort's reason, often);
+- the crashing thread's frames, newest first, through its frame pointers (the first two are the program counter and the
+  link register: for a crash in a function that calls others, the second may be a stale return address within it), each
+  as module + offset, named by `atos` where the module is a file outside the system's libraries (those are in the shared
+  cache, where atos names nothing, or the wrong function) of the build that crashed (its UUID, in the dump, against the
+  file's: an update since would give wrong names), and the first frame outside the system's libraries;
+- the crashing thread's registers x0 to x30, each with its bytes' printable ASCII, and the top STACK_TOP bytes of its
+  stack as printable ASCII. A short string held there can name what was being changed where the frames don't:
+  `outputsi` in x11, and `outputsize` on the stack, named the parameter of a crash under QWidget::setEnabled;
+- the last lines of Designer's log as it crashed, attached beside the dump in the database. The Sentry event attached
+  there, which holds the user's Adobe account, is never read.
+
+macOS on arm64 only: other dumps are refused.
 
 Exit status: 0 when it read a dump, 1 when it can't (it says why), 2 for a bad argument.
 """
@@ -41,6 +49,7 @@ sys.path.insert(0, ROOT)
 from project_constants import agent_designer_folders  # noqa: E402
 
 DATA = ('Library', 'Application Support', 'Adobe', 'Adobe Substance 3D Designer')
+REPORTS = ('pending', 'completed')  # the folders of Crashpad's database holding the dumps: waiting for upload, done
 SIGNATURE, ARM64, MACOS = 0x504D444D, 12, 0x8101  # 'MDMP'; MINIDUMP_SYSTEM_INFO's arm64 and macOS
 THREADS, MODULES, MEMORY, EXCEPTION, SYSTEM, CRASHPAD_INFO = 3, 4, 5, 6, 7, 0x43500001
 EXC_CRASH = 10
@@ -98,6 +107,8 @@ SYSTEM_LIBRARIES = ('/usr/lib/', '/System/Library/')
 ADDRESS = (1 << 47) - 1  # a return address's pointer-authentication bits dropped
 LOG_LINES = 8
 DEPTH = 64  # frames said at most, so frame records walked too
+STACK_TOP = 256  # bytes of the crashing thread's stack said as text, from sp
+TEXT_LINE = 64  # bytes a line
 # a Mach-O file's: universal (Designer's are, with one arm64 part each), arm64 code's, a 64-bit header's, the UUID's
 # load command
 FAT, CPU_ARM64, MACHO_64, LC_UUID = 0xCAFEBABE, 0x0100000C, 0xFEEDFACF, 0x1B
@@ -177,10 +188,18 @@ class _Dump:
         return '%s +%#x' % (os.path.basename(module[2]), address - module[0])
 
     def read64(self, address: int) -> int | None:
+        found = self.read(address, 8)
+        return int(struct.unpack_from('<Q', found)[0]) if len(found) == 8 else None
+
+    def read(self, address: int, size: int) -> bytes:
+        """The dump's bytes from `address`, `size` at most: the longest slice any range holding `address` gives, none
+        outside every range. A range of the memory list can overlap a thread's stack and end sooner (REVIEW.md
+        INS-49)."""
+        found = b''
         for start, memory in self.memory:
-            if start <= address and address + 8 <= start + len(memory):
-                return int(struct.unpack_from('<Q', memory, address - start)[0])
-        return None
+            if start <= address < start + len(memory):
+                found = max(found, memory[address - start : address - start + size], key=len)
+        return found
 
     def exception(self) -> tuple[int, int, list[int], int]:
         """The crashing thread, the exception's code, its parameters, and the RVA of the thread's registers."""
@@ -190,11 +209,15 @@ class _Dump:
         context = struct.unpack_from('<I', self.data, rva + 164)[0]
         return thread, code, params, context
 
+    def registers(self, context: int) -> tuple[list[int], int, int]:
+        """The thread's x0 to x30, its sp and its pc."""
+        *regs, sp, pc = (int(value) for value in struct.unpack_from('<33Q', self.data, context + 8))
+        return regs, sp, pc
+
     def frames(self, context: int) -> list[int]:
         """The program counter, the link register, then the return addresses of the frame records the frame pointer
         chains, as long as they rise on the stack and can be read; at most DEPTH."""
-        regs = struct.unpack_from('<31Q', self.data, context + 8)
-        pc = struct.unpack_from('<Q', self.data, context + 8 + 32 * 8)[0]  # after x0-x30 and sp
+        regs, _sp, pc = self.registers(context)
         found: list[int] = [pc & ADDRESS, regs[30] & ADDRESS]
         fp: int = regs[29]
         for walked in range(DEPTH - len(found)):
@@ -345,9 +368,47 @@ def _names(
     return names, unnamed
 
 
+def _text(data: bytes) -> str:
+    """`data`'s printable ASCII, '.' for each other byte."""
+    return ''.join(chr(b) if 32 <= b < 127 else '.' for b in data)
+
+
+def _registers(regs: list[int]) -> list[str]:
+    """A line for each of x0 to x30: its value, then the printable ASCII of its bytes in memory order, when it holds
+    any. A string short enough to be held in registers can name what was being changed where the frames don't."""
+    lines = ["its registers, each with its bytes' printable ASCII in memory order ('.' for the others):"]
+    for i, value in enumerate(regs):
+        text = _text(struct.pack('<Q', value))
+        lines.append(('  x%-2d  %#018x  %s' % (i, value, text if text.strip('.') else '')).rstrip())
+    return lines
+
+
+def _stack_top(dump: _Dump, sp: int) -> list[str]:
+    """The first STACK_TOP bytes of the stack from sp, as far as the dump holds them, as printable ASCII, TEXT_LINE a
+    line, each after its offset."""
+    top = dump.read(sp, STACK_TOP)
+    if not top:
+        return ['the top of its stack, from sp %#x: not in the dump' % sp]
+    lines = ["the top of its stack, from sp %#x, as printable ASCII ('.' for the other bytes):" % sp]
+    for at in range(0, len(top), TEXT_LINE):
+        lines.append('  sp+%#05x  %s' % (at, _text(top[at : at + TEXT_LINE])))
+    return lines
+
+
+def _database(path: str) -> str | None:
+    """The crash handler's database the dump at `path` lies in, the folder holding pending/, completed/ and
+    attachments/; None when the dump's folder isn't one of REPORTS, as for a dump moved elsewhere (REVIEW.md INS-48). A
+    bare file name counts from the current folder (REVIEW.md INS-32)."""
+    folder = os.path.dirname(os.path.abspath(path))
+    return os.path.dirname(folder) if os.path.basename(folder) in REPORTS else None
+
+
 def _log_tail(path: str) -> list[str]:
-    """The last lines of the log Crashpad attached beside the dump (attachments/<its name>/log.txt), said with where."""
-    database = os.path.dirname(os.path.dirname(os.path.abspath(path)))  # a bare file name too (REVIEW.md INS-32)
+    """The last lines of the log Crashpad attached beside the dump (attachments/<its name>/log.txt), said with where;
+    none for a dump outside the crash handler's database."""
+    database = _database(path)
+    if database is None:
+        return []
     log = os.path.join(database, 'attachments', os.path.splitext(os.path.basename(path))[0], 'log.txt')
     try:
         with open(log, encoding='utf-8', errors='replace') as f:
@@ -373,11 +434,16 @@ def describe(
         dump = _Dump(data)
         thread, code, params, context = dump.exception()
         frames = dump.frames(context)
+        regs, sp, _pc = dump.registers(context)
         messages = dump.messages()
     except struct.error as e:
         raise CannotRead('the dump is cut short or malformed: %s' % e) from e
     names, unnamed = _names(dump, frames, name_frames or _atos, build_of or _file_build)
-    lines = [path, '  written %s' % written, 'exception: %s' % _exception(code, params)]
+    lines = [path, '  written %s' % written]
+    database = _database(path)
+    if database is not None:
+        lines.append("  the crash handler's database: %s" % database)
+    lines.append('exception: %s' % _exception(code, params))
     if messages:
         lines += ['messages Crashpad kept:'] + ['  ' + m for m in messages]
     lines.append('the crashing thread (%d), its frames newest first:' % thread)
@@ -390,7 +456,7 @@ def describe(
             outside = '#%d %s' % (i, where)
     lines += unnamed
     lines.append("first frame outside the system's libraries: %s" % (outside or 'none'))
-    return lines + _log_tail(path)
+    return lines + _registers(regs) + _stack_top(dump, sp) + _log_tail(path)
 
 
 def _own_folder(folder: str) -> bool:
@@ -412,7 +478,7 @@ def dump_folders() -> list[str]:
     (REVIEW.md INS-29)."""
     agents = [folder for folder in agent_designer_folders() if _own_folder(folder)]
     homes = [os.path.expanduser('~')] + [os.path.join(folder, 'home') for folder in agents]
-    return [os.path.join(home, *DATA, 'Sentry-Crashpad', part) for home in homes for part in ('pending', 'completed')]
+    return [os.path.join(home, *DATA, 'Sentry-Crashpad', part) for home in homes for part in REPORTS]
 
 
 def _newest(paths: list[str]) -> str | None:

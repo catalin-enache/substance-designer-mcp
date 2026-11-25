@@ -3,6 +3,7 @@ what they do on a failure, which a passing self-test doesn't show."""
 
 import os
 import re
+import subprocess
 import sys
 import traceback
 from pathlib import Path
@@ -154,3 +155,31 @@ def test_the_keys_facts_unload_their_package_when_its_graph_cant_be_made(monkeyp
     _, error = _run('params/keys', {})
     assert 'no graph' in error
     manager.unloadUserPackage.assert_called_once_with(package)
+
+
+@pytest.mark.parametrize(('platform', 'flags'), [('win32', 0x08000000), ('darwin', 0)])
+def test_during_rollbacks_second_client_opens_no_console_on_windows(
+    monkeypatch: pytest.MonkeyPatch, platform: str, flags: int
+) -> None:
+    """batch/designer_scripts/during_rollback.py: its second client starts with CREATE_NO_WINDOW on Windows, Microsoft's
+    flag for a console process started with no console window of its own, and with no flag elsewhere (the user,
+    2026-11-25)."""
+    made = _stand_in(monkeypatch, 'sd', 'PySide6.QtCore', 'sd.api.sbs.sdsbscompgraph', 'sd.api.sdpackagemgr')
+    graph = MagicMock()
+    graph.getIdentifier.return_value = 'mcp_selftest'
+    manager = made['sd'].getContext.return_value.getSDApplication.return_value.getPackageMgr.return_value
+    package = MagicMock()
+    package.getChildrenResources.return_value = [graph]
+    manager.getUserPackages.return_value = [package]
+    monkeypatch.setattr(sys, 'platform', platform)
+    started: list[dict[str, object]] = []
+
+    def run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        started.append(kwargs)
+        return subprocess.CompletedProcess([], 0, stdout='cancelled', stderr='')
+
+    monkeypatch.setattr(subprocess, 'run', run)
+    _, raised = _run('batch/during_rollback', {'what': 'cancel', 'client': ['python', 'sd_run.py']})
+    assert 'the script failed' in raised
+    made['PySide6.QtCore'].QTimer.singleShot.call_args.args[1]()  # what Qt runs inside the rollback
+    assert [kwargs.get('creationflags', 0) for kwargs in started] == [flags]

@@ -34,8 +34,9 @@ Lint and types always run with them (about 10 s):
 or single tests (`tests/unit/test_x.py::test_name`). A change of Markdown, a comment or a
 docstring adds the docs tests (`.claude/rules/docs-tests.md`).
 
-**Typing** (`test_types.py` runs mypy strict over every Python file). The helpers, the plugin and the example are
-checked against Designer's own `sd` package and PySide6 stubs (found in the Designer install) and run on Designer's
+**Typing** (`test_types.py` runs mypy strict over every Python file). The helpers, the plugin, the example and
+`mcp_server/designer_rollback.py` (the rollback and `undo_edits`' undo, sent into Designer) are checked against
+Designer's own `sd` package and PySide6 stubs (found in the Designer install) and run on Designer's
 Python 3.13, which evaluates annotations when a `def` runs: every name in an annotation there must exist at runtime
 (import real types, `from sd.api.sdnode import SDNode`, never only under `if TYPE_CHECKING:`), and no `from __future__
 import annotations` (the helpers are joined into one script, where it can't come first). Every other Python file

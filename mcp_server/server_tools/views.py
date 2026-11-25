@@ -59,6 +59,7 @@ def preview_node(
             _with_undo(
                 _helpers_call('save_node_output(%r, %r, %r, %r)' % (node_id, out_path, graph, output)),
                 'Claude: preview node',
+                edit=False,  # its step, a temporary node added and removed, changes nothing (core.py, SessionStep)
             ),
             '<preview_node>',
             300,

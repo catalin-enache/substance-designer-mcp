@@ -16,7 +16,7 @@ import sys
 import time
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from textwrap import dedent
-from typing import Protocol
+from typing import Literal, Protocol
 
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
@@ -30,8 +30,12 @@ from project_constants import (  # `X as X` re-exports them
     PLUGIN_PACKAGE_DIR as PLUGIN_PACKAGE_DIR,
     QUIT_FORCED_IN_SHUTDOWN as QUIT_FORCED_IN_SHUTDOWN,
     QUIT_SAMPLED as QUIT_SAMPLED,
+    ROLLED_BACK as ROLLED_BACK,  # in a failed call's error once its step was taken back
     ROOT,
     SHORT_TEMP as SHORT_TEMP,  # where launch_designer makes the folders of a Designer it starts
+    TAG_ALPHABET,
+    TAG_LENGTH,
+    TAG_PREFIX,
     TOKEN_FILE as TOKEN_FILE,
     Greeting,
     Json as Json,  # a tool's arguments, a bridge request
@@ -205,9 +209,12 @@ def lan_address() -> str | None:
         return None
 
 
+SD_RUN = [sys.executable, os.path.join(BUNDLE, 'client', 'sd_run.py')]  # the command-line client's command
+
+
 def sd_run(*args: str, timeout: float = 60) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, os.path.join(BUNDLE, 'client', 'sd_run.py'), *args],
+        [*SD_RUN, *args],
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -273,20 +280,30 @@ CLEAN = dedent("""\
             pm.unloadUserPackage(p); n+=1
     print('removed', n)""")
 # Undo/Redo via Designer's Edit menu, scheduled to run after this call's own undo group closes (undo/edit_menu.py reads
-# it back; ROADMAP item 112):
+# it back; ROADMAP item 112). undo_redo gives its code:
 # - It prints Designer's state as it schedules the action (AT_SCHEDULE), and keeps it as the action fires, in
 #   sys._selftest_undo_fired (None until then). Scheduling nothing, it prints why, with the state seen (NOT_FOCUSED,
 #   NO_ACTION). The state is Designer's own (Qt's).
 # - The action fires only while it is the one armed: UNDO_FIRED's read disarms it, and the next send arms its own. So
 #   a read saying it never fired means it never will, and sending it again can't undo twice.
-# - It fires only if the self-test graph is still the current one as its timer fires: Edit > Undo acts on the document
-#   in focus then. Otherwise it keeps NOT_CURRENT and the graph current then, and doesn't fire (REVIEW.md TST-693).
+# - It fires only if the self-test graph is still the current one as its timer fires (REVIEW.md TST-693). Edit > Undo
+#   itself reverts the newest step of Designer's one history, whichever graph is current
+#   (mcp_server/designer_rollback.py). Otherwise it keeps NOT_CURRENT and the graph current then, and doesn't fire.
 #   Measured, 3 of 3: another package's graph opened after the schedule read as current there, and the Undo still
 #   undid the self-test graph's step, so this refuses some actions that would have landed on it.
+# - It fires only while the top step of its toolbar dropdown, Undo's or Redo's, is named as the check's own call names
+#   its step: the call's label, then a tag. The check has read its call's change before it sends, so that step is its
+#   call's. The name is read as the rollback reads it (mcp_server/designer_rollback.py), as the timer fires. Otherwise
+#   it keeps NOT_OURS and that step's name, and doesn't fire.
+# - The Undo lands as Designer next processes events after the trigger, a few tens of ms later, and takes the step on
+#   top then, not the one checked: a step made in that window, by the same callback or a job starting 30 ms or more
+#   later, was the one undone, 8 of 8 (REVIEW.md TST-873). In the user's Designer, a step of theirs made then would be
+#   undone. The self-test presses Edit > Undo to test Ctrl+Z itself, outside undo_edits on purpose (GUIDE.md's Undo
+#   rule), and the user takes that window (2026-11-25: "not a problem for me").
 # - The app in front as macOS says it is read by the self-test's client (REVIEW.md TST-650): nothing runs a process in
 #   Designer around the Undo (undo/edit_menu.py says what lsappinfo run there did).
 UNDO_REDO = dedent("""\
-    import sd, sys
+    import re, sd, sys
     from PySide6.QtCore import QTimer
     from PySide6.QtGui import QGuiApplication
     from PySide6.QtWidgets import QApplication, QMenu, QWidget
@@ -308,17 +325,26 @@ UNDO_REDO = dedent("""\
         # the identifier of the graph in the editor, 'none' without one
         g=sd.getContext().getSDApplication().getQtForPythonUIMgr().getCurrentGraph()
         return g.getIdentifier() if g is not None else 'none'
+    _rollback={}
+    exec(compile(%(rollback)r, %(rollback_file)r, 'exec'), _rollback)
+    def _top():
+        # the newest step's name in the toolbar's %(which)s dropdown, as the rollback reads it: None when it lists
+        # none, and a text that is no call's step name when the dropdowns aren't found (REVIEW.md TST-858)
+        found=_rollback['history']()
+        if found is None:
+            return "no Undo and Redo dropdowns of Designer's history found"
+        return _rollback['_top'](found.%(dropdown)s)
     scheduled_on=_current()
-    if scheduled_on!='%s':
+    if scheduled_on!='%(graph)s':
         print('NOT_FOCUSED current=' + scheduled_on)
     else:
         found=[(w, a) for w in QApplication.instance().allWidgets() if isinstance(w, QMenu) and w.title()=='&Edit'
-               for a in w.actions() if a.text()=='%s']
+               for a in w.actions() if a.text()=='%(which)s']
         acts=[a for w, a in found if a.isEnabled()]
         if acts:
             # in a Designer just started, with another Designer in front, Undo of an output's fields sometimes did
             # nothing without this (8 in 8 beside one idle Designer, 3 pool runs in 4, 1 in 3 in scratch runs; with it 4 in 4); it leaves the other
-            # app in front (GUIDE.md, Undo from a script)
+            # app in front
             mw=sd.getContext().getSDApplication().getQtForPythonUIMgr().getMainWindow()
             mw.raise_()
             mw.activateWindow()
@@ -331,6 +357,10 @@ UNDO_REDO = dedent("""\
                 if current!=scheduled_on:
                     sys._selftest_undo_fired='NOT_CURRENT current=' + current
                     return
+                top=_top()
+                if top is None or not re.fullmatch(%(own)r, top):
+                    sys._selftest_undo_fired='NOT_OURS top=%%r' %% (top,)
+                    return
                 sys._selftest_undo_fired=_state()
                 acts[0].trigger()
             QTimer.singleShot(0, _fire)
@@ -338,6 +368,30 @@ UNDO_REDO = dedent("""\
             print('SCHEDULED')
         else:
             print('NO_ACTION ' + _state())""")
+Which = Literal['Undo', 'Redo']
+
+
+def own_step(label: str) -> str:
+    """The pattern of the name of a call's own undo step, the call labelled `label`: the label, then a tag
+    (project_constants.py, new_tag)."""
+    return re.escape(label + TAG_PREFIX) + '[%s]{%d}' % (re.escape(TAG_ALPHABET), TAG_LENGTH)
+
+
+def undo_redo(which: Which, label: str) -> str:
+    """UNDO_REDO's code for `which`, sent through the self-test graph's Edit menu: it fires only while a step of a call
+    labelled `label` tops its toolbar dropdown (own_step)."""
+    from server_tools.core import ROLLBACK, ROLLBACK_FILE
+
+    return UNDO_REDO % {
+        'graph': TEST_GRAPH,
+        'which': which,
+        'dropdown': which.lower(),
+        'own': own_step(label),
+        'rollback': ROLLBACK,
+        'rollback_file': ROLLBACK_FILE,
+    }
+
+
 # The state UNDO_REDO keeps as its action fires ('FIRED None' before), read and removed; the action is disarmed, so
 # one not fired yet never fires. ARMED says whether one was armed since the last read: 'FIRED None' then says it hadn't
 # fired, else nothing (REVIEW.md TST-690)

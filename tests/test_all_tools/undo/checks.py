@@ -1,6 +1,7 @@
-"""One tool call = one undo step (acts only while the self-test graph is in the editor). Each Undo and Redo is sent
-through Designer's Edit menu and read back with describe_graph until the graph shows it (edit_menu.py); one that fails
-says why, and an Undo that fired and never showed is followed by a Redo putting back the step it hit."""
+"""One tool call = one undo step. Each Undo and Redo is triggered only while the self-test graph is in the editor, and
+while the top step of its dropdown is named as the check's call names its step (edit_menu.send). Each is sent through
+Designer's Edit menu and read back with describe_graph until the graph shows it (edit_menu.py); one that fails says
+why, and an Undo that fired and never showed is followed by a Redo putting back the step it hit."""
 
 import re
 from textwrap import dedent
@@ -18,6 +19,11 @@ from test_all_tools.undo.edit_menu import (
     recorded,
     send,
 )
+
+# the labels the tools give the steps of the checks' calls (server_tools/edits.py, functions.py): each Undo and Redo
+# is sent for its call's label (edit_menu.send)
+ONE_EDIT, TWO_EDITS = 'Claude: apply 1 edits', 'Claude: apply 2 edits'
+FUNCTION_LABEL = 'Claude: set function graph undo_fn'  # each set_function on the function graph undo_fn
 
 
 async def run(ctx: Ctx) -> None:
@@ -41,9 +47,9 @@ async def check_one_undo_removes_an_added_node(ctx: Ctx) -> None:
     ub = added_id(
         text(await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'blur', 'position': [0, 400]}], **G}))
     )
-    undo = await send(c, G, 'Undo', nodes_gone(ub))
+    undo = await send(c, G, 'Undo', nodes_gone(ub), ONE_EDIT)
     if recorded(undo, 'apply_edits', 'add: one Undo removes the added node'):
-        recorded(await send(c, G, 'Redo', nodes_listed(ub)), 'apply_edits', 'add: Redo restores it')
+        recorded(await send(c, G, 'Redo', nodes_listed(ub), ONE_EDIT), 'apply_edits', 'add: Redo restores it')
     await put_back(c, G, undo)
     await c('apply_edits', {'ops': [{'op': 'delete', 'node': ub}], **G})
 
@@ -63,7 +69,7 @@ async def check_one_undo_puts_an_outputs_fields_back(ctx: Ctx) -> None:
     was_set = changed in text(await c('describe_graph', G))
     check('apply_edits', "set: an output's fields, before the Undo", was_set, '')
     if was_set:
-        undo = await send(c, G, 'Undo', fields_back)
+        undo = await send(c, G, 'Undo', fields_back, ONE_EDIT)
         recorded(undo, 'apply_edits', name)
         await put_back(c, G, undo)
     else:
@@ -75,11 +81,12 @@ async def check_one_undo_reverts_a_whole_code_run(ctx: Ctx) -> None:
     """execute_designer_code's run is one undo step: one Undo removes both nodes a run added, and Redo restores them.
     The nodes are deleted after it."""
     c, G = ctx.c, ctx.G
+    label = 'self-test: two nodes'
     t = text(
         await c(
             'execute_designer_code',
             {
-                'undo_label': 'self-test: two nodes',
+                'undo_label': label,
                 'code': (
                     dedent("""\
                         import sd
@@ -97,9 +104,9 @@ async def check_one_undo_reverts_a_whole_code_run(ctx: Ctx) -> None:
     # no match raises AttributeError, which the run's except reports (REVIEW.md TST-63)
     two = re.search(r'IDS=(\d+),(\d+)', t).groups()  # type: ignore[union-attr]
     tool = 'execute_designer_code'
-    undo = await send(c, G, 'Undo', nodes_gone(*two))
+    undo = await send(c, G, 'Undo', nodes_gone(*two), label)
     if recorded(undo, tool, 'one Undo reverts the whole run'):
-        recorded(await send(c, G, 'Redo', nodes_listed(*two)), tool, 'one Redo restores it')
+        recorded(await send(c, G, 'Redo', nodes_listed(*two), label), tool, 'one Redo restores it')
     await put_back(c, G, undo)
     await c('apply_edits', {'ops': [{'op': 'delete', 'node': n} for n in list(two)], **G})
 
@@ -125,9 +132,10 @@ async def check_one_undo_reverts_a_set_function(ctx: Ctx) -> None:
     replaced = perpixel_driver(text(await c('describe_graph', described))) == NEW
     check(tool, 'a function replaced, before the Undo', replaced, '')
     if replaced:
-        undo = await send(c, described, 'Undo', lambda d: nodes_listed(pp)(d) and perpixel_driver(d) == BEFORE)
+        label = 'Claude: set function of %s.perpixel' % pp
+        undo = await send(c, described, 'Undo', lambda d: nodes_listed(pp)(d) and perpixel_driver(d) == BEFORE, label)
         if recorded(undo, tool, 'one Undo brings back the function before, the node kept'):
-            redo = await send(c, described, 'Redo', lambda d: perpixel_driver(d) == NEW)
+            redo = await send(c, described, 'Redo', lambda d: perpixel_driver(d) == NEW, label)
             recorded(redo, tool, 'Redo brings back the new one')
         await put_back(c, described, undo)
     await c('apply_edits', {'ops': [{'op': 'delete', 'node': pp}], **G})
@@ -154,11 +162,11 @@ async def check_one_undo_reverts_a_connect_into_a_new_input_value(ctx: Ctx) -> N
         connected = linked and made == '#u'
         check(tool, 'connect into a new #name, before the Undo', connected, made)
         if connected:
-            undo = await send(c, described, 'Undo', lambda d: nodes_listed(bl)(d) and link not in d)
+            undo = await send(c, described, 'Undo', lambda d: nodes_listed(bl)(d) and link not in d, ONE_EDIT)
             if recorded(undo, tool, 'connect into a new #name: one Undo removes the connection'):
                 left = await input_values(c, G, bl)
                 check(tool, 'connect into a new #name: one Undo removes the #name it made', left == '', left)
-                redo = await send(c, described, 'Redo', lambda d: link in d)
+                redo = await send(c, described, 'Redo', lambda d: link in d, ONE_EDIT)
                 if recorded(redo, tool, 'connect into a new #name: Redo brings the connection back'):
                     back = await input_values(c, G, bl)
                     check(tool, 'connect into a new #name: Redo brings the #name back', back == '#u', back)
@@ -196,10 +204,10 @@ async def check_one_undo_reverts_a_function_graph(ctx: Ctx) -> None:
     made = ONE_INPUT in said
     check(tool, 'a function graph made, before the Undo', made, said[-150:])
     if made:
-        undo = await send(c, G, 'Undo', lambda d: UNDO_FN not in d)
+        undo = await send(c, G, 'Undo', lambda d: UNDO_FN not in d, FUNCTION_LABEL)
         if recorded(undo, tool, 'a function graph made: one Undo removes it'):
             nodes_are('a function graph made: one Undo removes its nodes too', await nodes(), NO_NODES)
-            redo = await send(c, G, 'Redo', lambda d: ONE_INPUT in d)
+            redo = await send(c, G, 'Redo', lambda d: ONE_INPUT in d, FUNCTION_LABEL)
             if recorded(redo, tool, 'a function graph made: Redo brings it back'):
                 nodes_are('a function graph made: Redo brings back its nodes too', await nodes(), MADE_NODES)
         await put_back(c, G, undo)
@@ -209,11 +217,11 @@ async def check_one_undo_reverts_a_function_graph(ctx: Ctx) -> None:
     replaced = TWO_INPUTS in said
     check(tool, 'a function graph given another input, before the Undo', replaced, said[-150:])
     if replaced:
-        undo = await send(c, G, 'Undo', lambda d: ONE_INPUT in d)
+        undo = await send(c, G, 'Undo', lambda d: ONE_INPUT in d, FUNCTION_LABEL)
         if recorded(undo, tool, 'a function graph given another input: one Undo brings back its inputs before'):
             before = 'a function graph given another input: one Undo brings back its nodes before too'
             nodes_are(before, await nodes(), MADE_NODES)
-            redo = await send(c, G, 'Redo', lambda d: TWO_INPUTS in d)
+            redo = await send(c, G, 'Redo', lambda d: TWO_INPUTS in d, FUNCTION_LABEL)
             if recorded(redo, tool, 'a function graph given another input: Redo brings back the new ones'):
                 new = 'a function graph given another input: Redo brings back the new nodes too'
                 nodes_are(new, await nodes(), REPLACED_NODES)
@@ -267,9 +275,9 @@ async def check_one_undo_reverts_a_set_of_gradient_keys(ctx: Ctx) -> None:
         changed = KEYS_AFTER in said and POINTS_AFTER in said
         check(tool, 'set of keys and points, before the Undo', changed, said[-150:])
         if changed:
-            undo = await send(c, described, 'Undo', lambda d: KEYS_BEFORE in d and POINTS_BEFORE in d)
+            undo = await send(c, described, 'Undo', lambda d: KEYS_BEFORE in d and POINTS_BEFORE in d, TWO_EDITS)
             if recorded(undo, tool, 'set: one Undo brings back the keys and points before'):
-                redo = await send(c, described, 'Redo', lambda d: KEYS_AFTER in d and POINTS_AFTER in d)
+                redo = await send(c, described, 'Redo', lambda d: KEYS_AFTER in d and POINTS_AFTER in d, TWO_EDITS)
                 recorded(redo, tool, 'set: Redo brings back the new keys and points')
             await put_back(c, described, undo)
     finally:

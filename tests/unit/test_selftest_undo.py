@@ -9,10 +9,9 @@ import time
 import typing
 from collections.abc import Callable, Sequence
 from types import ModuleType, SimpleNamespace
-from typing import Literal
 
 import pytest
-from selftest_fakes import FakeCall, code_of, fresh, tool_result
+from selftest_fakes import FakeCall, Which, code_of, fresh, tool_result
 
 from project_constants import ToolArgs
 
@@ -308,9 +307,9 @@ def test_a_resend_refused_says_the_state_designer_gave(undo: ModuleType, capsys:
 def test_which_is_undo_or_redo(undo: ModuleType) -> None:
     # REVIEW.md TST-663: a misspelt `which` passed mypy, and gave NO_ACTION at run time
     menu = sys.modules['test_all_tools.undo.edit_menu']
-    wanted = Literal['Undo', 'Redo']
-    assert typing.get_type_hints(menu.Sent)['which'] == wanted
-    assert typing.get_type_hints(menu.send)['which'] == wanted
+    assert typing.get_type_hints(menu.Sent)['which'] == Which
+    assert typing.get_type_hints(menu.send)['which'] == Which
+    assert typing.get_type_hints(vars(menu)['undo_redo'])['which'] == Which
 
 
 # --- the add of a node, and a code run adding two (REVIEW.md TST-641: the same reads for each Undo check)
@@ -685,7 +684,7 @@ def test_a_state_not_said_is_said_so(
     menu = sys.modules['test_all_tools.undo.edit_menu']
     monkeypatch.setitem(vars(menu), 'READS_THE_FRONT', False)  # off macOS
     c, _ = _designer(lambda u, r, since: 'x', fired=['no such line'], undo='SCHEDULED')
-    sent = asyncio.run(menu.send(c, {'graph': 'g'}, 'Undo', lambda described: False))
+    sent = asyncio.run(menu.send(c, {'graph': 'g'}, 'Undo', lambda described: False, 'Claude: apply 1 edits'))
     # neither said to have fired nor not: it isn't sent again, nor redone after (test_a_read_of_the_action_that_failed_...)
     assert (
         sent.detail()
@@ -736,7 +735,7 @@ def test_a_failed_read_of_the_graph_disarms_the_action_before_returning(
     undo: ModuleType, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # REVIEW.md TST-687: send returned at a failed describe_graph read with the Edit menu's action maybe still armed,
-    # to fire in a later job on the document then in focus, maybe the user's (the one run in their Designer)
+    # to fire in a later job, undoing the newest step then, maybe the user's (the one run in their Designer)
     c, calls = _designer(lambda u, r, since: 'Error: the graph is gone' if u else CHANGED, fired=[NOT_FIRED])
     asyncio.run(undo.check_one_undo_puts_an_outputs_fields_back(_ctx(c)))
     # the read of the action's state after the failed read, which disarms one not fired yet
@@ -783,7 +782,7 @@ def test_the_undo_checks_end_reading_the_action_left_armed(
     undo: ModuleType, capsys: pytest.CaptureFixture[str], end: str, said: str | None
 ) -> None:
     # REVIEW.md TST-690: put_back's Redo after the last check's Undo was never read, so never disarmed: fired later, it
-    # would land on the document in focus then
+    # would undo the newest step then
     # each check's Undo, then the Redo putting it back, read as never shown (REVIEW.md TST-693)
     c, calls = _designer(lambda u, r, since: NONE_SHOWS, fired=[FIRED] * 10 + [end])
     asyncio.run(undo.run(_ctx(c)))
@@ -837,19 +836,88 @@ def test_the_undo_checks_end_reads_the_action_left_armed_when_a_check_raised(
     )
 
 
-def test_an_action_that_found_another_graph_current_as_it_fired_fails_saying_so(
-    undo: ModuleType, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize(
+    'state',
+    ['NOT_CURRENT current=probe_other', "NOT_OURS top='Add Node'"],
+    ids=['another graph current', "another step than the call's on top"],
+)
+def test_an_action_that_didnt_fire_as_it_found_another_graph_or_step_fails_saying_so(
+    undo: ModuleType, capsys: pytest.CaptureFixture[str], state: str
 ) -> None:
-    # REVIEW.md TST-693: it didn't fire, so it is neither sent again, to the graph current then, nor put back
-    c, calls = _designer(lambda u, r, since: CHANGED, fired=['FIRED NOT_CURRENT current=probe_other'])
+    # REVIEW.md TST-693: it didn't fire, so it is neither sent again, to the graph current then, nor put back. The
+    # self-test's Edit > Undo takes only a top step of its own call (common.UNDO_REDO)
+    c, calls = _designer(lambda u, r, since: CHANGED, fired=['FIRED ' + state])
     asyncio.run(undo.check_one_undo_puts_an_outputs_fields_back(_ctx(c)))
     out = capsys.readouterr().out
     line = _line(out, SET)
-    assert line.startswith('FAIL') and line.endswith(
-        "the Edit menu's action didn't fire: NOT_CURRENT current=probe_other"
-    ), line
-    assert "the Edit menu's action didn't fire: NOT_CURRENT current=probe_other" in _said(out), _said(out)
+    assert line.startswith('FAIL') and line.endswith("the Edit menu's action didn't fire: " + state), line
+    assert "the Edit menu's action didn't fire: " + state in _said(out), _said(out)
     assert calls.count('Undo') == 1 and 'Redo' not in calls, calls
+
+
+def test_a_redo_whose_top_step_wasnt_the_checks_own_as_it_fired_fails_naming_it(
+    undo: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # the Undo shows; the Redo's dropdown has another step on top, so it doesn't fire and isn't sent again
+    c, calls = _designer(
+        lambda u, r, since: _graph() if u else _graph('7 blur @(0,400)'), fired=["FIRED NOT_OURS top='Add Node'"]
+    )
+    asyncio.run(undo.check_one_undo_removes_an_added_node(_ctx(c)))
+    out = capsys.readouterr().out
+    assert _line(out, 'add: one Undo removes the added node').startswith('PASS')
+    line = _line(out, 'add: Redo restores it')
+    assert line.startswith('FAIL') and line.endswith("the Edit menu's action didn't fire: NOT_OURS top='Add Node'"), (
+        line
+    )
+    assert calls.count('Redo') == 1, calls
+
+
+def _both(label: str) -> list[tuple[Which, str]]:
+    """An Undo, then a Redo, each for the step of a call labelled `label`."""
+    return [('Undo', label), ('Redo', label)]
+
+
+@pytest.mark.parametrize(
+    'step, graph, sends',
+    [
+        ('check_one_undo_removes_an_added_node', _back_after(1), _both('Claude: apply 1 edits')),
+        ('check_one_undo_puts_an_outputs_fields_back', _back_after(1), [('Undo', 'Claude: apply 1 edits')]),
+        # an Undo that fires and never shows, which put_back's Redo puts back: for the same label, or it refuses
+        # NOT_OURS and the self-test's step stays undone (REVIEW.md TST-880)
+        ('check_one_undo_puts_an_outputs_fields_back', lambda u, r, since: CHANGED, _both('Claude: apply 1 edits')),
+        ('check_one_undo_reverts_a_whole_code_run', _back_after(1), _both('self-test: two nodes')),
+        (
+            SET_FUNCTION,
+            lambda u, r, since: _graph(*BEFORE) if u > r else _graph(*REPLACED),
+            _both('Claude: set function of 7.perpixel'),
+        ),
+        (
+            INPUT_VALUE,
+            lambda u, r, since: _graph(UNLINKED) if u > r else _graph(LINKED),
+            _both('Claude: apply 1 edits'),
+        ),
+        (FUNCTION_GRAPH, None, _both('Claude: set function graph undo_fn') * 2),
+        (KEYS, lambda u, r, since: _keys(u > r, u > r), _both('Claude: apply 2 edits')),
+    ],
+    ids=['add', 'set', 'set put back', 'code run', 'set_function', 'input value', 'function graph', 'keys'],
+)
+def test_each_undo_and_redo_is_for_the_step_of_the_checks_own_call(
+    undo: ModuleType, monkeypatch: pytest.MonkeyPatch, step: str, graph: Graph | None, sends: list[tuple[Which, str]]
+) -> None:
+    # the label each tool gives its call's step (server_tools/edits.py, functions.py; the code run's undo_label), which
+    # UNDO_REDO's action fires only while it tops its dropdown, with a tag
+    menu = sys.modules['test_all_tools.undo.edit_menu']
+    sent: list[tuple[Which, str]] = []
+    real: Callable[[Which, str], str] = vars(menu)['undo_redo']
+
+    def recording(which: Which, label: str) -> str:
+        sent.append((which, label))
+        return real(which, label)
+
+    monkeypatch.setitem(vars(menu), 'undo_redo', recording)
+    c, _ = _designer(graph) if graph else _function_graphs()
+    asyncio.run(getattr(undo, step)(_ctx(c)))
+    assert sent == sends
 
 
 @pytest.mark.parametrize('lands', [True, False], ids=['lands', 'never shows'])

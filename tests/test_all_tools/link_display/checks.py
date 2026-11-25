@@ -1,12 +1,13 @@
 """set_link_display: portals and wires, by node, by link, by fan-out and by length."""
 
+import json
 import os
 import re
 import xml.etree.ElementTree as ET
 from textwrap import dedent
 from typing import cast
 
-from test_all_tools.common import TEST_GRAPH, Ctx, added_id, check, graph_in_editor, text
+from test_all_tools.common import TEST_GRAPH, Ctx, added_id, check, designer_script, graph_in_editor, text
 
 # every widget of Designer's watched for its destruction, then the package at PATH unloaded (the helpers'
 # unload_package_file, as set_link_display's reload does): how many went within the call (IN_CALL)
@@ -176,3 +177,68 @@ async def run(ctx: Ctx) -> None:
     )
     await c('set_link_display', {'mode': 'wire', 'longer_than': 1, **G})
     await c('apply_edits', {'ops': [{'op': 'delete', 'node': tb}], **G})
+    await check_a_reload_clears_no_step_of_the_undo_history(ctx)
+    await check_undo_edits_names_a_reloads_steps_as_designers_own(ctx)
+
+
+async def check_undo_edits_names_a_reloads_steps_as_designers_own(ctx: Ctx) -> None:
+    """A call, then set_link_display, whose reload leaves steps of Designer's own on top of it, untagged: undo_edits()
+    undoes nothing, and names them as Designer's own, from set_link_display's reload (REVIEW.md SRV-265). The node added
+    for it is deleted, and the links go back to wires, after."""
+    c, G = ctx.c, ctx.G
+    added = added_id(
+        text(await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'blur', 'position': [300, 900]}], **G}))
+    )
+    try:
+        t = text(await c('set_link_display', {'mode': 'portal', 'from_nodes': [ctx.clouds], **G}))
+        r_ = await c('undo_edits', {})
+        said = text(r_)
+        check(
+            'undo_edits',
+            "a reload's steps on top of a call: nothing undone, named as Designer's own, from set_link_display",
+            'reloaded' in t
+            and r_.is_error
+            and 'Nothing undone' in said
+            and "Designer's own steps of set_link_display's reload" in said,
+            said.strip()[-300:],
+        )
+    finally:
+        await c('set_link_display', {'mode': 'wire', 'from_nodes': [ctx.clouds], **G})
+        await c('apply_edits', {'ops': [{'op': 'delete', 'node': added}], **G})
+
+
+async def check_a_reload_clears_no_step_of_the_undo_history(ctx: Ctx) -> None:
+    """set_link_display's reload keeps the steps of Designer's one Undo history, its own added on top: the two steps
+    made just before it are still listed after it, a call's on the graph reloaded and one's on a graph of another
+    package (link_display/designer_scripts/undo_steps.py reads the Undo dropdown, which lists the newest 25;
+    REVIEW.md TST-844, TST-849). The node added for it is deleted, and the links go back to wires, after."""
+    c, G = ctx.c, ctx.G
+    await c('create_graph', {'name': TEST_GRAPH + '_history', 'size_log2': 4})
+    added = added_id(
+        text(await c('apply_edits', {'ops': [{'op': 'add', 'definition': 'blur', 'position': [0, 900]}], **G}))
+    )
+    try:
+        before = _steps(text(await designer_script(c, 'link_display/undo_steps')))
+        t = text(await c('set_link_display', {'mode': 'portal', 'from_nodes': [ctx.clouds], **G}))
+        after = _steps(text(await designer_script(c, 'link_display/undo_steps')))
+        # the two newest: this check's apply_edits on the graph reloaded, then its create_graph in another package
+        check(
+            'designer facts',
+            "set_link_display's reload clears no step of the Undo history, its own package's included, and adds its "
+            'own on top',
+            'reloaded' in t
+            and len(before) >= 2
+            and all(step in after for step in before[:2])
+            and after[0] != before[0],
+            '%s | before %s | after %s' % (t.split(';')[0], before[:2], after[:6]),
+        )
+    finally:
+        await c('set_link_display', {'mode': 'wire', 'from_nodes': [ctx.clouds], **G})
+        await c('apply_edits', {'ops': [{'op': 'delete', 'node': added}], **G})
+
+
+def _steps(t: str) -> list[str]:
+    """undo_steps.py's step names, newest first, or [] if it printed none."""
+    found = re.search(r'^STEPS=(.*)$', t, re.M)
+    steps: list[str] = json.loads(found.group(1)) if found else []
+    return steps
