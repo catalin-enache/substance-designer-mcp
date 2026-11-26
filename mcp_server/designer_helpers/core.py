@@ -3,13 +3,21 @@ other parts use these)."""
 
 # `X as X`: the other parts import these from here (mypy counts only explicit re-exports); the parts
 # share one namespace, so each name is imported once, here
+import contextlib as contextlib
 import html as html
-import math
+import math as math
 import os as os
 import re as re
 import sys as sys
 from collections.abc import Callable as Callable, Iterator as Iterator, Sequence as Sequence
-from typing import Literal as Literal, NamedTuple, Protocol as Protocol, TypedDict as TypedDict, cast as cast
+from typing import (
+    Literal as Literal,
+    NamedTuple as NamedTuple,
+    Protocol as Protocol,
+    TypedDict as TypedDict,
+    cast as cast,
+)
+from xml.etree import ElementTree as ElementTree
 
 import sd
 from PySide6 import QtCore as QtCore, QtGui as QtGui, QtWidgets as QtWidgets

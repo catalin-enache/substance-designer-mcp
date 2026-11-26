@@ -4,7 +4,6 @@ from .core import (
     _APP,
     _PM,
     APIException,
-    Callable,
     QtWidgets,
     SDApplicationPath,
     SDGraph,
@@ -126,31 +125,17 @@ FIT_PADDING = 0.05  # of the fitted area, on every side
 
 def _wheel_zoom(view: QtWidgets.QGraphicsView, notches: int) -> None:
     """Zoom the graph view by mouse-wheel notches (positive: in), through Designer's own wheel
-    handling. Designer keeps its own zoom level besides the view's transform: setting the
-    transform directly (fitInView, scale) leaves that level stale, and the user's next wheel
-    step jumps from it. Wheel events keep the two in step (Designer 16: 1.2x per notch)."""
-    _wheel(view.viewport(), notches)
-
-
-def _wheel(
-    viewport: QtWidgets.QWidget, notches: int, taking: Callable[[], Callable[[], bool] | None] | None = None
-) -> tuple[int, bool] | None:
-    """Mouse-wheel notches (positive: in) at the middle of a widget, as Designer takes them from the mouse, one event
-    each. Returns the notch, from 1, that ended them, and whether it was sent: not sent, the view didn't come to rest
-    before it; sent, no sign came that the view took it. None when every notch was sent and gave its sign, or none was
-    waited for.
-    `taking`, when given, runs before each notch and returns the wait run after it, or None when the notch mustn't be
-    sent, for a view that drops some: the 3D view's _Frames.from_rest (designer_helpers/frames3d.py, view3d.py;
-    REVIEW.md HLP-164; ROADMAP item 112)."""
+    handling: one wheel event a notch at the middle of its viewport, as Designer takes them from the mouse. Designer
+    keeps its own zoom level besides the view's transform: setting the transform directly (fitInView, scale) leaves
+    that level stale, and the user's next wheel step jumps from it. Wheel events keep the two in step (Designer 16:
+    1.2x per notch)."""
     from PySide6.QtCore import QPoint, QPointF, Qt
     from PySide6.QtGui import QWheelEvent
     from PySide6.QtWidgets import QApplication
 
+    viewport = view.viewport()
     centre = QPointF(viewport.width() / 2.0, viewport.height() / 2.0)
-    for notch in range(1, abs(notches) + 1):
-        taken = taking() if taking is not None else None
-        if taking is not None and taken is None:
-            return notch, False
+    for _ in range(abs(notches)):
         event = QWheelEvent(
             centre,
             QPointF(viewport.mapToGlobal(centre.toPoint())),
@@ -163,9 +148,6 @@ def _wheel(
         )
         QApplication.sendEvent(viewport, event)
         _process_events(2)
-        if taken is not None and not taken():
-            return notch, True
-    return None
 
 
 def _whole_graph_rect(g: SDGraph) -> tuple[float, float, float, float, str] | None:

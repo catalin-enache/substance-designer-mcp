@@ -14,7 +14,8 @@ from conftest import fake_bridge, server
 from project_constants import Json
 from server_tools import views
 
-NOTE = "3D view: Plane, graph g's outputs on the mesh, view Top, framed, +2 wheel steps, tiling 2 (the Parameters panel back on g)"
+# the set-up's line as scene3d.py prints it: the fields of its one load, then the graph's outputs
+NOTE = "3D view: Plane, view Top, framed, +2 zoom steps, tiling 2, graph g's outputs on the mesh"
 
 
 def _bridge(
@@ -130,7 +131,7 @@ def test_the_3d_view_is_set_up_and_shot_in_one_helper_call(
 @pytest.mark.parametrize(
     'option, value',
     [
-        # the rotation and the exposure are values Designer's fields are set to, 0 included: unlike a turn, pan or zoom
+        # the rotation and the exposure are values written in the state file, 0 included: unlike a turn, pan or zoom
         # of 0, not nothing to do
         ('environment_rotation', 0.0),
         ('environment_exposure', 0.0),
@@ -166,7 +167,7 @@ def _plain(panel: str, folders: list[str]) -> str:
     return 'save_screenshot(%r, %r)' % (panel, shot)
 
 
-STEPS = '3D view, setting: Plane\n3D view, setting: view Top, framed\n'
+STEPS = "3D view, setting: Plane, view Top, framed, +2 zoom steps, tiling 2\n3D view, setting: graph g's outputs on the mesh\n"
 
 
 def test_the_setup_line_comes_beside_the_image(monkeypatch: pytest.MonkeyPatch, temp_folders: list[str]) -> None:
@@ -186,8 +187,7 @@ def test_a_set_up_that_stopped_says_the_steps_it_began(
         server.screenshot_designer('3d', mesh='Plane', view='Top')
     assert str(raised.value).splitlines() == [
         'ScriptAborted: cancelled by client after 3.0s',
-        '3D view, setting: Plane',
-        '3D view, setting: view Top, framed',
+        *STEPS.splitlines(),
     ]
 
 
@@ -219,8 +219,7 @@ def test_a_shot_that_failed_says_what_was_done_to_designers_window(
     assert str(raised.value).splitlines() == [
         'ScriptAborted: cancelled by client after 3.0s',
         FRONT,
-        '3D view, setting: Plane',
-        '3D view, setting: view Top, framed',
+        *STEPS.splitlines(),
     ]
 
 
@@ -273,7 +272,7 @@ def test_without_options_nothing_is_set_up_and_only_the_image_comes_back(
 def test_a_shot_that_fails_after_the_set_up_says_what_was_set(
     monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], printed: str, options: dict[str, list[float]]
 ) -> None:
-    # REVIEW.md HLP-107: the user's 3D view was changed all the same
+    # REVIEW.md HLP-107: the set-up's line said after the error, the view put back after it (scene3d.py)
     _bridge(monkeypatch, temp_folders, printed, shot='crop' in options)
     with pytest.raises(ToolError) as raised:
         server.screenshot_designer('3d', mesh='Plane', **options)

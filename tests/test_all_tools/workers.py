@@ -5,9 +5,11 @@ process of its own (the check record and common.PORT are module globals) with a 
 and folders of its own; this parent shows each worker's lines and merges their results into one summary. A run is the
 same with 1 worker (one after the other) or 4: no category sees what another did. Both suites took about 12 minutes
 one after the other before the pool, which came on 2026-11-11. With it, they took about 8.7 minutes with 4 side by
-side (2026-11-23, two full runs: 527 s, 521 s). editor_panels_and_fit (about 7 minutes), facts and undo set that time:
-the first two never run at once, and undo runs alone at the end. A Designer took about 1.9 GB after a run, about 11 GB
-after a heavy compute (2026-11-05); the peak of four at once wasn't measured (ROADMAP item 66).
+side (2026-11-23, two full runs: 527 s, 521 s), before ROADMAP item 131 put the 3D view back after each shot; not
+measured since. editor_panels_and_fit, facts and undo set that time: the first two never run at once, and undo runs
+alone at the end (editor_panels_and_fit took about 6 minutes in a scratch run alone, 2026-11-26). A Designer took
+about 1.9 GB after a run, about 11 GB after a heavy compute (2026-11-05); the peak of four at once wasn't measured
+(ROADMAP item 66).
 
 - **lifecycle starts first** (the longest category after editor_panels_and_fit, which starts next), and holds
   launch_lock's lock over its two windows: while it does, no other worker's Designer starts or quits.

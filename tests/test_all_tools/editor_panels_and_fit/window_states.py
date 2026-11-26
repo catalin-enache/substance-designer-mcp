@@ -399,23 +399,58 @@ _UNDER = dedent("""
     print('IN_FRONT %d' % len(set(others)))
 """)
 
-# the 3D view's viewport, and a drag of the helpers' own (_drag) panning it DX pixels right
-_DRAG = dedent("""
+# a pan of the self-test's own: a middle-drag on the 3D view's viewport, as the user's mouse would make, a change of
+# what the view shows that no 3D shot makes (its camera goes through the state file: designer_helpers/scene3d.py).
+# _ws_drag sends it; _ws_pan then waits for the view to take it: on screen a paint after its events, off screen an
+# UpdateRequest since it began, the view asking for a frame (REVIEW.md HLP-149, HLP-164), SETTLE_LIMIT at most, a
+# safety net
+PAN_OF_ITS_OWN = dedent("""
+    def _ws_drag(viewport, dx):
+        middle, none = QtCore.Qt.MouseButton.MiddleButton, QtCore.Qt.MouseButton.NoButton
+        x, y = viewport.width() / 2.0, viewport.height() / 2.0
+        moves = [(QtCore.QEvent.Type.MouseMove, x + dx * i / 10, none, middle) for i in range(1, 11)]
+        for kind, at, button, held in [
+            (QtCore.QEvent.Type.MouseButtonPress, x, middle, middle),
+            *moves,
+            (QtCore.QEvent.Type.MouseButtonRelease, x + dx, middle, none),
+        ]:
+            point = QtCore.QPointF(at, y)
+            event = QtGui.QMouseEvent(
+                kind, point, QtCore.QPointF(viewport.mapToGlobal(point.toPoint())), button, held,
+                QtCore.Qt.KeyboardModifier.NoModifier,
+            )
+            QtWidgets.QApplication.sendEvent(viewport, event)
+            _process_events(2)
+
+
+    def _ws_pan(viewport, dx):
+        seen = []
+        spy = _event_signal(viewport, ('Paint', 'UpdateRequest'), seen.append)
+        try:
+            _ws_drag(viewport, dx)
+            painted = seen.count('Paint')
+            _until(
+                lambda: seen.count('Paint') > painted
+                or ('UpdateRequest' in seen and not viewport.windowHandle().isExposed()),
+                SETTLE_LIMIT,
+                [spy.fired],
+            )
+        finally:
+            _unwatch(viewport, spy)
+""")
+# the 3D view's viewport, and a pan of the self-test's own (PAN_OF_ITS_OWN) moving it DX pixels right
+_DRAG = PAN_OF_ITS_OWN + dedent("""
     viewport = [w for w in _3d_dock(mw).findChildren(QtWidgets.QWidget)
                 if w.metaObject().className() == 'Alg::Gui3D::ViewportWidget'][0]
     keep = [mw, viewport]
-    frames = _Frames(viewport, lambda: _3d_render(mw))
-    try:  # off screen the view draws no frame: the drag waits for its request for one (_Frames.taking; REVIEW.md HLP-149)
-        _drag(viewport, QtCore.Qt.MouseButton.MiddleButton, DX, 0, [], frames.taking)
-    finally:
-        frames.close()
+    _ws_pan(viewport, DX)
 """)
 
 # a pan of the 3D view, the render before and after compared: SAME=True when the render didn't follow it. The windows in
 # front of Designer's are counted before the pan and after its first drag (in_the_way). In a way that leaves the view
 # drawn (_PUT's on_screen), Designer's window still covered for macOS is counted as one in the way too: a window above
 # every normal one, or a locked screen, which in_front_of doesn't list (REVIEW.md TST-520, TST-523)
-_PANNED = dedent("""
+_PANNED = PAN_OF_ITS_OWN + dedent("""
     viewport = [w for w in _3d_dock(mw).findChildren(QtWidgets.QWidget)
                 if w.metaObject().className() == 'Alg::Gui3D::ViewportWidget'][0]
     keep = [mw, viewport]
@@ -423,121 +458,33 @@ _PANNED = dedent("""
         return in_front_of(mac) + ([-1] if way in on_screen and mac.covered() else [])
     others = in_the_way()
     before = _3d_render(mw)
-    frames = _Frames(viewport, lambda: _3d_render(mw))
-    try:  # each drag taken: its frame drawn, or off screen the view's request for one (_Frames.taking; REVIEW.md HLP-149)
-        _drag(viewport, QtCore.Qt.MouseButton.MiddleButton, 40, 0, [], frames.taking)
-        others += in_the_way()
-        print('SAME=%s' % (_3d_render(mw) == before))
-        print('IN_FRONT %d' % len(set(others)))
-        _drag(viewport, QtCore.Qt.MouseButton.MiddleButton, -40, 0, [], frames.taking)
-    finally:
-        frames.close()
+    _ws_pan(viewport, 40)
+    others += in_the_way()
+    print('SAME=%s' % (_3d_render(mw) == before))
+    print('IN_FRONT %d' % len(set(others)))
+    _ws_pan(viewport, -40)
 """)
 
-# shoot_3d panning a quarter of the view right, saved to PATH, with DURING_THE_PAN done as the pan's first drag starts,
-# as a user's click on their own window would (REVIEW.md HLP-124, HLP-130, HLP-131)
+# shoot_3d with SET_UP, panning a quarter of the view right, saved to PATH, with DURING_THE_PAN done as the pan's load
+# begins (the camera through the state file: designer_helpers/scene3d.py), as a user's click on their own window would
+# (REVIEW.md HLP-124, HLP-130, HLP-131)
 _DURING_PAN = dedent("""
     print('BEFORE ' + state())
-    _first_drag = _drag
+    _first_load = _state_load
     _pending = [True]
-    def _drag(*args):
+    def _state_load(*args):
         if _pending:
             _pending.pop()
             DURING_THE_PAN
             # what it did, as macOS says it: a window covered about 0.07 s later, until then drawn on (REVIEW.md TST-421)
             until(lambda: DONE)
-        return _first_drag(*args)  # whether its sign came: the set-up sends no move after one with none
-    shoot_3d(PATH, pan=[0.25, 0.0])
-""")
-# shoot_3d zooming ZOOM wheel steps, saved to PATH, Designer hidden as the view draws its first frame after the first
-# step, as a click on the user's own window covers Designer's during a shot. That frame begins an accumulation, so the
-# step after it would go off screen with the accumulation's request in flight, and a step sent then was dropped (1 run
-# in 60 of a hide right after the step's events, ROADMAP item 112; REVIEW.md HLP-149). The frame is waited for on a
-# paint spy from before the step, SETTLE_LIMIT at most (PAINTED_BEFORE_THE_HIDE says whether it came)
-_HIDDEN_MID_ZOOM = dedent("""
-    print('BEFORE ' + state())
-    _first_wheel = _wheel
-    def _wheel(viewport, notches, taking=None):
-        _hid = []
-        def _taking():  # before each notch; what it returns runs after it
-            taken = taking() if taking is not None else None
-            if taking is not None and taken is None:
-                return None  # the view didn't come to rest: the notch isn't sent
-            painted = []
-            spy = None if _hid else _event_signal(viewport, ('Paint',), painted.append)
-            def _after():
-                if not _hid:
-                    _hid.append(True)
-                    try:
-                        _until(lambda: bool(painted), SETTLE_LIMIT, [spy.fired])
-                    finally:
-                        _unwatch(viewport, spy)
-                    print('PAINTED_BEFORE_THE_HIDE %s' % bool(painted))
-                    mac.hide()
-                    until(lambda: not exposed())
-                    print('HIDDEN_AT_THE_FIRST_STEP exposed=%s' % exposed())
-                return taken is None or taken()  # whether its sign came: no notch is sent after one with none
-            return _after
-        return _first_wheel(viewport, notches, _taking)
-    shoot_3d(PATH, zoom=ZOOM)
-""")
-# shoot_3d zooming ZOOM wheel steps, saved to PATH, Designer hidden right before the first step, the view at rest: every
-# step goes off screen from rest (ROADMAP item 112). Whether the overlay's count read SAMPLES at the hide is printed
-# (AT_REST_AT_THE_HIDE)
-_HIDDEN_BEFORE_ZOOM = dedent("""
-    print('BEFORE ' + state())
-    _first_wheel = _wheel
-    def _wheel(viewport, notches, taking=None):
-        mac.hide()
-        until(lambda: not exposed())
-        print('HIDDEN_BEFORE_THE_FIRST_STEP exposed=%s' % exposed())
-        count = _samples([label.text() for label in viewport.findChildren(QtWidgets.QLabel)])
-        print('AT_REST_AT_THE_HIDE %s count=%s' % (count is not None and count >= SAMPLES, count))
-        return _first_wheel(viewport, notches, taking)
-    shoot_3d(PATH, zoom=ZOOM)
-""")
-# shoot_3d zooming ZOOM wheel notches (closer), saved to PATH, the wheel facts (ROADMAP item 112). First the view brought
-# to rest by the shot's own wait (taking: _Frames.from_rest), then Designer hidden when HIDE, the count read at the hide
-# (AT_REST_BEFORE_THE_NOTCHES: whether the view was at rest). Then sent as MODE:
-# - 'one': one event carrying them all;
-# - 'back': an event each, back to back;
-# - 'apart': the shot's own _wheel, each from rest and after the one before's sign (STOPPED: what it returned).
-# For 'one' and 'back' it prints sendEvent's return and the event's isAccepted() for each event (SENT)
-_WHEEL_FACTS = dedent("""
-    _first_wheel = _wheel
-    def _wheel(viewport, notches, taking=None):
-        rested = taking() is not None
-        if HIDE:
-            mac.hide()
-            until(lambda: not exposed())
-            print('HIDDEN_BEFORE_THE_NOTCHES exposed=%s' % exposed())
-            count = _samples([label.text() for label in viewport.findChildren(QtWidgets.QLabel)])
-            rested = rested and count is not None and count >= SAMPLES
-        print('AT_REST_BEFORE_THE_NOTCHES %s' % rested)
-        if MODE == 'apart':
-            stopped = _first_wheel(viewport, notches, taking)
-            print('STOPPED %s' % (stopped,))
-            return stopped
-        centre = QtCore.QPointF(viewport.width() / 2.0, viewport.height() / 2.0)
-        def send(delta):
-            event = QtGui.QWheelEvent(
-                centre, QtCore.QPointF(viewport.mapToGlobal(centre.toPoint())), QtCore.QPoint(0, 0),
-                QtCore.QPoint(0, delta), QtCore.Qt.MouseButton.NoButton, QtCore.Qt.KeyboardModifier.NoModifier,
-                QtCore.Qt.ScrollPhase.NoScrollPhase, False)
-            returned = QtWidgets.QApplication.sendEvent(viewport, event)
-            print('SENT %s/%s' % (returned, event.isAccepted()))
-        if MODE == 'one':
-            send(120 * notches)
-        else:
-            for _ in range(notches):
-                send(120)
-        _process_events(2)
-    shoot_3d(PATH, zoom=ZOOM)
+        return _first_load(*args)
+    shoot_3d(PATH, SET_UP)
 """)
 # the same shot, nothing done during it
 _PAN = dedent("""
     print('BEFORE ' + state())
-    shoot_3d(PATH, pan=[0.25, 0.0])
+    shoot_3d(PATH, SET_UP)
 """)
 # the same shot, the window's state printed as each render is read (RENDER)
 _RENDERED = dedent("""
@@ -545,7 +492,7 @@ _RENDERED = dedent("""
     def _3d_render(mw):
         print('RENDER ' + state())
         return _real_render(mw)
-    shoot_3d(PATH, pan=[0.25, 0.0])
+    shoot_3d(PATH, SET_UP)
 """)
 # the same shot, Designer the active app from the set-up's start on, as the helpers see it (_MacWindow.active rebound:
 # the user's keyboard stays where it is), the window's state printed as each render is read (RENDER; REVIEW.md HLP-136)
@@ -557,13 +504,27 @@ _SWITCHED = dedent("""
         set_up = _real_set_up(*args)
         def started(*given):
             _active.append(True)
-            return set_up(*given)
+            return set_up.applied(*given)
         return _SetUp(started, set_up.may_change)
     _real_render = _3d_render
     def _3d_render(mw):
         print('RENDER ' + state())
         return _real_render(mw)
-    shoot_3d(PATH, pan=[0.25, 0.0])
+    shoot_3d(PATH, SET_UP)
+""")
+# the same shot, Designer the active app from the shot's own render on, after the set-up: the put-back's look is the
+# first to see it (REVIEW.md HLP-264). The shot renders the view before the set-up too
+_SWITCHED_AT_THE_RENDER = dedent("""
+    _active, _renders = [], []
+    _MacWindow.active = lambda self: bool(_active)
+    _real_render = _3d_render
+    def _3d_render(mw):
+        print('RENDER ' + state())
+        _renders.append(True)
+        if len(_renders) == 2:
+            _active.append(True)
+        return _real_render(mw)
+    shoot_3d(PATH, SET_UP)
 """)
 # what can happen to the windows during the shot, each a line of the first snippet above: a window of Designer's own brought
 # over Designer's (the cover, or a later one over a window covered already); the cover closed, or minimized
@@ -718,8 +679,8 @@ def in_order(pairs: Sequence[tuple[str, str]]) -> str:
 
 def panned(way: str | None) -> str:
     """Pans the 3D view with Designer's window off screen `way` (WAYS, DRAWN; None: 'on screen', in front of other
-    windows: REVIEW.md TST-390), as no tool does it: the helpers' own drag, the render read before and after
-    (SAME=...), the state (STATE); then puts the window back."""
+    windows: REVIEW.md TST-390), as no tool does it: a pan of the self-test's own (PAN_OF_ITS_OWN), the render read
+    before and after (SAME=...), the state (STATE); then puts the window back."""
     off = put(way if way is not None else 'on screen')
     return off + _PANNED + _CLEAR
 
@@ -748,58 +709,48 @@ def notified() -> str:
 
 
 def put_and_drag(way: str, pixels: int) -> str:
-    """Puts the window off screen `way`, then pans the 3D view `pixels` right with the helpers' own drag, which the view
-    may not draw: the change a plain shot must show (REVIEW.md TST-393, TST-420, TST-433)."""
+    """Puts the window off screen `way`, then pans the 3D view `pixels` right with a pan of the self-test's own
+    (PAN_OF_ITS_OWN), which the view may not draw: the change a plain shot must show (REVIEW.md TST-393, TST-420,
+    TST-433)."""
     return put(way) + _DRAG.replace('DX', str(pixels))
 
 
 def drag(pixels: int) -> str:
-    """Pans the 3D view `pixels` right with the helpers' own drag, the window as it is."""
+    """Pans the 3D view `pixels` right with a pan of the self-test's own (PAN_OF_ITS_OWN), the window as it is."""
     return _WINDOW + _DRAG.replace('DX', str(pixels))
+
+
+# the set-up of the shots below, shoot_3d's arguments after its path: a pan of a quarter of the view right, from the
+# view the user left (designer_helpers/scene3d.py)
+PAN = 'pan=[0.25, 0.0]'
 
 
 def rendered(path: str) -> str:
     """shoot_3d panning a quarter of the view right, saved to `path`, printing the window's state as each render is read
     (RENDER lines)."""
-    return _WINDOW + _RENDERED.replace('PATH', repr(path))
+    return _WINDOW + _RENDERED.replace('PATH', repr(path)).replace('SET_UP', PAN)
 
 
 def switched(path: str) -> str:
     """rendered(path), Designer the active app from the set-up's start on, as the helpers see it: the user's switch to
     Designer during the shot, without taking the keyboard from the app the user is in (RENDER lines)."""
-    return _WINDOW + _SWITCHED.replace('PATH', repr(path))
+    return _WINDOW + _SWITCHED.replace('PATH', repr(path)).replace('SET_UP', PAN)
 
 
-def during_pan(path: str, event: str | None) -> str:
-    """shoot_3d panning a quarter of the view right, saved to `path`, with `event` (EVENTS) done as the pan begins;
-    None: nothing. Prints the window's state first (BEFORE). The windows made stay for at_rest."""
+def switched_at_the_render(path: str) -> str:
+    """rendered(path), Designer the active app from the shot's own render on, as the helpers see it (RENDER lines)."""
+    return _WINDOW + _SWITCHED_AT_THE_RENDER.replace('PATH', repr(path)).replace('SET_UP', PAN)
+
+
+def during_pan(path: str, event: str | None, set_up: str = PAN) -> str:
+    """shoot_3d with `set_up` (its arguments after the path, a pan among them), saved to `path`, with `event` (EVENTS)
+    done as the pan's load begins; None: nothing. Prints the window's state first (BEFORE). The windows made stay for
+    at_rest."""
     pan = _DURING_PAN if event is not None else _PAN
     done = EVENT_DONE[event] if event else 'True'
     return _WINDOW + pan.replace('DURING_THE_PAN', EVENTS[event] if event else '').replace('DONE', done).replace(
         'PATH', repr(path)
-    )
-
-
-def hidden_mid_zoom(path: str, zoom: int) -> str:
-    """shoot_3d zooming `zoom` wheel steps, saved to `path`, Designer hidden as the view draws its first frame after the
-    first step (PAINTED_BEFORE_THE_HIDE, then HIDDEN_AT_THE_FIRST_STEP exposed=...); prints the window's state first
-    (BEFORE). The shot puts it back hidden."""
-    return _WINDOW + _HIDDEN_MID_ZOOM.replace('PATH', repr(path)).replace('ZOOM', str(zoom))
-
-
-def hidden_before_zoom(path: str, zoom: int) -> str:
-    """shoot_3d zooming `zoom` wheel steps, saved to `path`, Designer hidden right before the first step
-    (HIDDEN_BEFORE_THE_FIRST_STEP exposed=..., AT_REST_AT_THE_HIDE); prints the window's state first (BEFORE). The shot
-    puts it back hidden."""
-    return _WINDOW + _HIDDEN_BEFORE_ZOOM.replace('PATH', repr(path)).replace('ZOOM', str(zoom))
-
-
-def wheel_facts(path: str, zoom: int, mode: str, hidden: bool) -> str:
-    """shoot_3d zooming `zoom` (closer) wheel notches sent as `mode` ('one', 'back' or 'apart': _WHEEL_FACTS), saved to
-    `path`, Designer hidden before the notches when `hidden` (HIDDEN_BEFORE_THE_NOTCHES exposed=...). The shot puts it
-    back."""
-    body = _WHEEL_FACTS.replace('PATH', repr(path)).replace('ZOOM', str(zoom)).replace('MODE', repr(mode))
-    return _WINDOW + body.replace('HIDE', str(hidden))
+    ).replace('SET_UP', set_up)
 
 
 def became_active(said: str, before: dict[str, str], after: dict[str, str]) -> bool:

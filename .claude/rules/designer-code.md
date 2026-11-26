@@ -24,7 +24,9 @@ points here). How they fit together: README.md, How it works.
   imports what it uses from other parts (`from .core import find_graph`), for PyCharm and readers; `part_source()` drops
   those lines. `tests/unit/test_designer_helpers.py` fails on a missing, extra or misplaced import, a name no part
   defines, and a part file not in `PARTS`. Code needing the helpers' text takes it from `designer_helpers.source()`,
-  never from one file.
+  never from one file. A part that takes only the standard library's names from the others (`state3d`) also runs
+  outside Designer, as a module of its own: `designer_helpers.standalone()`, for its unit tests and the self-test's
+  checks of it.
 - **The server** (`mcp_server/server.py`) only starts it and re-exports the names of `mcp_server/server_tools/`, one
   module per area (`core` holds the bridge and the `_tool` decorator; a new module goes into `MODULES` in its
   `__init__.py`). Its unit tests patch a name with `patch_server` (`.claude/rules/unit-tests.md`).

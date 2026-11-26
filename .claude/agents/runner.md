@@ -3,7 +3,7 @@ name: runner
 description: Runs and observes for this repository. Use it for runs whose output would fill the lead's context, such as the full suites and chosen categories the user asked for, and a review's probes handed to it, and to diagnose a Designer that crashed, hung or misbehaved (its log, crash dumps, a quit that hung). It reports what ran, what passed and failed, and what it found. It changes no code and no committed file.
 tools: Bash, Read, Grep, Glob, Write, TaskStop, SendMessage, mcp__substance-designer__*
 model: sonnet
-effort: xhigh
+effort: high
 skills:
   - live-check
 ---

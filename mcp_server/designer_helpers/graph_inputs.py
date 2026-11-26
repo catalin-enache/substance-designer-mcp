@@ -1,9 +1,8 @@
 """Exposed parameters: expose_param, list_graph_inputs, remove_graph_input, set_graph_size."""
 
-import xml.etree.ElementTree as ET
-
 from .core import (
     APIException,
+    ElementTree,
     Json,
     SDGraph,
     SDNode,
@@ -321,8 +320,8 @@ def _graph_parameter_reads(g: SDSBSCompGraph, connected_only: bool, plain_only: 
     so they are read from the package's file, as last saved; a package never saved has none to read. plain_only, with
     connected_only: only functions that are nothing but that read."""
     try:
-        root = ET.parse(g.getPackage().getFilePath()).getroot()
-    except (OSError, ET.ParseError):
+        root = ElementTree.parse(g.getPackage().getFilePath()).getroot()
+    except (OSError, ElementTree.ParseError):
         return {}
     reads: dict[str, list[str]] = {}
     for graph in root.iter('graph'):
@@ -335,9 +334,9 @@ def _graph_parameter_reads(g: SDSBSCompGraph, connected_only: bool, plain_only: 
             name = prm.find('name')
             if function is None or name is None:
                 continue
-            nodes = {cast(ET.Element, n.find('uid')).get('v'): n for n in function.iter('paramNode')}
+            nodes = {cast(ElementTree.Element, n.find('uid')).get('v'): n for n in function.iter('paramNode')}
             if connected_only:
-                wired: dict[str | None, ET.Element] = {}
+                wired: dict[str | None, ElementTree.Element] = {}
                 rootnode = function.find('rootnode')
                 todo = [rootnode.get('v')] if rootnode is not None else []
                 while todo:

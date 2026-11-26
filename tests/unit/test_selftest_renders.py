@@ -148,12 +148,6 @@ def _plain(size: int = 80) -> 'np.ndarray[tuple[int, int], np.dtype[np.float64]]
     return a
 
 
-def _said(shot: SimpleNamespace, line: str) -> SimpleNamespace:
-    """`shot` with `line` as its text, after its image, as screenshot_designer gives what it set."""
-    shot.content.append(SimpleNamespace(type='text', text=line))
-    return shot
-
-
 Calls = list[tuple[str, ToolArgs | None]]
 
 
@@ -185,23 +179,13 @@ def test_a_shot_is_taken_again_until_the_checker_shows_on_the_mesh(
 ) -> None:
     # REVIEW.md TST-383, TST-388: in a full run the 3D shots once didn't follow the camera for about 20 s, the cause
     # unknown. TST-421: retaken a second apart, so that the retakes last (TST-386); now as each shot returns, each
-    # waiting for the 3D view itself (frames3d.py), until RETAKE_S have passed
+    # waiting for the 3D view itself (frames3d.py), until RETAKE_S have passed. Each retake sets the view up again: each
+    # call starts from the view the user left (designer_helpers/scene3d.py)
     c, calls, pauses = _shots_in_turn(monkeypatch, [_shot(_plain()), _shot(_plain()), _shot(_checker(8))])
     r = asyncio.run(renders.with_checker(c, ARGS))
     assert renders.transitions(renders.grey(r)) >= renders.CHECKER and pauses == []
-    assert calls == [('screenshot_designer', ARGS)] + [('screenshot_designer', {'panel': '3d', 'max_size': 700})] * 2
+    assert calls == [('screenshot_designer', ARGS)] * 3
     assert 'the checker showed on the mesh after 2 retakes' in capsys.readouterr().out
-
-
-def test_a_retaken_shot_keeps_the_text_of_what_the_call_set(
-    renders: ModuleType, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # REVIEW.md TST-384: a retake says nothing of what was set, and two checks read it
-    first = _said(_shot(_plain()), "3D view: Plane, graph g's outputs on the mesh, view Top, framed")
-    c, _calls, _pauses = _shots_in_turn(monkeypatch, [first, _said(_shot(_checker(8)), '')])
-    r = asyncio.run(renders.with_checker(c, ARGS))
-    assert renders.transitions(renders.grey(r)) >= renders.CHECKER
-    assert renders.text(r).strip() == "3D view: Plane, graph g's outputs on the mesh, view Top, framed"
 
 
 def test_a_shot_with_the_checker_at_once_is_taken_once(
@@ -243,27 +227,3 @@ def test_a_render_not_saved_is_said_so(renders: ModuleType, capsys: pytest.Captu
     # the category's later checks didn't run
     renders.say_renders(('a shot after', str(tmp_path / 'after.png')))
     assert capsys.readouterr().out.splitlines() == ['      a shot after: not saved: %s' % (tmp_path / 'after.png')]
-
-
-@pytest.mark.parametrize('first', [True, False], ids=['the shot after failed', 'the shot before saved nothing'])
-def test_a_plain_shot_after_that_saved_nothing_returns_what_was_said(
-    renders: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, first: bool
-) -> None:
-    # REVIEW.md TST-688: plain_after dropped its shot's reply, and a check failing on it couldn't say why
-    failed = "Error: RuntimeError: the 3D view isn't drawn"
-    path = tmp_path / 'zoomed.png'
-    if first:
-        PILImage.fromarray(_plain().astype(np.uint8)).save(path)
-    calls: list[str] = []
-
-    async def c(name: str, args: ToolArgs | None = None) -> SimpleNamespace:
-        calls.append(name)
-        return tool_result(failed)
-
-    async def at_rest(call: FakeCall, source: str) -> None:
-        calls.append('at rest')
-
-    monkeypatch.setitem(vars(renders), 'at_rest', at_rest)
-    after, apart, said = asyncio.run(renders.plain_after(c, 'helpers\n', str(path)))
-    assert (after, apart) == (str(tmp_path / 'zoomed_after.png'), 255.0)
-    assert (said, calls) == ((failed, ['execute_designer_code', 'at rest']) if first else (renders.NOT_TAKEN, []))

@@ -33,17 +33,21 @@ from test_all_tools.undo import checks as undo
 # in the pool's order (SOLO's start last), slowest first, so a pool's last ones are short (measured 2026-11-10, each
 # category's preparation, checks and clean-up: a run's summary lists them); one run (Windows) runs them in this order too
 CATEGORIES: list[Step] = [
-    # 425 s (2026-11-23, two full runs, 4 Designers side by side: 425.3 s, 425.9 s; 420.2 s alone, 2026-11-21): every
-    # panel's screenshot, the clipboard, fitting the whole graph, the 3D view set up
+    # 343 s (2026-11-26, a scratch run alone, with its server's start and its Designer's launch, once the mesh, the
+    # tiling and the light went through the state file; 425 s in two full runs, 4 Designers side by side, 2026-11-23,
+    # before the 3D view was put back after each shot): every panel's screenshot, the clipboard, fitting the whole
+    # graph, the 3D view set up
     editor_panels_and_fit.run,
+    # 196 s (2026-11-26, a scratch run alone, with its server's start and its Designer's launch): Designer facts GUIDE.md
+    # relies on, the 3D view's state file, Designer's Frame and the Scene menu's mesh switch at two aspects, what a 3D
+    # shot puts back
+    facts.run,
     # 136 s (2026-11-22, two scratch runs, with their server's start: 150.0 s, 122.7 s): function graphs' Designer facts,
     # set_function, function graphs of the package, sampling images, the tools reading functions
     functions.run,
     # 88 s (2026-11-24, two scratch runs, with their server's start: 88.2 s, 87.6 s): node_stats, sweep_param,
     # check_tiling, read_designer_log
     measure.run,
-    # 50 s (2026-11-23, two scratch runs, with their server's start: 53.8 s, 46.7 s): Designer facts GUIDE.md relies on
-    facts.run,
     # 46 s (2026-11-22, two scratch runs, with their server's start: 45.3 s, 46.3 s): set ops, inheritance and seed
     # facts, a Gradient Map's keys and a Curve's points
     params.run,

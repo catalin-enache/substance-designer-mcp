@@ -72,7 +72,7 @@ entry, takes the user (the `address-review` skill (`.claude/skills/address-revie
   reopen 112"; this form for every branch is the lead's reading, told the user. One that fails alone too is a failure, fixed before the merge. A pass alone shows the failure
   is rare, or needs the full run's conditions; the count shows which tests fail now and then, for the tool or the check
   (ROADMAP item 112: its zoom check passed 3 times in 3 in scratch runs, while the 3D zoom lost a step in 2 runs of 120
-  with the window hidden right after the first step: `designer_helpers/view3d.py`). The user's decisions, 2026-11-21.
+  with the window hidden right after the first step: `designer_helpers/view3d.py` at 73ead3a). The user's decisions, 2026-11-21.
   Reopen if: the table grows faster than its tests are fixed, or the user changes the rule.
 
 - **Only the current and next versions of Designer are supported.** README says older versions aren't, and the plugin's
@@ -262,36 +262,33 @@ entry, takes the user (the `address-review` skill (`.claude/skills/address-revie
   the text comes back. The self-test's clipboard checks keep only the user's text too. README says so. The user's
   decision, 2026-11-10.
   Reopen if: the user wants the whole clipboard kept, or the text is seen not to come back.
-- **After setting the 3D view's tiling or environment, the Parameters panel goes back to the graph in the editor, not
-  to the node that was selected.** `screenshot_designer('3d', tiling=...)` and its environment options set them
-  through the Parameters panel, then turn the panel back to the graph in the editor (how, as measured:
-  `designer_helpers/view3d.py`). Turning it back to a selected node would take a click on that node in the user's
-  graph view, since the API can't show a node in the panel (GUIDE.md, Designer UI). Nothing in the graph changes, and
-  one click on the node shows its parameters again. The user's decision, 2026-11-12, for the tiling; widened to the
-  environment at their request, 2026-11-18.
+- **After a 3D shot's set-up, the relink through the Explorer's menu leaves the Parameters panel on the graph, not on
+  the node that was selected.** `screenshot_designer('3d', graph=...)` puts a graph's outputs on the mesh through the
+  Explorer's "View Outputs In 3D View", and so does the relink after each load of the 3D view's state file, when the
+  view showed a graph's outputs (how: `designer_helpers/scene3d.py`, `_relinked`). Selecting the graph in the Explorer
+  turns the panel to it. Turning the panel back to the selected node would take
+  a synthetic click on that node in the user's graph view, since the API can't show a node in the panel (GUIDE.md,
+  Designer UI). Nothing in the graph changes, and one click on the node shows its parameters again. The user's
+  decision, 2026-11-12, for the tiling; widened to the environment at their request, 2026-11-18; reworded for the
+  relink on their word, 2026-11-26.
   Reopen if: the user wants the selected node back, or the API gains a way to show a node in the Parameters panel.
-- **The 3D shot never sends a wheel step or a drag move again; one whose sign doesn't come within its limit ends the
-  camera's moves, and the shot says which.** Designer gives no sign that it dropped one: `sendEvent` returns True and
-  `isAccepted()` is False for every notch, taken or dropped, and a dropped one shows only as a sign that never comes,
-  which a late one also shows until it comes (the self-test's wheel facts check; `designer_helpers/view3d.py`). A step
-  sent again could then be taken twice. The lead's choice, which the user approved, 2026-11-21.
-  Reopen if: Designer gains a way to tell a dropped step from a late one.
-- **A 3D screenshot, and `set_3d_view` where it can't work off screen, put Designer's window on screen transparent, then
-  back as it was.** The 3D view doesn't draw off screen (how the shot works around it: `_Screen`,
-  `designer_helpers/shot3d.py`). The user chose a transparent, click-through window on screen over refusing the shot.
-  On 2026-11-13 they first chose the window brought up visibly. On 2026-11-14, once the transparent window was
-  measured, they chose it invisible in every case. If the user makes Designer the active app during the shot, it is
-  left on screen if Designer is still the active app as the shot ends; switched to and away again, it is put back as
-  found (the user's agreement, 2026-11-13; this wording, 2026-11-14). README once said that apps under the window might pause drawing
-  them; the user had that sentence removed once it was found wrong (2026-11-14). The Explorer's menu that `graph=`
-  opens is click-through too on macOS, the user's choice of 2026-11-14: whether a click would reach the menu while it
-  is only transparent couldn't be measured without clicking on the user's screen (`designer_helpers/view3d.py`).
-  `set_3d_view` run on its own does the same for camera moves, `graph=` and any mesh switch; otherwise only a
-  viewpoint's turn runs on screen. Why: `set_3d_view`'s docstring, `designer_helpers/view3d.py`. The user chose this
-  over refusing those set-ups, for the moves on 2026-11-16, and for `graph=` and any mesh switch on 2026-11-18.
+- **A 3D screenshot puts Designer's window on screen transparent, then back as it was.** The 3D view doesn't draw off
+  screen (how the shot works around it: `_Screen`, `designer_helpers/shot3d.py`). The user chose a transparent,
+  click-through window on screen over refusing the shot. On 2026-11-13 they first chose the window brought up visibly.
+  On 2026-11-14, once the transparent window was measured, they chose it invisible in every case. If the user makes
+  Designer the active app during the shot, it is left on screen if Designer is still the active app as the shot ends;
+  switched to and away again, it is put back as found (the user's agreement, 2026-11-13; this wording, 2026-11-14).
+  README once said that apps under the window might pause drawing them; the user had that sentence removed once it was
+  found wrong (2026-11-14). The Explorer's menu that `graph=` and the set-up's relink open is click-through too on
+  macOS, the user's choice of 2026-11-14: whether a click would reach the menu while it is only transparent couldn't be
+  measured without clicking on the user's screen (`designer_helpers/view3d.py`). The user chose the window on screen
+  over refusing a set-up that couldn't work off screen: for the camera's moves on 2026-11-16, and for `graph=` and any
+  mesh switch on 2026-11-18. The state file's loads that replaced those moves and switches run with the window on
+  screen too, transparent as above, their camera glides included (`designer_helpers/scene3d.py`; ROADMAP item 131, the
+  user's design; this wording, 2026-11-26).
   Reopen if: the user sees the window during a shot, wants it left up or the shot refused, sees an app under it pause
-  during a shot, or showing it makes Designer the active app; or a way is found to run those set-ups off screen as
-  they come out on screen.
+  during a shot, or showing it makes Designer the active app; or a way is found to run the shot off screen as it comes
+  out on screen.
 - **Renaming an existing output warns; it isn't refused.** Designer updates only the graphs open during the rename. One that
   was closed computes black, with no error, and the tools can't see it. So `apply_edits`' result tells the agent to tell the
   user, naming the repair (`set_output_tags`; `GUIDE.md`, Output nodes). The user chose this over refusing a rename or only

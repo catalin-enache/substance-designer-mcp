@@ -104,9 +104,10 @@ def test_an_agent_parses_and_lists_its_tools(name: str) -> None:
         value = fields.get(key)
         assert isinstance(value, str) and value, '%s: no %s' % (name, key)
         assert ': ' not in value, "%s: a ': ' in %s would end the plain YAML value" % (name, key)
-    # the user's choice (ROADMAP item 102). A model without the level "falls back to the highest supported level at or
-    # below the one you set" (Claude Code's docs, model-config)
-    assert fields['effort'] in ('low', 'medium', 'high', 'xhigh', 'max'), fields['effort']
+    # the user's choice (ROADMAP item 102): the runner moved from xhigh to high, the analyst, the developer and the
+    # reviewer at xhigh (the user, 2026-11-26, who moved the analyst back to xhigh). A model without the level "falls
+    # back to the highest supported level at or below the one you set" (Claude Code's docs, model-config)
+    assert fields['effort'] == ('high' if name == 'runner' else 'xhigh'), fields['effort']
 
 
 @pytest.mark.parametrize('name', sorted(ONLY_READS))

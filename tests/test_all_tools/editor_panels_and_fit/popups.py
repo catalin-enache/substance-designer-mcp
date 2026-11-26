@@ -80,9 +80,11 @@ def closed_early(path: str, graph: str, tries: int | None = None) -> str:
     return _CLOSED_EARLY.replace('PATH', repr(path)).replace('GRAPH', repr(graph)).replace('TRIES', repr(tries))
 
 
-def shown_ms(times: list[float]) -> float:
-    """How long popups were seen, in ms: from the first sample that showed one to the last; 0 when none did."""
-    return (times[-1] - times[0]) * 1000 if times else 0.0
+def shown_ms(spells: list[list[float]]) -> float:
+    """How long popups were seen on screen in one go, in ms: the longest of `spells`, each the times of samples one after
+    another that each showed one, from its first to its last; 0 when none did. Measured from the first sample showing
+    one to the last across the shot, two glimpses 1.2 s apart read as 1197 ms (REVIEW.md TST-953)."""
+    return max(((spell[-1] - spell[0]) * 1000 for spell in spells), default=0.0)
 
 
 def _seen(cg: ctypes.CDLL, cf: ctypes.CDLL, keys: list[int], pid: int, layer: int = POPUP_LAYER) -> tuple[bool, bool]:
@@ -108,16 +110,17 @@ def _seen(cg: ctypes.CDLL, cf: ctypes.CDLL, keys: list[int], pid: int, layer: in
 
 
 class PopupWatch:
-    """While inside it, samples the window server's list and keeps the times (`times`, monotonic seconds) a popup of
-    process `pid` was on screen, a window at `layer` or above (0: any window; REVIEW.md TST-472); `samples` counts the
-    samples taken, `listed` those that listed a window of `pid`."""
+    """While inside it, samples the window server's list and keeps the times (monotonic seconds) a popup of process
+    `pid` was on screen, a window at `layer` or above (0: any window; REVIEW.md TST-472): in `spells`, each the times of
+    samples one after another that each showed one, and all of them in `times`. `samples` counts the samples taken,
+    `listed` those that listed a window of `pid`."""
 
     def __init__(self, pid: int, layer: int = POPUP_LAYER) -> None:
         self.pid = pid
         self.layer = layer
         self.samples = 0
         self.listed = 0
-        self.times: list[float] = []
+        self.spells: list[list[float]] = []
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._watch, daemon=True)
 
@@ -132,18 +135,27 @@ class PopupWatch:
         self._thread.join()
 
     @property
+    def times(self) -> list[float]:
+        return [at for spell in self.spells for at in spell]
+
+    @property
     def shown_ms(self) -> float:
-        return shown_ms(self.times)
+        """The longest spell of popups on screen, in ms (shown_ms)."""
+        return shown_ms(self.spells)
 
     def _watch(self) -> None:
         cg, cf = libraries()
         names = (b'kCGWindowLayer', b'kCGWindowAlpha', b'kCGWindowOwnerPID')
         keys: list[int] = [cf.CFStringCreateWithCString(None, name, CF_UTF8) for name in names]
         try:
+            before = False  # whether the sample before showed a popup: this one then goes on its spell
             while not self._stop.is_set():
                 there, shown = _seen(cg, cf, keys, self.pid, self.layer)
                 if shown:
-                    self.times.append(time.monotonic())
+                    if not before:
+                        self.spells.append([])
+                    self.spells[-1].append(time.monotonic())
+                before = shown
                 self.listed += there
                 self.samples += 1
         finally:

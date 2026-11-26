@@ -1,9 +1,9 @@
 """screenshot_designer('3d') in Designer (shoot_3d): the set-up checked, Designer's window put on screen, transparent,
-and kept there until the render is read, the 3D view set up (view3d.py), and a render that may not have followed the
-set-up said (REVIEW.md SRV-146, HLP-124).
+and kept there until the render is read and the 3D view put back, the view set up around the render (scene3d.py), and
+a render that may not have followed the set-up said (REVIEW.md SRV-146, HLP-124).
 
-Measured on macOS in a Designer an agent started (2026-11-13 and 2026-11-14), by panning the view with the helpers' own
-drag and comparing its renders. The self-test's editor_panels_and_fit re-measures the first point (minimized and
+Measured on macOS in a Designer an agent started (2026-11-13 and 2026-11-14), by panning the view with a mouse drag
+and comparing its renders. The self-test's editor_panels_and_fit re-measures the first point (minimized and
 hidden; covered by a window of Designer's own, it says what it saw) and the second, but for its time, the identical
 render and the window never shown. It also
 re-measures drags reaching the camera off screen, the top-level window and the page as macOS minimizes it, and AppKit's
@@ -73,13 +73,11 @@ Only the main window is looked at: a 3D View panel floating in a window of its o
 macOS nothing was measured: the window is left as it is, and the shot taken as before.
 """
 
-import contextlib
-
-from .core import Callable, Iterator, QtCore, QtGui, QtWidgets, Sequence, _main_window, cast
+from .core import Callable, Iterator, QtCore, QtGui, QtWidgets, Sequence, _main_window, cast, contextlib
 from .frames3d import SETTLE_LIMIT, _Frames, _frames_of, _viewport
 from .mac_window import _mac_window, _MacWindow, _wait_unhidden, _wait_unlisted
+from .scene3d import _3d_set_up
 from .screenshots import _3d_dock, _3d_render
-from .view3d import _3d_set_up
 from .waits import _event_signal, _until, _unwatch
 
 ON_SCREEN_WAIT = 3.0  # s at most for Designer's window to be on screen once shown, a safety net: about 0.3 s measured
@@ -89,8 +87,8 @@ WINDOW = "Designer's window: "
 STALE = (
     '3D render: identical to the render before the set-up, though the set-up moved the camera, switched the mesh, or '
     'changed the tiling or the light. '
-    'The 3D view may not have been drawn. Shoot again with no set-up before judging it: pan, orbit and zoom move the '
-    'camera from where it is. With no mesh in view, a pan or zoom changes nothing, and a tiling changes nothing on a '
+    'The 3D view may not have been drawn. Shoot again with the same set-up before judging it: each call starts from '
+    'the view the user left. With no mesh in view, a pan or zoom changes nothing, and a tiling changes nothing on a '
     'material with no pattern'
 )
 TRANSPARENT = (0.0, True)  # a window's opacity, and whether the mouse goes through it (_MacWindow.appearance)
@@ -169,12 +167,10 @@ class _Screen:
       brought in front too, opaque, and left there: restored by Qt alone, the view drew no new frame.
 
     Each window is made opaque and clickable again once the window is back, minimized or hidden ones once off screen:
-    before, the user would see them. again() looks before each set-up step and render, after a viewpoint's turn, and in
-    a wheel step's rest (_Frames.from_rest): a
-    window the user covered, minimized or hid during the shot is put on screen the same way (REVIEW.md HLP-124,
+    before, the user would see them. again() looks before each set-up step and render: a window the user covered, minimized or hid during the shot is put on screen the same way (REVIEW.md HLP-124,
     HLP-158, HLP-163). A Designer the user made the active app during
     the shot is left on screen, opaque (REVIEW.md HLP-125). It is made opaque at once, by between() before each
-    set-up step and render, after a viewpoint's turn, and in a wheel step's rest: left transparent, the user would see
+    set-up step and render: left transparent, the user would see
     no window, and a click would go through it to the app under it (REVIEW.md HLP-136). While Designer is that app, a
     window put on screen again isn't made transparent. A Designer the active app as the shot began counts as made the
     active app once the user comes back to it, if a look before a step or render saw them gone (REVIEW.md HLP-138).
@@ -233,8 +229,7 @@ class _Screen:
         return self._mac is not None and self._mac.active() and not self._was_active
 
     def between(self) -> None:
-        """Before each set-up step and render, after a viewpoint's turn, and in a wheel step's rest (_Frames.from_rest):
-        once the user made Designer the active app during the shot, gives each window made transparent its look back at
+        """Before each set-up step and render: once the user made Designer the active app during the shot, gives each window made transparent its look back at
         once, saying so (the class docstring)."""
         if self._mac is None:
             return
@@ -294,8 +289,7 @@ class _Screen:
                 self._bring(again=True, brings=brings - 1)
 
     def again(self) -> None:
-        """Before a set-up step or a render, after a viewpoint's turn, and in a wheel step's rest (_Frames.from_rest):
-        makes the windows opaque once the user made Designer the active app (between), then puts the window on screen
+        """Before a set-up step or a render: makes the windows opaque once the user made Designer the active app (between), then puts the window on screen
         again if it went off screen during the shot."""
         self.between()
         self._bring(again=True)
@@ -351,8 +345,8 @@ class _Screen:
 
 @contextlib.contextmanager
 def _on_screen(mw: QtWidgets.QMainWindow, frames: _Frames) -> Iterator[_Screen]:
-    """Designer's main window on screen while the 3D view is set up and rendered (_Screen): put there now, and again
-    before each set-up step and render and in a wheel step's rest (_Screen.again), each time waited for on `frames`,
+    """Designer's main window on screen while the 3D view is set up, rendered and put back (_Screen): put there now, and
+    again before each set-up step, the render and the put-back (_Screen.again), each time waited for on `frames`,
     the 3D view's. Off screen, the render is the
     view's last frame (the module docstring). The window is put back when the shot fails or is aborted too."""
     screen = _Screen(mw, _mac_window(mw), frames)
@@ -387,17 +381,18 @@ def shoot_3d(
     environment_rotation: float | None = None,
     environment_exposure: float | None = None,
 ) -> None:
-    """screenshot_designer('3d'): the 3D view set up when anything is given (_3d_set_up, set_3d_view's steps), then its
-    render saved to `out_path`, with Designer's window on screen throughout (_on_screen, looked at again before each
-    set-up step and render, and in a wheel step's rest). What _3d_set_up checks, and a 3D View panel not shown, is refused first, before the window changes
-    (REVIEW.md HLP-127). What the steps find as they go is refused after, the window's lines in the error: with mesh=
-    and tiling=, the new mesh's material; with graph=, its row in the Explorer; with the environment, its fields in the
-    Parameters panel and a map the 3D view doesn't take. After a set-up that changed what the view shows (the camera
-    moved, the mesh switched, the tiling or the light changed: the set-up's run says), a render identical to the one
-    before it is taken again, at most RETAKES times, each once the view drew another frame, then said (STALE): the view
-    may not have been drawn. It isn't taken again once the view draws no frame within NO_RESTART (_Frames.next_frame;
-    off screen, at once). A view or a graph may already be what is shown, so they are no sign; nor are a value shown
-    already or a map asked again, which the set-up says changed nothing. Each wait is on the view's frames, watched from before the window is put on screen until the render
+    """screenshot_designer('3d'): the 3D view set up when anything is given (scene3d._3d_set_up), then rendered, then
+    put back, with Designer's window on screen throughout (_on_screen, looked at again before each set-up step, the
+    render and the put-back). The render is saved to `out_path` after the put-back, so a put-back that fails leaves it
+    unsaved. What _3d_set_up checks, and a 3D View panel not shown, is refused first, before
+    the window changes (REVIEW.md HLP-127). What the steps find as they go is refused after, the window's lines in the
+    error: what the state file holds (a field missing); with graph=, its row in the Explorer. After a set-up that
+    changed what the view shows (the camera moved, the mesh switched, the tiling or the light changed: the set-up
+    says), a render identical to the one before it is taken again, at most RETAKES times, each once the view drew
+    another frame, then said (STALE): the view may not have been drawn. It isn't taken again once the view draws no
+    frame within NO_RESTART (_Frames.next_frame; off screen, at once). A graph may already be
+    what is shown, so it is no sign; nor is a value the view shows already, which the set-up says changed nothing.
+    Each wait is on the view's frames, watched from before the window is put on screen until the view is put back
     (frames3d.py; REVIEW.md HLP-148)."""
     light = (environment, environment_rotation, environment_exposure)
     given = bool(graph or mesh or view or zoom or orbit or pan) or any(v is not None for v in (tiling, *light))
@@ -414,18 +409,17 @@ def shoot_3d(
 
             # a set-up that may change what the view shows: a render before it, compared once it says it did
             before = render() if set_up is not None and set_up.may_change else None
-            changed = False
-            if set_up is not None:
-                # before each step, the window put on screen again if it went off, as before a render: a camera's
-                # turn is watched on screen (REVIEW.md HLP-158, the user's choice)
-                changed = set_up(screen.again, frames)
-            image = render()
-            compared = before is not None and changed
-            for _ in range(RETAKES if compared else 0):
-                if image != before or not frames.next_frame():
-                    break
+            # before each step, the window put on screen again if it went off, as before a render: a load's glide is
+            # watched on screen (REVIEW.md HLP-158, the user's choice). The view is put back after the render
+            applied = set_up.applied(screen.again, frames) if set_up is not None else contextlib.nullcontext(False)
+            with applied as changed:
                 image = render()
-            undrawn = UNDRAWN + frames.below_rest() if frames.undrawn else ''
+                compared = before is not None and changed
+                for _ in range(RETAKES if compared else 0):
+                    if image != before or not frames.next_frame():
+                        break
+                    image = render()
+                undrawn = UNDRAWN + frames.below_rest() if frames.undrawn else ''
     finally:
         frames.close()
     if not image.save(out_path):

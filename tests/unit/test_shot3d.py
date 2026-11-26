@@ -946,7 +946,7 @@ class Shot:
 
         self.screen = SimpleNamespace(again=lambda: self.events.append('again'), between=lambda: None)
         # what the set-up was given to run before each step, and the frames to wait on
-        self.given: tuple[Callable[[], None] | None, Frames | None] | None = None
+        self.given: tuple[Callable[[], None] | None, Frames] | None = None
 
         @contextlib.contextmanager
         def on_screen(mw: 'QtWidgets.QMainWindow', frames: Frames) -> Iterator[SimpleNamespace]:
@@ -974,16 +974,18 @@ class Shot:
             if refused:
                 raise RuntimeError(refused)
 
-            def run(between: Callable[[], None] | None, frames: Frames | None) -> bool:
+            @contextlib.contextmanager
+            def applied(between: Callable[[], None] | None, frames: Frames) -> Iterator[bool]:
                 self.given = (between, frames)
                 self.events.append('set up %r' % (args,))
-                return changed
+                yield changed
+                self.events.append('view put back')  # after the render, the window still on screen
 
-            # whether it may change what the view shows, as _3d_set_up says: the camera moved, the mesh switched, the
+            # whether it may change what the view shows, as _3d_set_up says: a camera option, the mesh switched, the
             # tiling or the light given
             _, shown, _, zoom, tiling, orbit, pan, *light = args
-            may_change = bool(zoom or orbit or pan) or (shown is not None and shown != mesh)
-            return helpers._SetUp(run, may_change or any(v is not None for v in (tiling, *light)))
+            may_change = bool(args[2] or zoom or orbit or pan) or (shown is not None and shown != mesh)
+            return helpers._SetUp(applied, may_change or any(v is not None for v in (tiling, *light)))
 
         vars(helpers)['_3d_render'] = render
         vars(helpers)['_on_screen'] = on_screen
@@ -991,7 +993,7 @@ class Shot:
         vars(helpers)['_viewport'] = lambda dock: 'the viewport'
         vars(helpers)['_Frames'] = lambda viewport, render: self.frames
         vars(helpers)['_3d_set_up'] = set_up
-        vars(helpers)['_environment_maps'] = lambda: {'studio': '/maps/studio.hdr'}
+        vars(helpers)['_environment_maps'] = lambda: {'studio': 'sd-3dview-maps://studio.hdr'}
         vars(helpers)['find_graph'] = lambda name: SimpleNamespace(
             getIdentifier=lambda: name, getOutputNodes=lambda: [object()] * (1 if name == 'one' else 2)
         )
@@ -1000,8 +1002,8 @@ class Shot:
 STALE = (
     '3D render: identical to the render before the set-up, though the set-up moved the camera, switched the mesh, or '
     'changed the tiling or the light. '
-    'The 3D view may not have been drawn. Shoot again with no set-up before judging it: pan, orbit and zoom move the '
-    'camera from where it is. With no mesh in view, a pan or zoom changes nothing, and a tiling changes nothing on a '
+    'The 3D view may not have been drawn. Shoot again with the same set-up before judging it: each call starts from '
+    'the view the user left. With no mesh in view, a pan or zoom changes nothing, and a tiling changes nothing on a '
     'material with no pattern'
 )
 
@@ -1034,6 +1036,7 @@ def test_a_render_identical_after_a_pan_is_taken_again_until_it_differs(
         'next frame',
         'again',
         'render B',
+        'view put back',  # the view put back before the window: its load is watched on screen
         'put back',
         'closed',
     ]
@@ -1058,14 +1061,14 @@ def test_a_render_identical_while_the_view_draws_no_frame_isnt_taken_again(
     # REVIEW.md HLP-148: off screen, or at rest, it draws none: a retake would read the same frame
     shot = Shot(helpers, 'A', drawing=False)
     helpers.shoot_3d('out.png', pan=[0.25, 0.0])
-    assert shot.events[-5:] == ['again', 'render A', 'next frame', 'put back', 'closed']
+    assert shot.events[-6:] == ['again', 'render A', 'next frame', 'view put back', 'put back', 'closed']
     assert capsys.readouterr().out.splitlines()[-1] == STALE
 
 
 @pytest.mark.parametrize(
     'options',
-    [{'zoom': 2}, {'pan': [0.0, 0.1]}, {'orbit': [0.0, -5.0]}, {'mesh': 'Sphere'}],
-    ids=['zoom', 'pan', 'orbit', 'another mesh'],
+    [{'zoom': 2}, {'pan': [0.0, 0.1]}, {'orbit': [0.0, -5.0]}, {'view': 'Top'}, {'mesh': 'Sphere'}],
+    ids=['zoom', 'pan', 'orbit', 'view', 'another mesh'],
 )
 def test_a_set_up_that_moves_the_camera_or_switches_the_mesh_is_compared(
     helpers: types.ModuleType, options: View3dOptions
@@ -1077,13 +1080,13 @@ def test_a_set_up_that_moves_the_camera_or_switches_the_mesh_is_compared(
 
 @pytest.mark.parametrize(
     'options',
-    [{'graph': 'g'}, {'view': 'Top'}, {'mesh': 'Plane'}, {}],
-    ids=['graph', 'view', 'the mesh shown', 'nothing'],
+    [{'graph': 'g'}, {'mesh': 'Plane'}, {}],
+    ids=['graph', 'the mesh shown', 'nothing'],
 )
 def test_a_shot_that_needs_no_comparison_takes_one_render(
     helpers: types.ModuleType, capsys: pytest.CaptureFixture[str], options: View3dOptions
 ) -> None:
-    # a view or a graph may be what is shown already: an identical render is no sign of a stale one
+    # a graph may be what is shown already: an identical render is no sign of a stale one
     shot = Shot(helpers, 'A')
     helpers.shoot_3d('out.png', **options)
     assert [e for e in shot.events if e.startswith('render')] == ['render A']
@@ -1117,7 +1120,7 @@ def test_a_tiling_or_a_light_that_changed_nothing_isnt_compared(
     helpers: types.ModuleType, capsys: pytest.CaptureFixture[str], options: View3dOptions
 ) -> None:
     # a value shown already, or a map asked again: the set-up says it changed nothing, and an identical render is no
-    # sign of a stale one. Each is set up all the same, a rotation or exposure of 0 too: Designer's fields are set to it
+    # sign of a stale one. Each is set up all the same, a rotation or exposure of 0 too: written in the state file
     shot = Shot(helpers, 'A', changed=False)
     helpers.shoot_3d('out.png', **options)
     assert [e for e in shot.events if e.startswith('render')] == ['render A', 'render A']  # before, then after
@@ -1158,10 +1161,11 @@ def test_a_set_up_refused_doesnt_touch_the_window(helpers: types.ModuleType, opt
 
 
 def test_a_set_up_refused_by_what_designer_shows_doesnt_touch_the_window(helpers: types.ModuleType) -> None:
-    # REVIEW.md HLP-127: set_3d_view's own checks (an orbit of less than a pixel, a panel not shown...) come first too
-    refused = "orbit's 0.2 degrees right is less than one pixel's drag, 0.45 degrees: it would do nothing"
+    # REVIEW.md HLP-127: the set-up's own checks (a panel not shown, a Default State File it can't follow...) come
+    # first too
+    refused = "the 3D view's Default State File '/a/s.sbsscn' isn't a file URL: refused"
     shot = Shot(helpers, 'A', refused=refused)
-    with pytest.raises(RuntimeError, match='less than one pixel'):
+    with pytest.raises(RuntimeError, match="isn't a file URL"):
         helpers.shoot_3d('out.png', orbit=[0.2, 0.0])
     assert shot.events == []
 

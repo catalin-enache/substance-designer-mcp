@@ -1,9 +1,10 @@
 """The Rasterizer's settings for the 3D zoom's check of them (checks.py): set through Renderer > Edit settings, the
-Rasterizer's page of the Parameters panel, then the panel turned back to the graph in the editor, as the tool sets the
-tiling (_in_properties). Run inline with the helpers' text. Measured (2026-11-21, a Designer an agent started): the
+Rasterizer's page of the Parameters panel, then the panel turned back to the graph in the editor by opening it again,
+once it shows the page. Run inline with the helpers' text. Measured (2026-11-21, a Designer an agent started): the
 page lists "Samples" (a spin box) and "Enable rasterizer accumulation antialiasing" (a checkable button), neither
-with an object name; reading both and turning the panel back took 0.25 s. The shot itself never reads them (REVIEW.md
-HLP-215, the user's decision)."""
+with an object name; reading both and turning the panel back took 0.25 s. A spin box of the Parameters panel takes a
+value only through its own valueChanged() (measured 2026-11-12 on the 3D material's Tiling). The shot itself never
+reads them (REVIEW.md HLP-215, the user's decision)."""
 
 import re
 from textwrap import dedent
@@ -19,7 +20,7 @@ DEFAULTS_SET = _DEFAULTS + ' after'
 # it, only from __FROM__: any other value is left as it is (NOT_AS_READ). Prints the values before and after
 # (RASTERIZER samples=.. aa=..)
 _SET = dedent("""
-    from PySide6 import QtWidgets
+    from PySide6 import QtCore, QtWidgets
     mw = _main_window()
     dock = _3d_dock(mw)
     bar = dock.findChildren(QtWidgets.QMenuBar)[0]
@@ -39,6 +40,10 @@ _SET = dedent("""
             ) and w.isCheckable():
                 aa = w
         return samples, aa
+    def commit(spin, value):
+        spin.setValue(value)
+        QtCore.QMetaObject.invokeMethod(spin, 'valueChanged', QtCore.Qt.ConnectionType.DirectConnection)
+        _process_events()
     def setting():
         if not _until(lambda: None not in controls(), SETTLE_LIMIT):
             raise RuntimeError("the Parameters panel's Rasterizer page showed no Samples or no antialiasing")
@@ -51,16 +56,24 @@ _SET = dedent("""
         if now != __FROM__:
             raise RuntimeError('NOT_AS_READ: %s is %r, not %r' % (__KIND__, now, __FROM__))
         if __KIND__ == 'samples':
-            _commit(samples, float(__WANTED__), 'Samples')
+            commit(samples, float(__WANTED__))
         elif now != __WANTED__:
             aa.click()
             _process_events()
-        return said() + ' after', True
+        return said() + ' after'
     frames = _frames_of(mw, _viewport(dock))
     try:
         with _on_screen(mw, frames):
-            show = lambda: _menu_action(bar, keep, 'Renderer', 'Edit settings').trigger()
-            print(_in_properties(params, show, setting, "the Rasterizer's settings")[0])
+            shown = params.windowTitle()
+            try:
+                _menu_action(bar, keep, 'Renderer', 'Edit settings').trigger()
+                print(setting())
+            finally:  # once it shows the page: turned back before, the switch to the page came after
+                _until(lambda: params.windowTitle() != shown, SETTLE_LIMIT, [params.windowTitleChanged])
+                editor = _current_graph()
+                if editor is not None:
+                    _ui_mgr().openResourceInEditor(editor)
+                    _process_events()
     finally:
         frames.close()
 """)

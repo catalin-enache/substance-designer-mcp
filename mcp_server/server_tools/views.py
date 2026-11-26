@@ -27,10 +27,10 @@ from .core import (
 from .functions import NO_PARAMETER
 from .output import _load_8bit
 
-# screenshot_designer('3d', zoom=...): wheel steps either way (their size: designer_helpers/view3d.py)
+# screenshot_designer('3d', zoom=...): steps either way (their size: designer_helpers/state3d.py)
 ZOOM_STEPS = 30
 # screenshot_designer('3d', environment_rotation=..., environment_exposure=...): degrees and Exposure either way, the
-# tool's own limits (Designer's fields: designer_helpers/view3d.py)
+# tool's own limits (their units in the state file: designer_helpers/state3d.py)
 ENVIRONMENT_ROTATION = 180
 ENVIRONMENT_EXPOSURE = 10
 # the lines of a 3D shot that come beside its image, in the order printed: what was done to Designer's window, what was
@@ -107,20 +107,24 @@ def screenshot_designer(
         str | None, Field(description="One of the 3D view's Scene menu (Plane, Sphere, Rounded cube...).")
     ] = None,
     view: Annotated[
-        str | None, Field(description='Default, Front, Right, Back, Left, Top or Bottom, then framed.')
+        str | None,
+        Field(
+            description="Default, Front, Right, Back, Left, Top or Bottom, framed as Designer's Frame frames the mesh "
+            "(a mesh of the user's own is framed as the cube: if it doesn't show whole, call again with zoom or pan "
+            'beside view).'
+        ),
     ] = None,
     zoom: Annotated[
         int,
         Field(
-            description='Wheel steps from where the camera is then, about 1.1x closer each (negative: away), so after '
-            'pan it comes closer to what is in the middle.'
+            description="Steps closer, x1.11 each (negative: away, x1.1 each), from view's framing, a new mesh's "
+            "framing, or else the user's view; after pan it comes closer to what is in the middle."
         ),
     ] = 0,
     tiling: Annotated[
         float | None,
         Field(
-            description="How often the material repeats on the mesh (the user's Parameters panel then shows the graph "
-            'in the editor).'
+            description='How often the material repeats on the mesh (refused for a mesh using more than one material).'
         ),
     ] = None,
     orbit: Annotated[
@@ -162,21 +166,23 @@ def screenshot_designer(
     puts a minimized, covered or hidden window there for the shot, transparent so the user doesn't see it, never
     taking focus, then puts it back as it was, and says so. It is left up if the user switched to Designer during
     the shot and Designer is still the app in front as it ends. Tell the user when the result says it left Designer's
-    window up or in front. After a set-up that moved the camera, switched the
+    window up or in front, that a backup of their default 3D state it couldn't put back was removed, or that their 3D
+    view no longer follows a graph. Tell them too when an aborted call (a cancel, or the time limit) names 3D view steps
+    it began: their 3D view stays as the call left it, and Scene > Reset Scene then loads the default 3D state, not the
+    view they had. After a set-up that moved the camera, switched the
     mesh, or changed the tiling or the light, a render identical to the one before is said, and so is a 3D view that
-    hadn't settled within 3 s: shoot again with no set-up (pan, orbit and zoom move from where the camera is).
+    hadn't settled within 3 s: shoot again with the same set-up.
     A 3D shot that doesn't show what the call set (the mesh, the view, the material) may be the view's last frame
-    too. Shoot again with no set-up before judging it.
+    too. Shoot again with the same set-up before judging it.
     '3d' can set up the view first with graph, mesh, view, orbit, pan, zoom, tiling and the light, and says what it set
-    (stopped partway, the steps it began); it stays set, for later shots and in the user's view.
-    Each wheel step waits for the 3D view to be at rest, then for its sign of taking the step; each drag waits for its
-    sign. A step without them ends the camera's moves there: the result says which, and how long it waited. When a
-    wheel step isn't sent, or the view hadn't settled within 3 s after a step, or hadn't by the render since the window
-    came back with no step restarting it, the result also gives the view's count if below 8 (off screen, as last
-    drawn) and what may hold it there: still refining, or the Rasterizer's Samples below 8 or its accumulation
-    antialiasing off (Renderer > Edit settings). A shot where nothing of this happens says nothing of the count.
-    The light (environment, environment_rotation, environment_exposure) goes through the Parameters panel, as tiling
-    does.
+    (stopped partway, the steps it began). After the render it puts the user's 3D view back and says so, so each
+    call starts from the view the user left. A view that showed a graph's outputs gets the editor's graph's back after
+    each load, through the Explorer: this selects that graph there, expanding its package, and turns the Parameters
+    panel to it. The camera, the mesh, the tiling and the light go through Designer's
+    default 3D state file, which the call writes and puts back. When the view hadn't settled within 3 s after a step,
+    or hadn't by the render since the window came back with no step restarting it, the result also gives the view's
+    count if below 8 (off screen, as last drawn) and what may hold it there: still refining, or the Rasterizer's
+    Samples below 8 or its accumulation antialiasing off (Renderer > Edit settings). A shot where nothing of this happens says nothing of the count.
     An image costs about width x height / 750 tokens (1000 x 700 is about 930), so keep
     max_size small and crop to what you need."""
     if crop is not None and (not all(0.0 <= v <= 1.0 for v in crop) or not (crop[0] < crop[2] and crop[1] < crop[3])):
@@ -190,7 +196,7 @@ def screenshot_designer(
         'orbit': orbit if orbit and any(orbit) else None,  # 0 both ways: nothing to set, as zoom=0
         'pan': pan if pan and any(pan) else None,
         'environment': environment,
-        # values Designer's fields are set to, 0 included: unlike a turn, pan or zoom of 0, not nothing to do
+        # values written in the state file, 0 included: unlike a turn, pan or zoom of 0, not nothing to do
         'environment_rotation': environment_rotation,
         'environment_exposure': environment_exposure,
     }
@@ -198,7 +204,7 @@ def screenshot_designer(
     if given and panel != '3d':
         raise ToolError("%s: these set up the 3D view, so they go with panel='3d'" % ', '.join(given))
     if not -ZOOM_STEPS <= zoom <= ZOOM_STEPS:
-        raise ToolError('zoom is -%d to %d wheel steps (positive: closer), not %r' % (ZOOM_STEPS, ZOOM_STEPS, zoom))
+        raise ToolError('zoom is -%d to %d steps (positive: closer), not %r' % (ZOOM_STEPS, ZOOM_STEPS, zoom))
     if tiling is not None and not tiling > 0:
         raise ToolError('tiling is how often the material repeats on the mesh: more than 0, not %r' % tiling)
     if orbit is not None and not (abs(orbit[0]) <= 180 and abs(orbit[1]) <= 90):
@@ -234,8 +240,9 @@ def screenshot_designer(
         window = [line for line in lines if line.startswith(WINDOW)]
         set_up = [line for line in lines if line.startswith('3D view: ')]
         begun = [line for line in lines if line.startswith('3D view, setting: ')]
-        # an error after the set-up, or partway (an abort: the steps it began): the user's 3D view changed all the same,
-        # and their window too
+        # an error after the set-up, or partway: what was set, then that the view was put back; an abort: the steps it
+        # began, the view left as they set it; and what became of the user's window (designer_helpers/scene3d.py,
+        # shot3d.py)
         said = ''.join('\n' + line for line in window + (set_up or begun))
         if not os.path.exists(out_path):
             raise ToolError((text.strip().splitlines()[-1] if text.strip() else 'screenshot failed') + said)

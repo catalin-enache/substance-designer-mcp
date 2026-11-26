@@ -17,7 +17,9 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from textwrap import dedent
+from typing import TYPE_CHECKING
 
+import designer_helpers
 from project_constants import (
     QUIT_CLOSED,
     QUIT_FORCED_IN_SHUTDOWN,
@@ -31,6 +33,7 @@ from test_all_tools import common, launch_lock, window_server
 from test_all_tools.common import (
     POLL_S,
     Ctx,
+    Ops,
     agent_folder,
     agents_designers,
     check,
@@ -50,6 +53,11 @@ from test_all_tools.common import (
 from test_all_tools.crash_watch import watching_crashes
 from test_all_tools.lifecycle.crash_reports import uploads, uploads_off, uploads_on
 from test_all_tools.lifecycle.samples import TEARDOWN_LOGGED, in_shutdown, sampled
+
+if TYPE_CHECKING:  # for the checker: the part as the helpers hold it
+    from designer_helpers import state3d
+else:
+    state3d = designer_helpers.standalone('state3d')
 
 HANDLER_GONE_S = (
     10  # s at most for a Designer's crash handler to end after its quit: a limit; it ended with it, measured
@@ -520,11 +528,11 @@ async def check_a_designer_of_its_own(ctx: Ctx) -> bool:
     return started
 
 
-# the 3D view's dock looked up, then a set-up with no render: a 3D shot would go through the clipboard, which the
-# categories of categories.CLIPBOARD use beside this one
+# the 3D view's dock looked up, then a set-up checked, with no render: a 3D shot would go through the clipboard, which
+# the categories of categories.CLIPBOARD use beside this one
 WAITS_FOR_A_GRAPH = dedent("""
     mw = _APP.getQtForPythonUIMgr().getMainWindow()
-    for step in (lambda: _3d_dock(mw), lambda: set_3d_view(None, 'Plane')):
+    for step in (lambda: _3d_dock(mw), lambda: _3d_set_up(None, 'Plane')):
         try:
             step()
             print('BUILT')
@@ -545,6 +553,183 @@ async def check_the_3d_view_waits_for_a_graph(ctx: Ctx) -> None:
     )
 
 
+# the Designer's version folder, which the helpers take from Qt (designer_helpers/scene3d.py)
+VERSION_FOLDER = "print('FOLDER=' + _version_folder())"
+# Save Current State As Default, then the file it wrote, edited, loaded by Reset Scene, and saved again, Designer's
+# window on screen for the load (designer_helpers/scene3d.py)
+SAVED_LOADED_SAVED = dedent("""
+    mw = _main_window()
+    bar = _3d_dock(mw).findChildren(QtWidgets.QMenuBar)[0]
+    keep = [mw, bar]
+    _state_save(bar, keep)
+    path = _state_default_path(_version_folder())
+    print('SAVED=%%s' %% path)
+    resources = _state_resources(path)  # the textures the first Save wrote beside it
+    print('TEXTURES=%%r' %% (sorted(os.listdir(resources)) if os.path.isdir(resources) else None))
+    _state_write(path, _state_edited(_state_text(path), {'rotation': %r}))
+    frames = _frames_of(mw, _viewport(_3d_dock(mw)))
+    try:
+        with _on_screen(mw, frames):
+            print('LOADED=%%s' %% _state_load(bar, keep, frames)())
+            _state_save(bar, keep)
+    finally:
+        frames.close()""")
+# a 3D shot's set-up with a camera option, run as a shot runs it, without its render: a render goes through the
+# clipboard, which the categories of categories.CLIPBOARD use beside this one
+SET_UP_ALONE = dedent("""
+    mw = _main_window()
+    frames = _frames_of(mw, _viewport(_3d_dock(mw)))
+    try:
+        with _on_screen(mw, frames) as screen:
+            with _3d_set_up(orbit=(30.0, 0.0)).applied(screen.again, frames):
+                pass
+    finally:
+        frames.close()""")
+# a graph's two outputs, base colour and roughness, of one colour: on the mesh, a Save writes their textures beside the
+# state file (REVIEW.md TST-940); two, so Designer maps them by usage rather than asking which channel to show one in
+TWO_OUTPUTS: Ops = [
+    {'op': 'add', 'definition': 'uniform', 'ref': 'n', 'position': [-300, 0]},
+    {'op': 'add', 'definition': 'output', 'ref': 'o', 'usage': 'baseColor', 'identifier': 'basecolor'},
+    {'op': 'connect', 'from': 'n', 'to': 'o', 'input': 'inputNodeOutput'},
+    {
+        'op': 'add',
+        'definition': 'output',
+        'ref': 'r',
+        'usage': 'roughness',
+        'identifier': 'roughness',
+        'position': [0, 150],
+    },
+    {'op': 'connect', 'from': 'n', 'to': 'r', 'input': 'inputNodeOutput'},
+]
+# the user's Default State File set in Project settings > 3D View, as Designer reads it from its project file
+DEFAULT_STATE_FILE = '\t\t<view3d>\n\t\t\t<stateSaveFileUrl>file://%s</stateSaveFileUrl>\n\t\t</view3d>\n'
+
+
+async def check_the_users_default_state_file_is_followed(ctx: Ctx) -> None:
+    """A Designer started with a Default State File in its project settings (`user_project.sbsprj`, read as it starts)
+    saves the 3D view's state there with Save Current State As Default, and Reset Scene loads it. With a graph's two
+    outputs on the mesh, the first Save writes their textures beside that file. The version folder's own file and
+    textures are left alone (designer facts; REVIEW.md TST-940). A 3D shot's set-up, run without its render
+    (SET_UP_ALONE), puts that file and folder back byte for byte, and leaves the version folder's own alone
+    (designer_helpers/scene3d.py, state3d._state_default_path). Another file set since in the project settings, which
+    Designer reads only as it starts, is refused once the Save has run: Designer's Save wrote the file it started with,
+    and nothing is written where the new setting points (REVIEW.md HLP-268). The check restarts the run's Designer with the setting, and puts the project file back after;
+    macOS only, where the Designer has a home of its own."""
+    fact = 'a Default State File set in the project settings is the one Designer saves and loads'
+    followed = "a 3D shot's set-up puts the user's Default State File back byte for byte"
+    changed_since = "a 3D shot's set-up is refused once the Default State File was changed since Designer started"
+    if sys.platform != 'darwin':
+        skip('designer facts', fact, 'macOS only: no home of its own')
+        skip('screenshot_designer', followed, 'macOS only: no home of its own')
+        skip('screenshot_designer', changed_since, 'macOS only: no home of its own')
+        return
+    c = ctx.c
+    folder = (
+        re.findall(
+            r'^FOLDER=(.*)$', text(await c('execute_designer_code', {'code': ctx.helper_source + VERSION_FOLDER})), re.M
+        )
+        or ['']
+    )[0]
+    project = os.path.join(folder, 'user_project.sbsprj')
+    if not folder.startswith(os.path.join(agent_folder(common.PORT), 'home', '')) or not os.path.isfile(project):
+        check('designer facts', fact, False, "no project file in the Designer's own home: %r" % folder)
+        return
+    own = os.path.join(ctx.scratch, 'default_state', 'mine.sbsscn')
+    os.makedirs(os.path.dirname(own), exist_ok=True)  # REVIEW.md TST-924
+    versions = os.path.join(folder, state3d.STATE_NAME)  # the version folder's own, which stays as it is
+    users = b'<the users own default/>\r\n'
+
+    def versions_own() -> tuple[bytes | None, list[str] | None]:  # its file, and the textures beside it
+        resources = state3d._state_resources(versions)
+        return (
+            Path(versions).read_bytes() if os.path.isfile(versions) else None,
+            sorted(os.listdir(resources)) if os.path.isdir(resources) else None,
+        )
+
+    kept = Path(project).read_bytes()
+
+    def setting(default: str) -> None:  # the project file setting `default` as the Default State File
+        Path(project).write_bytes(
+            kept.replace(b'<preferences>\n', b'<preferences>\n' + (DEFAULT_STATE_FILE % default).encode(), 1)
+        )
+
+    def no_backup() -> bool:
+        return not os.path.exists(os.path.join(folder, state3d.STATE_BACKUP))
+
+    try:
+        setting(own)
+        with watching_crashes(ctx) as watch:  # its quit a step of its own (REVIEW.md TST-236)
+            step = watch.step()
+            quit_ = text(await c('quit_designer', {'wait_s': 30}))
+            # judged as lifecycle's other quits, a quit forced in its shutdown counted (REVIEW.md TST-924)
+            closing = 'closes the Designer to start it with a Default State File'
+            check('quit_designer', closing, normal_close(quit_, closing), quit_)
+            watch.check(step, 'quit_designer', 'a normal close leaves no crash dump', True, quit_)
+        started = text(await c('launch_designer', {'wait_s': 240}))
+        check(
+            'launch_designer',
+            'starts again with a Default State File set',
+            'Designer started in' in started and 'ERROR' not in started,
+            started,
+        )
+        await c('create_graph', {'name': 'mcp_selftest_default_state_file', 'size_log2': 4})
+        await c('apply_edits', {'graph': 'mcp_selftest_default_state_file', 'ops': TWO_OUTPUTS})
+        # Designer builds its 3D view, the graph's outputs on the mesh
+        await c('open_graph', {'graph': 'mcp_selftest_default_state_file'})
+        before = versions_own()
+        t = text(await c('execute_designer_code', {'code': ctx.helper_source + SAVED_LOADED_SAVED % 0.375}))
+        loaded = os.path.isfile(own) and state3d._state_fields(state3d._state_text(own), ['rotation']) == {
+            'rotation': 0.375
+        }
+        left = versions_own() == before
+        # the graph's two outputs on the mesh: the first Save writes their textures beside the file (REVIEW.md TST-940)
+        textures = "TEXTURES=['default_baseColor.png', 'default_roughness.png']" in t
+        check(
+            'designer facts',
+            fact,
+            'SAVED=%s' % own in t and 'LOADED=True' in t and loaded and left and textures,
+            "saved and loaded %s, the version folder's left alone %s, the textures beside it %s | %s | %s"
+            % (loaded, left, textures, ' '.join(t.split())[-200:], started),
+        )
+        Path(own).write_bytes(users)
+        shutil.rmtree(state3d._state_resources(own), ignore_errors=True)  # their own, not the Save's
+        os.makedirs(state3d._state_resources(own))
+        Path(state3d._state_resources(own), 'theirs.png').write_bytes(b'their texture')
+        set_up = text(await c('execute_designer_code', {'code': ctx.helper_source + SET_UP_ALONE}))
+        back = Path(own).read_bytes() == users and os.listdir(state3d._state_resources(own)) == ['theirs.png']
+        left = versions_own() == before
+        gone = no_backup()
+        check(
+            'screenshot_designer',
+            followed,
+            back and left and gone and '3D view: put back as it was' in set_up,
+            "its file back %s, the version folder's left alone %s, no backup left %s | %s"
+            % (back, left, gone, set_up.strip()[-200:]),
+        )
+        # another Default State File set since Designer started, which saves the one it started with (REVIEW.md
+        # HLP-268): refused once the Save has run, nothing written where the new setting points
+        other = os.path.join(os.path.dirname(own), 'other.sbsscn')
+        setting(other)
+        changed = text(await c('execute_designer_code', {'code': ctx.helper_source + SET_UP_ALONE}))
+        written = os.path.exists(other) or os.path.exists(state3d._state_resources(other))
+        gone = no_backup()
+        saved = Path(own).read_bytes() != users  # Designer's Save: the file it started with, the session's state in it
+        check(
+            'screenshot_designer',
+            changed_since,
+            'takes a restart of Designer' in changed
+            and "The file Designer started with now holds the session's state" in changed  # REVIEW.md HLP-274
+            and not written
+            and gone
+            and saved
+            and '3D view, setting: ' not in changed,
+            'refused %s, written where it points now %s, no backup left %s, saved where Designer started %s | %s'
+            % ('takes a restart of Designer' in changed, written, gone, saved, changed.strip()[-250:]),
+        )
+    finally:
+        Path(project).write_bytes(kept)  # read as Designer starts: the next start has none
+
+
 async def run(ctx: Ctx) -> None:
     with watching_crashes(ctx):  # one wait for crash dumps, at the end, for every check below
         # in a pool, no other Designer starts from before its own does until the hand-over check has used it: that one
@@ -554,6 +739,7 @@ async def run(ctx: Ctx) -> None:
                 return
             await check_a_designer_sharing_the_temp_folder_hands_over(ctx)
         await check_the_3d_view_waits_for_a_graph(ctx)  # before any graph is opened: the hand-over check opens none
+        await check_the_users_default_state_file_is_followed(ctx)  # restarts the run's Designer, as the next checks do
         await check_launch_on_another_port(ctx)
         await check_launch_refuses_a_port_another_program_holds(ctx)
         await check_quitting_and_starting_again(ctx)

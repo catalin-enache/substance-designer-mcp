@@ -6,7 +6,7 @@ re-measures, in its frames fact: the count at rest; its restart by a pan and by 
 turns, and its return; the first paint after each reading the count from before; a show from hidden right after a
 pan made meanwhile (an UpdateRequest, then a restart), and one with nothing changed (only paints at rest); no count
 with Display > Samples off, at the frame after the toggle; Designer hidden, an UpdateRequest after each pan and no
-paint. Its window checks take a zoom whose window goes off screen at its first step. The rest was measured once.
+paint. The rest was measured once.
 
 - Each frame the 3D view draws is a Paint event on its viewport (an Alg::Gui3D::ViewportWidget). Off screen it draws
   none.
@@ -26,7 +26,7 @@ paint. Its window checks take a zoom whose window goes off screen at its first s
   count went on to 8, and in 1 show of 5 two paints read the lower count first, before any UpdateRequest (2026-11-16,
   REVIEW.md HLP-167). With something changed while the window was off screen (a pan, a viewpoint, a
   graph's outputs; hidden or minimized), the view asks for a frame or restarts by the second paint, in each of 9
-  shows where the change's UpdateRequest had come while hidden (the shot's moves wait for it: taken). A pan made right
+  shows where the change's UpdateRequest had come while hidden. A pan made right
   before the show, its UpdateRequest not come yet, read the count at rest at the first three paints, then asked.
 - With Display > Samples off, the label shows no count, only "Render Time". It changes at the next frame, not as the
   menu is toggled. The GPU Pathtracer counts on: 143 samples after 6 s.
@@ -35,23 +35,16 @@ paint. Its window checks take a zoom whose window goes off screen at its first s
   REVIEW.md HLP-211). At Samples 4, each wheel notch on screen drew 6 paints reading 4, 1, 1, 2, 3, 4, and hidden one
   UpdateRequest and no paint. With antialiasing off, each notch drew 3 or 4 paints on screen, each reading 1, and
   hidden one UpdateRequest. Samples above 8 weren't measured. The self-test's Rasterizer check (editor_panels_and_fit)
-  re-measures the count at the render, 4 then 1, with an on-screen zoom refused at each.
+  re-measures the count at the render, 4 then 1, with an on-screen zoom at each.
 - The label changes only at a frame, so off screen it stays at the count of the last frame drawn there. After the
   self-test's material check (Materials > Add, whose dialog shows Designer, then Designer hidden again), it read
   "Samples: 1", "Samples: 3" and "Samples: 2" in three tries.
-- A drag, or a wheel step, sent before the view drew a frame after the one before is lost, or part of it. Sent after
-  that frame, each was taken as when they were 0.2 s apart: the renders were identical.
-- Designer hidden, the view draws no frame, and moves sent back to back were lost too: three pans, or three wheel
-  steps, a pan and a turn, came out 22 to 25 grey levels apart on average from the same moves 0.2 s apart. Each move
-  was followed by one UpdateRequest, 0.02 to 0.04 s later, and moves sent each after it came out as those 0.2 s apart
-  (within 0.01 grey levels on average; 2026-11-15). The UpdateRequest came while the move's own events ran in 1 of 60
-  moves, the first (2026-11-16, REVIEW.md HLP-164).
-- Off screen, the same set-up from the same start still came out differently between runs: a pan of two drags 68.5
-  grey levels away in 1 run of 2, a mesh switch and an orbit in one call 1.1 and 4.2 apart. On screen, each of 5
-  set-ups repeated exactly, twice (2026-11-16). So set_3d_view runs a set-up that moves the camera with the window on
-  screen (view3d.py; REVIEW.md HLP-168, the user's choice).
-- On screen, waits that counted the frames drawn while a move's events ran lost one of zoom=-3's three wheel steps:
-  it zoomed out 0.82x, as two steps do, once (2026-11-16).
+- A pan made by the mouse, Designer hidden: the view draws no frame, and asks for one (an UpdateRequest) 0.02 to 0.04 s
+  after the pan (2026-11-15). Of 60 moves, wheel notches and drags in turn, it came while the move's own events ran
+  in 1, the first (2026-11-16, REVIEW.md HLP-164). The self-test's window checks pan so, a change no shot makes (its camera goes through the state file:
+  scene3d.py).
+- A load of the 3D view's state file restarts the count, which holds at 1 while the camera glides to the file's
+  pose, then climbs back (scene3d.py).
 - In a Designer launch_designer opened hidden, before any shot, the overlay's labels were empty: the view hadn't drawn.
   After one, they read "Samples: 8" (2026-11-16, REVIEW.md HLP-162).
 - Designer in another language than English wasn't measured: a label saying its count otherwise isn't read
@@ -66,33 +59,20 @@ So the waits (_Frames):
   from the one before it: a count still climbing from the step before isn't one (REVIEW.md HLP-159);
 - the count at rest is SAMPLES, whatever the Rasterizer's settings: the shot reads none of them (REVIEW.md HLP-215,
   the user's choice). With its Samples below 8, or its accumulation antialiasing off, the count stops below SAMPLES on
-  screen: a wheel step's rest never comes, and the step is refused. At Samples below 8, a settle after a restart runs
-  to its net. The result names the count, off screen the one last drawn, and what may hold it there, a view still
-  refining among them (below_rest), claiming neither;
+  screen. At Samples below 8, a settle after a restart runs to its net. The result names the count, off screen the one
+  last drawn, and what may hold it there, a view still refining among them (below_rest), claiming neither;
 - with the Rasterizer's Samples above 8, if its count goes on past 8 as the GPU Pathtracer's does, the view reads as
   at rest at 8, and a render is taken mid-accumulation (_resting; not measured). With its antialiasing off, each paint
   reads 1. A restart is a count below the one before, so only the watch's first paint, with no count before it, reads
   as one: a wait that sees it, as the first step of a shot in a Designer already on screen, runs to its net and says
-  unsettled. A later step's settled and moved can end at NO_RESTART as if the step changed nothing, and a viewpoint's
-  turn can be cut short (REVIEW.md HLP-216, HLP-217; not measured);
-- after a viewpoint, before Frame: the count rising after its restart, the turn over (a Frame at once cancels it).
-  Off screen nothing says the turn ended. Measured hidden (2026-11-16, 2 turns): only UpdateRequests came, every 22 to
-  44 ms, for 0.82 and 0.84 s, then nothing; no other event on the viewport or its window. So the set-up shows the
-  window for the turn (view3d.py's _3d_set_up, the user's choice: REVIEW.md HLP-158). Gone off screen during it, the
-  wait ends, and the set-up's look after the turn puts the window on screen again and waits for the view to settle
-  there (REVIEW.md HLP-163);
-- before a set-up's wheel step, the view at rest (from_rest; drags aren't: view3d.py): on screen, the count back at
-  SAMPLES. Off screen the count stays as last drawn. At SAMPLES the view is at rest; lower, the view went off screen
-  with an accumulation left, and the window goes on screen again (the shot's look) for the count to come back, the look
-  made again if the window leaves before it is back (REST_LOOKS). Then
-  the move's sign: on screen the count's restart read at a paint, off screen an UpdateRequest since the move began.
-  From rest neither can be left over by the move before (ROADMAP item 112, measured: view3d.py). Each wait SETTLE_LIMIT
-  at most, a safety net, not the time a sign is expected by, as NO_RESTART was;
-- with no count to read, a move's sign is a frame after the move's events ran; off screen, an UpdateRequest since the
-  move began (taking; REVIEW.md HLP-164). That sign can still be an UpdateRequest a move before left in flight;
-- with a count past SAMPLES, as the GPU Pathtracer's, the view reads as at rest while it still accumulates (_resting).
-  On screen, a step dropped then shows no restart, so its wait runs to its net and the step ends the moves. Off
-  screen, a step can take a left-over request for its sign, as with no count to read. Neither was measured;
+  unsettled. A later step's settled and moved can end at NO_RESTART as if the step changed nothing (REVIEW.md
+  HLP-216, HLP-217; not measured). A later step's restarted can run to SETTLE_LIMIT and say the restart never came
+  (REVIEW.md HLP-289; not measured). The self-test's Rasterizer check measures a zoom then, its count said of a step
+  or of the render;
+- after a load of the state file: its end (scene3d.py), then the count rising back to SAMPLES after its restart, the
+  camera's glide over (settled). Each wait SETTLE_LIMIT at most, a safety net;
+- with a count past SAMPLES, as the GPU Pathtracer's, the view reads as at rest while it still accumulates (_resting;
+  not measured);
 - once the window is on screen: a restart and the count back; or, from a count at rest, two paints reading no restart
   and no UpdateRequest since the show, what tells nothing changed from a change made while it was off screen
   (REVIEW.md HLP-151); from a count left lower, the count at the target (REVIEW.md HLP-167). A change
@@ -105,7 +85,7 @@ So the waits (_Frames):
 - with no count to read, a step's comparison of renders ends off screen on an UpdateRequest since the step, as the
   count's wait does: off screen every render is the view's last frame (REVIEW.md HLP-163). Off screen from the step
   on, it takes no render: a view that never drew, as in a Designer opened hidden before any 3D shot, gives none
-  there, and set_3d_view raised after switching the mesh (REVIEW.md HLP-170).
+  there (REVIEW.md HLP-170).
 """
 
 from types import TracebackType
@@ -124,12 +104,8 @@ HELD = (
 )
 HELD_AGAIN = ', its sample count at %d%s, below 8'  # what may hold it there said once already
 LAST_DRAWN = ' when last drawn'  # off screen, where the count stays as the view last drew it
-# looks at most a wheel step's rest makes in all, the first included, the window gone off screen again after a look
-# before the count was back: nothing was sent then, so the step can't be sent twice (REVIEW.md HLP-218); a safety net,
-# as shot3d's BRINGS
-REST_LOOKS = 3
 NO_RESTART = 1.0  # s a step's change may take to show: a step that restarts nothing changed nothing the view shows
-# s at most for the view to settle once it restarted, or to give a drag's or a wheel step's sign (taken): a safety net
+# s at most for the view to settle once it restarted, or for a load of the state file to end: a safety net
 SETTLE_LIMIT = 3.0
 COUNT = r'Samples: (\d+)'  # the overlay's line, in English
 VIEWPORT = 'Alg::Gui3D::ViewportWidget'
@@ -183,9 +159,8 @@ class _Counts:
         """The view restarted since `since`, then counted back to the target after its latest restart, or is now `off`
         screen, where it draws nothing more (a label left lower). The restart's paint reads the count of the frame
         before it, the restart's, so the change was drawn by then (REVIEW.md HLP-158: a frame more was waited for).
-        The latest: a step of several moves, each sent from the view at rest (_Frames.from_rest), restarts and counts
-        back at each, and the render must follow the last (ROADMAP item 112: it was taken at the last wheel step's
-        first frame, one sample)."""
+        The latest: a step that restarts the view more than once counts back after each, and the render must follow
+        the last (ROADMAP item 112: it was taken at the last wheel step's first frame, one sample)."""
         latest = max(self._restarts(since), default=None)
         return latest is not None and (self._reached(latest + 1, self.target) or off)
 
@@ -214,7 +189,8 @@ class _Counts:
 
 
 def _viewport(dock: QtWidgets.QDockWidget) -> QtWidgets.QWidget:
-    """The 3D view's viewport in its `dock`, the one the set-up drags (_3d_set_up); refused when there is none."""
+    """The 3D view's viewport in its `dock`, the one the set-up watches (scene3d._3d_set_up); refused when there is
+    none."""
     # className() is a str: PySide's stubs say bytes
     found = [w for w in dock.findChildren(QtWidgets.QWidget) if cast(str, w.metaObject().className()) == VIEWPORT]
     if not found:
@@ -236,7 +212,6 @@ class _Frames:
         # HLP-162: in a Designer opened hidden, the labels are empty until the view has drawn)
         self._counts: _Counts | None = None
         self._painted = 0  # paints seen
-        self.rest_waited = 0.0  # s the last wheel step's rest was waited for (_at_rest), for the line of a step refused
         self._held_said = False  # below_rest said what may hold the count below SAMPLES
         # the mark of the latest look whose wait (shown) ended at its limit; None once a step restarted the view since
         self._unshown: tuple[int, int] | None = None
@@ -278,7 +253,9 @@ class _Frames:
         _unwatch(self._viewport, self._spy)
         _unwatch(self._window, self._exposed)
 
-    def _wait(self, state: Callable[[], bool], limit: float) -> bool:
+    def until(self, state: Callable[[], bool], limit: float) -> bool:
+        """Waits for `state()`, looking at each of the view's paints, UpdateRequests and expose events, at most `limit`
+        s, a safety net (waits._until). Returns whether it came."""
         return _until(state, limit, [self._spy.fired, self._exposed.fired])
 
     def mark(self) -> tuple[int, int]:
@@ -294,15 +271,7 @@ class _Frames:
         if not self._drawing():
             return False
         since = self._painted
-        return self._wait(lambda: self._painted > since, NO_RESTART)
-
-    def taken(self, since: tuple[int, int]) -> bool:
-        """After a drag or a wheel step: waits for the view's sign it took it, at most SETTLE_LIMIT, a safety net. On
-        screen, the sign is a frame after the paints `since` counts. Off screen, where it draws none, it is an
-        UpdateRequest after those `since` counts, the view asking for a frame. Returns whether either came (REVIEW.md
-        HLP-149)."""
-        painted, asked = since
-        return self._wait(lambda: self._painted > painted or self._asked_off_screen(asked), SETTLE_LIMIT)
+        return self.until(lambda: self._painted > since, NO_RESTART)
 
     def _asked_off_screen(self, asked: int) -> bool:
         """Whether the view asked for a frame since it had asked `asked` times, and is off screen, where it draws none:
@@ -328,55 +297,6 @@ class _Frames:
         said, self._held_said = self._held_said, True
         return (HELD_AGAIN if said else HELD) % (count, '' if self._drawing() else LAST_DRAWN)
 
-    def _at_rest(self, again: Callable[[], None] | None) -> bool:
-        """Before a wheel step, a count shown: brings the view to rest, SETTLE_LIMIT at most for each wait, a
-        safety net, and returns whether it is. On screen, the count back at SAMPLES. Off screen, the count stays as
-        last drawn: at SAMPLES the view is at rest; lower, an accumulation is left, and `again` (the shot's look) puts
-        the window on screen, where the count goes back (the module docstring). Off screen again before the count was
-        back, the look is made again, up to REST_LOOKS looks in all, each followed by a wait of SETTLE_LIMIT at most.
-        How long it waited, from its first wait to its end, goes in `rest_waited`."""
-        if self._resting():
-            return True
-        import time
-
-        def rested() -> bool:  # or off screen, where the count stays as last drawn
-            return self._resting() or not self._drawing()
-
-        start = time.monotonic()
-        self._wait(rested, SETTLE_LIMIT)
-        for _ in range(REST_LOOKS):
-            if self._resting() or self._drawing() or again is None:
-                break
-            again()
-            self._wait(rested, SETTLE_LIMIT)
-        self.rest_waited = time.monotonic() - start
-        return self._resting()
-
-    def from_rest(self, again: Callable[[], None] | None) -> Callable[[], bool] | None:
-        """Before a wheel step: the view brought to rest (_at_rest), then the wait for the step's sign, run
-        once the step's events ran; None when the view didn't come to rest, and the step isn't sent. From rest, the
-        sign on screen is the count's restart read at a paint since now; off screen, an UpdateRequest since now:
-        neither can be left over by a step before. SETTLE_LIMIT at most, a safety net. With no count to read, the
-        sign is taking's. With a count past SAMPLES (the GPU Pathtracer's) the view reads as at rest while it
-        accumulates, so off screen that UpdateRequest can be left over too (the module docstring)."""
-        counts = self._counts
-        if counts is None:
-            return self.taking()
-        if not self._at_rest(again):
-            return None
-        painted, asked = self.mark()
-        return lambda: self._wait(
-            lambda: counts.restart(painted) is not None or self._asked_off_screen(asked), SETTLE_LIMIT
-        )
-
-    def taking(self) -> Callable[[], bool]:
-        """Before a drag or a wheel step: returns the wait for the view to take it (taken), run once the move's events
-        ran. Its UpdateRequests count from now: off screen, the view's can come while those events run (REVIEW.md
-        HLP-164). Its paints count from the wait's start: on screen, counted from now, a zoom lost one of its wheel
-        steps (the module docstring)."""
-        asked = self._asked
-        return lambda: self.taken((self._painted, asked))
-
     def settled(self, since: tuple[int, int]) -> bool:
         """After a step: waits for the view to restart since `since`, at most NO_RESTART (none: the step changed
         nothing it shows), then to count back to the count at rest, at most SETTLE_LIMIT. Off screen, where the view
@@ -391,26 +311,41 @@ class _Frames:
         if counts is None:
             self._unshown = None  # the step's own wait, its result the step's to say
             return self._renders_alike(asked_off_screen)
-        if not self._wait(lambda: counts.restart(paints) is not None or asked_off_screen(), NO_RESTART):
+        if not self._restart(counts, since, NO_RESTART):
             return True  # no restart: the step changed nothing the view shows
         self._unshown = None  # restarted: the step's own wait from here on, its result the step's to say
-        return self._wait(lambda: counts.settled(paints, not self._drawing()) or asked_off_screen(), SETTLE_LIMIT)
+        return self.until(lambda: counts.settled(paints, not self._drawing()) or asked_off_screen(), SETTLE_LIMIT)
+
+    def restarted(self, since: tuple[int, int]) -> bool:
+        """After a load that nothing else marks the end of (scene3d._state_load): waits for the view's restart since
+        `since`, at most SETTLE_LIMIT. A load of box.fbx writing a change restarted the view (REVIEW.md HLP-286). Off
+        screen, where the view draws no paint, an UpdateRequest since `since` ends it, as in settled(). Returns
+        whether it came; True with no count to read, where settled() judges by the renders. What it can't see, as
+        with antialiasing off: the module docstring, and scene3d.py's for the load (REVIEW.md HLP-289)."""
+        counts = self._counts
+        return counts is None or self._restart(counts, since, SETTLE_LIMIT)
+
+    def _restart(self, counts: _Counts, since: tuple[int, int], limit: float) -> bool:
+        """Waits for the view's restart since `since`, at most `limit`: a paint reading it, or off screen, where the
+        view draws no paint, an UpdateRequest (REVIEW.md HLP-158). Returns whether it came."""
+        paints, asked = since
+        return self.until(lambda: counts.restart(paints) is not None or self._asked_off_screen(asked), limit)
 
     def moved(self, since: tuple[int, int]) -> bool:
         """After a viewpoint: waits for the camera's turn to end (_Counts.moved), as settled() does for its count, and
-        returns False as it does. Ends as the view goes off screen, where nothing says the turn ended: the set-up's
-        look after the turn puts the window on screen again and waits for the view there (view3d.py; REVIEW.md
-        HLP-163)."""
+        returns False as it does. Ends as the view goes off screen, where nothing says the turn ended (REVIEW.md
+        HLP-163). The set-up waits with settled(); the self-test's facts measure Designer's own turns with this
+        (facts/state_file.py)."""
         off = self.off_screen
         counts = self._counts
         if counts is None:
             self._unshown = None  # as in settled()
             return self._renders_alike(off)
         paints = since[0]
-        if not self._wait(lambda: counts.restart(paints) is not None or off(), NO_RESTART):
+        if not self.until(lambda: counts.restart(paints) is not None or off(), NO_RESTART):
             return True
         self._unshown = None
-        return self._wait(lambda: counts.moved(paints) or off(), SETTLE_LIMIT)
+        return self.until(lambda: counts.moved(paints) or off(), SETTLE_LIMIT)
 
     def shown(self, since: tuple[int, int]) -> None:
         """Once Designer's window is on screen again, shown after `since`: waits for the view to draw what changed
@@ -421,12 +356,12 @@ class _Frames:
         off = self.off_screen
         paints = since[0]
         if self._counts is None:  # a label shows its count from the view's first frame on (REVIEW.md HLP-162)
-            self._wait(lambda: self._counts is not None or self._painted > paints + 1 or off(), SETTLE_LIMIT)
+            self.until(lambda: self._counts is not None or self._painted > paints + 1 or off(), SETTLE_LIMIT)
 
         if self._counts is None:
             drawn = off() or self._renders_alike(off, changed=False)
         else:
-            drawn = self._wait(lambda: self._look_drawn(since) or off(), SETTLE_LIMIT)
+            drawn = self.until(lambda: self._look_drawn(since) or off(), SETTLE_LIMIT)
         self._unshown = None if drawn else since
 
     def _look_drawn(self, since: tuple[int, int]) -> bool:
@@ -441,8 +376,9 @@ class _Frames:
         hasn't drawn what changed by now: the render may be of a view still drawing, which the shot says after it
         (shot3d.UNDRAWN; REVIEW.md HLP-222). The look's own read is read again, on the paints counted since, never the
         count alone: with a frame asked for, a count at SAMPLES may be the one before the change. Measured, forced (3 of
-        3): a look ending at its limit, then a notch with no sign; the view drew it during the notch's wait, and the
-        render matched a plain shot right after it. Where no count shows, the look's result stands."""
+        3), when the zoom was wheel steps: a look ending at its limit, then a step with no sign; the view drew it during
+        the step's wait, and the render matched a plain shot right after it. Where no count shows, the look's result
+        stands."""
         return self._unshown is not None and not self._look_drawn(self._unshown)
 
     def off_screen(self) -> bool:
@@ -463,7 +399,7 @@ class _Frames:
 
         start = time.monotonic()
         if not self._drawing():
-            self._wait(lambda: ended() or self._drawing(), NO_RESTART)
+            self.until(lambda: ended() or self._drawing(), NO_RESTART)
             if ended() or not self._drawing():
                 return True
         last = self._render()
@@ -493,7 +429,7 @@ def _frames_of(mw: QtWidgets.QMainWindow, viewport: QtWidgets.QWidget) -> _Frame
 class _Waiting:
     """`with _Waiting(watched) as waiting:` around a change: on leaving, the change is waited for on `watched`, the view
     restarting and settling since a mark taken as the `with` starts (_Frames.settled). A step of the 3D view's set-up waits this
-    way (view3d.py). Inside, the step records the change once made, so an error in its wait can say it was set
+    way (scene3d.py). Inside, the step records the change once made, so an error in its wait can say it was set
     (REVIEW.md HLP-200). `waiting.needed` set False skips the wait, for a change the view takes as none (REVIEW.md
     HLP-201). An error inside skips it too. `waiting.settled` is what the wait returned, True without one (REVIEW.md
     HLP-214)."""

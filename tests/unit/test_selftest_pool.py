@@ -902,6 +902,7 @@ def test_lifecycle_holds_the_lock_from_its_launch_to_the_hand_over_and_with_its_
     for name in (
         'check_a_designer_sharing_the_temp_folder_hands_over',
         'check_the_3d_view_waits_for_a_graph',
+        'check_the_users_default_state_file_is_followed',
         'check_launch_on_another_port',
         'check_launch_refuses_a_port_another_program_holds',
         'check_quitting_and_starting_again',

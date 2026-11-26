@@ -1,19 +1,20 @@
 """What the 3D view checks measure in a render of a checker on a plane seen from the top: the plane's width, height and
 middle (a square from straight above), how far it moved between two renders, and how often a row near its middle (the
 most of three) turns from dark to light (twice per square: tiling 2 doubles it). And a shot that waits for the checker
-on the mesh (with_checker)."""
+on the mesh (with_checker), and the user's own view set to show it (users_checker)."""
 
 import base64
 import io
 import os
 import time
+from textwrap import dedent
 
 import numpy as np
 from mcp.types import CallToolResult
 from PIL import Image as PILImage
 
-from test_all_tools.common import Call, JsonSent, ToolArgs, is_image, text
-from test_all_tools.editor_panels_and_fit.window_states import at_rest
+from test_all_tools.common import Call, ToolArgs, is_image, text
+from test_all_tools.editor_panels_and_fit.preparations import VIEW3D_GRAPH
 
 # dark-light changes that show the checker on the mesh: with it 11 to 30, with the default material 1 at most, in each
 # kind of shot the checks take (measured 2026-11-13: a rounded cube from the Front and the Top, a plane from the
@@ -23,6 +24,35 @@ CHECKER = 6
 # beside the workers, the 3D shots once didn't follow the camera for about 20 s, the cause unknown (REVIEW.md TST-383,
 # TST-388). A limit: each shot waits for the 3D view itself (designer_helpers/frames3d.py; TST-421)
 RETAKE_S = 30
+
+# the user's own view set through the 3D view's menus, as a user sets it, Designer's window on screen as a 3D shot puts
+# it: the outputs of graph %r on the mesh (None: as they are), then a Plane from the Top, framed. A set-up shot leaves no
+# view of its own: each call starts from the view the user left, and puts it back (designer_helpers/scene3d.py)
+USERS_PLANE_TOP = dedent("""
+    mw = _main_window()
+    bar = _3d_dock(mw).findChildren(QtWidgets.QMenuBar)[0]
+    keep = [mw, bar]
+    frames = _frames_of(mw, _viewport(_3d_dock(mw)))
+    shown = %r
+    try:
+        with _on_screen(mw, frames) as screen:
+            if shown is not None:
+                g = find_graph(shown)
+                with _Waiting(frames):
+                    g.compute()  # its outputs ready for the mesh
+                    _apply_outputs(_explorer_tree(mw, keep), g, keep)
+            plane = _menu_action(bar, keep, 'Scene', 'Plane')
+            if not plane.isChecked():  # checked, it is shown already, and picked again it restarts nothing
+                with _Waiting(frames):
+                    plane.trigger()
+            since = frames.mark()
+            _menu_action(bar, keep, 'Camera', 'Top').trigger()
+            frames.moved(since)  # Frame at once cancels the turn
+            screen.again()
+            with _Waiting(frames):
+                _menu_action(bar, keep, 'Camera', 'Frame').trigger()
+    finally:
+        frames.close()""")
 
 
 def _now() -> float:
@@ -138,43 +168,28 @@ def say_renders(*renders: tuple[str, str]) -> None:
         print('      %s: %s, mean grey %.1f: %s' % (name, plane, a.mean(), path))
 
 
-NOT_TAKEN = 'not taken: the shot before saved nothing'  # plain_after's reply then
-
-
-async def plain_after(c: Call, helper_source: str, path: str) -> tuple[str, float, str]:
-    """A plain shot right after the 3D shot saved at `path`, with no set-up, which renders the view at rest. Returns its
-    path (`path`'s, with _after), how far apart the two are in grey levels, and its shot's reply, for a check that
-    fails on it (REVIEW.md TST-688). 255 when either shot saved nothing, the reply NOT_TAKEN when the shot at `path`
-    did."""
-    after = path.replace('.png', '_after.png')
-    if not os.path.exists(path):
-        return after, 255.0, NOT_TAKEN
-    try:
-        said = text(await c('execute_designer_code', {'code': helper_source + 'shoot_3d(%r)' % after}))
-    finally:
-        await at_rest(c, helper_source)
-    return after, difference(grey_file(path), grey_file(after)) if os.path.exists(after) else 255.0, said
-
-
 async def with_checker(c: Call, args: ToolArgs) -> CallToolResult:
-    """screenshot_designer with `args`, then retaken as the 3D view is, each retake as the shot before returns, until
-    the checker shows on the mesh (CHECKER), RETAKE_S at most. What the checks measure needs the checker. Once, after a
-    call that switched the mesh and applied a graph, the shots didn't follow the camera for about 20 s (RETAKE_S);
-    shots after a call doing one of them wait too, as a defence. Says how many retakes it took, or that the checker
-    never showed. Returns the last shot, the checker on it or not, with the first shot's text: what the call set, which
-    a retake doesn't say. A shot that failed is returned at once."""
+    """screenshot_designer with `args`, then retaken with them, each retake as the shot before returns, until the
+    checker shows on the mesh (CHECKER), RETAKE_S at most: each call starts from the view the user left, so a retake
+    sets the view up again (designer_helpers/scene3d.py). What the checks measure needs the checker. Once, after a call
+    that switched the mesh and applied a graph, the shots didn't follow the camera for about 20 s (RETAKE_S). Says how
+    many retakes it took, or that the checker never showed. Returns the last shot, the checker on it or not. A shot
+    that failed is returned at once."""
     start = _now()
-    first = r = await c('screenshot_designer', args)
-    again: dict[str, JsonSent] = {key: args[key] for key in ('panel', 'max_size') if key in args}
+    r = await c('screenshot_designer', args)
     retakes = 0
     while is_image(r) and transitions(grey(r)) < CHECKER and _now() - start < RETAKE_S:
-        r = await c('screenshot_designer', again)
+        r = await c('screenshot_designer', args)
         retakes += 1
     if retakes:
         shown = is_image(r) and transitions(grey(r)) >= CHECKER
         print('      the checker %s on the mesh after %d retakes' % ('showed' if shown else "didn't show", retakes))
-        if is_image(r):  # two checks read what the call set (REVIEW.md TST-384)
-            r.content = [part for part in r.content if part.type != 'text'] + [
-                part for part in first.content if part.type == 'text'
-            ]
     return r
+
+
+async def users_checker(c: Call, helpers: str, shot: ToolArgs) -> CallToolResult:
+    """The user's own view, for the checks that change it or shoot it with nothing set up: VIEW3D_GRAPH's checker on a
+    Plane from the Top, framed, set through the 3D view's menus (USERS_PLANE_TOP, run with the helpers' text `helpers`).
+    Returns the shot `shot`, with nothing set up, retaken until the checker shows (with_checker)."""
+    await c('execute_designer_code', {'code': helpers + USERS_PLANE_TOP % VIEW3D_GRAPH})
+    return await with_checker(c, shot)

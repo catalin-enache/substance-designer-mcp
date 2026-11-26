@@ -153,7 +153,7 @@ def test_every_helper_either_edits_through_the_check_or_only_reads(helpers: type
         'package_file_of',
         'save_node_output',
         'save_package_copy',
-        '_set_up_checked',  # set_3d_view's: counts the graph's outputs, which set_3d_view computes and puts on the mesh
+        '_set_up_checked',  # the 3D set-up's: counts the graph's outputs, which the set-up computes and puts on the mesh
     }
     tree = ast.parse(designer_helpers.source())
     uses = {

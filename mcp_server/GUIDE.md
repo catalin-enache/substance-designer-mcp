@@ -560,16 +560,16 @@ The rules and the first pitfalls are in the core, `get_guide()`. Changing this p
   called with Qt's own long-lived objects too (the pixmap cache, for its timer), which get Python wrappers, and
   Designer aborts as it quits, after Python has shut down (a filter on 40 s, then a quit: a crash dump in PySide's
   clean-up; without it, none; measured 2026-11-12). Filter the widget you mean and remove the filter when done, as
-  the 3D view's drags do (`designer_helpers/view3d.py`).
+  the watch of the 3D view's frames does (`designer_helpers/frames3d.py`).
 - **Screenshots:** `QWidget.grab()` on Designer's widgets only. **Never use `QScreen.grabWindow`**, not even with
   Designer's own window id: on macOS both copy the screen area, capturing whatever covers Designer (the user's other
   apps). Widget capture can't see the GPU-drawn 3D view: use `screenshot_designer('3d')`. Never use "Save Render...":
   its modal file dialog blocks the bridge.
-- **The 3D view** has no API: `screenshot_designer('3d', ...)` drives its menus, the Explorer's context menu (opened
+- **The 3D view** has no API: `screenshot_designer('3d', ...)` drives its menus and the Explorer's context menu (opened
   on the Explorer's tree only; the warning above about the graph view stands, and an open menu holds the bridge until
-  it closes), the material's Tiling field and the environment's fields in the Parameters panel, a map's file dropped on
-  its viewport, and left- and middle-drags there under its toolbar's Camera tool. What Designer does there, measured:
-  `designer_helpers/view3d.py`. How to tell when the view has drawn a change (its
+  it closes). Its camera, mesh, tiling and environment go through the view's own state file, which the Scene menu
+  saves and loads; the shot writes it and puts it back, the user's view with it. What Designer does there, measured:
+  `designer_helpers/view3d.py`, `scene3d.py` and `state3d.py`. How to tell when the view has drawn a change (its
   paints and its overlay's sample count), instead of waiting a fixed time: `designer_helpers/frames3d.py`.
 - Dock titles change with content, so find panels by object name: `areaA_` explorer, `areaB_` graph, `areaC_`
   parameters, `areaD_` 3D view, `areaE_` 2D view, `areaF_` console (hidden by default; Windows > Console), `areaG_`

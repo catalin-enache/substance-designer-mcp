@@ -101,9 +101,27 @@ class LoadOptions(TypedDict, total=False):
     strict: bool
 
 
+# a material Materials > Add added, as Designer saved it (measured 2026-11-26): its id its name, removable, mapped to no
+# part of the mesh by material_mapping_table; its tiling 4
+ADDED_MATERIAL = (
+    '\t\t\t\t<_2 prefix="_">\n\t\t\t\t\t<material_instance_id>added</material_instance_id>\n\t\t\t\t\t<material>\n'
+    '\t\t\t\t\t\t<parameters>\n\t\t\t\t\t\t\t<___usd___tiling>float(4)</___usd___tiling>\n\t\t\t\t\t\t</parameters>\n'
+    '\t\t\t\t\t\t<name>added</name>\n\t\t\t\t\t\t<is_removable>true</is_removable>\n\t\t\t\t\t</material>\n'
+    '\t\t\t\t</_2>\n'
+)
+
+
+def with_added_material(content: str) -> str:
+    """The state file `content` (the fixture's layout) holding ADDED_MATERIAL after its own material, as Materials > Add
+    leaves it."""
+    end = '\t\t\t\t</_1>\n\t\t\t</materials>'
+    assert end in content, 'no materials list ends there'
+    return content.replace(end, '\t\t\t\t</_1>\n' + ADDED_MATERIAL + '\t\t\t</materials>', 1)
+
+
 class View3dOptions(TypedDict, total=False):
-    """The keyword arguments of the 3D view's set-up: set_3d_view's, and shoot_3d's after its path
-    (designer_helpers/view3d.py, shot3d.py)."""
+    """The keyword arguments of the 3D view's set-up: _3d_set_up's, and shoot_3d's after its path
+    (designer_helpers/scene3d.py, shot3d.py)."""
 
     graph: str | None
     mesh: str | None

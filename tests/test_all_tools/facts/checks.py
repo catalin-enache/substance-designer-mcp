@@ -1,17 +1,25 @@
 """Designer facts GUIDE.md relies on (they fail if a Designer update changes them)."""
 
 import base64
+import contextlib
 import os
+import pathlib
 import re
+import shutil
+import sys
+from collections.abc import Sequence
 from itertools import product
 from textwrap import dedent
-from typing import cast
+from typing import TYPE_CHECKING
 
+import designer_helpers
+from test_all_tools import common
 from test_all_tools.common import (
     NO_LINE,
     TEST_GRAPH,
     Ctx,
     Ops,
+    ToolArgs,
     added_id,
     check,
     designer_script,
@@ -22,6 +30,7 @@ from test_all_tools.common import (
     skip,
     text,
 )
+from test_all_tools.facts import state_camera, state_file
 from test_all_tools.facts.blend_cases import (
     COLOURS,
     DESTINATION,
@@ -38,6 +47,18 @@ from test_all_tools.facts.blend_cases import (
     image,
     listed,
 )
+from test_all_tools.facts.preparations import STATE_GRAPH
+from test_all_tools.facts.state_file import in_designer
+
+if TYPE_CHECKING:  # for the checker: the part as the helpers hold it
+    from designer_helpers import state3d
+    from designer_helpers.state3d import StateField
+else:
+    state3d = designer_helpers.standalone('state3d')
+
+# the state file checks write the Designer's own default 3D view state, in its own home: never the user's (off macOS,
+# the self-test's Designer has no home of its own, and writes the user's AppData: REVIEW.md TST-890)
+STATE_FILE_USERS = "it would write the user's default 3D view state: Designer has no home of its own here"
 
 
 async def check_a_blend_opacity_fed_a_colour_image(ctx: Ctx) -> None:
@@ -300,6 +321,742 @@ async def check_function_graph_states(ctx: Ctx) -> None:
         "an FX-Map's function reads the input, and removing it changes the output",
         'fx-map | input at 0.25 0.25 | at 0.75 0.75 | removed 1.00' in t,
         t,
+    )
+
+
+async def check_a_packages_uid_survives_saving_and_a_restamped_one_loads(ctx: Ctx) -> None:
+    """A package's UID is its file's <fileUID>: unchanged by saving and Save As, shared by a copy of the file loaded
+    again; mHandle differs for every Python object wrapping one package. What snapshots' package notes rely on
+    (REVIEW.md SRV-34, SRV-36). And _fresh_uid's byte edit loads with the new UID (REVIEW.md SRV-42)."""
+    c, scratch = ctx.c, ctx.scratch
+    F = 'designer facts'
+    uid_dir = os.path.join(scratch, 'uid_probe')
+    t = text(await designer_script(c, 'facts/package_uid', folder=uid_dir))
+    check(
+        F,
+        "a package's UID survives saving, a loaded copy and a snapshot copy share it; mHandle isn't stable",
+        'SAME_UID=True' in t and 'HANDLES_DIFFER=True' in t and 'COPY_KEEPS_UID=True' in t,
+        t.strip()[-150:],
+    )
+    # _fresh_uid's byte edit (snapshots of unsaved packages, REVIEW.md SRV-42) loads with the new UID; and
+    # re-stamping a package's own file (a snapshot restored over it) leaves a package using its graph
+    # working: the dependency is stored by file name, with <fileUID> "0"
+    from server_tools.snapshots import _fresh_uid
+
+    def own_uid(path: str) -> str | None:
+        return _file_uid(pathlib.Path(path).read_text(encoding='utf-8'))
+
+    s_sbs, b_sbs, d_sbs = (os.path.join(uid_dir, n) for n in ('S.sbs', 'B.sbs', 'D.sbs'))
+    # a package saved with no fileUID fails the check, and the category goes on (REVIEW.md TST-945)
+    if not all(os.path.isfile(p) for p in (s_sbs, b_sbs, d_sbs)) or None in (own_uid(s_sbs), own_uid(b_sbs)):
+        check(F, 'a re-stamped UID loads, and a package using its graph still finds it', False, t.strip()[-150:])
+        return
+    b_uid = own_uid(b_sbs)
+    _fresh_uid(s_sbs)
+    _fresh_uid(b_sbs)
+    with open(d_sbs, encoding='utf-8') as f:
+        dep_zero = bool(re.search(r'<dependency><filename v="B\.sbs"/>.*?<fileUID v="0"/>', f.read()))
+    t = text(
+        await designer_script(
+            c,
+            'facts/reload_uid',
+            snapshot=s_sbs,
+            snapshot_uid=own_uid(s_sbs),
+            user=d_sbs,
+            dependency=b_sbs,
+            dependency_uid=own_uid(b_sbs),
+        )
+    )
+    check(
+        F,
+        'a re-stamped UID loads, and a package using its graph still finds it (stored by file name)',
+        own_uid(b_sbs) != b_uid and dep_zero and 'SNAP_LOADS_NEW=True' in t and 'DEP_FOUND=True' in t,
+        'dependency fileUID "0": %s; %s' % (dep_zero, t.strip()[-150:]),
+    )
+
+
+def _file_uid(package: str) -> str | None:
+    """The UID in a package's file text `package`, its first <fileUID>; None when it holds none."""
+    found = re.search(r'<fileUID v="([^"]+)"', package)
+    return found.group(1) if found else None
+
+
+def skipped_in_users(ctx: Ctx, *names: str, shots: Sequence[str] = ()) -> bool:
+    """Whether the run's Designer has no home of its own, the checks then skipped: `names` as designer facts, `shots`
+    as screenshot_designer's, each under the tool it is checked under (REVIEW.md TST-959). Such a Designer is the user's,
+    or one started off macOS. The state file checks write the Designer's own default 3D view state."""
+    users = ctx.was_running or sys.platform != 'darwin'
+    if users:
+        for name in names:
+            skip('designer facts', name, STATE_FILE_USERS)
+        for name in shots:
+            skip('screenshot_designer', name, STATE_FILE_USERS)
+    return users
+
+
+async def check_the_3d_views_state_file_is_saved_and_loaded_in_designers_own_home_showing_nothing(ctx: Ctx) -> None:
+    """Save Current State As Default and Reset Scene, where the file is and what they show (state_file.py)."""
+    F = 'designer facts'
+    what = "Save Current State As Default and Reset Scene: the state file in Designer's own home, nothing shown"
+    if skipped_in_users(ctx, what):
+        return
+    from server_tools.core import _designer_data_dir
+
+    async with state_file.kept(ctx) as kept:
+        t = await in_designer(ctx, state_file.ENTRIES)
+        saved = state3d._state_text(kept.path) if os.path.isfile(kept.path) else ''
+    home, version = state_file.printed(t, 'HOME') or '', state_file.printed(t, 'VERSION') or ''
+    where = os.path.join(_designer_data_dir(home), '.'.join(version.split('.')[:2]), state_file.NAME)
+    format_version = state_file.fields(saved).get('/settingsInfo/version') if saved else None
+    untrue = [key for key in state_file.ENTRIES_SAID if state_file.printed(t, key) != 'True']
+    check(
+        F,
+        what,
+        # common.PORT, read now: alone.run(port=...) sets it after this module is imported
+        home == os.path.join(common.agent_folder(common.PORT), 'home')
+        and state_file.printed(t, 'PATH') == where
+        and format_version == state3d.STATE_VERSION
+        and not untrue,
+        'not so: %s; format version %s; %s' % (untrue, format_version, ' '.join(t.split())[-200:]),
+    )
+
+
+async def check_a_3d_shots_set_up_is_designers_state_as_it_renders(ctx: Ctx) -> None:
+    """A shot's mesh, tiling and light, through the state file, are what Designer holds as it renders, as a Save then
+    writes them and state3d.py reads them: the tiling written with no *, the background's map the environment's
+    (designer_helpers/scene3d.py). The user's camera is put away from Frame's framing first: the shot's new mesh is
+    framed as the Scene menu frames it, the user's camera's direction kept (check_the_scene_menus_mesh_switch_...)."""
+    what = "screenshot_designer('3d')'s mesh, tiling and light are Designer's state as it renders"
+    framed = "screenshot_designer('3d', mesh=...) frames the new mesh from the user's camera's direction"
+    if skipped_in_users(ctx, shots=[what, framed]):
+        return
+    async with state_file.kept(ctx) as kept:
+        at = state_camera.pose(kept.base)
+        users = state3d.Pose(state_camera.UNFRAMED, 60.0, 15.0, at.distance * 1.4)
+        state3d._state_write(kept.path, state3d._state_edited(kept.base, {'camera': users}))
+        t = await in_designer(ctx, state_file.DOCKED_THEN_LOADED)
+        viewport = state_file.pair(t, 'VIEWPORT')
+        copy = os.path.join(ctx.scratch, 'state_saved_as_a_shot_renders.sbsscn')
+        shot = os.path.join(ctx.scratch, 'state_shot.png')
+        t = await in_designer(ctx, state_file.SET_UP_THEN_SAVED % (copy, shot))
+        saved = state3d._state_text(copy) if os.path.isfile(copy) else ''
+    if not saved:
+        check('screenshot_designer', what, False, 'nothing saved as the shot rendered: %s' % ' '.join(t.split())[-200:])
+        check('screenshot_designer', framed, False, 'nothing saved as the shot rendered')
+        return
+    values = state3d._state_fields(saved, ['mesh', 'tiling', 'environment', 'rotation', 'exposure'])
+    held = state_file.fields(saved)
+    tiling = held.get('/database/materials/materials/_1/material/parameters/___usd___tiling')
+    background = held.get('/database/scene_textures/panorama')
+    check(
+        'screenshot_designer',
+        what,
+        values
+        == {'mesh': 'sphere', 'tiling': 2.5, 'environment': state_file.AIRPORT, 'rotation': 0.25, 'exposure': 1.5}
+        and tiling == 'float(2.5)'
+        and background == '[(loaderType)(file)][(file)(%s)]' % state_file.AIRPORT,
+        '%s; the tiling written %s, the background %s' % (values, tiling, background),
+    )
+    rendered = state_camera.pose(saved)
+    check(
+        'screenshot_designer',
+        framed,
+        state_camera.alike(rendered, state3d._reframed(users, 'sphere', viewport)),
+        'the user at %s; as it rendered %s' % (state_camera.said(users), state_camera.said(rendered)),
+    )
+
+
+async def check_the_state_files_rotation_is_in_turns_and_its_intensity_the_exposure(ctx: Ctx) -> None:
+    """A state file with the tiling 2.3, the environment's rotation 0.3 and its intensity 0.7, loaded: Designer's own
+    Environment > Edit properties shows 108 degrees and an Exposure of 0.7, the units the set-up writes them in. A Save
+    then holds each as the 32-bit float Designer holds, to 9 significant digits, so the set-up compares them so
+    (state3d.py, _float32)."""
+    units = "the state file's environment rotation is in turns and its intensity the Exposure, as Designer shows them"
+    held = "Designer holds the state file's tiling, rotation and exposure as 32-bit floats, and saves them so"
+    if skipped_in_users(ctx, units, held):
+        return
+    async with state_file.kept(ctx) as kept:
+        edited = state3d._state_edited(kept.base, {'tiling': 2.3, 'rotation': 0.3, 'exposure': 0.7})
+        state3d._state_write(kept.path, edited)
+        t = await in_designer(ctx, state_file.LOADED_THEN_SAVED + '\n_sf_environment_shown()')
+        saved = state3d._state_text(kept.path)
+    shown = [float(state_file.printed(t, key) or 'nan') for key in ('DEGREES', 'EXPOSURE')]
+    check(
+        'designer facts',
+        units,
+        abs(shown[0] - 108) < 1e-3 and abs(shown[1] - 0.7) < 1e-6 and state_file.printed(t, 'LOADED') == 'True',
+        'degrees %s, exposure %s | %s' % (*shown, ' '.join(t.split())[-150:]),
+    )
+    # each number's text as saved, where state3d.py finds it
+    numbers = [state3d._located(saved, field)[0].group(2) for field in ('tiling', 'rotation', 'exposure')]
+    check('designer facts', held, numbers == ['2.29999995', '0.300000012', '0.699999988'], 'saved: %s' % numbers)
+
+
+async def check_a_dropped_maps_url_is_the_one_the_set_up_writes(ctx: Ctx) -> None:
+    """Designer's maps dropped on the 3D view, as from its Library: a Save holds each as the URL
+    view3d._environment_maps gives it, `sd-3dview-maps://` and the file's name, a space and a capital kept. A graph's
+    outputs on the mesh, the folder beside the state file holds their textures, and no map (state3d.py; all 34
+    measured, 2026-11-26)."""
+    what = "a map dropped on the 3D view is saved as the URL the set-up writes, and isn't copied beside the state file"
+    if skipped_in_users(ctx, what):
+        return
+    c = ctx.c
+    async with state_file.kept(ctx):
+        await c('open_graph', ctx.G)  # another graph, then STATE_GRAPH: its outputs on the mesh
+        await c('open_graph', {'graph': STATE_GRAPH})
+        t = await in_designer(ctx, state_file.DROPPED % ['studio 02', 'Soft_1Front'])
+        await c('open_graph', ctx.G)  # the editor back on the category's graph
+    dropped = [line.split('=', 1)[1].split('|') for line in t.splitlines() if line.startswith('DROPPED=')]
+    check(
+        'designer facts',
+        what,
+        len(dropped) == 2
+        and all(
+            saved == written and 'default_baseColor.png' in files and not re.search(r'\.(exr|hdr)', files)
+            for _, saved, written, files in dropped
+        ),
+        '; '.join(' '.join(d) for d in dropped) or ' '.join(t.split())[-200:],
+    )
+
+
+async def check_the_scene_menus_mesh_switch_frames_the_mesh_from_the_cameras_direction(ctx: Ctx) -> None:
+    """Each mesh picked in the Scene menu, with no Frame, from a camera put at another direction, away from any mesh's
+    framing: the file holds the mesh by the table's id, and the camera keeps its direction and looks at the new mesh's
+    point from its distance at the viewport's aspect (state3d._framing), docked and floated wider than tall. mesh=
+    frames the new mesh so, through the state file (designer_helpers/scene3d.py)."""
+    switched = "the Scene menu's mesh switch frames the mesh from the camera's direction, in a viewport %s"
+    sizes = {'docked': None, 'wider than tall': (700, 420)}
+    if skipped_in_users(ctx, *(switched % size for size in sizes)):
+        return
+    async with state_file.kept(ctx) as kept:
+        # each a mesh the view doesn't show as it is picked: one shown already, picked again, changes nothing
+        docked = ['Plane', 'Torus', 'Cylinder', 'Mat ball', 'Sphere', 'Cloth']
+        if state3d.FRAMING[docked[0]][0] == state3d._state_fields(kept.base, ['mesh'])['mesh']:
+            docked = docked[1:] + docked[:1]
+        wider = ['Torus', 'Plane'] if docked[-1] == 'Plane' else ['Plane', 'Torus']
+        meshes = {'docked': docked, 'wider than tall': wider}
+        at = state_camera.pose(kept.base)
+        away = state3d.Pose(state_camera.UNFRAMED, 30.0, 20.0, at.distance * 1.4)
+        state3d._state_write(kept.path, state3d._state_edited(kept.base, {'camera': away}))
+        await in_designer(ctx, '_sf_load()')
+        switches = [
+            (
+                size,
+                [
+                    (mesh, os.path.join(ctx.scratch, 'state_switched_%d_%d.sbsscn' % (i, j)))
+                    for j, mesh in enumerate(meshes[name])
+                ],
+            )
+            for i, (name, size) in enumerate(sizes.items())
+        ]
+        t = await in_designer(ctx, state_file.SWITCHED % switches)
+        seen = [state_file.pair(line, 'VIEWPORT') for line in t.splitlines() if line.startswith('VIEWPORT=')]
+    for i, (name, (_, pairs)) in enumerate(zip(sizes, switches, strict=True)):
+        if len(seen) <= i:
+            check('designer facts', switched % name, False, 'no viewport said: %s' % ' '.join(t.split())[-200:])
+            continue
+        off = []
+        for mesh, path in pairs:
+            got = state3d._state_fields(state3d._state_text(path), ['mesh', 'camera']) if os.path.isfile(path) else None
+            mesh_id = state3d.FRAMING[mesh][0]  # the mesh's id in the file, which the table holds
+            want = state3d._reframed(away, mesh_id, seen[i])
+            if got is None or got['mesh'] != mesh_id or not state_camera.alike(got['camera'], want):
+                held = got and '%s %s' % (got['mesh'], state_camera.said(got['camera']))
+                off.append('%s %s, framed %s' % (mesh, held, state_camera.said(want)))
+        check(
+            'designer facts',
+            switched % name,
+            not off,
+            'viewport %dx%d; %s' % (*seen[i], '; '.join(off) or 'each mesh framed so'),
+        )
+
+
+async def check_a_state_file_with_another_mesh_loads_it_keeping_the_files_camera(ctx: Ctx) -> None:
+    """A state file with another mesh's id and a camera away from that mesh's framing, loaded: Designer shows the mesh
+    and keeps the file's camera, framing nothing, so the set-up writes the camera framed with the mesh (state3d.py)."""
+    what = "a state file with another mesh loads it with the file's camera: Designer doesn't frame the new mesh"
+    if skipped_in_users(ctx, what):
+        return
+    async with state_file.kept(ctx) as kept:
+        held = state3d._state_fields(kept.base, ['mesh', 'camera'])
+        other = 'plane' if held['mesh'] != 'plane' else 'sphere'
+        written = state3d.Pose(state_camera.UNFRAMED, 60.0, 15.0, held['camera'].distance * 1.3)
+        state3d._state_write(kept.path, state3d._state_edited(kept.base, {'mesh': other, 'camera': written}))
+        t = await in_designer(ctx, '_sf_sized(None)\n' + state_file.LOADED_THEN_SAVED)
+        after = state3d._state_fields(state3d._state_text(kept.path), ['mesh', 'camera'])
+    framed = state3d._reframed(written, other, state_file.pair(t, 'VIEWPORT'))
+    check(
+        'designer facts',
+        what,
+        after['mesh'] == other
+        and state_camera.alike(after['camera'], written)
+        and not state_camera.alike(after['camera'], framed)
+        and state_file.printed(t, 'LOADED') == 'True',
+        'mesh %s, camera %s; written %s, framed %s'
+        % (after['mesh'], state_camera.said(after['camera']), state_camera.said(written), state_camera.said(framed)),
+    )
+
+
+async def check_a_load_of_a_mesh_of_the_users_own_ends_once_the_view_settled(ctx: Ctx) -> None:
+    """A state file holding a mesh of the user's own, Designer's own box.fbx by its file:// URL, loaded: the Scene menu
+    checks no mesh as Reset Scene returns, nor once the view settled after it. The load restarts the view within
+    SETTLE_LIMIT, and the state saved once the view settled holds the mesh, so the load had ended by then
+    (designer_helpers/scene3d.py, _state_load; REVIEW.md HLP-283, HLP-286). A 3D shot with a camera option over it says
+    nothing of a view that hadn't settled."""
+    fact = (
+        "a mesh of the user's own: the Scene menu checks no mesh, the load restarts the view, and it has ended once"
+        ' the view settled'
+    )
+    shot = "screenshot_designer('3d') over a mesh of the user's own takes each load as ended once the view settled"
+    if skipped_in_users(ctx, fact, shots=[shot]):
+        return
+    box = state_file.printed(await in_designer(ctx, state_file.BOX_PATH), 'BOX')
+    if not box:
+        check('designer facts', fact, False, "Designer's resources hold no python/tests/assets/box.fbx")
+        check('screenshot_designer', shot, False, 'no mesh of the users own to load')
+        return
+    url = state3d.USERS_MESH + box
+    async with state_file.kept(ctx) as kept:
+        state3d._state_write(kept.path, state3d._state_edited(kept.base, {'mesh': url}))
+        t = await in_designer(ctx, state_file.LOADED_SETTLED)
+        saved = state3d._state_fields(state3d._state_text(kept.path), ['mesh'])['mesh']
+        r = await ctx.c('screenshot_designer', ORBIT)
+    expected = {'AT_TRIGGER': '[]', 'RESTARTED': 'True', 'SETTLED': 'True', 'AFTER': '[]'}
+    said = {key: state_file.printed(t, key) for key in expected}
+    check(
+        'designer facts',
+        fact,
+        said == expected and saved == url,
+        'read %s, expected %s; the state saved holds %s' % (said, expected, saved),
+    )
+    check(
+        'screenshot_designer',
+        shot,
+        is_image(r) and "hadn't settled" not in text(r) and '3D view: put back as it was' in text(r),
+        ' / '.join(line for line in text(r).splitlines() if line.startswith('3D view'))[-250:],
+    )
+
+
+async def check_a_state_file_with_one_field_edited_loads_that_field_alone(ctx: Ctx) -> None:
+    """Each field the set-up edits, edited alone (state_file.ONE_FIELD), loads: the state saved after the load is the
+    one written, but the fields that follow it. A Save once the load has ended holds the camera the camera's row turns
+    still on its way, and the others' where it was; one once the view's count has risen holds the file's camera
+    (state_file.py; REVIEW.md TST-892)."""
+    F = 'designer facts'
+    loads = 'a state file with only its %s edited loads it'
+    if skipped_in_users(ctx, *(loads % row.name for row in state_file.ONE_FIELD)):
+        return
+    async with state_file.kept(ctx) as kept:
+        # the state once drawn, its camera put at AWAY: a view that hasn't drawn yet saves fields it sets as it draws (a
+        # material's blue noise, the rasterizer's settings), which a load drawn on screen would show as changed
+        state3d._state_write(kept.path, state_camera.away(kept.base))
+        await in_designer(ctx, state_file.LOADED_THEN_SAVED)
+        base = state3d._state_text(kept.path)
+        session = state_camera.pose(base)  # the camera the session has, which each load moves
+        mid = os.path.join(ctx.scratch, 'state_saved_at_the_loads_end.sbsscn')
+        for row in state_file.ONE_FIELD:
+            written = row.edit(base)
+            state3d._state_write(kept.path, written)
+            t = await in_designer(ctx, state_file.MID_LOADED_THEN_SAVED % mid)
+            after = state3d._state_text(kept.path)
+            changed = state_file.differing(base, written)
+            left = state_file.not_loaded(changed, written, after, row.follows)
+            wanted = state_camera.pose(written)
+            # at the load's end, a camera turned is still on its way; one the session had is where it was
+            turning = state_camera.turned_apart(session, wanted) > 0.01
+            session = state_camera.pose(after)
+            if state_file.printed(t, 'MID_SAVED') != 'True':  # REVIEW.md TST-911: no Save at the load's end, said
+                check(F, loads % row.name, False, "no Save at the load's end: " + ' '.join(t.split())[-120:])
+                continue
+            apart = state_camera.turned_apart(wanted, state_camera.pose(state3d._state_text(mid)))
+            check(
+                F,
+                loads % row.name,
+                bool(changed)
+                and not left
+                and (apart > 1 if turning else apart < 0.01)
+                and state_file.printed(t, 'LOADED') == 'True',
+                "differing after the load %s; the camera at the load's end %.2f degrees off the file's; edited %s"
+                % (left[:4], apart, changed[:3]),
+            )
+
+
+async def check_a_state_file_missing_its_lights_loads_them_at_designers_defaults(ctx: Ctx) -> None:
+    """A file with the camera alone of the scene's entities, after one turning Point Light 1 on loaded, brings the
+    light back off (state_file.py, the format)."""
+    F = 'designer facts'
+    what = "a state file missing its lights loads them at Designer's defaults"
+    if skipped_in_users(ctx, what):
+        return
+    async with state_file.kept(ctx) as kept:
+        lit = state_file.edited(kept.base, state_file.LIGHT_ON, r'\1true\2')
+        state3d._state_write(kept.path, lit)
+        t = await in_designer(ctx, state_file.LOADED_THEN_SAVED)
+        on = state_file.entity(state3d._state_text(kept.path), 'Point Light 1')
+        state3d._state_write(kept.path, state_file.edited(lit, state_file.LIGHTS, state_file.CAMERA_ONLY))
+        t += await in_designer(ctx, state_file.LOADED_THEN_SAVED)
+        off = state_file.entity(state3d._state_text(kept.path), 'Point Light 1')
+    check(
+        F,
+        what,
+        on.get('/is_enabled') == 'true' and off.get('/is_enabled') == 'false' and 'LOADED=False' not in t,
+        'Point Light 1 on: %s, after the file without it: %s' % (on.get('/is_enabled'), off.get('/is_enabled')),
+    )
+
+
+async def check_reset_scene_reads_the_state_file_once_it_has_returned(ctx: Ctx) -> None:
+    """A file written right after Reset Scene's trigger, in the same job, is the one loaded (state_file.py)."""
+    F = 'designer facts'
+    what = 'Reset Scene reads the state file once it has returned'
+    if skipped_in_users(ctx, what):
+        return
+    async with state_file.kept(ctx) as kept:
+        later = os.path.join(ctx.scratch, 'state_written_after_the_trigger.sbsscn')
+        state3d._state_write(later, state3d._state_edited(kept.base, {'rotation': 0.375}))
+        state3d._state_write(kept.path, state3d._state_edited(kept.base, {'rotation': 0.125}))
+        t = await in_designer(ctx, state_file.WRITTEN_AFTER_THE_TRIGGER % later)
+        rotation = state3d._state_fields(state3d._state_text(kept.path), ['rotation']).get('rotation')
+    check(F, what, rotation == 0.375 and 'LOADED=True' in t, 'rotation loaded %s' % rotation)
+
+
+async def check_designers_frame_gives_the_view_tables_poses(ctx: Ctx) -> None:
+    """Designer's own Camera > <view>, then Frame, against the pose `view=` writes (state3d._framed): each view on the
+    Plane, in the self-test's 3D panel as it is, looks along its direction at the table's point and distance. Then each
+    mesh of the Scene menu, framed by Frame in the 3D panel floated to a size taller than wide, then to one wider than
+    tall: the file holds it by the table's id, and the camera looks at the table's point from its distance at the
+    viewport's aspect (state3d.FRAMING, FRAME_ANGLE; the user's design, 2026-11-25). The camera's decode is state3d's
+    (state_camera.pose)."""
+    F = 'designer facts'
+    what_views = "the state file camera: each view framed on the Plane is view='s pose"
+    framed = "the state file camera: each mesh framed in a viewport of %s is the view table's pose"
+    sizes = {'a panel taller than wide': (300, 500), 'a panel wider than tall': (700, 420)}
+    if skipped_in_users(ctx, what_views, *(framed % size for size in sizes)):
+        return
+    async with state_file.kept(ctx):
+        paths = {view: os.path.join(ctx.scratch, 'state_view_%s.sbsscn' % view) for view in state3d.VIEW_DIRECTIONS}
+        t = await in_designer(ctx, '_sf_sized(None)\n' + state_file.VIEWED % list(paths.items()))
+        viewport = state_file.pair(t, 'VIEWPORT')
+        poses = {view: state_camera.pose(state3d._state_text(path)) for view, path in paths.items()}
+        wanted = {view: state3d._framed('plane', view, viewport) for view in poses}
+        check(
+            F,
+            what_views,
+            all(state_camera.alike(at, wanted[view]) for view, at in poses.items()),
+            '; '.join(
+                '%s %s, the table %s' % (v, state_camera.said(p), state_camera.said(wanted[v]))
+                for v, p in poses.items()
+            ),
+        )
+        framings = [
+            (
+                size,
+                [
+                    (mesh, os.path.join(ctx.scratch, 'state_framed_%d_%d.sbsscn' % (i, j)))
+                    for j, mesh in enumerate(state3d.FRAMING)
+                ],
+            )
+            for i, size in enumerate(sizes.values())
+        ]
+        t = await in_designer(ctx, state_file.FRAMED % framings)
+        # the viewport of each size, then docked again
+        seen = [state_file.pair(line, 'VIEWPORT') for line in t.splitlines() if line.startswith('VIEWPORT=')]
+    for i, (name, (_, meshes)) in enumerate(zip(sizes, framings, strict=True)):
+        if len(seen) <= i:
+            check(F, framed % name, False, 'no viewport said: %s' % ' '.join(t.split())[-200:])
+            continue
+        width, height = seen[i]
+        off = []
+        for mesh, path in meshes:
+            got = state3d._state_fields(state3d._state_text(path), ['mesh', 'camera']) if os.path.isfile(path) else None
+            mesh_id = state3d.FRAMING[mesh][0]  # the mesh's id in the file, which the table holds (REVIEW.md TST-933)
+            want = state3d._framed(mesh_id, 'Front', seen[i])
+            # Frame keeps the camera's direction: its point and distance compared
+            if (
+                got is None
+                or got['mesh'] != mesh_id
+                or not state_camera.alike(got['camera']._replace(yaw=0.0, pitch=0.0), want)
+            ):
+                held = got and '%s %s' % (got['mesh'], state_camera.said(got['camera']))
+                off.append('%s %s, the table %s' % (mesh, held, state_camera.said(want)))
+        check(
+            F,
+            framed % name,
+            (width < height) == (name == 'a panel taller than wide') and not off,
+            'viewport %dx%d; %s' % (width, height, '; '.join(off) or 'each mesh as the table'),
+        )
+
+
+async def check_after_a_load_the_3d_view_follows_the_graph_once_another_graph_and_it_are_opened(ctx: Ctx) -> None:
+    """A graph opened puts its outputs on the mesh, Save writing their textures. A load leaves them; a Save after it
+    writes none and deletes their folder, until another graph, then that one, are opened (state_file.py; REVIEW.md
+    TST-901, TST-909)."""
+    F = 'designer facts'
+    what = 'after a load the 3D view follows the graph again once another graph, then it, are opened'
+    if skipped_in_users(ctx, what):
+        return
+    c = ctx.c
+    async with state_file.kept(ctx) as kept:
+        folder = state3d._state_resources(kept.path)
+
+        def listed() -> list[str] | None:  # the folder's textures; None: no folder
+            return sorted(os.listdir(folder)) if os.path.isdir(folder) else None
+
+        async def textures_saved() -> list[str] | None:
+            await in_designer(ctx, state_file.COMPUTED_THEN_SAVED % STATE_GRAPH)
+            return listed()
+
+        await c('open_graph', {'graph': STATE_GRAPH})
+        linked = await textures_saved()
+        await in_designer(ctx, '_sf_load()')
+        left_by_the_load = listed()  # REVIEW.md TST-909: the Save, not the load, deletes the folder
+        loaded = await textures_saved()
+        await c('open_graph', ctx.G)  # another graph, then STATE_GRAPH again
+        await c('open_graph', {'graph': STATE_GRAPH})
+        relinked = await textures_saved()
+        await c('open_graph', ctx.G)  # the editor back on the category's graph
+    textures = ['default_baseColor.png', 'default_roughness.png']
+    check(
+        F,
+        what,
+        linked == left_by_the_load == relinked == textures and loaded is None,
+        'textures saved: linked %s; after a load %s, then saved %s; relinked %s'
+        % (linked, left_by_the_load, loaded, relinked),
+    )
+
+
+async def check_a_state_file_load_resets_the_aov_and_keeps_the_renderer_and_displacement(ctx: Ctx) -> None:
+    """The AOV set to Material roughness, then a load. Then, the file saved with the Rasterizer and the Displacement
+    toggle as they were, the GPU Pathtracer set and the toggle flipped, then a load: both stay as the session has them
+    (state_file.py; REVIEW.md TST-893, TST-904)."""
+    F = 'designer facts'
+    what_aov = "a state file's load puts the 3D view's AOV back to Beauty"
+    what_renderer = "a state file's load keeps the session's renderer and Displacement toggle, the GPU Pathtracer set"
+    if skipped_in_users(ctx, what_aov, what_renderer):
+        return
+    async with state_file.kept(ctx):
+        t = await in_designer(ctx, state_file.VIEW_SETTINGS)
+    said = {key: state_file.printed(t, key) for key in state_file.VIEW_SETTINGS_SAID}
+    detail = ', '.join('%s %s' % (key.lower(), value) for key, value in said.items())
+    check(F, what_aov, (said['AOV_SET'], said['AOV_LOADED']) == ("['Material roughness']", "['Beauty']"), detail)
+    check(
+        F,
+        what_renderer,
+        said['RENDERER_SAVED'] == "['Rasterizer']"
+        and said['RENDERER_SET'] == said['RENDERER_LOADED'] == "['GPU Pathtracer']"
+        and said['DISPLACEMENT_SET'] == said['DISPLACEMENT_LOADED'] != said['DISPLACEMENT_SAVED']
+        and said['PUT_BACK'] == 'True',
+        detail,
+    )
+
+
+async def check_a_state_file_load_turns_override_material_on_though_the_file_holds_it_off(ctx: Ctx) -> None:
+    """Materials > Override Material turned off, a graph's outputs on the mesh, then the state saved and loaded: the
+    file holds it off, and the load turns it on (state_file.py; REVIEW.md HLP-267: the set-up sets it back after each
+    load, designer_helpers/scene3d.py)."""
+    what = "a state file's load turns Materials > Override Material on, though the file holds it off"
+    if skipped_in_users(ctx, what):
+        return
+    c = ctx.c
+    async with state_file.kept(ctx):  # its end loads the base again, which turns it on
+        await c('open_graph', ctx.G)  # another graph, then STATE_GRAPH: its outputs on the mesh, and the entry there
+        await c('open_graph', {'graph': STATE_GRAPH})
+        t = await in_designer(ctx, state_file.OVERRIDE_LOADED)
+        await c('open_graph', ctx.G)  # the editor back on the category's graph
+    said = {key: state_file.printed(t, key) for key in ('OFF', 'SAVED_OFF', 'OVERRIDDEN')}
+    check(
+        'designer facts',
+        what,
+        said == {'OFF': 'False', 'SAVED_OFF': 'True', 'OVERRIDDEN': 'True'},
+        'turned off: checked %s; the file holds it off %s; loaded: checked %s | %s'
+        % (said['OFF'], said['SAVED_OFF'], said['OVERRIDDEN'], t.strip()[-200:]),
+    )
+
+
+# a 3D shot with every set-up option the state file and the menus set, through the tool
+EVERY_SET_UP: ToolArgs = {
+    'panel': '3d',
+    'max_size': 256,
+    'graph': STATE_GRAPH,
+    'mesh': 'Sphere',
+    'view': 'Top',
+    'orbit': [30, 10],
+    'pan': [0.1, 0.05],
+    'zoom': 2,
+    'tiling': 2.0,
+    'environment': 'airport',
+    'environment_rotation': 90,
+    'environment_exposure': 1.0,
+}
+ORBIT: ToolArgs = {'panel': '3d', 'max_size': 256, 'orbit': [30, 0]}  # a shot with a camera option alone
+
+
+def kept_files(path: str) -> dict[str, bytes]:
+    """The state file `path` and the textures' folder beside it, each file by its path, as bytes."""
+    folder = state3d._state_resources(path)
+    files = [path] if os.path.isfile(path) else []
+    files += [os.path.join(folder, name) for name in sorted(os.listdir(folder))] if os.path.isdir(folder) else []
+    return {file: pathlib.Path(file).read_bytes() for file in files}
+
+
+def users_files(path: str) -> None:
+    """A default state file and textures' folder of the user's own at `path`: bytes no Save writes."""
+    with open(path, 'wb') as f:
+        f.write(b'<the users own default, not even a state file/>\r\n')
+    os.makedirs(state3d._state_resources(path), exist_ok=True)
+    with open(os.path.join(state3d._state_resources(path), 'theirs.png'), 'wb') as f:
+        f.write(b'their texture')
+
+
+async def check_a_3d_shot_puts_the_users_3d_view_and_default_state_file_back(ctx: Ctx) -> None:
+    """A shot with every set-up option: the user's default state file and textures' folder, of bytes no Save writes,
+    are back byte for byte after it, the shot's backup gone; and the state saved then holds the same camera, mesh,
+    environment and tiling as the one saved before it (designer_helpers/scene3d.py; the user's design, ROADMAP item
+    131). The shot says what it set, then that the view was put back. With neither file nor folder, a shot leaves
+    neither, and it leaves Override Material off when the user had it off, which a load turns on (REVIEW.md
+    HLP-267). The user's AOV, Material roughness, is shown again after it, which a load puts back to Beauty (REVIEW.md
+    TST-941)."""
+    view = "screenshot_designer('3d') with a set-up puts the user's 3D view back: camera, mesh, environment and tiling"
+    what = "screenshot_designer('3d') with a set-up puts the default state file and its folder back byte for byte"
+    none = "screenshot_designer('3d') with a set-up leaves no default state file where there was none"
+    overridden = "screenshot_designer('3d') with a set-up leaves Materials > Override Material off, as the user had it"
+    aov_back = "screenshot_designer('3d') with a set-up shows the user's AOV again, which a load puts back to Beauty"
+    if skipped_in_users(ctx, shots=[view, what, none, overridden, aov_back]):
+        return
+    async with state_file.kept(ctx) as kept:
+        users_files(kept.path)
+        before = kept_files(kept.path)
+        picked = state_file.printed(await in_designer(ctx, state_file.AOV_SHOWN % 'Material roughness'), 'AOV')
+        try:
+            r = await ctx.c('screenshot_designer', EVERY_SET_UP)
+        finally:  # the AOV after the shot, then Beauty again
+            aov = state_file.printed(await in_designer(ctx, state_file.AOV_READ_BACK), 'AOV')
+        check(
+            'screenshot_designer',
+            aov_back,
+            is_image(r) and picked == aov == "['Material roughness']",
+            'picked %s; after the shot %s' % (picked, aov),
+        )
+        after = kept_files(kept.path)
+        check(
+            'screenshot_designer',
+            what,
+            is_image(r) and after == before and not os.path.exists(state_file.backup(kept.path)),
+            'files before %s, after %s | %s' % (sorted(before), sorted(after), text(r).strip()[-200:]),
+        )
+        # saved, then the user's Override Material off, which a load turns on (REVIEW.md HLP-267); kept's end loads it
+        # on again
+        turned_off = state_file.printed(
+            await in_designer(ctx, "_sf_save(); print('OFF=%s' % _sf_override(False))"), 'OFF'
+        )
+        saved = state3d._state_text(kept.path)
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(kept.path)
+        shutil.rmtree(state3d._state_resources(kept.path), ignore_errors=True)
+        orbit = await ctx.c('screenshot_designer', ORBIT)
+        left = kept_files(kept.path)
+        override = state_file.printed(await in_designer(ctx, "print('OVERRIDE=%s' % _sf_override())"), 'OVERRIDE')
+        check(
+            'screenshot_designer',
+            overridden,
+            is_image(orbit) and (turned_off, override) == ('False', 'False'),
+            'checked when turned off %s, after the shot %s | %s' % (turned_off, override, text(orbit).strip()[-200:]),
+        )
+        check(
+            'screenshot_designer',
+            none,
+            is_image(orbit) and not left,
+            'left %s | %s' % (sorted(left), text(orbit)[-200:]),
+        )
+    names: list[StateField] = ['mesh', 'tiling', 'environment', 'rotation', 'exposure']
+    before_fields, after_fields = state3d._state_fields(kept.base, names), state3d._state_fields(saved, names)
+    camera = [state_camera.pose(content) for content in (kept.base, saved)]
+    said = [line for line in text(r).splitlines() if line.startswith('3D view: ')]
+    check(
+        'screenshot_designer',
+        view,
+        is_image(r)
+        and before_fields == after_fields
+        and state_camera.alike(*camera)
+        and said[-1:] == ['3D view: put back as it was']
+        and any('Sphere' in line and 'view Top' in line for line in said),
+        'before %s, %s; after %s, %s | %s'
+        % (before_fields, state_camera.said(camera[0]), after_fields, state_camera.said(camera[1]), ' / '.join(said)),
+    )
+
+
+async def check_a_3d_shot_puts_a_leftover_backup_back_first(ctx: Ctx) -> None:
+    """A backup an earlier call left, as a crash between its backup and its put-back would, is put back before the
+    shot's own, and said: the user's file comes back, not ours (scene3d.py, state3d._state_back_up)."""
+    what = "screenshot_designer('3d') puts a backup an earlier call left back first, and says so"
+    if skipped_in_users(ctx, shots=[what]):
+        return
+    async with state_file.kept(ctx) as kept:
+        users_files(kept.path)
+        before = kept_files(kept.path)
+        state3d._state_back_up(kept.path, state_file.backup(kept.path))
+        state3d._state_write(kept.path, '<ours, left by a call that never ended/>')
+        r = await ctx.c('screenshot_designer', ORBIT)
+        after = kept_files(kept.path)
+    check(
+        'screenshot_designer',
+        what,
+        is_image(r) and after == before and '3D view: ' + state3d.LEFTOVER_PUT_BACK % kept.path in text(r),
+        'the files back: %s | %s' % (after == before, text(r).strip()[-300:]),
+    )
+
+
+async def check_a_3d_shot_removes_a_leftover_backup_it_cant_put_back_and_says_so(ctx: Ctx) -> None:
+    """A backup an earlier call left that records no path (one made before REVIEW.md HLP-257's fix) is removed, said,
+    and the shot goes on, putting the user's file back (the user, 2026-11-26)."""
+    what = "screenshot_designer('3d') removes a backup it can't put back, says so, and goes on"
+    if skipped_in_users(ctx, shots=[what]):
+        return
+    async with state_file.kept(ctx) as kept:
+        users_files(kept.path)
+        before = kept_files(kept.path)
+        os.makedirs(os.path.join(state_file.backup(kept.path), 'folder'))  # a backup, recording no path
+        r = await ctx.c('screenshot_designer', ORBIT)
+        after = kept_files(kept.path)
+        gone = not os.path.exists(state_file.backup(kept.path))
+    said = '3D view: ' + state3d.LEFTOVER_REMOVED % 'it records no path'
+    check(
+        'screenshot_designer',
+        what,
+        is_image(r) and gone and after == before and said in text(r),
+        'removed %s, the files back %s | %s' % (gone, after == before, text(r).strip()[-300:]),
+    )
+
+
+# shoot_3d with the base saved without its camera, as a file of another layout would be: refused before anything changes
+CAMERA_LEFT_OUT = dedent("""
+    _sf_real_save = _state_save
+    def _state_save(bar, keep):
+        _sf_real_save(bar, keep)
+        _state_write(_sf_path(), _state_text(_sf_path()).replace('<name>Default Camera</name>', '<name>Other</name>'))
+    shoot_3d(%r, None, None, None, 0, None, (30.0, 0.0))""")
+
+
+async def check_a_3d_shot_refuses_a_state_file_missing_a_field_and_writes_nothing(ctx: Ctx) -> None:
+    """A base saved without the field a call edits (the camera) is refused before anything changes: no render, the
+    user's files back byte for byte, and the session's camera as it was (scene3d.py)."""
+    what = "screenshot_designer('3d') refuses a state file missing a field it edits, and writes nothing"
+    if skipped_in_users(ctx, shots=[what]):
+        return
+    async with state_file.kept(ctx) as kept:
+        users_files(kept.path)
+        before = kept_files(kept.path)
+        shot = os.path.join(ctx.scratch, 'state_refused.png')
+        t = await in_designer(ctx, CAMERA_LEFT_OUT % shot)
+        after = kept_files(kept.path)
+        await in_designer(ctx, '_sf_save()')
+        camera = [state_camera.pose(content) for content in (kept.base, state3d._state_text(kept.path))]
+    refused = "holds the camera's <local_transform> 0 times" in t and not os.path.exists(shot)
+    check(
+        'screenshot_designer',
+        what,
+        refused and after == before and state_camera.alike(*camera) and '3D view, setting: ' not in t,  # TST-923
+        'refused %s, the files back %s, the camera %s then %s | %s'
+        % (refused, after == before, state_camera.said(camera[0]), state_camera.said(camera[1]), t.strip()[-200:]),
     )
 
 
@@ -666,49 +1423,24 @@ async def run(ctx: Ctx) -> None:
         ),
         t.strip()[-200:],
     )
-    # a package's UID is its file's <fileUID>: unchanged by saving and Save As, shared by a copy of
-    # the file loaded again; mHandle differs for every Python object wrapping one package. What
-    # snapshots' package notes rely on (REVIEW.md SRV-34, SRV-36)
-    uid_dir = os.path.join(scratch, 'uid_probe')
-    t = text(await designer_script(c, 'facts/package_uid', folder=uid_dir))
-    check(
-        F,
-        "a package's UID survives saving, a loaded copy and a snapshot copy share it; mHandle isn't stable",
-        'SAME_UID=True' in t and 'HANDLES_DIFFER=True' in t and 'COPY_KEEPS_UID=True' in t,
-        t.strip()[-150:],
-    )
-    # _fresh_uid's byte edit (snapshots of unsaved packages, REVIEW.md SRV-42) loads with the new UID; and
-    # re-stamping a package's own file (a snapshot restored over it) leaves a package using its graph
-    # working: the dependency is stored by file name, with <fileUID> "0"
-    from server_tools.snapshots import _fresh_uid
-
-    def own_uid(path: str) -> str:
-        with open(path, encoding='utf-8') as f:
-            return cast(re.Match[str], re.search(r'<fileUID v="([^"]+)"', f.read())).group(1)
-
-    s_sbs, b_sbs, d_sbs = (os.path.join(uid_dir, n) for n in ('S.sbs', 'B.sbs', 'D.sbs'))
-    if not all(os.path.isfile(p) for p in (s_sbs, b_sbs, d_sbs)):
-        check(F, 'a re-stamped UID loads, and a package using its graph still finds it', False, t.strip()[-150:])
-        return
-    b_uid = own_uid(b_sbs)
-    _fresh_uid(s_sbs)
-    _fresh_uid(b_sbs)
-    with open(d_sbs, encoding='utf-8') as f:
-        dep_zero = bool(re.search(r'<dependency><filename v="B\.sbs"/>.*?<fileUID v="0"/>', f.read()))
-    t = text(
-        await designer_script(
-            c,
-            'facts/reload_uid',
-            snapshot=s_sbs,
-            snapshot_uid=own_uid(s_sbs),
-            user=d_sbs,
-            dependency=b_sbs,
-            dependency_uid=own_uid(b_sbs),
-        )
-    )
-    check(
-        F,
-        'a re-stamped UID loads, and a package using its graph still finds it (stored by file name)',
-        own_uid(b_sbs) != b_uid and dep_zero and 'SNAP_LOADS_NEW=True' in t and 'DEP_FOUND=True' in t,
-        'dependency fileUID "0": %s; %s' % (dep_zero, t.strip()[-150:]),
-    )
+    await check_a_packages_uid_survives_saving_and_a_restamped_one_loads(ctx)
+    # the 3D view's own state file (ROADMAP item 131), its view put back after each; last, as one raising on a format
+    # it doesn't know ends the category's run (REVIEW.md TST-898)
+    await check_the_3d_views_state_file_is_saved_and_loaded_in_designers_own_home_showing_nothing(ctx)
+    await check_a_3d_shots_set_up_is_designers_state_as_it_renders(ctx)
+    await check_the_state_files_rotation_is_in_turns_and_its_intensity_the_exposure(ctx)
+    await check_a_dropped_maps_url_is_the_one_the_set_up_writes(ctx)
+    await check_the_scene_menus_mesh_switch_frames_the_mesh_from_the_cameras_direction(ctx)
+    await check_a_state_file_with_another_mesh_loads_it_keeping_the_files_camera(ctx)
+    await check_a_load_of_a_mesh_of_the_users_own_ends_once_the_view_settled(ctx)
+    await check_a_state_file_with_one_field_edited_loads_that_field_alone(ctx)
+    await check_a_state_file_missing_its_lights_loads_them_at_designers_defaults(ctx)
+    await check_reset_scene_reads_the_state_file_once_it_has_returned(ctx)
+    await check_designers_frame_gives_the_view_tables_poses(ctx)
+    await check_after_a_load_the_3d_view_follows_the_graph_once_another_graph_and_it_are_opened(ctx)
+    await check_a_state_file_load_resets_the_aov_and_keeps_the_renderer_and_displacement(ctx)
+    await check_a_state_file_load_turns_override_material_on_though_the_file_holds_it_off(ctx)
+    await check_a_3d_shot_puts_the_users_3d_view_and_default_state_file_back(ctx)
+    await check_a_3d_shot_puts_a_leftover_backup_back_first(ctx)
+    await check_a_3d_shot_removes_a_leftover_backup_it_cant_put_back_and_says_so(ctx)
+    await check_a_3d_shot_refuses_a_state_file_missing_a_field_and_writes_nothing(ctx)

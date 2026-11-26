@@ -3,8 +3,9 @@
 import ctypes
 import os
 import sys
+import threading
 import time
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Protocol, cast
 
 import pytest
@@ -16,10 +17,33 @@ def popups() -> ModuleType:
     return fresh('editor_panels_and_fit.popups')
 
 
-def test_popups_are_seen_from_the_first_sample_showing_one_to_the_last(popups: ModuleType) -> None:
+def test_popups_are_seen_from_the_first_sample_showing_one_to_the_last_of_the_longest_spell(popups: ModuleType) -> None:
     assert popups.shown_ms([]) == 0.0
-    assert popups.shown_ms([2.0]) == 0.0  # one sample: seen, for less than a sample's time
-    assert popups.shown_ms([2.0, 2.004, 2.009]) == pytest.approx(9.0)
+    assert popups.shown_ms([[2.0]]) == 0.0  # one sample: seen, for less than a sample's time
+    assert popups.shown_ms([[2.0, 2.004, 2.009]]) == pytest.approx(9.0)
+    assert popups.shown_ms([[2.0, 2.003], [3.197, 3.2, 3.21]]) == pytest.approx(13.0)
+
+
+def test_two_glimpses_far_apart_are_two_spells_on_screen(popups: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    # REVIEW.md TST-953, measured: a graph= shot on a linked view opens two Explorer menus, the step's and the
+    # put-back's relink; a glimpse of each, 1.2 s apart, read as 1197 ms on screen. Whether each sample shows a popup,
+    # in turn, then none does; a time taken at each sample showing one
+    shown = [True, False, True, True]
+    times = iter([2.0, 3.197, 3.2])
+    done = threading.Event()
+
+    def seen(*args: object) -> tuple[bool, bool]:
+        if not shown:
+            done.set()
+        return True, shown.pop(0) if shown else False
+
+    monkeypatch.setitem(vars(popups), '_seen', seen)
+    cf = SimpleNamespace(CFStringCreateWithCString=lambda *args: 1, CFRelease=lambda key: None)
+    monkeypatch.setitem(vars(popups), 'libraries', lambda: (None, cf))
+    monkeypatch.setitem(vars(popups), 'time', SimpleNamespace(monotonic=lambda: next(times)))
+    with popups.PopupWatch(PID) as watch:
+        assert done.wait(10)  # a safety net: the watch's thread takes the samples at once
+    assert watch.spells == [[2.0], [3.197, 3.2]] and watch.shown_ms == pytest.approx(3.0)  # the second spell
 
 
 @pytest.mark.skipif(sys.platform != 'darwin', reason="the window server's list is macOS's")

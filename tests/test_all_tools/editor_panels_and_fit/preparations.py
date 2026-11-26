@@ -43,6 +43,7 @@ async def prepare(ctx: Ctx) -> None:
 
 VIEW3D_GRAPH = 'mcp_selftest_view3d'  # the 3D view checks' own
 VIEW3D_ADDED = 'mcp_selftest_view3d_added'  # the designer fact's: opened, then given its outputs
+VIEW3D_EMPTY = 'mcp_selftest_view3d_empty'  # a graph with no outputs, opened in the editor (REVIEW.md HLP-282)
 # a checker into two outputs, base colour and roughness: two, so Designer maps them by usage rather than asking which
 # channel to show a single one in (designer_helpers/view3d.py)
 CHECKER_OPS: Ops = [

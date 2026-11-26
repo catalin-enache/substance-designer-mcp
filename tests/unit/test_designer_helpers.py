@@ -259,7 +259,7 @@ def test_the_checks_below_can_fail() -> None:
     assert _used_before_bound([p('a', generics), p('b', 'D = Base = 1')]) == [('a', 'D'), ('a', 'Base')]
 
 
-def test_core_comes_first_and_nothing_else_depends_on_the_order() -> None:
+def test_core_comes_first_and_no_part_reads_at_load_time_a_name_a_later_part_binds() -> None:
     # REVIEW.md TST-76: core itself (not a slice of the joined text) holds what the others use, and no
     # part reads at load time a name that only a later part binds (__init__.py's claim)
     parts = _parts()
@@ -272,6 +272,30 @@ def test_no_name_is_defined_by_two_parts() -> None:
     # one namespace: a second binding silently replaces the first (REVIEW.md TST-75: any binding, not
     # only plain defs and assignments; an import the parts need goes in core, once)
     assert _redefined(_parts()) == []
+
+
+def test_a_part_taking_only_the_standard_librarys_names_runs_as_a_module_of_its_own() -> None:
+    # state3d: no sd and no Qt, so the tests, unit and live, run the code the helpers hold (designer_helpers.standalone)
+    import re
+    import shutil
+
+    part = designer_helpers.standalone('state3d')
+    assert part.re is re and part.shutil is shutil and callable(part._state_edited)
+    assert part.__name__ == 'designer_helpers.state3d'
+    # REVIEW.md HLP-262: one module, whoever asks, so its classes are one; and its code at its file's own lines, the
+    # imports of other parts left out of the syntax tree, so the lines keep their numbers
+    assert designer_helpers.standalone('state3d') is part
+    with open(os.path.join(designer_helpers.HERE, 'state3d.py'), encoding='utf-8') as f:
+        lines = f.read().split('\n')
+    assert lines[part._state_edited.__code__.co_firstlineno - 1].startswith('def _state_edited(')
+
+
+def test_a_part_taking_designers_names_is_refused_as_a_module_of_its_own() -> None:
+    # view3d takes Designer's application from core (_APP, sd's), and Qt; frames3d Qt's QtGui
+    with pytest.raises(ImportError, match="view3d imports _APP from core, which isn't the standard library's there"):
+        designer_helpers.standalone('view3d')
+    with pytest.raises(ImportError, match='frames3d imports QtGui from core'):
+        designer_helpers.standalone('frames3d')
 
 
 def _sent_by_tools(monkeypatch: pytest.MonkeyPatch) -> list[str]:

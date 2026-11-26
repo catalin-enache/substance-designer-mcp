@@ -92,7 +92,7 @@ saved file (details: [mcp_server/GUIDE.md](mcp_server/GUIDE.md), Portals).
 | Tuning | `sweep_param` (try several values of a parameter side by side; the original value is restored) |
 | Safety | `undo_edits` (takes back Claude's own last calls, newest first; it stops at a step of yours on top of them, and Claude asks you before undoing it), `snapshot_graph`, `list_snapshots`, `diff_graph` (what changed vs the saved file or a snapshot) |
 | Readability | `arrange_graph` (tidy layout by data flow), `add_frame`, `add_comment`, `set_link_display` (show wires as portals to hide clutter; saves and reloads the package after a snapshot) |
-| Viewing | `screenshot_designer` (window, graph, 2D view, 3D view, panels; only Designer is captured, never other apps; the 3D view optionally set up first: a graph's outputs on a chosen mesh, viewpoint, the camera turned and panned, zoom and tiling, and the light: one of Designer's environment maps, its angle and its exposure), `open_graph` (open a graph or a function graph of its package, fitted whole, zoomed to a frame, nodes or rectangle, or centred on a node) |
+| Viewing | `screenshot_designer` (window, graph, 2D view, 3D view, panels; only Designer is captured, never other apps; the 3D view optionally set up first: a graph's outputs on a chosen mesh, viewpoint, the camera turned and panned, zoom and tiling, and the light: one of Designer's environment maps, its angle and its exposure; your 3D view put back after the shot), `open_graph` (open a graph or a function graph of its package, fitted whole, zoomed to a frame, nodes or rectangle, or centred on a node) |
 | Editing | `apply_edits` (add nodes and image files, set parameters (a Gradient Map's keys and a Curve's points too), name and tag output nodes, connect (a Value Processor's value into another node's `#name` input value, and a processor's second and later input images, too), disconnect, move, delete, expose parameters as graph inputs: one or many edits per call, one undo step; a typo'd node id changes nothing, and a batch failing partway is undone whole while its step is the newest), `set_function` (an expression compiled into a Pixel Processor's, a Value Processor's or a parameter's function, reading graph inputs, the node's `#name` input values and a processor's input images, or into a function graph stored in the package, which any expression of the package calls by name; one undo step), `create_graph`, `set_graph_size` |
 | Controls | `remove_graph_input` (exposing a parameter is `apply_edits`' `expose` op) |
 | Scripting | `execute_designer_code`, `run_designer_script` (with timeout and `args`) |
@@ -199,10 +199,12 @@ context on it:
 
 Check every tool end to end against the real Designer. On macOS it runs each category of checks (below) in a Designer
 started for it and closed after it, several at once (how many: `--help`), with the unit tests (`pytest`) beside them,
-their result one line of its summary: about 8.7 minutes for both, four Designers side by side (2026-11-23). With
+their result one line of its summary: about 8.7 minutes for both, four Designers side by side (2026-11-23, before
+ROADMAP item 131 put the 3D view back after each shot; not measured since). With
 a Designer of yours open it starts nothing and asks you to close it first: they would share its settings. On Windows
 it is one run in one Designer, without the unit tests: it starts Designer if none runs and leaves it open at the end,
-as it leaves yours.
+as it leaves yours. Off macOS, its 3D set-up checks write your own default 3D view state file, as a 3D screenshot that
+sets the view up does: each backs the file up first and puts it back after (accepted on 2026-11-26).
 
 ### Running it
 
@@ -249,7 +251,7 @@ or, in a full run, a tool no check exercised; 2: nothing was run (a Designer of 
 | `discovery` | Finding nodes: `search_nodes` and `describe_node` |
 | `editor_open_and_zoom` | The editor: `open_graph`'s targets and zoom, `screenshot_designer('graph')` with crops, `describe_graph(selected=True)`, the selection getters it reads, the Parameters panel as `setSelected` selects and a package is unloaded, and `parentItem()` on the graph view's items |
 | `bitmaps` | Bitmaps: `apply_edits`' bitmap op, `compare_to_reference` and `analyze_reference`; the greys Designer's nodes make of a colour image, and a photo's palette on a Gradient Map |
-| `editor_panels_and_fit` | The editor: every panel's screenshot, the clipboard, `open_graph` fitting the whole graph, the 3D view set up (the longest, about 7 minutes, 2026-11-23) |
+| `editor_panels_and_fit` | The editor: every panel's screenshot, the clipboard, `open_graph` fitting the whole graph, the 3D view set up (the longest, about 6 minutes, 2026-11-26) |
 | `graph_edit_create` | `create_graph` and `apply_edits`' add op |
 | `layout` | Snapshots, diffs and readable graphs: `snapshot_graph`, `list_snapshots`, `diff_graph`, `arrange_graph` |
 | `save` | Saving: `save_package`, snapshots of a saved package, a diff against a `.sbs`, copied bitmaps |
@@ -408,6 +410,17 @@ python client/sd_run.py --cancel              # abort the running script
 - Screenshots only ever capture Designer's own panels. The 3D view uses Designer's own render
   through the clipboard, then puts back its text; anything else on it (an image, formatting, copied files) may
   be lost.
+- A 3D screenshot that sets the view up (a camera, a mesh, a graph's outputs, the tiling or the light) puts your 3D
+  view back after its render. It goes through Designer's default 3D view state file (Scene > Save Current State As
+  Default), in Designer's settings folder, or your Default State File if your project settings set one: the shot copies
+  that file and its textures' folder aside, writes its own, then puts yours back byte for byte. If Designer crashes
+  between the two, its next start reads the shot's file instead of yours, and the next shot that sets the view up
+  puts yours back first.
+  Designer reads the Default State File setting as it starts, so after you change it, restart Designer: until then a
+  shot with a set-up is refused, once Designer's own Save has written the session's state to the file it started with.
+  Designer doesn't tell which graph's outputs the view showed, so after the shot it shows those of the graph open in
+  the editor. Putting them back selects that graph in the Explorer, expanding its package, and turns the Parameters
+  panel to it. A graph with a single output isn't put back on the view, and the shot says so.
 - The 3D view draws only while Designer's window is on screen. So on macOS, when Designer's window is minimized,
   covered by other windows or hidden, a 3D screenshot brings it in front for the shot, fully transparent, and puts it
   back where it was afterwards. While it is transparent, your clicks go to the window under it. If you switch to
