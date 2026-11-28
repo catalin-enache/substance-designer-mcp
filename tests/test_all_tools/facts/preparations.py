@@ -5,7 +5,8 @@ parameter set and one driven by the graph input `floor` (what the save round tri
 function graph), and the graph has a default parent size (embed_and_parent_size puts it back: create_graph's graph has
 none, which setDefaultParentSize refuses), overridable at 512 px. The graph is open in the editor, so the 3D view
 shows it. In a Designer the self-test started, the state file checks' graph, left closed: two outputs of one colour,
-base colour and roughness (STATE_GRAPH)."""
+base colour and roughness (STATE_GRAPH); and one of a gradient's two outputs, a pattern a tiling shows on the mesh
+(PATTERN_GRAPH)."""
 
 import os
 
@@ -26,6 +27,12 @@ STATE_OPS: Ops = [
         'position': [0, 150],
     },
     {'op': 'connect', 'from': 'n', 'to': 'r', 'input': 'inputNodeOutput'},
+]
+
+PATTERN_GRAPH = 'mcp_selftest_pattern'  # a gradient's outputs on the mesh, whose tiling shows (REVIEW.md HLP-321)
+PATTERN_OPS: Ops = [
+    {'op': 'add', 'definition': 'gradient_linear_1', 'ref': 'n', 'position': [-300, 0]},
+    *STATE_OPS[1:],
 ]
 
 
@@ -73,3 +80,5 @@ async def prepare(ctx: Ctx) -> None:
     if not ctx.was_running:  # the state file checks, which use it, skip in the user's Designer
         await prepared_call(c, 'create_graph', {'name': STATE_GRAPH, 'size_log2': 8})  # not opened: the editor stays
         await prepared_call(c, 'apply_edits', {'graph': STATE_GRAPH, 'ops': STATE_OPS})
+        await prepared_call(c, 'create_graph', {'name': PATTERN_GRAPH, 'size_log2': 8})
+        await prepared_call(c, 'apply_edits', {'graph': PATTERN_GRAPH, 'ops': PATTERN_OPS})

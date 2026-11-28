@@ -232,6 +232,25 @@
 				<debug-time_code>*double(0)</debug-time_code>
 			</parameters>
 		</render_settings>
+		<plugins>
+			<HdEclairRendererPlugin>
+				<materials>
+					<size>1</size>
+					<_1 prefix="_">
+						<instance>
+							<parameters>
+								<custom_uvs_tiling>*float(1)</custom_uvs_tiling>
+								<base_color>*float3(0.800000012,0.800000012,0.800000012)</base_color>
+							</parameters>
+						</instance>
+						<id>default</id>
+						<definition>
+							<name>usd::ND_open_pbr_surface_surfaceshader</name>
+						</definition>
+					</_1>
+				</materials>
+			</HdEclairRendererPlugin>
+		</plugins>
 		<materials>
 			<materials>
 				<size>1</size>

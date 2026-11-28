@@ -20,6 +20,7 @@ from .core import (
     _bridge,
     _checked,
     _helpers_call,
+    _local_path,
     _output_note_in,
     _tool,
     _with_undo,
@@ -33,10 +34,13 @@ ZOOM_STEPS = 30
 # tool's own limits (their units in the state file: designer_helpers/state3d.py)
 ENVIRONMENT_ROTATION = 180
 ENVIRONMENT_EXPOSURE = 10
+# screenshot_designer('3d', mesh=...): the extensions of the mesh files Designer imports (ROADMAP.md item 84)
+MESH_FORMATS = ('usd', 'usda', 'usdz', 'fbx', 'obj', '3ds', 'dae', 'dxf', 'stl', 'ply', 'gltf', 'glb')
 # the lines of a 3D shot that come beside its image, in the order printed: what was done to Designer's window, what was
 # set up, and a render that may not have followed the set-up (designer_helpers/shot3d.py)
 WINDOW = "Designer's window: "
-NOTES = (WINDOW, '3D view: ', '3D render: ')
+SET_UP = '3D view: '
+NOTES = (WINDOW, SET_UP, '3D render: ')
 
 
 @_tool(read_only=False, destructive=False, idempotent=True, open_world=False)
@@ -98,20 +102,22 @@ def screenshot_designer(
     graph: Annotated[
         str | None,
         Field(
-            description="Puts that graph's outputs on the mesh, selecting it in the Explorer (outputs added to the "
-            "graph open in the editor don't reach it by themselves; one with fewer than two outputs is refused: "
-            'preview_node shows one).'
+            description="Puts that graph's outputs on the mesh, on each of its materials, selecting it in the Explorer "
+            "(outputs added to the graph open in the editor don't reach it by themselves; one with fewer than two "
+            'outputs is refused: preview_node shows one).'
         ),
     ] = None,
     mesh: Annotated[
-        str | None, Field(description="One of the 3D view's Scene menu (Plane, Sphere, Rounded cube...).")
+        str | None,
+        Field(
+            description="One of the 3D view's Scene menu (Plane, Sphere, Rounded cube...) or the path of a mesh file "
+            "(%s), framed as Designer's Frame frames it, unless the view shows it already." % ', '.join(MESH_FORMATS)
+        ),
     ] = None,
     view: Annotated[
         str | None,
         Field(
-            description="Default, Front, Right, Back, Left, Top or Bottom, framed as Designer's Frame frames the mesh "
-            "(a mesh of the user's own is framed as the cube: if it doesn't show whole, call again with zoom or pan "
-            'beside view).'
+            description="Default, Front, Right, Back, Left, Top or Bottom, framed as Designer's Frame frames the mesh."
         ),
     ] = None,
     zoom: Annotated[
@@ -124,7 +130,9 @@ def screenshot_designer(
     tiling: Annotated[
         float | None,
         Field(
-            description='How often the material repeats on the mesh (refused for a mesh using more than one material).'
+            description='How often the material repeats on the mesh (refused for a mesh using more than one '
+            "material). It shows only with the material's Override Material on: one off is turned on for the render, "
+            "which says so, and the user's view comes back after."
         ),
     ] = None,
     orbit: Annotated[
@@ -159,6 +167,30 @@ def screenshot_designer(
         float | None,
         Field(description="The environment's Exposure, -10 to 10, higher brighter (Designer starts at 0)."),
     ] = None,
+    shader_model: Annotated[
+        str | None,
+        Field(
+            description="The shader model of the mesh's material, as Materials > the material lists it: "
+            "AdobeStandardMaterial, OpenPBR Surface (Designer's default) or UsdPreviewSurface. Refused for a mesh "
+            "using more than one material. The model shows only with the material's Override Material on: one off "
+            "is turned on for the render, which says so, and the user's view comes back after. Since Blender 4.0, its "
+            'Principled BSDF is based on OpenPBR Surface.'
+        ),
+    ] = None,
+    as_text: Annotated[
+        bool,
+        Field(
+            description="With panel='3d': what the 3D view shows, as text, with no render, a line each. The lines "
+            'mesh, tiling, environment, environment_rotation, environment_exposure and shader_model give each value as '
+            'that option takes it: given back to it, the value reads as shown already, but a tiling or a shader model '
+            "on a material whose Override Material is off, which the shot turns on. A map not of Designer's own is "
+            'said by its URL instead, and a shader model the Materials menu lacks by its name in the state file, which '
+            "shader_model refuses. A field that can't be read says why. Also the camera, the renderer, the "
+            'AOV and the Override Material of each material the mesh uses, by name (`Override Material: Body on, '
+            'Joints off`), each of the last three left out where Designer gives none. Takes no set-up option and no '
+            'crop.'
+        ),
+    ] = False,
 ) -> list[str | Image]:
     """Capture Designer's own UI (never other apps). Shows what the user sees (node layout, 2D view, properties).
     open_graph(frame=... / node_ids=...) zooms the graph panel to a section first.
@@ -170,21 +202,26 @@ def screenshot_designer(
     view no longer follows a graph. Tell them too when an aborted call (a cancel, or the time limit) names 3D view steps
     it began: their 3D view stays as the call left it, and Scene > Reset Scene then loads the default 3D state, not the
     view they had. After a set-up that moved the camera, switched the
-    mesh, or changed the tiling or the light, a render identical to the one before is said, and so is a 3D view that
-    hadn't settled within 3 s: shoot again with the same set-up.
+    mesh, or changed the tiling, the light or the shader model, a render identical to the one before is said, and so is
+    a 3D view that hadn't settled within 3 s: shoot again with the same set-up. A mesh file that didn't import within
+    30 s is said so: shooting again won't help, and read_designer_log says if Designer failed to import it.
     A 3D shot that doesn't show what the call set (the mesh, the view, the material) may be the view's last frame
     too. Shoot again with the same set-up before judging it.
-    '3d' can set up the view first with graph, mesh, view, orbit, pan, zoom, tiling and the light, and says what it set
-    (stopped partway, the steps it began). After the render it puts the user's 3D view back and says so, so each
-    call starts from the view the user left. A view that showed a graph's outputs gets the editor's graph's back after
-    each load, through the Explorer: this selects that graph there, expanding its package, and turns the Parameters
-    panel to it. The camera, the mesh, the tiling and the light go through Designer's
-    default 3D state file, which the call writes and puts back. When the view hadn't settled within 3 s after a step,
+    '3d' can set up the view first with graph, mesh, view, orbit, pan, zoom, tiling, the light and shader_model, and
+    says what it set (stopped partway, the steps it began). After the render it puts the user's 3D view back and says
+    so, so each call starts from the view the user left. A view that showed a graph's outputs gets the editor's graph's
+    back after each load, on the materials that showed them, through the Explorer: this selects that graph there,
+    expanding its package, and turns the Parameters panel to it. The camera, the mesh, the tiling, the light and the
+    shader model go through Designer's default 3D state file, which the call writes and puts back. When the view hadn't settled within 3 s after a step,
     or hadn't by the render since the window came back with no step restarting it, the result also gives the view's
     count if below 8 (off screen, as last drawn) and what may hold it there: still refining, or the Rasterizer's
     Samples below 8 or its accumulation antialiasing off (Renderer > Edit settings). A shot where nothing of this happens says nothing of the count.
     An image costs about width x height / 750 tokens (1000 x 700 is about 930), so keep
-    max_size small and crop to what you need."""
+    max_size small and crop to what you need.
+
+    With as_text, '3d' renders nothing and uses no clipboard: it says what the 3D view shows, a line each, and leaves
+    Designer's window as it is. It saves the session's state to the default 3D state file to read it, then puts the
+    user's file back. A backup an earlier call left is put back, or removed, before the Save, and said first."""
     if crop is not None and (not all(0.0 <= v <= 1.0 for v in crop) or not (crop[0] < crop[2] and crop[1] < crop[3])):
         raise ToolError('crop is [left, top, right, bottom] as fractions 0-1, with left < right and top < bottom')
     options = {
@@ -199,10 +236,13 @@ def screenshot_designer(
         # values written in the state file, 0 included: unlike a turn, pan or zoom of 0, not nothing to do
         'environment_rotation': environment_rotation,
         'environment_exposure': environment_exposure,
+        'shader_model': shader_model,
     }
     given = [name for name, value in options.items() if value not in (None, '')]
     if given and panel != '3d':
         raise ToolError("%s: these set up the 3D view, so they go with panel='3d'" % ', '.join(given))
+    if as_text:
+        return _3d_as_text(panel, given + (['crop'] if crop is not None else []))
     if not -ZOOM_STEPS <= zoom <= ZOOM_STEPS:
         raise ToolError('zoom is -%d to %d steps (positive: closer), not %r' % (ZOOM_STEPS, ZOOM_STEPS, zoom))
     if tiling is not None and not tiling > 0:
@@ -225,20 +265,21 @@ def screenshot_designer(
             "environment_exposure is the environment's Exposure, -%d to %d (Designer starts at 0), not %r"
             % (ENVIRONMENT_EXPOSURE, ENVIRONMENT_EXPOSURE, environment_exposure)
         )
+    mesh = _mesh_file(mesh) if mesh else None
     tmp_dir = tempfile.mkdtemp(prefix='sd_shot_')
     out_path = os.path.join(tmp_dir, 'shot.png')
     call = 'save_screenshot(%r, %r)' % (panel, out_path)
     if panel == '3d':  # Designer's window on screen through the set-up and the render (designer_helpers/shot3d.py)
         setup = (  # '': none
             *(out_path, graph or None, mesh or None, view or None, zoom, tiling, options['orbit'], options['pan']),
-            *(environment or None, environment_rotation, environment_exposure),
+            *(environment or None, environment_rotation, environment_exposure, shader_model or None),
         )
         call = 'shoot_3d(%s)' % ', '.join(map(repr, setup))
     try:
         text = _bridge(_helpers_call(call), timeout=120 if given else 60)
         lines = text.splitlines()
         window = [line for line in lines if line.startswith(WINDOW)]
-        set_up = [line for line in lines if line.startswith('3D view: ')]
+        set_up = [line for line in lines if line.startswith(SET_UP)]
         begun = [line for line in lines if line.startswith('3D view, setting: ')]
         # an error after the set-up, or partway: what was set, then that the view was put back; an abort: the steps it
         # began, the view left as they set it; and what became of the user's window (designer_helpers/scene3d.py,
@@ -259,6 +300,38 @@ def screenshot_designer(
         return [Image(data=buf.getvalue(), format='png'), *[line for line in lines if line.startswith(NOTES)]]
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _mesh_file(mesh: str) -> str:
+    """screenshot_designer's `mesh` as the helpers take it. A name of the 3D view's Scene menu holds no extension and no
+    folder, and is sent as given: the helpers know the names. Anything else is a mesh file's path, made absolute
+    (_local_path). Refuses a path whose extension isn't one of MESH_FORMATS, and one that is no file."""
+    if not (os.path.splitext(mesh)[1] or os.sep in mesh or '/' in mesh):
+        return mesh
+    path = _local_path(mesh) or mesh  # a path given, a path back
+    if os.path.splitext(path)[1][1:].lower() not in MESH_FORMATS:
+        raise ToolError(
+            "mesh %r is neither one of the 3D view's Scene menu nor a mesh file Designer imports (%s)"
+            % (mesh, ', '.join(MESH_FORMATS))
+        )
+    if not os.path.isfile(path):
+        raise ToolError('mesh: no such file: %s' % path)
+    return path
+
+
+def _3d_as_text(panel: str, given: list[str]) -> list[str | Image]:
+    """screenshot_designer(panel='3d', as_text=True): the 3D view as text, a line each (designer_helpers/scene3d.py,
+    shown_3d), or refused when `panel` isn't '3d' or `given` names options it doesn't take. Its error ends with what was
+    done to the default state file first (a leftover backup put back or removed), as a shot's does."""
+    if panel != '3d':
+        raise ToolError("as_text says what the 3D view shows, so it goes with panel='3d'")
+    if given:
+        raise ToolError('as_text says what the 3D view shows, with no render: it takes no %s' % ', '.join(given))
+    text = _bridge(_helpers_call('shown_3d()'), timeout=60).strip()
+    if '--- ERROR ---' in text:
+        lines = text.splitlines()
+        raise ToolError(lines[-1] + ''.join('\n' + line for line in lines if line.startswith(SET_UP)))
+    return [text]
 
 
 @_tool(read_only=False, destructive=False, idempotent=True, open_world=False)

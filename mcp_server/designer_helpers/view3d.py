@@ -2,13 +2,13 @@
 the mesh (ROADMAP items 7 and 73); and what the set-up's arguments rule out. Designer's API has none of it (sd, Designer
 16), so this drives the menus and widgets, as measured in a Designer an agent started (2026-11-12; the self-test's
 editor_panels_and_fit checks what the tool relies on, lifecycle the first point below). The camera, the mesh, the
-tiling and the environment go through the view's state file (scene3d.py, state3d.py).
+tiling, the environment and the shader model go through the view's state file (scene3d.py, state3d.py).
 
 - Designer builds the 3D view's menu bar and viewport once a graph is opened (before, its dock has neither).
 - The 3D view's menu bar: Scene lists the meshes (MESHES, among other entries), Camera the viewpoints (VIEWS) and
   Frame. Their actions trigger from code once the menu's aboutToShow has filled it, as the screenshot's Copy Render
-  does. Scene checks the mesh the view shows: the set-up reads the action of the mesh asked, and changes nothing for
-  a mesh checked already.
+  does. Scene checks the mesh the view shows: the set-up reads the mesh it checks (scene3d._mesh_shown), and changes
+  nothing for a mesh checked already.
 - A graph's outputs reach the mesh as Designer switches to the graph (Preferences > Graph > Common, "View outputs in 3D
   view when opening a graph"), so outputs added to the graph open in the editor don't until it switches again. The
   Explorer's "View Outputs In 3D View" does, but only from its context menu: the action triggered by itself does
@@ -37,8 +37,23 @@ tiling and the environment go through the view's state file (scene3d.py, state3d
   menu in a `finally`, and the guard is made of C callables only (_popup_closer). The timers have a parent the
   function holds alone, so they go with it even when an abort lands in the `finally` that stops them: without one, a
   timer whose slot holds it outlives the function (the self-test's designer fact).
+- On a mesh of several materials the action makes Designer ask which material, in a QMenu of its own,
+  `materialSelectionMenu` (MATERIAL_MENU). It opens as the action runs, 6 to 17 ms after it, in an event loop of its
+  own, and lists the materials by name. Left unanswered, it held the job until the guard closed it (REVIEW.md HLP-312).
+  The entry made active, then a Return key event sent to the menu, picks it, and each pick puts the outputs on one
+  material, the picks adding up. So the look, started again as the action runs, makes that menu transparent and
+  click-through as it does the Explorer's, then picks a material there, the Explorer's menu opened once per material
+  (_apply_outputs). Another menu opening then is left to the guard. Designer makes a new menu each opening and deletes
+  it once closed (a runner's probe, 2026-11-27: a new pointer each time, the wrappers kept invalid after), so unfade
+  giving back its window's look is enough. Probes also measured that Down, the entry's index
+  + 1 times, then Return picked it, and that `.trigger()` on an entry, or the menu closed, picked none (2026-11-27).
+  Facts' checks of graph= on the project's OBJ and the Samba FBX check the menu's look and the outputs on each
+  material.
 - The Materials menu lists each material of the view, one Materials > Add added as "(unused)": the material the mesh
-  uses is the one not so marked (_material_checked).
+  uses is the one not so marked (_material_checked). An earlier mesh file's are listed so too, after a load of another
+  (a probe, 2026-11-28; REVIEW.md HLP-322). While a load of a mesh file imports it, the menu lists none in
+  use (_materials_used; scene3d.py). Each material's submenu lists the shader models
+  (state3d.SHADER_MODELS), which the set-up sets through the state file.
 - Designer's own environment maps are the files of its resources' `view3d/maps` folder, which its Library lists under
   3D view > HDRI environments (_environment_maps).
 - What a shot sets is put back after its render (scene3d.py).
@@ -65,13 +80,16 @@ from .core import (
 from .editor import _process_events
 from .mac_window import _MacWindow
 from .screenshots import _PANEL_AREAS, _visible_dock
-from .state3d import FRAMING, MAP_SCHEME, MATERIALS_USED, VIEW_DIRECTIONS
+from .state3d import FRAMING, MAP_SCHEME, MATERIALS_USED, SHADER_MODELS, VIEW_DIRECTIONS
 
 MESHES = tuple(FRAMING)  # the 3D view's Scene menu's meshes, in its order
 VIEWS = tuple(VIEW_DIRECTIONS)  # its Camera menu's views
 VIEW_OUTPUTS = 'View Outputs In 3D View'
 MENU_GUARD = 5000  # ms the Explorer's context menu may stay open
 MENU_TRIES = 3  # times the Explorer's context menu is opened when something closes it before its action is picked
+MATERIAL_MENU = (
+    'materialSelectionMenu'  # the object name of Designer's menu asking which material (the module docstring)
+)
 SETTING = '3D view, setting: '  # a step said before its change (scene3d._3d_set_up); the server collects these
 
 
@@ -98,18 +116,24 @@ def _menu_action(bar: QtWidgets.QMenuBar, keep: list[Kept], *path: str) -> QtGui
     raise RuntimeError('no menu path given')
 
 
-def _material_checked(bar: QtWidgets.QMenuBar, keep: list[Kept]) -> None:
-    """Refused unless the mesh uses one material in the 3D view's Materials menu, one Designer lists as unused not
-    counted (MATERIALS_USED): tiling= would set one of them."""
+def _materials_used(bar: QtWidgets.QMenuBar, keep: list[Kept]) -> list[str]:
+    """The materials the mesh uses, as the 3D view's Materials menu names them: each it lists but those it marks unused.
+    It names none while the import of a mesh file a load names hasn't ended (scene3d.py)."""
     menu = _menu(_menu_action(bar, keep, 'Materials'))
     keep.append(menu)
     menu.aboutToShow.emit()
     _process_events()
     used = [a for a in menu.actions() if a.menu() is not None and a.text() and '(unused)' not in a.text()]
     keep += used
-    if len(used) != 1:
-        names = [a.text().replace('&', '') for a in used]
-        raise RuntimeError(MATERIALS_USED % (len(used), ' (%s)' % ', '.join(names) if names else ''))
+    return [a.text().replace('&', '') for a in used]
+
+
+def _material_checked(bar: QtWidgets.QMenuBar, keep: list[Kept]) -> None:
+    """Refused unless the mesh uses one material in the 3D view's Materials menu (_materials_used, MATERIALS_USED):
+    tiling= or shader_model= would set one of them."""
+    names = _materials_used(bar, keep)
+    if len(names) != 1:
+        raise RuntimeError(MATERIALS_USED % (len(names), ' (%s)' % ', '.join(names) if names else ''))
 
 
 def _row_point(tree: QtWidgets.QTreeView, row: QtCore.QModelIndex, graph: str) -> QtCore.QPoint:
@@ -125,25 +149,41 @@ def _row_point(tree: QtWidgets.QTreeView, row: QtCore.QModelIndex, graph: str) -
 
 class _MenuPick:
     """What _menu_once's look does in one try, while the Explorer's context menu runs, and what went wrong, said
-    after. `before` is the popup open before the menu, maybe the user's: never taken for it."""
+    after. `before` is the popup open before the menu, maybe the user's: never taken for it. Designer's menu asking
+    which material (MATERIAL_MENU), opening as the action runs, gets the first of `materials` it lists that isn't in
+    `done` picked (_materials_wanted)."""
 
-    def __init__(self, action: str, before: QtWidgets.QWidget | None) -> None:
+    def __init__(
+        self, action: str, before: QtWidgets.QWidget | None, materials: Sequence[str] = (), done: Sequence[str] = ()
+    ) -> None:
         self.action = action
         self.before = before
+        self.materials = materials
+        self.done = done
         self.menus = 0  # menus pick found open
         self.disabled = False  # the action found disabled
         self.picked = False  # the action triggered in one
         self.faded = False  # a menu made transparent by fade
         self.closed = False  # a menu pick found closed already, by something else
         self.fade_error: str | None = None  # why fade raised, the menu closed then (REVIEW.md HLP-153)
-        self.held: tuple[_MacWindow, int] | None = None  # on macOS, that menu's window, held till unfade
+        self.seen: list[QtWidgets.QMenu] = []  # the menus fade made transparent: the Explorer's, then Designer's own
+        self.held: list[tuple[_MacWindow, int]] = []  # on macOS, those menus' windows, held till unfade
+        self.listed: list[str] | None = None  # the materials Designer's menu listed, once it asked which
+        self.material: str | None = None  # the one picked there
+        self.more = False  # whether a material wanted is left after that one
 
     def pick(self, menu: QtWidgets.QMenu | None) -> bool:
         """In the menu opened since, trigger the action if enabled and close the menu, even when the trigger raises
-        (an abort: the module docstring): True. A menu closed already by something else is left: True too. No such
-        menu yet (None, or `before`): False, so its timer looks again."""
+        (an abort: the module docstring): True. A menu closed already by something else is left: True too. Designer's
+        menu asking which material, once the Explorer's was looked in, is answered (_answer): True. No such menu yet
+        (None, or `before`), or another menu opening as the action runs, which the guard closes: False."""
         if menu is None or menu is self.before:
             return False
+        if self.menus:  # the Explorer's looked in: a menu opening as the action runs
+            if menu.objectName() != MATERIAL_MENU:
+                return False
+            self._answer(menu)
+            return True
         # closed as fade made it transparent, by something else (REVIEW.md HLP-147); one closed before the look is
         # one that didn't open, the look picking in the slot that fades
         if not menu.isVisible():
@@ -161,10 +201,31 @@ class _MenuPick:
             menu.close()
         return True
 
+    def _answer(self, menu: QtWidgets.QMenu) -> None:
+        """In Designer's menu of the mesh's materials, the first wanted that isn't done made active, then picked by a
+        Return key event sent to the menu (the module docstring). The menu is closed when that didn't close it, so that
+        it doesn't hold the job."""
+        entries = {action.text(): action for action in menu.actions() if not action.isSeparator()}
+        self.listed = list(entries)
+        left = [name for name in _materials_wanted(self.listed, self.materials) if name not in self.done]
+        try:
+            if left and menu.isVisible():
+                menu.setActiveAction(entries[left[0]])
+                key = QtGui.QKeyEvent(
+                    QtCore.QEvent.Type.KeyPress, QtCore.Qt.Key.Key_Return, QtCore.Qt.KeyboardModifier.NoModifier
+                )
+                QtWidgets.QApplication.sendEvent(menu, key)
+                if not menu.isVisible():
+                    self.material, self.more = left[0], len(left) > 1
+        finally:
+            if menu.isVisible():
+                menu.close()
+
     def fade(self, menu: QtWidgets.QMenu | None) -> bool:
         """Makes the menu opened since transparent, so it doesn't show over the user's windows while the 3D shot keeps
         Designer's own transparent (the module docstring), and on macOS click-through: True. No such menu yet (None,
-        or `before`): False, so its timer looks again. Raising, it says why in fade_error first (REVIEW.md HLP-153)."""
+        `before`, or one made so already): False, so its timer looks again. Raising, it says why in fade_error first
+        (REVIEW.md HLP-153)."""
         try:
             return self._fade(menu)
         except BaseException as e:
@@ -172,13 +233,14 @@ class _MenuPick:
             raise
 
     def _fade(self, menu: QtWidgets.QMenu | None) -> bool:
-        if menu is None or menu is self.before:
+        if menu is None or menu is self.before or menu in self.seen:
             return False
+        self.seen.append(menu)
         if sys.platform == 'darwin':  # held first: the Explorer deletes the menu as it closes, not its window
             mac = _MacWindow(menu)
             window = mac.windows(False)[0]
             mac.hold(window)
-            self.held = (mac, window)
+            self.held.append((mac, window))
         menu.setWindowOpacity(0.0)
         # measured there only: it sets the menu window's ignoresMouseEvents, and the action is still picked
         if sys.platform == 'darwin':
@@ -187,17 +249,16 @@ class _MenuPick:
         return True
 
     def unfade(self) -> None:
-        """Once the menu closed: makes the window of the menu fade made transparent opaque and clickable again, and
+        """Once the menus closed: makes the window of each menu fade made transparent opaque and clickable again, and
         ends its hold (macOS). The window of a menu closed before its action was picked stayed transparent and
-        click-through (REVIEW.md HLP-146). Cut short by an abort, it can run again: the look is set again, and the
+        click-through (REVIEW.md HLP-146). Cut short by an abort, it can run again: each look is set again, and each
         hold, forgotten just before it ends, ends once. An abort landing between the two leaves the hold: a closed
         window kept, where ending it twice could free it while Designer uses it (REVIEW.md HLP-177)."""
-        if self.held is None:
-            return
-        mac, window = self.held
-        mac.set_appearance(window, 1.0, False)
-        self.held = None
-        mac.let_go(window)
+        while self.held:
+            mac, window = self.held[-1]
+            mac.set_appearance(window, 1.0, False)
+            self.held.pop()
+            mac.let_go(window)
 
     def closed_early(self) -> bool:
         """Whether no menu was looked in: none opened, or something else closed it first (REVIEW.md HLP-147). A menu
@@ -209,6 +270,11 @@ class _MenuPick:
         was picked. `held`: the guard had to close a menu."""
         if self.fade_error is not None:
             return "couldn't be made transparent (%s), and was closed" % self.fade_error
+        if self.picked and self.listed is not None and self.material is None:
+            return "had %r picked, then Designer's menu of the mesh's materials (%s) closed with none picked" % (
+                self.action,
+                ', '.join(self.listed),
+            )
         if self.picked:
             return None
         if self.menus:
@@ -268,10 +334,18 @@ def _explorer_tree(mw: QtWidgets.QMainWindow, keep: list[Kept]) -> QtWidgets.QTr
     return trees[0]
 
 
-def _apply_outputs(tree: QtWidgets.QTreeView, graph: SDSBSCompGraph, keep: list[Kept]) -> None:
+def _materials_wanted(listed: Sequence[str], materials: Sequence[str]) -> list[str]:
+    """The materials of Designer's menu `listed` to put a graph's outputs on: those of `materials`, or every one when it
+    lists none of them, as with none given or another mesh than the one they were read from (scene3d.py)."""
+    return [name for name in listed if name in materials] or list(listed)
+
+
+def _apply_outputs(
+    tree: QtWidgets.QTreeView, graph: SDSBSCompGraph, keep: list[Kept], materials: Sequence[str] = ()
+) -> None:
     """The Explorer's "View Outputs In 3D View" for `graph`, from its context menu on the Explorer's `tree` (the module
-    docstring). A menu closed before its action was picked, by something else, is opened again, MENU_TRIES times at
-    most (REVIEW.md HLP-147)."""
+    docstring). On a mesh of several materials Designer asks which: the outputs go on each of `materials` its menu lists
+    (_materials_wanted; none given: every one), the Explorer's menu opened once per material."""
     _ui_mgr().setExplorerSelection(graph)
     _process_events()
     rows = tree.selectionModel().selectedRows()
@@ -280,27 +354,56 @@ def _apply_outputs(tree: QtWidgets.QTreeView, graph: SDSBSCompGraph, keep: list[
             "graph %s wasn't selected in the Explorer (%d rows are)" % (graph.getIdentifier(), len(rows))
         )
     at = _row_point(tree, rows[0], graph.getIdentifier())
+    done: list[str] = []
+    more = True
+    while more:
+        state = _menu_tried(tree, at, keep, graph.getIdentifier(), materials, done)
+        if state.material is None:  # Designer asked no material: the mesh has one
+            return
+        done.append(state.material)
+        more = state.more
+
+
+def _menu_tried(
+    tree: QtWidgets.QTreeView,
+    at: QtCore.QPoint,
+    keep: list[Kept],
+    graph: str,
+    materials: Sequence[str],
+    done: Sequence[str],
+) -> _MenuPick:
+    """The Explorer's menu opened and its action picked once (_menu_once), a material asked picked as _MenuPick says.
+    A menu closed before its action was picked, by something else, is opened again, MENU_TRIES times at most (REVIEW.md
+    HLP-147). Raises with why the outputs of `graph` may not be on the mesh."""
     tried, earlier = 0, []
     while True:
         tried += 1
-        state, held = _menu_once(tree, at, keep)
+        state, held = _menu_once(tree, at, keep, materials, done)
         if held or not state.closed_early() or tried == MENU_TRIES:
             break
         earlier.append(cast(str, state.what(held)))  # closed early: something went wrong
-    failure = state.failure(graph.getIdentifier(), held, tried, earlier)
+    failure = state.failure(graph, held, tried, earlier)
     if failure:
         raise RuntimeError(failure)
+    return state
 
 
-def _menu_once(tree: QtWidgets.QTreeView, at: QtCore.QPoint, keep: list[Kept]) -> tuple[_MenuPick, bool]:
+def _menu_once(
+    tree: QtWidgets.QTreeView,
+    at: QtCore.QPoint,
+    keep: list[Kept],
+    materials: Sequence[str] = (),
+    done: Sequence[str] = (),
+) -> tuple[_MenuPick, bool]:
     """The Explorer's context menu opened once at `at` on `tree`, and its action picked while it runs: what the pick
-    found, and whether the guard had to close a menu. An abort raised at the look's call, or at its first line, comes
-    before any of the look runs: the menu then stays as it opened until the guard closes it, MENU_GUARD at most
+    found, and whether the guard had to close a menu. The look runs again as the action runs, for Designer's menu of
+    the mesh's materials (_MenuPick, `materials` and `done`). An abort raised at the look's call, or at its first line,
+    comes before any of the look runs: the menu then stays as it opened until the guard closes it, MENU_GUARD at most
     (REVIEW.md HLP-177)."""
     app = QtWidgets.QApplication
     before = app.activePopupWidget()  # a popup already open, maybe the user's: left alone
     keep.append(before)
-    state = _MenuPick(VIEW_OUTPUTS, before)
+    state = _MenuPick(VIEW_OUTPUTS, before, materials, done)
 
     def look() -> None:
         # the menu made transparent as it opens, then its action picked at once: there at the first look (measured).
@@ -309,11 +412,13 @@ def _menu_once(tree: QtWidgets.QTreeView, at: QtCore.QPoint, keep: list[Kept]) -
         try:
             menu = app.activePopupWidget()
             menu = menu if isinstance(menu, QtWidgets.QMenu) else None
-            keep.append(menu)
-            if not state.fade(menu):
+            if not state.fade(menu):  # none yet, or one looked at already, kept then
                 timers[0].start(0)
                 return
+            keep.append(menu)
+            timers[0].start(0)  # again as the action runs: Designer may ask which material, in a menu of its own
             state.pick(menu)
+            timers[0].stop()  # no menu opens once the pick returned
         except BaseException:
             # closed at once, not left open over the user's windows (REVIEW.md HLP-153): a menu fade couldn't make
             # transparent, and one an abort left open before its fade or as pick closed it, here untraced (REVIEW.md
@@ -366,15 +471,30 @@ def _environment_maps() -> dict[str, str]:
 
 
 def _set_up_checked(
-    graph: str | None, mesh: str | None, view: str | None, environment: str | None = None
+    graph: str | None,
+    mesh: str | None,
+    view: str | None,
+    environment: str | None = None,
+    shader_model: str | None = None,
 ) -> SDSBSCompGraph | None:
-    """The graph `graph` names (None without one), once what the arguments alone rule out is refused: a mesh or view
-    the 3D view's menus don't have (MESHES, VIEWS), an environment map Designer doesn't have (_environment_maps), and a
-    graph with fewer than two outputs. Nothing in Designer's UI is looked at or changed."""
+    """The graph `graph` names (None without one), once what the arguments alone rule out is refused: a mesh, view or
+    shader model the 3D view's menus don't have (MESHES, VIEWS, state3d.SHADER_MODELS), an environment map Designer
+    doesn't have (_environment_maps), and a graph with fewer than two outputs. A mesh the Scene menu lacks is taken as
+    a mesh file's absolute path, and refused unless a file is there. Nothing in Designer's UI is looked at or
+    changed."""
     if mesh is not None and mesh not in MESHES:
-        raise RuntimeError('unknown mesh %r; the 3D view has %s' % (mesh, ', '.join(MESHES)))
+        if not os.path.isabs(mesh):  # screenshot_designer makes a path absolute
+            raise RuntimeError(
+                'unknown mesh %r; the 3D view has %s, and a mesh file is given by its path' % (mesh, ', '.join(MESHES))
+            )
+        if not os.path.isfile(mesh):
+            raise RuntimeError('no such mesh file: %s' % mesh)
     if view is not None and view not in VIEWS:
         raise RuntimeError('unknown view %r; the 3D view has %s' % (view, ', '.join(VIEWS)))
+    if shader_model is not None and shader_model not in SHADER_MODELS:
+        raise RuntimeError(
+            "unknown shader model %r; the 3D view's Materials menu has %s" % (shader_model, ', '.join(SHADER_MODELS))
+        )
     if environment is not None and environment not in (maps := _environment_maps()):
         raise RuntimeError('unknown environment %r; Designer has %s' % (environment, ', '.join(maps)))
     g = find_graph(graph) if graph else None

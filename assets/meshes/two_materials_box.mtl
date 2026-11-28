@@ -1,0 +1,5 @@
+# The two materials of two_materials_box.obj.
+newmtl first
+Kd 0.8 0.2 0.2
+newmtl second
+Kd 0.2 0.2 0.8

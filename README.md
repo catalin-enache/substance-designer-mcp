@@ -92,7 +92,7 @@ saved file (details: [mcp_server/GUIDE.md](mcp_server/GUIDE.md), Portals).
 | Tuning | `sweep_param` (try several values of a parameter side by side; the original value is restored) |
 | Safety | `undo_edits` (takes back Claude's own last calls, newest first; it stops at a step of yours on top of them, and Claude asks you before undoing it), `snapshot_graph`, `list_snapshots`, `diff_graph` (what changed vs the saved file or a snapshot) |
 | Readability | `arrange_graph` (tidy layout by data flow), `add_frame`, `add_comment`, `set_link_display` (show wires as portals to hide clutter; saves and reloads the package after a snapshot) |
-| Viewing | `screenshot_designer` (window, graph, 2D view, 3D view, panels; only Designer is captured, never other apps; the 3D view optionally set up first: a graph's outputs on a chosen mesh, viewpoint, the camera turned and panned, zoom and tiling, and the light: one of Designer's environment maps, its angle and its exposure; your 3D view put back after the shot), `open_graph` (open a graph or a function graph of its package, fitted whole, zoomed to a frame, nodes or rectangle, or centred on a node) |
+| Viewing | `screenshot_designer` (window, graph, 2D view, 3D view, panels; only Designer is captured, never other apps; the 3D view optionally set up first: a graph's outputs on a chosen mesh, one of the 3D view's own or a mesh file of yours (FBX, OBJ, glTF, USD and the other formats Designer imports), viewpoint, the camera turned and panned, zoom and tiling, the light: one of Designer's environment maps, its angle and its exposure, and the material's shader model; your 3D view put back after the shot; or, with no image, what the 3D view shows as text: its mesh, camera, tiling, light, shader model, renderer, AOV and Override Material), `open_graph` (open a graph or a function graph of its package, fitted whole, zoomed to a frame, nodes or rectangle, or centred on a node) |
 | Editing | `apply_edits` (add nodes and image files, set parameters (a Gradient Map's keys and a Curve's points too), name and tag output nodes, connect (a Value Processor's value into another node's `#name` input value, and a processor's second and later input images, too), disconnect, move, delete, expose parameters as graph inputs: one or many edits per call, one undo step; a typo'd node id changes nothing, and a batch failing partway is undone whole while its step is the newest), `set_function` (an expression compiled into a Pixel Processor's, a Value Processor's or a parameter's function, reading graph inputs, the node's `#name` input values and a processor's input images, or into a function graph stored in the package, which any expression of the package calls by name; one undo step), `create_graph`, `set_graph_size` |
 | Controls | `remove_graph_input` (exposing a parameter is `apply_edits`' `expose` op) |
 | Scripting | `execute_designer_code`, `run_designer_script` (with timeout and `args`) |
@@ -410,17 +410,19 @@ python client/sd_run.py --cancel              # abort the running script
 - Screenshots only ever capture Designer's own panels. The 3D view uses Designer's own render
   through the clipboard, then puts back its text; anything else on it (an image, formatting, copied files) may
   be lost.
-- A 3D screenshot that sets the view up (a camera, a mesh, a graph's outputs, the tiling or the light) puts your 3D
-  view back after its render. It goes through Designer's default 3D view state file (Scene > Save Current State As
-  Default), in Designer's settings folder, or your Default State File if your project settings set one: the shot copies
-  that file and its textures' folder aside, writes its own, then puts yours back byte for byte. If Designer crashes
-  between the two, its next start reads the shot's file instead of yours, and the next shot that sets the view up
-  puts yours back first.
-  Designer reads the Default State File setting as it starts, so after you change it, restart Designer: until then a
-  shot with a set-up is refused, once Designer's own Save has written the session's state to the file it started with.
-  Designer doesn't tell which graph's outputs the view showed, so after the shot it shows those of the graph open in
-  the editor. Putting them back selects that graph in the Explorer, expanding its package, and turns the Parameters
-  panel to it. A graph with a single output isn't put back on the view, and the shot says so.
+- A 3D screenshot that sets the view up (a camera, a mesh, a graph's outputs, the tiling, the light or the shader model)
+  puts your 3D view back after its render. It goes through Designer's default 3D view state file (Scene > Save Current
+  State As Default), in Designer's settings folder, or your Default State File if your project settings set one: the
+  shot copies that file and its textures' folder aside, writes its own, then puts yours back byte for byte. If Designer
+  crashes between the two, its next start reads the shot's file instead of yours, and the next shot that sets the view
+  up puts yours back first. Asking what the 3D view shows as text (`as_text`) goes through the same file: it saves the
+  session's state there to read it, then puts yours back the same way. Designer reads the Default State File setting as
+  it starts, so after you change it, restart Designer: until then a shot with a set-up, or `as_text`, is refused, once
+  Designer's own Save has written the session's state to the file it started with. Designer doesn't tell which graph's
+  outputs the view showed, so after the shot it shows those of the graph open in the editor, on the materials that
+  showed outputs. Putting them back selects
+  that graph in the Explorer, expanding its package, and turns the Parameters panel to it. A graph with a single output
+  isn't put back on the view, and the shot says so. A mesh file of yours is read where it is.
 - The 3D view draws only while Designer's window is on screen. So on macOS, when Designer's window is minimized,
   covered by other windows or hidden, a 3D screenshot brings it in front for the shot, fully transparent, and puts it
   back where it was afterwards. While it is transparent, your clicks go to the window under it. If you switch to
@@ -470,6 +472,7 @@ one an agent started uses its own folder and writes Designer's preferences as it
 | `This Designer wasn't started by an agent` | The tools never close a Designer you opened. Save, close and reopen it yourself. |
 | `Designer ... did not answer` and it may be stuck closing | If its windows closed but the process stayed, end it in Activity Monitor, or with the `kill` command the message gives. On Windows, in Task Manager. Nothing is lost then. If its windows are open, save and close it as usual: ending it would lose unsaved work. |
 | Bridge accepts connections but never answers | The plugin code was replaced while running (for example by a hot reload). Restart Designer. |
+| A 3D shot of a mesh file of yours says it `didn't import within 30 s`, and shows no mesh | Designer didn't import the file within 30 s, and shooting again won't help. If its log says `Scene import failed`, with the importer's error before it (`read_designer_log`), export the mesh again, or in another format Designer imports. If not, its import takes longer than the shot waits. |
 | `Address already in use` in the Designer log | The plugin was loaded twice, or another app uses port 9877. Restart Designer, or change `SD_BRIDGE_PORT`. |
 | `sbscooker/sbsrender not found` | Set `SD_DESIGNER_BIN_DIR`. |
 | MCP shows `Failed to connect` | Run `<venv python> mcp_server/server.py` by hand to see the error (usually Python too old or the venv missing). |

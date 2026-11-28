@@ -66,11 +66,11 @@ So the waits (_Frames):
   reads 1. A restart is a count below the one before, so only the watch's first paint, with no count before it, reads
   as one: a wait that sees it, as the first step of a shot in a Designer already on screen, runs to its net and says
   unsettled. A later step's settled and moved can end at NO_RESTART as if the step changed nothing (REVIEW.md
-  HLP-216, HLP-217; not measured). A later step's restarted can run to SETTLE_LIMIT and say the restart never came
-  (REVIEW.md HLP-289; not measured). The self-test's Rasterizer check measures a zoom then, its count said of a step
+  HLP-216, HLP-217; not measured). The self-test's Rasterizer check measures a zoom then, its count said of a step
   or of the render;
 - after a load of the state file: its end (scene3d.py), then the count rising back to SAMPLES after its restart, the
-  camera's glide over (settled). Each wait SETTLE_LIMIT at most, a safety net;
+  camera's glide over (settled). Each wait SETTLE_LIMIT at most, a safety net, but a mesh file's import's end,
+  scene3d.IMPORT_LIMIT;
 - with a count past SAMPLES, as the GPU Pathtracer's, the view reads as at rest while it still accumulates (_resting;
   not measured);
 - once the window is on screen: a restart and the count back; or, from a count at rest, two paints reading no restart
@@ -105,7 +105,8 @@ HELD = (
 HELD_AGAIN = ', its sample count at %d%s, below 8'  # what may hold it there said once already
 LAST_DRAWN = ' when last drawn'  # off screen, where the count stays as the view last drew it
 NO_RESTART = 1.0  # s a step's change may take to show: a step that restarts nothing changed nothing the view shows
-# s at most for the view to settle once it restarted, or for a load of the state file to end: a safety net
+# s at most for the view to settle once it restarted, or for a load of the state file to end, a mesh file's import
+# aside (scene3d.IMPORT_LIMIT): a safety net
 SETTLE_LIMIT = 3.0
 COUNT = r'Samples: (\d+)'  # the overlay's line, in English
 VIEWPORT = 'Alg::Gui3D::ViewportWidget'
@@ -311,25 +312,16 @@ class _Frames:
         if counts is None:
             self._unshown = None  # the step's own wait, its result the step's to say
             return self._renders_alike(asked_off_screen)
-        if not self._restart(counts, since, NO_RESTART):
+        if not self._restart(counts, since):
             return True  # no restart: the step changed nothing the view shows
         self._unshown = None  # restarted: the step's own wait from here on, its result the step's to say
         return self.until(lambda: counts.settled(paints, not self._drawing()) or asked_off_screen(), SETTLE_LIMIT)
 
-    def restarted(self, since: tuple[int, int]) -> bool:
-        """After a load that nothing else marks the end of (scene3d._state_load): waits for the view's restart since
-        `since`, at most SETTLE_LIMIT. A load of box.fbx writing a change restarted the view (REVIEW.md HLP-286). Off
-        screen, where the view draws no paint, an UpdateRequest since `since` ends it, as in settled(). Returns
-        whether it came; True with no count to read, where settled() judges by the renders. What it can't see, as
-        with antialiasing off: the module docstring, and scene3d.py's for the load (REVIEW.md HLP-289)."""
-        counts = self._counts
-        return counts is None or self._restart(counts, since, SETTLE_LIMIT)
-
-    def _restart(self, counts: _Counts, since: tuple[int, int], limit: float) -> bool:
-        """Waits for the view's restart since `since`, at most `limit`: a paint reading it, or off screen, where the
+    def _restart(self, counts: _Counts, since: tuple[int, int]) -> bool:
+        """Waits for the view's restart since `since`, at most NO_RESTART: a paint reading it, or off screen, where the
         view draws no paint, an UpdateRequest (REVIEW.md HLP-158). Returns whether it came."""
         paints, asked = since
-        return self.until(lambda: counts.restart(paints) is not None or self._asked_off_screen(asked), limit)
+        return self.until(lambda: counts.restart(paints) is not None or self._asked_off_screen(asked), NO_RESTART)
 
     def moved(self, since: tuple[int, int]) -> bool:
         """After a viewpoint: waits for the camera's turn to end (_Counts.moved), as settled() does for its count, and

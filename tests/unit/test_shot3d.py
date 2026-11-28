@@ -956,7 +956,7 @@ class Shot:
             self.events.append('put back')
 
         def set_up(  # shoot_3d passes every argument, in order: graph, mesh, view, zoom, tiling, orbit, pan, environment,
-            # environment_rotation, environment_exposure
+            # environment_rotation, environment_exposure, shader_model
             *args: *tuple[
                 str | None,
                 str | None,
@@ -968,9 +968,10 @@ class Shot:
                 str | None,
                 float | None,
                 float | None,
+                str | None,
             ],
         ) -> object:
-            checked(*args[:3], args[7])
+            checked(*args[:3], args[7], args[10])
             if refused:
                 raise RuntimeError(refused)
 
@@ -982,7 +983,7 @@ class Shot:
                 self.events.append('view put back')  # after the render, the window still on screen
 
             # whether it may change what the view shows, as _3d_set_up says: a camera option, the mesh switched, the
-            # tiling or the light given
+            # tiling, the light or the shader model given
             _, shown, _, zoom, tiling, orbit, pan, *light = args
             may_change = bool(args[2] or zoom or orbit or pan) or (shown is not None and shown != mesh)
             return helpers._SetUp(applied, may_change or any(v is not None for v in (tiling, *light)))
@@ -1001,10 +1002,10 @@ class Shot:
 
 STALE = (
     '3D render: identical to the render before the set-up, though the set-up moved the camera, switched the mesh, or '
-    'changed the tiling or the light. '
+    'changed the tiling, the light or the shader model. '
     'The 3D view may not have been drawn. Shoot again with the same set-up before judging it: each call starts from '
-    'the view the user left. With no mesh in view, a pan or zoom changes nothing, and a tiling changes nothing on a '
-    'material with no pattern'
+    'the view the user left. With no mesh in view, a pan or zoom changes nothing, a tiling changes nothing on a '
+    'material with no pattern, and UsdPreviewSurface may render a material as OpenPBR Surface does'
 )
 
 
@@ -1027,7 +1028,7 @@ def test_a_render_identical_after_a_pan_is_taken_again_until_it_differs(
         'on screen',
         'again',
         'render A',  # before the set-up
-        'set up (None, None, None, 0, None, None, [0.25, 0.0], None, None, None)',
+        'set up (None, None, None, 0, None, None, [0.25, 0.0], None, None, None, None)',
         'again',
         'render A',
         'next frame',
@@ -1099,8 +1100,9 @@ LIGHT_OR_TILING = [
     {'environment': 'studio'},
     {'environment_rotation': 0.0},
     {'environment_exposure': 0.0},
+    {'shader_model': 'AdobeStandardMaterial'},
 ]
-LIGHT_OR_TILING_IDS = ['tiling', 'environment', 'rotation 0', 'exposure 0']
+LIGHT_OR_TILING_IDS = ['tiling', 'environment', 'rotation 0', 'exposure 0', 'shader model']
 
 
 @pytest.mark.parametrize('options', LIGHT_OR_TILING, ids=LIGHT_OR_TILING_IDS)
@@ -1131,9 +1133,15 @@ def test_a_tiling_or_a_light_that_changed_nothing_isnt_compared(
 def test_the_environment_is_given_to_the_set_up_in_its_order(helpers: types.ModuleType) -> None:
     # REVIEW.md TST-547: the rotation and the exposure swapped reached the set-up with no unit test failing
     shot = Shot(helpers, 'A')
-    helpers.shoot_3d('out.png', environment='studio', environment_rotation=90.0, environment_exposure=1.0)
+    options: View3dOptions = {
+        'environment': 'studio',
+        'environment_rotation': 90.0,
+        'environment_exposure': 1.0,
+        'shader_model': 'UsdPreviewSurface',
+    }
+    helpers.shoot_3d('out.png', **options)
     assert [e for e in shot.events if e.startswith('set up')] == [
-        "set up (None, None, None, 0, None, None, None, 'studio', 90.0, 1.0)"
+        "set up (None, None, None, 0, None, None, None, 'studio', 90.0, 1.0, 'UsdPreviewSurface')"
     ]
 
 
@@ -1150,6 +1158,7 @@ def test_without_options_nothing_is_set_up(helpers: types.ModuleType) -> None:
         ({'view': 'Diagonal'}, "unknown view 'Diagonal'"),
         ({'graph': 'one'}, 'graph one has one output'),
         ({'environment': 'Studio'}, "unknown environment 'Studio'"),  # REVIEW.md TST-547
+        ({'shader_model': 'Principled BSDF'}, "unknown shader model 'Principled BSDF'"),
     ],
 )
 def test_a_set_up_refused_doesnt_touch_the_window(helpers: types.ModuleType, options: View3dOptions, said: str) -> None:

@@ -11,11 +11,12 @@ import re
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import NoReturn
+from typing import NoReturn, Unpack
 
 import pytest
 from selftest_fakes import Designer, FakeCall, code_of, fresh, tool_result
 
+from conftest import View3dOptions
 from project_constants import TAG_LENGTH, TAG_PREFIX, ToolArgs
 
 NOT_VISIBLE = 'the 3D View panel is not visible in Designer'
@@ -211,26 +212,27 @@ class Shots3d:
 UNDRAWN = "3D render: the 3D view hadn't settled within 3 s after Designer's window came back on screen"
 
 
+# the 3D view as text (scene3d._3d_shown): the Plane, a light and a shader model unlike Designer's defaults, so that a
+# reader saying them fails the test (REVIEW.md TST-965), then what isn't a set-up option
+SHOWN_TEXT = [
+    'mesh: Plane',
+    'tiling: 1.5',
+    'environment: studio',
+    'environment_rotation: 108',
+    'environment_exposure: 0.7',
+    'camera: yaw 45, pitch 30 degrees (view Front then orbit [45, 30]), looking at (0, 50, 0) from 180.99 away',
+    'shader_model: UsdPreviewSurface',
+    'renderer: Rasterizer',
+]
+
+
 def shown_already_names(**fakes: object) -> dict[str, object]:
-    """The names SHOWN_ALREADY (and SETTLED) take from the helpers, faked: a Designer showing the Plane, its state file
-    holding the fixture's light at Designer's defaults; `fakes` replace or add some."""
-    fields = {'tiling': 1.0, 'environment': 'sd-3dview-maps://studio.hdr', 'rotation': 0.0, 'exposure': 0.0}
+    """The names SHOWN_ALREADY (and SETTLED) take from the helpers, faked: a Designer whose 3D view as text is
+    SHOWN_TEXT; `fakes` replace or add some."""
     names: dict[str, object] = {
         '_Frames': SimpleNamespace(settled=None),
         'shoot_3d': lambda path, **shown: None,
-        '_main_window': lambda: 'the main window',
-        '_3d_dock': lambda mw: SimpleNamespace(findChildren=lambda kind: ['the menu bar']),
-        'QtWidgets': SimpleNamespace(QMenuBar='QMenuBar'),
-        '_scene_checked': lambda bar, keep: {'Plane'},
-        'MESHES': ('Plane',),
-        '_state_default_path': lambda folder: '/16.0/user_view3d_settings.sbsscn',
-        '_version_folder': lambda: '/16.0',
-        'STATE_BACKUP': 'sd_mcp_3d_view_backup',
-        '_state_back_up': lambda path, aside: None,
-        '_state_save': lambda bar, keep: None,
-        '_state_text': lambda path: 'the state',
-        '_state_fields': lambda content, names: fields,
-        '_state_put_back': lambda aside: None,
+        '_3d_shown': lambda: list(SHOWN_TEXT),
         '_state_load': lambda bar, keep, watched, *rest: None,
     }
     return {**names, **fakes}
@@ -256,16 +258,25 @@ def test_the_shown_already_checks_count_of_waits_keeps_each_waits_result(capsys:
     assert re.search(r'^LOADS=0$', capsys.readouterr().out, re.M)
 
 
-def test_the_shown_already_check_backs_the_users_file_up_where_a_shot_finds_a_leftover() -> None:
-    # REVIEW.md TST-944: off macOS the path is the user's real file, and a crash between the Save and the put-back left
-    # the session's state as their default with its backup in a scratch folder, which no shot puts back
+def test_the_shown_already_check_gives_the_shot_what_the_3d_view_as_text_says() -> None:
+    # ROADMAP item 85: the values read as as_text reads them, the set-up's options passed back as the text gives them;
+    # the reader's backup is where a shot finds a leftover (REVIEW.md TST-944: test_view3d_helpers.py)
     editor = fresh('editor_panels_and_fit.checks')
-    asides: list[str] = []
-    exec(
-        editor.SHOWN_ALREADY % '/folder',
-        shown_already_names(_state_back_up=lambda path, aside: asides.append(aside)),
-    )
-    assert asides == [os.path.join('/16.0', 'sd_mcp_3d_view_backup')]
+    shots: list[tuple[str, View3dOptions]] = []  # each shot's file and its set-up (REVIEW.md TST-1000)
+
+    def shoot(path: str, **shown: Unpack[View3dOptions]) -> None:
+        shots.append((os.path.basename(path), shown))
+
+    exec(editor.SHOWN_ALREADY % '/folder', shown_already_names(shoot_3d=shoot))
+    given: View3dOptions = {
+        'mesh': 'Plane',
+        'tiling': 1.5,
+        'environment': 'studio',
+        'environment_rotation': 108.0,
+        'environment_exposure': 0.7,
+        'shader_model': 'UsdPreviewSurface',
+    }
+    assert shots == [('plain.png', {}), ('again.png', given)]
 
 
 @pytest.mark.parametrize('snippet', ['SETTLED', 'SHOWN_ALREADY'])
@@ -275,7 +286,7 @@ def test_a_snippet_wrapping_the_state_files_load_passes_the_set_ups_arguments_th
     editor = fresh('editor_panels_and_fit.checks')
     passed: list[tuple[object, ...]] = []
     names = shown_already_names(
-        _state_load=lambda *args: passed.append(args), _relinked=lambda tree, keep: '', _3d_render=lambda mw: None
+        _state_load=lambda *args: passed.append(args), _relinked=lambda *args: '', _3d_render=lambda mw: None
     )
 
     def shoot_3d(path: str, **options: object) -> None:  # the set-up's load, as scene3d's loading calls it

@@ -1,0 +1,35 @@
+# A box ten times the 3D view's Cube: 1000 units on each side, from y 0 to 1000, centred on the y axis.
+# Two materials: the front, back and top faces use `first` (red), the right, left and bottom faces `second` (blue), so
+# the 3D view's Default view shows both.
+# Each material is an object of its own: Designer maps each object to one material, the last it names. Two `usemtl`
+# in one object, or in two groups (`g`) of it, gave `second` alone (2026-11-27).
+# The self-test's mesh of the user's own (tests/test_all_tools/facts, ROADMAP.md item 84).
+mtllib two_materials_box.mtl
+v -500 0 500
+v 500 0 500
+v 500 1000 500
+v -500 1000 500
+v -500 0 -500
+v 500 0 -500
+v 500 1000 -500
+v -500 1000 -500
+vt 0 0
+vt 1 0
+vt 1 1
+vt 0 1
+vn 0 0 1
+vn 0 0 -1
+vn 1 0 0
+vn -1 0 0
+vn 0 1 0
+vn 0 -1 0
+o first_faces
+usemtl first
+f 1/1/1 2/2/1 3/3/1 4/4/1
+f 6/1/2 5/2/2 8/3/2 7/4/2
+f 4/1/5 3/2/5 7/3/5 8/4/5
+o second_faces
+usemtl second
+f 2/1/3 6/2/3 7/3/3 3/4/3
+f 5/1/4 1/2/4 4/3/4 8/4/4
+f 5/1/6 6/2/6 2/3/6 1/4/6

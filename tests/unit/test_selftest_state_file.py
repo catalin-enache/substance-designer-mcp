@@ -2,8 +2,9 @@
 poses they put and compare, the state file's comparison and the edits of their own, and kept's put-back with a fake
 Designer (REVIEW.md TST-889, TST-890, TST-896 to TST-898, TST-903, TST-908 and TST-910, which its tests cite). The
 camera's decode and moves, the edits of the fields the set-up sets and the backup are state3d.py's own:
-test_state3d.py. The fixture is a state file a Designer just started saved, its renderer's plugin settings left out
-and its home's path shortened."""
+test_state3d.py. The fixture is a state file a Designer just started saved, edited by hand: its home's path is
+shortened, and a renderer plugin's section is added with its material's entry, as a later Save wrote it (2026-11-27),
+its shading parameters cut to two (REVIEW.md TST-979, TST-983)."""
 
 import ast
 import asyncio
@@ -149,10 +150,27 @@ def test_each_edit_of_one_field_changes_its_field_alone(state: ModuleType) -> No
         '/database/scene_textures/panorama',
     ]
     assert changed['mesh'] == ['/database/scene/external_scenes/_1/id']
+    assert changed['shader model'] == ['/database/plugins/HdEclairRendererPlugin/materials/_1/definition/name']
     assert changed['camera'] == [
         '/database/scene/entities/_1/components/camera/dist_to_target',
         '/database/scene/entities/_1/components/location/local_transform',
     ]
+
+
+def test_a_mesh_loaded_may_move_the_cameras_clip_planes(state: ModuleType) -> None:
+    # REVIEW.md TST-978: from the Plane to the Sphere, the camera's automatic clip planes moved with the mesh's size, a
+    # session another category left on the Plane failing the row (measured 2026-11-27)
+    mesh = next(row for row in state.ONE_FIELD if row.name == 'mesh')
+    written = mesh.edit(SAVED)
+    after = written.replace('float(4.7194972)', 'float(2.5)').replace('float(5351.90039)', 'float(2800)')
+    assert after.count('clip_plane>float(') == written.count('clip_plane>float(') == 2 and after != written
+    assert state.not_loaded(state.differing(SAVED, written), written, after, mesh.follows) == []
+
+
+def test_the_cameras_row_is_the_last_of_one_fields_rows(state: ModuleType) -> None:
+    # the check expects a camera the row turns to be on its way at the load's end, and the others' where it was: a row
+    # after the camera's loads the base's camera back, which jumped there (measured 2026-11-27)
+    assert state.ONE_FIELD[-1].name == 'camera'
 
 
 def test_a_field_edited_that_a_load_put_back_is_reported_though_it_follows_others(state: ModuleType) -> None:
@@ -316,6 +334,12 @@ def test_the_state_file_checks_run_last_all_together() -> None:
     assert len(ours) >= 8 and awaited[-len(ours) :] == ours, awaited[-12:]
 
 
+def _first_after_reset(script: str) -> str:
+    """The first statement of the Designer code `script` after it triggers Reset Scene."""
+    after = script.split("_sf_menu('Scene', 'Reset Scene')", 1)[1]
+    return next(line for line in after.strip().splitlines() if not line.strip().startswith('#'))
+
+
 def test_the_entries_check_takes_no_event_passes_for_before_the_load(state: ModuleType) -> None:
     # TST-896: "no mesh yet" read after ten event passes took a time for the load: true only while it takes longer
     assert '_process_events' not in state.ENTRIES and 'LOAD_LEFT_FOR_LATER' not in state.ENTRIES
@@ -324,15 +348,25 @@ def test_the_entries_check_takes_no_event_passes_for_before_the_load(state: Modu
 def test_the_entries_check_reads_the_scene_menu_right_as_the_trigger_returns(state: ModuleType) -> None:
     # REVIEW.md TST-943: the set-up reads it there (scene3d._state_load); a wait for the menu to clear passed a Designer
     # that cleared it a moment later
-    after = state.ENTRIES.split("_sf_menu('Scene', 'Reset Scene')", 1)[1]
-    first = next(line for line in after.strip().splitlines() if not line.strip().startswith('#'))  # a statement
+    first = _first_after_reset(state.ENTRIES)
     assert "LOAD_BEGAN=%s' % (not _sf_meshes())" in first, first
+
+
+def test_the_import_check_reads_the_materials_menu_right_as_the_trigger_returns_with_no_event_pass(
+    state: ModuleType,
+) -> None:
+    # REVIEW.md TST-990: an event pass first, as view3d._materials_used runs, let box.fbx's and the OBJ's imports end
+    # before the read; the read "none in use yet" must come as Reset Scene returns, as ENTRIES' does (TST-896, TST-943)
+    first = _first_after_reset(state.IMPORTED)
+    assert "AT_TRIGGER=%r' % ([_sf_used(), _sf_meshes()],)" in first, first
+    reader = state.STATE.split('def _sf_used(', 1)[1].split('\n\n\n', 1)[0]
+    assert '_process_events' not in reader and '_materials_used' not in reader, reader
 
 
 def test_the_facts_read_the_meshes_the_scene_menu_checks_alone(state: ModuleType) -> None:
     # REVIEW.md TST-958: each checked entry counted as a mesh, where the set-up counts an entry checked since the trigger;
     # Display UVs in 2D View, a Scene entry, on throughout made a load read as never begun. One helper reads the menu,
-    # keeping its meshes (view3d.MESHES), as SHOWN_ALREADY does
+    # keeping its meshes (view3d.MESHES), as the set-up's scene3d._mesh_shown does
     snippets = [value for value in vars(state).values() if isinstance(value, str)]
     reading = [line.strip() for value in snippets for line in value.splitlines() if "_sf_checked('Scene')" in line]
     assert reading == ["return [m for m in _sf_checked('Scene') if m in MESHES]"], reading

@@ -1,18 +1,29 @@
-"""screenshot_designer's 3D view options (ROADMAP items 7, 73 and 74): what the server refuses before reaching Designer,
-and how it calls the helpers. Driving the 3D view itself is checked live (editor_panels_and_fit)."""
+"""screenshot_designer's 3D view options (ROADMAP items 7, 73 and 74; the shader model, item 88; a mesh file, item 84)
+and the 3D view as text (as_text, item 85): what the server refuses before reaching Designer, and how it calls the
+helpers. Driving the 3D view itself is checked live (editor_panels_and_fit, facts)."""
 
+import ast
 import asyncio
 import os
+import re
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from mcp.server.mcpserver import Image
 from mcp.server.mcpserver.exceptions import ToolError
-from mcp.types import CallToolResult, InputRequiredResult
+from mcp.types import CallToolResult, InputRequiredResult, TextContent
 from PIL import Image as PILImage
 
+import designer_helpers
 from conftest import fake_bridge, server
 from project_constants import Json
 from server_tools import views
+
+if TYPE_CHECKING:  # for the checker: the part as the helpers hold it
+    from designer_helpers import state3d
+else:
+    state3d = designer_helpers.standalone('state3d')
 
 # the set-up's line as scene3d.py prints it: the fields of its one load, then the graph's outputs
 NOTE = "3D view: Plane, view Top, framed, +2 zoom steps, tiling 2, graph g's outputs on the mesh"
@@ -55,6 +66,7 @@ OPTIONS: dict[str, Json] = {
     'environment': 'studio',
     'environment_rotation': 90.0,
     'environment_exposure': 1.0,
+    'shader_model': 'AdobeStandardMaterial',
 }
 
 
@@ -67,11 +79,14 @@ def _shoot(arguments: dict[str, Json]) -> CallToolResult | InputRequiredResult:
     return result
 
 
-@pytest.mark.parametrize('option', sorted(OPTIONS))
+GATED: dict[str, Json] = {**OPTIONS, 'as_text': True}  # what goes with panel='3d' alone
+
+
+@pytest.mark.parametrize('option', sorted(GATED))
 def test_3d_options_need_the_3d_panel(monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], option: str) -> None:
     sent = _bridge(monkeypatch, temp_folders)
     with pytest.raises(ToolError, match=r"panel='3d'"):
-        _shoot({'panel': 'graph', option: OPTIONS[option]})
+        _shoot({'panel': 'graph', option: GATED[option]})
     assert sent == []
 
 
@@ -115,6 +130,65 @@ def test_options_out_of_range_are_refused(
     assert sent == []
 
 
+def _sent_mesh(code: str) -> str:
+    """The mesh a shoot_3d call sends, its third argument."""
+    call = _call(code)
+    assert call.startswith('shoot_3d(')
+    return str(ast.literal_eval(call[len('shoot_3d') :])[2])
+
+
+@pytest.mark.parametrize(
+    'given', ['box.OBJ', os.path.join('meshes', '..', 'box.OBJ'), os.path.join('~', 'box.OBJ')], ids=['here', 'up', '~']
+)
+def test_a_mesh_files_path_is_made_absolute(
+    monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], tmp_path: Path, given: str
+) -> None:
+    # Designer would resolve a relative path against its own working folder, as the bitmap op's (REVIEW.md SRV-27). The
+    # extension in any case: Designer's own meshes end in .FBX too
+    (tmp_path / 'box.OBJ').write_text('o box\n', encoding='utf-8')
+    os.makedirs(tmp_path / 'meshes')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv('HOME', os.getcwd())
+    monkeypatch.setenv('USERPROFILE', os.getcwd())  # ~ on Windows (REVIEW.md TST-349)
+    sent = _bridge(monkeypatch, temp_folders)
+    _shoot({'panel': '3d', 'mesh': given})
+    assert _sent_mesh(sent[0]) == os.path.join(os.getcwd(), 'box.OBJ')
+
+
+@pytest.mark.parametrize(
+    'mesh, message',
+    [
+        (
+            'box.png',
+            r"mesh 'box\.png' is neither one of the 3D view's Scene menu nor a mesh file Designer imports \(usd, usda, "
+            r'usdz, fbx, obj, 3ds, dae, dxf, stl, ply, gltf, glb\)$',
+        ),
+        (os.path.join('meshes', 'box'), r"mesh '.*box' is neither one of the 3D view's Scene menu"),  # no extension
+        ('gone.fbx', 'mesh: no such file: {}$'),  # made absolute first, as os.path does (REVIEW.md TST-999)
+    ],
+    ids=['another extension', 'no extension', 'no such file'],
+)
+def test_a_mesh_path_of_another_format_or_of_no_file_is_refused_before_designer(
+    monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], tmp_path: Path, mesh: str, message: str
+) -> None:
+    (tmp_path / 'box.png').write_bytes(b'')
+    monkeypatch.chdir(tmp_path)
+    sent = _bridge(monkeypatch, temp_folders)
+    with pytest.raises(ToolError, match=message.format(re.escape(os.path.join(os.getcwd(), mesh)))):
+        _shoot({'panel': '3d', 'mesh': mesh})
+    assert sent == []
+
+
+@pytest.mark.parametrize('name', list(state3d.FRAMING))
+def test_a_scene_menu_mesh_is_sent_by_its_name(
+    monkeypatch: pytest.MonkeyPatch, temp_folders: list[str], name: str
+) -> None:
+    # no name of the Scene menu's has an extension or a folder: none is taken for a path (the helper knows the names)
+    sent = _bridge(monkeypatch, temp_folders)
+    _shoot({'panel': '3d', 'mesh': name})
+    assert _sent_mesh(sent[0]) == name
+
+
 def test_the_3d_view_is_set_up_and_shot_in_one_helper_call(
     monkeypatch: pytest.MonkeyPatch, temp_folders: list[str]
 ) -> None:
@@ -124,7 +198,8 @@ def test_the_3d_view_is_set_up_and_shot_in_one_helper_call(
     assert len(sent) == 1
     shot = os.path.join(temp_folders[-1], 'shot.png')
     assert _call(sent[0]) == (
-        "shoot_3d(%r, 'g', 'Plane', 'Top', 2, 2.0, (90.0, -30.0), (0.25, 0.5), 'studio', 90.0, 1.0)" % shot
+        "shoot_3d(%r, 'g', 'Plane', 'Top', 2, 2.0, (90.0, -30.0), (0.25, 0.5), 'studio', 90.0, 1.0, "
+        "'AdobeStandardMaterial')" % shot
     )
 
 
@@ -149,7 +224,7 @@ def test_an_environment_value_is_sent_as_given(
     _shoot({'panel': '3d', option: value})
     rotation, exposure = (value, None) if option == 'environment_rotation' else (None, value)
     shot = os.path.join(temp_folders[-1], 'shot.png')
-    assert _call(sent[0]) == 'shoot_3d(%r, None, None, None, 0, None, None, None, None, %r, %r)' % (
+    assert _call(sent[0]) == 'shoot_3d(%r, None, None, None, 0, None, None, None, None, %r, %r, None)' % (
         shot,
         rotation,
         exposure,
@@ -163,7 +238,7 @@ def _plain(panel: str, folders: list[str]) -> str:
     save_screenshot."""
     shot = os.path.join(folders[-1], 'shot.png')
     if panel == '3d':
-        return 'shoot_3d(%r, None, None, None, 0, None, None, None, None, None, None)' % shot
+        return 'shoot_3d(%r, None, None, None, 0, None, None, None, None, None, None, None)' % shot
     return 'save_screenshot(%r, %r)' % (panel, shot)
 
 
@@ -196,7 +271,10 @@ FRONT = (
     'covered'
 )
 BACK = "Designer's window: put back behind the window that was in front of it"
-STALE = '3D render: identical to the render before the set-up, though the set-up moved the camera, switched the mesh, or changed the tiling or the light.'
+STALE = (
+    '3D render: identical to the render before the set-up, though the set-up moved the camera, switched the mesh, or '
+    'changed the tiling, the light or the shader model.'
+)
 
 
 def test_what_was_done_to_designers_window_and_a_stale_render_come_beside_the_image(
@@ -234,8 +312,9 @@ def test_a_shot_that_failed_says_what_was_done_to_designers_window(
         ('mesh', ''),
         ('view', ''),
         ('environment', ''),
+        ('shader_model', ''),
     ],
-    ids=['orbit', 'pan', 'zoom', 'graph', 'mesh', 'view', 'environment'],
+    ids=['orbit', 'pan', 'zoom', 'graph', 'mesh', 'view', 'environment', 'shader_model'],
 )
 def test_a_turn_pan_or_zoom_of_zero_or_an_empty_name_sets_nothing_up(
     monkeypatch: pytest.MonkeyPatch,
@@ -277,3 +356,70 @@ def test_a_shot_that_fails_after_the_set_up_says_what_was_set(
     with pytest.raises(ToolError) as raised:
         server.screenshot_designer('3d', mesh='Plane', **options)
     assert str(raised.value).splitlines()[-1] == NOTE
+
+
+# what shown_3d prints, in part: the 3D view as text, a line each (designer_helpers/scene3d.py)
+SHOWN = 'mesh: Sphere\ntiling: 2\nrenderer: Rasterizer\n'
+LEFTOVER = (
+    "3D view: a backup of the 3D view's default state, left by an earlier call, was put back first: "
+    '/16.0/user_view3d_settings.sbsscn'
+)
+
+
+def _read(monkeypatch: pytest.MonkeyPatch, printed: str) -> list[str]:
+    """The calls sent to Designer, each answered with `printed`: as_text renders nothing, so no shot is left."""
+    sent: list[str] = []
+
+    def bridge(code: str) -> str:
+        sent.append(code)
+        return printed
+
+    fake_bridge(monkeypatch, bridge)
+    return sent
+
+
+def test_the_3d_view_as_text_is_read_with_no_render(monkeypatch: pytest.MonkeyPatch, temp_folders: list[str]) -> None:
+    sent = _read(monkeypatch, SHOWN)
+    result = _shoot({'panel': '3d', 'as_text': True})
+    assert [_call(code) for code in sent] == ['shown_3d()']
+    assert temp_folders == []  # no folder for a shot
+    assert isinstance(result, CallToolResult)
+    assert [(type(b), b.text if isinstance(b, TextContent) else None) for b in result.content] == [
+        (TextContent, SHOWN.strip())
+    ]
+
+
+UNTAKEN: dict[str, Json] = {**OPTIONS, 'crop': [0.0, 0.0, 0.5, 0.5]}  # what as_text takes none of
+
+
+@pytest.mark.parametrize('option', sorted(UNTAKEN))
+def test_as_text_with_a_set_up_option_or_a_crop_is_refused(monkeypatch: pytest.MonkeyPatch, option: str) -> None:
+    # as_text says what the view shows: a set-up would change it, and a crop needs a render. The option named after
+    # the message's own words, which hold "3D view" (REVIEW.md TST-969)
+    sent = _read(monkeypatch, SHOWN)
+    with pytest.raises(ToolError, match=r'it takes no .*\b%s\b' % option):
+        _shoot({'panel': '3d', 'as_text': True, option: UNTAKEN[option]})
+    assert sent == []
+
+
+@pytest.mark.parametrize(
+    'option, value',
+    [('orbit', [0.0, 0.0]), ('pan', [0.0, 0.0]), ('zoom', 0), ('mesh', ''), ('environment', ''), ('shader_model', '')],
+    ids=['orbit', 'pan', 'zoom', 'mesh', 'environment', 'shader_model'],
+)
+def test_as_text_takes_the_options_that_set_nothing_up(
+    monkeypatch: pytest.MonkeyPatch, option: str, value: Json
+) -> None:
+    # a turn, pan or zoom of 0, or an empty name, sets nothing up (REVIEW.md TST-336, SRV-147): no reason to refuse
+    sent = _read(monkeypatch, SHOWN)
+    _shoot({'panel': '3d', 'as_text': True, option: value})
+    assert [_call(code) for code in sent] == ['shown_3d()']
+
+
+def test_as_text_that_failed_says_the_leftover_backup_put_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    # a backup an earlier call left, put back before the Save that then failed: said as a shot says it (scene3d.py)
+    error = "RuntimeError: Scene > Save Current State As Default didn't write /16.0/user_view3d_settings.sbsscn"
+    _read(monkeypatch, LEFTOVER + '\n--- ERROR ---\n' + error + '\n')
+    with pytest.raises(ToolError) as raised:
+        views.screenshot_designer('3d', as_text=True)
+    assert str(raised.value).splitlines() == [error, LEFTOVER]

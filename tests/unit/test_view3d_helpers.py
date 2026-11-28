@@ -1,15 +1,18 @@
 """The helpers' side of screenshot_designer('3d', ...) (designer_helpers/view3d.py and scene3d.py), with sd and
 PySide6 faked: what is checked before anything changes, what an error says was set, the graph's row found before its
-context menu opens there, what the timers do while that menu runs, and the set-up through the 3D view's state file:
-the camera, the mesh, the tiling and the environment written in one load and put back with the user's view, the
-backup, and the relinks. The live self-test checks the 3D view itself (editor_panels_and_fit, facts)."""
+context menu opens there, what the timers do while that menu runs, Designer's menu of a mesh's materials answered,
+and the set-up through the 3D view's state file: the camera, the mesh, the tiling, the environment and the shader
+model written in its loads and put back with the user's view, a mesh file of the user's own framed by Designer's Frame
+first, the backup, and the relinks; and the 3D view as text. The live self-test checks the 3D
+view itself (editor_panels_and_fit, facts)."""
 
 import math
 import os
+import re
 import shutil
 import sys
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Literal, NoReturn, cast
@@ -17,17 +20,40 @@ from unittest import mock
 
 import pytest
 
-from conftest import FIXTURES, View3dOptions, with_added_material
+import designer_helpers
+from conftest import (
+    FIXTURES,
+    View3dOptions,
+    held_by,
+    held_overridden,
+    mapped,
+    over_two,
+    overridden_as,
+    with_added_material,
+    with_materials,
+)
 
 if TYPE_CHECKING:  # for the checker only: the types the faked helpers take; sd and PySide6 are faked at run time
     from PySide6 import QtCore, QtGui, QtWidgets
     from sd.api.sbs.sdsbscompgraph import SDSBSCompGraph
 
+    from designer_helpers import state3d
     from designer_helpers.core import Kept
-    from designer_helpers.state3d import Pose
+    from designer_helpers.state3d import Pose, StateField, StateFields
+else:  # the part as a module of its own: the URL of a mesh file as the set-up writes it, whatever the system
+    state3d = designer_helpers.standalone('state3d')
 
-SAVED = Path(FIXTURES, 'state_file.sbsscn').read_text(encoding='utf-8')  # a state file a fresh Designer saved
-USERS = SAVED.replace('<id>Rounded Cube</id>', '<id>file:///Users/u/box.fbx</id>')  # a mesh of the user's own, by URL
+# a state file a fresh Designer saved, edited by hand (test_selftest_state_file.py)
+SAVED = Path(FIXTURES, 'state_file.sbsscn').read_text(encoding='utf-8')
+
+
+def showing(path: str) -> str:
+    """The fixture's state, its mesh the file `path`, by the URL the set-up writes (state3d._mesh_id: a Windows path's
+    backslashes encoded; REVIEW.md TST-999)."""
+    return SAVED.replace('<id>Rounded Cube</id>', '<id>%s</id>' % state3d._mesh_id(path))
+
+
+USERS = showing('/Users/u/box.fbx')  # a mesh of the user's own, by URL
 
 
 class MenuWindow:
@@ -118,7 +144,8 @@ def test_a_point_that_isnt_on_the_graphs_row_is_refused(
 
 class Menu:
     """The Explorer's context menu. `closed_as_faded`: something else closes it as the fade makes it transparent, before
-    its action is picked (the live check does so: popups.closed_early)."""
+    its action is picked (the live check does so: popups.closed_early). `on_trigger` runs as an action is triggered,
+    as Designer's menu of the mesh's materials runs its own loop then (_asks)."""
 
     def __init__(
         self, *texts: str, disabled: tuple[str, ...] = (), raising: bool = False, closed_as_faded: bool = False
@@ -131,20 +158,30 @@ class Menu:
         self.opacities: list[float] = []  # each opacity setWindowOpacity set, in order
         self.native: list[str] = []  # what was done to its own window through _MacWindow (MenuWindow)
         self.flags: list[tuple[QtCore.Qt.WindowType, bool]] = []  # what its window's setFlag set
+        self.on_trigger: Callable[[], None] = lambda: None
 
         def trigger(t: str) -> None:
             if raising:
                 raise KeyboardInterrupt('an abort landing in the trigger')
             self.opacity_at_trigger = self.opacity
             self.triggered.append(t)
+            self.on_trigger()
 
         self._actions = [
-            SimpleNamespace(text=lambda t=t: t, isEnabled=lambda t=t: t not in disabled, trigger=lambda t=t: trigger(t))
+            SimpleNamespace(
+                text=lambda t=t: t,
+                isEnabled=lambda t=t: t not in disabled,
+                isSeparator=lambda: False,
+                trigger=lambda t=t: trigger(t),
+            )
             for t in texts
         ]
 
     def actions(self) -> list[SimpleNamespace]:
         return self._actions
+
+    def objectName(self) -> str:  # the Explorer's menu has none
+        return ''
 
     def close(self) -> None:
         self.closed = True
@@ -166,6 +203,29 @@ class Menu:
 
 
 VIEW = 'View Outputs In 3D View'
+
+
+class Materials(Menu):
+    """Designer's menu of the mesh's materials, `materialSelectionMenu`, which View Outputs In 3D View opens as it runs on
+    a mesh of several: an entry per material. A key event sent to it (Return, the tests check) picks the entry made
+    active and closes it, as measured (REVIEW.md HLP-312); `stuck`: it picks nothing and stays open."""
+
+    def __init__(self, *names: str, stuck: bool = False) -> None:
+        super().__init__(*names)
+        self.stuck = stuck
+        self.active: SimpleNamespace | None = None
+        self.picked: list[str] = []  # the entries picked
+
+    def objectName(self) -> str:
+        return 'materialSelectionMenu'
+
+    def setActiveAction(self, action: SimpleNamespace) -> None:
+        self.active = action
+
+    def key(self) -> None:
+        if not self.stuck and self.active is not None:
+            self.picked.append(self.active.text())
+            self.closed = True
 
 
 def test_the_pick_looks_again_until_the_menu_opens_then_triggers_the_action(helpers: types.ModuleType) -> None:
@@ -334,27 +394,56 @@ def _outputs_applied(
     send_event: Callable[[list[Timer]], None],
     aborted_start: int | None = None,
     timers: list[Timer] | None = None,
+    materials: Sequence[str] = (),
 ) -> None:
     """_apply_outputs on a faked Explorer, each menu's run being `send_event(timers)`; the timers it makes go in
-    `timers`, two a try (the look, the guard), the one numbered `aborted_start` raising as it starts."""
+    `timers`, two a try (the look, the guard), the one numbered `aborted_start` raising as it starts. `materials` are
+    the materials the outputs go on when Designer asks which."""
     made: list[Timer] = [] if timers is None else timers
 
     def new_timer(parent: 'QtCore.QObject | None' = None) -> Timer:
         made.append(Timer(aborted=len(made) == aborted_start, parent=parent))
         return made[-1]
 
+    def sent(
+        to: object, event: object
+    ) -> None:  # the context menu's event to the tree, or a key to a menu of materials
+        if isinstance(to, Materials):
+            to.key()
+        else:
+            send_event(made)
+
     qt('QtCore').QTimer.side_effect = new_timer
-    qt('QtWidgets').QApplication.sendEvent.side_effect = lambda viewport, event: send_event(made)
+    qt('QtWidgets').QApplication.sendEvent.side_effect = sent
     qt('QtWidgets').QApplication.activePopupWidget.return_value = None
     vars(helpers)['_row_point'] = lambda tree, row, graph: 'the point'
     tree = SimpleNamespace(selectionModel=lambda: SimpleNamespace(selectedRows=lambda: [Index()]), viewport=mock.Mock())
-    helpers._apply_outputs(tree, SimpleNamespace(getIdentifier=lambda: 'g'), [])
+    graph = SimpleNamespace(getIdentifier=lambda: 'g')
+    helpers._apply_outputs(tree, graph, [], materials)
 
 
 def _menus(*menus: 'Menu | None') -> None:
     """The popups open as each try begins (none), then as its look runs: `menus`, one a try (None: none opened)."""
     qt('QtWidgets').QMenu = Menu
     qt('QtWidgets').QApplication.activePopupWidget.side_effect = [x for menu in menus for x in (None, menu)]
+
+
+def _asking(timers: list[Timer], *tries: tuple[Menu, Menu]) -> None:
+    """Each try's popups: none as it begins, then the Explorer's menu as its look runs, then, once its action is
+    triggered, Designer's menu of the mesh's materials, in that action's own loop (measured: REVIEW.md HLP-312). That
+    loop runs the try's look again if it was started again since it was first started, as a single-shot timer started
+    again fires there."""
+    qt('QtWidgets').QMenu = Menu
+    qt('QtWidgets').QApplication.activePopupWidget.side_effect = [
+        x for explorers, materials in tries for x in (None, explorers, materials)
+    ]
+
+    def loop() -> None:
+        if len(timers[-2].starts) > 1:
+            timers[-2].run()
+
+    for explorers, _ in tries:
+        explorers.on_trigger = loop
 
 
 def _looked(timers: list[Timer]) -> None:
@@ -427,7 +516,9 @@ def test_the_look_looks_again_until_the_menu_opens_then_stops(helpers: types.Mod
     qt('QtWidgets').QMenu = Menu
     qt('QtWidgets').QApplication.activePopupWidget.side_effect = [None, None, menu]  # before the menu, two looks
     _outputs_applied(helpers, send_event, timers=timers)
-    assert timers[0].starts == [0, 0] and menu.opacities[0] == 0.0 and menu.triggered == [VIEW]
+    assert menu.opacities[0] == 0.0 and menu.triggered == [VIEW]
+    # started again while the action ran, as Designer may ask which material then (REVIEW.md HLP-312), then stopped
+    assert timers[0].starts == [0, 0, 0] and not timers[0].active
 
 
 def test_a_menu_closed_before_its_pick_is_opened_again(helpers: types.ModuleType) -> None:
@@ -488,6 +579,118 @@ def test_a_menu_picked_has_its_window_given_its_look_back_once_closed(helpers: t
     assert menu.native == ['hold', 'look 1 False', 'let go'] and menu.triggered == [VIEW] and menu.closed
 
 
+def test_designers_menu_of_the_materials_is_answered_once_per_material(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-312, measured: on a mesh of several materials View Outputs In 3D View opens a menu of Designer's own
+    # as it runs, listing them, and nothing answered it; each pick puts the outputs on one, the picks adding up. The
+    # user's choice (2026-11-27, "Every material")
+    timers: list[Timer] = []
+    tries = [(Menu(VIEW), Materials('first', 'second')) for _ in range(2)]
+    _asking(timers, *tries)
+    _outputs_applied(helpers, _looked, timers=timers)
+    assert [materials.picked for _, materials in tries] == [['first'], ['second']]
+    assert all(explorers.triggered == [VIEW] and explorers.closed for explorers, _ in tries)
+    key = qt('QtGui').QKeyEvent.call_args.args
+    assert key[1:] == (qt('QtCore').Qt.Key.Key_Return, qt('QtCore').Qt.KeyboardModifier.NoModifier)
+    assert not any(timer.active for timer in timers)
+
+
+@pytest.mark.parametrize(
+    'materials, picked',
+    [(['second'], [['second']]), (['other'], [['first'], ['second']]), ([], [['first'], ['second']])],
+    ids=['those given', 'none of those given listed: every one', 'none given: every one'],
+)
+def test_the_outputs_go_on_the_materials_given_that_designers_menu_lists(
+    helpers: types.ModuleType, materials: list[str], picked: list[list[str]]
+) -> None:
+    # a relink puts them back on those that showed them (scene3d.py); on another mesh, none of those is listed
+    timers: list[Timer] = []
+    tries = [(Menu(VIEW), Materials('first', 'second')) for _ in range(2)]
+    _asking(timers, *tries)
+    _outputs_applied(helpers, _looked, timers=timers, materials=materials)
+    assert [answered.picked for _, answered in tries[: len(picked)]] == picked
+    assert [len(explorers.triggered) for explorers, _ in tries] == [1] * len(picked) + [0] * (2 - len(picked))
+
+
+@pytest.mark.parametrize('platform', ['darwin', 'win32'])
+def test_designers_menu_of_the_materials_is_made_transparent_as_it_opens_then_gets_its_look_back(
+    helpers: types.ModuleType, monkeypatch: pytest.MonkeyPatch, platform: str
+) -> None:
+    # as the Explorer's (REVIEW.md HLP-134, HLP-146; the user's choice: DECISIONS.md), before its material is picked
+    monkeypatch.setattr(sys, 'platform', platform)
+    timers: list[Timer] = []
+    materials = Materials('only', 'other')
+    _asking(timers, (Menu(VIEW), materials), (Menu(VIEW), Materials('only', 'other')))
+    _outputs_applied(helpers, _looked, timers=timers)
+    through = (qt('QtCore').Qt.WindowType.WindowTransparentForInput, True)
+    assert materials.opacities == [0.0] and materials.flags == ([through] if platform == 'darwin' else [])
+    assert materials.native == (['hold', 'look 1 False', 'let go'] if platform == 'darwin' else [])
+    assert materials.picked == ['only']
+
+
+def test_designers_menu_of_the_materials_closed_with_none_picked_is_said_and_closed(helpers: types.ModuleType) -> None:
+    # left open, it would hold the job until the guard closed it, the outputs on no material
+    timers: list[Timer] = []
+    materials = Materials('first', 'second', stuck=True)
+    _asking(timers, (Menu(VIEW), materials))
+    with pytest.raises(
+        RuntimeError,
+        match=r"^the Explorer's menu for graph g had 'View Outputs In 3D View' picked, then Designer's menu of the "
+        r"mesh's materials \(first, second\) closed with none picked$",
+    ):
+        _outputs_applied(helpers, _looked, timers=timers)
+    assert materials.closed and materials.picked == []
+
+
+@pytest.mark.parametrize('platform', ['darwin', 'win32'])
+def test_the_explorers_menu_found_again_as_the_action_runs_is_neither_faded_nor_picked_again(
+    helpers: types.ModuleType, monkeypatch: pytest.MonkeyPatch, platform: str
+) -> None:
+    # REVIEW.md HLP-312, TST-1007: Designer's menu of the materials opens 6 to 17 ms after the action begins (measured),
+    # so the look started again finds the Explorer's still the active popup first
+    monkeypatch.setattr(sys, 'platform', platform)
+    timers: list[Timer] = []
+    explorers, materials = Menu(VIEW), Materials('first', 'second')
+    qt('QtWidgets').QMenu = Menu
+    qt('QtWidgets').QApplication.activePopupWidget.side_effect = [None, explorers, explorers, materials]
+
+    def loop() -> None:  # the action's loop: the look runs while it is started again, twice here
+        for _ in range(2):
+            if timers[0].active:
+                timers[0].active = False  # fired: a single-shot timer started again runs once
+                timers[0].run()
+
+    explorers.on_trigger = loop
+    _outputs_applied(helpers, _looked, timers=timers, materials=['first'])
+    assert explorers.triggered == [VIEW] and explorers.opacities == [0.0] and materials.picked == ['first']
+    held = ['hold', 'look 1 False', 'let go'] if platform == 'darwin' else []
+    assert explorers.native == held and materials.native == held
+
+
+def test_another_menu_opening_as_the_action_runs_is_left_to_the_guard(helpers: types.ModuleType) -> None:
+    # only Designer's menu of the materials is answered (its object name, measured): a Return in another would trigger
+    # an entry of it, where the guard closes it unanswered and the shot says so
+    timers: list[Timer] = []
+    other = Menu('Something', 'Else')
+    _asking(timers, (Menu(VIEW), other))
+    _outputs_applied(helpers, _looked, timers=timers)
+    assert other.triggered == [] and not other.closed and other.opacities == [0.0]
+
+
+@pytest.mark.parametrize(
+    'listed, materials, wanted',
+    [
+        (['a', 'b'], ['b', 'c'], ['b']),
+        (['a', 'b'], ['c'], ['a', 'b']),
+        (['a', 'b'], [], ['a', 'b']),
+    ],
+    ids=['those listed', 'none listed', 'none given'],
+)
+def test_the_materials_wanted_are_those_given_designers_menu_lists_else_every_one(
+    helpers: types.ModuleType, listed: list[str], materials: list[str], wanted: list[str]
+) -> None:
+    assert helpers._materials_wanted(listed, materials) == wanted
+
+
 def _materials_menu(helpers: types.ModuleType, *names: str) -> None:
     menu = SimpleNamespace(
         aboutToShow=mock.Mock(),
@@ -497,6 +700,26 @@ def _materials_menu(helpers: types.ModuleType, *names: str) -> None:
         ),
     )
     vars(helpers)['_menu_action'] = lambda bar, keep, *path: SimpleNamespace(menu=lambda: menu)
+
+
+def test_override_material_is_read_by_the_materials_name_its_marks_left_out(helpers: types.ModuleType) -> None:
+    # REVIEW.md HLP-315: set back by name, as the menu lists the materials overridden first (measured 2026-11-27)
+    def material(text: str) -> SimpleNamespace:
+        override = SimpleNamespace(isCheckable=lambda: True, text=lambda: '&Override Material', name=text)
+        model = SimpleNamespace(isCheckable=lambda: True, text=lambda: 'OpenPBR Surface')
+        submenu = SimpleNamespace(aboutToShow=mock.Mock(), actions=lambda: [override, model])
+        return SimpleNamespace(text=lambda: text, menu=lambda: submenu)
+
+    texts = ['first (overridden)', 'Default (unused) (overridden)', 'second']
+    menu = SimpleNamespace(
+        aboutToShow=mock.Mock(),
+        actions=lambda: [*map(material, texts), SimpleNamespace(text=lambda: 'Add', menu=lambda: None)],
+    )
+    vars(helpers)['_menu_action'] = lambda bar, keep, *path: SimpleNamespace(menu=lambda: menu)
+    found = helpers._overrides(object(), [])
+    assert {name: entry.name for name, entry in found.items()} == dict(
+        zip(['first', 'Default', 'second'], texts, strict=True)
+    )
 
 
 def test_a_mesh_using_one_material_is_taken(helpers: types.ModuleType) -> None:
@@ -511,10 +734,11 @@ def test_a_material_the_mesh_doesnt_use_isnt_counted(helpers: types.ModuleType) 
 
 
 def test_a_mesh_with_several_materials_is_refused(helpers: types.ModuleType) -> None:
-    # tiling= would tile one of them (REVIEW.md TST-315)
+    # tiling= and shader_model= would set one of them (REVIEW.md TST-315)
     _materials_menu(helpers, 'Body', 'Glass')
     with pytest.raises(
-        RuntimeError, match=r"^the 3D view's mesh uses 2 materials \(Body, Glass\): tiling= sets the material of a mesh"
+        RuntimeError,
+        match=r"^the 3D view's mesh uses 2 materials \(Body, Glass\): tiling= and shader_model= set the material of a",
     ):
         helpers._material_checked(object(), [])
 
@@ -534,6 +758,7 @@ class Frames:
         self.settles: list[bool] = []  # what each settled() says, True once they run out
         self.ends: list[bool] = []  # what each until() says, its state's reading once they run out
         self.states: list[list[bool]] = []  # each until()'s readings of its state
+        self.limits: list[float] = []  # each until()'s limit
         self.events_ran: Callable[[], None] = lambda: None  # Designer's event loop, run in each wait
         self.abort_at = 0
         self.settle_error = ''  # settled() raising a RuntimeError of this text, when not empty
@@ -556,13 +781,9 @@ class Frames:
         self._wait('settled')
         return self.settles.pop(0) if self.settles else True
 
-    def restarted(self, since: int) -> bool:
-        self.events_ran()  # a load triggered before happens in the wait, and restarts the view
-        self._wait('restarted')
-        return True
-
     def until(self, state: Callable[[], bool], limit: float) -> bool:
         self._wait('loaded')
+        self.limits.append(limit)
         read = [state()]  # before the event loop ran: as the wait starts
         if not read[-1]:
             self.events_ran()
@@ -583,8 +804,18 @@ MAPS = {
 
 
 SAVE, RESET = ('Scene', 'Save Current State As Default'), ('Scene', 'Reset Scene')
+FRAME = ('Camera', 'Frame')  # Designer's own framing, which a mesh of the user's own takes (scene3d.py)
 TORUS = 'sd-3dview-shapes://Torus.FBX'  # the Torus's id in the state file
 OWN = (SAVE, RESET)  # the state file's own entries, which every set-up triggers
+OPENPBR, USD_MODEL = 'usd::ND_open_pbr_surface_surfaceshader', 'usd::UsdPreviewSurface'  # as the file names them
+# where Frame looks at the project's test OBJ, and from how far, in the docked viewport (measured 2026-11-27)
+FRAMED = ((0.0, 500.0, 0.0), 1809.924)
+FAR = 1e-8 * FRAMED[1]  # how far a camera so far away, as written and read back, is from the one written: alike()
+
+
+def on_screen(*args: object, **kwargs: object) -> NoReturn:
+    """_on_screen and _Screen, faked: Designer's window put on screen, which the set-up and the text never do."""
+    raise AssertionError("Designer's window put on screen")
 
 
 class Graph:
@@ -611,10 +842,19 @@ class Designer:
     Designer started with, set since), with a texture in the folder beside it while the view shows a graph's outputs
     (`linked`). Reset Scene raises `load_error` at the load it names (from 1), as Designer would; else Designer loads
     the file once the trigger has returned, in its event loop (a wait's, Frames.events_ran): it records the file in
-    `loads`, makes it the state, unlinks the view, puts the AOV back to Beauty and turns each material's Override
-    Material on. Till then the Scene menu checks no mesh (_scene_checked). A graph's outputs applied link it again,
+    `loads`, makes it the state as `imported` gives it (a mesh's import maps its own materials), unlinks the view, puts
+    the AOV back to Beauty and turns each material's Override Material on. Till then the Scene menu checks no mesh
+    (_scene_checked) and the Materials menu lists no material in use (_materials_used), and after it `mesh` (None:
+    none, as for a mesh of the user's own) and `in_use`, each Scene menu's read recorded as a lookup of ('Scene',).
+    `in_use` left None, the menu lists Default for a mesh the Scene menu lists, else each material the state's table
+    maps, by its id (the fixtures' materials are named after their ids).
+    Camera > Frame looks at `framed`'s point from its distance, the camera's direction kept. A mesh file's import never
+    ends, its materials never listed in use, while `unimportable`. Its 3D panel's title is
+    `title`. A graph's outputs applied link it again,
     and turn each material's Override Material on, as the Explorer's View Outputs In 3D View does (REVIEW.md HLP-291,
-    measured). The AOV shown is `aov`, and each material's Override Material `overridden`."""
+    measured). The AOV shown is `aov`, and each material's Override Material `overridden`, by the material's name:
+    the Materials menu lists those on first (measured 2026-11-27). `applied` records the materials each application
+    was given."""
 
     def __init__(
         self,
@@ -626,17 +866,25 @@ class Designer:
         viewport: tuple[int, int] = (400, 300),
     ) -> None:
         self.events: list[Event] = []  # ('lookup' or 'trigger', the menu path or step)
-        self.checked: set[tuple[str, ...]] = set()  # the menu paths whose action is checked, as a mesh shown is
         self.order: list[str] = []
         self.state = SAVED  # what a Save writes: the session's state
         self.linked = linked  # the view shows a graph's outputs: a Save writes their textures
         self.loads: list[str] = []  # each state file Reset Scene loaded
         self.loading = False  # Reset Scene triggered, the file not read yet
         self.load_error: tuple[int, str] = (0, '')  # (the Reset Scene that raises, from 1; its error)
+        self.loaded_materials: list[str] = []  # the materials a load lists instead, when given: another mesh's
         self.saves_to = ''  # where a Save writes, when not the default state file
         self.aov = 'Beauty'
-        self.overridden = [True]  # each material's Override Material, in the Materials menu's order
+        self.overridden = {'Default': True}  # each material's Override Material, by its name
         self.editor: Graph | None = Graph('editor', editor_outputs)
+        self.mesh: str | None = 'Rounded cube'  # the mesh the Scene menu checks once a load has ended
+        self.title = 'Rounded cube - Rasterizer'  # the 3D panel's
+        self.imported: Callable[[str], str] = lambda content: content  # a loaded file, as the state it makes
+        self.framed = FRAMED  # where Camera > Frame looks, and from how far
+        self.unimportable = False  # a mesh file's import never ends, as a corrupt file's (REVIEW.md HLP-299)
+        self.applied: list[Sequence[str]] = []  # the materials each application of a graph's outputs was given
+        self.in_use: list[str] | None = None  # the materials the Materials menu lists in use once loaded (above)
+        self.helpers = helpers
         self.path = os.path.join(helpers._version_folder(), helpers.STATE_NAME)
         self.resources = cast(Callable[[str], str], helpers._state_resources)
         widgets = qt('QtWidgets')
@@ -647,7 +895,7 @@ class Designer:
         )
         tree = SimpleNamespace(objectName=lambda: 'mTreeView')
         children = {widgets.QMenuBar: [object()], widgets.QTreeView: [tree], widgets.QWidget: [viewport_widget]}
-        dock = SimpleNamespace(findChildren=lambda cls: children[cls])
+        dock = SimpleNamespace(findChildren=lambda cls: children[cls], windowTitle=lambda: self.title)
         areas = {helpers._PANEL_AREAS[name] for name in hidden}
 
         def visible_dock(mw: 'QtWidgets.QMainWindow', area: str) -> SimpleNamespace | None:
@@ -656,31 +904,38 @@ class Designer:
 
         def menu_action(bar: 'QtWidgets.QMenuBar', keep: list['Kept'], *path: str) -> SimpleNamespace:
             self.events.append(('lookup', path))
-            return SimpleNamespace(trigger=lambda: self._trigger(path), isChecked=lambda: path in self.checked)
+            return SimpleNamespace(trigger=lambda: self._trigger(path))
 
         vars(helpers)['_visible_dock'] = visible_dock
         vars(helpers)['_menu_action'] = menu_action
-        # the Scene menu's checked entries: the mesh once a load has ended, Display UVs in 2D View throughout
-        vars(helpers)['_scene_checked'] = lambda bar, keep: (
-            {'Display UVs in 2D View'} | (set() if self.loading else {'Rounded cube'})
-        )
-        vars(helpers)['_overrides'] = lambda bar, keep: [self._override(i) for i in range(len(self.overridden))]
+        vars(helpers)['_scene_checked'] = self._scene_checked
+        vars(helpers)['_overrides'] = lambda bar, keep: {
+            name: self._override(name) for name in sorted(self.overridden, key=lambda n: not self.overridden[n])
+        }
         vars(helpers)['_aov_menu'] = lambda dock, keep: SimpleNamespace(
             actions=lambda: [self._aov(name) for name in ('Beauty', 'Material roughness')]
         )
         vars(helpers)['_material_checked'] = lambda bar, keep: None
+        vars(helpers)['_materials_used'] = self._materials_used
         vars(helpers)['_home_screen'] = lambda: None
         vars(helpers)['SDSBSCompGraph'] = Graph
         vars(helpers)['_current_graph'] = lambda: self.editor
 
-        def apply_outputs(tree: 'QtWidgets.QTreeView', g: Graph, keep: list['Kept']) -> None:
+        def apply_outputs(
+            tree: 'QtWidgets.QTreeView', g: Graph, keep: list['Kept'], materials: Sequence[str] = ()
+        ) -> None:
             self.events.append(('trigger', ('outputs', g.getIdentifier())))
+            self.applied.append(materials)
             self.linked = True
-            self.overridden = [True] * len(self.overridden)
+            self.overridden = dict.fromkeys(self.overridden, True)
 
         vars(helpers)['_apply_outputs'] = apply_outputs
 
         vars(helpers)['_environment_maps'] = lambda: dict(MAPS)
+        # Designer's window, which the set-up and the 3D view as text leave as it is: a 3D shot alone puts it on
+        # screen (shot3d.py; REVIEW.md TST-960)
+        assert {'_on_screen', '_Screen'} <= vars(helpers).keys(), 'the guard would guard nothing'
+        vars(helpers)['_on_screen'] = vars(helpers)['_Screen'] = on_screen
         self.frames = Frames(self.events)
         frames = self.frames
 
@@ -693,6 +948,24 @@ class Designer:
         vars(helpers)['_Frames'] = Watching
         vars(helpers)['find_graph'] = lambda name: Graph(name, outputs)
         frames.events_ran = self._loaded
+
+    def _scene_checked(self, bar: 'QtWidgets.QMenuBar', keep: list['Kept']) -> set[str]:
+        """The Scene menu's checked entries: the mesh once a load has ended, Display UVs in 2D View throughout."""
+        self.events.append(('lookup', ('Scene',)))
+        return {'Display UVs in 2D View'} | (set() if self.loading or self.mesh is None else {self.mesh})
+
+    def _materials_used(self, bar: 'QtWidgets.QMenuBar', keep: list['Kept']) -> list[str]:
+        """The materials the Materials menu lists in use: none while a load or an import is under way, else `in_use`
+        (the class docstring)."""
+        if self.loading or self.unimportable:
+            return []
+        if self.in_use is not None:
+            return self.in_use
+        if self.helpers._mesh_listed(self.state):
+            return ['Default']
+        table = re.search(r'<material_mapping_table>.*?</material_mapping_table>', self.state, re.S)
+        ids: list[str] = re.findall(r'<material_instance_id>([^<]*)<', table.group(0) if table else '')
+        return sorted({'Default' if i == 'default' else i for i in ids})
 
     def _trigger(self, path: tuple[str, ...]) -> None:
         self.events.append(('trigger', path))
@@ -712,22 +985,26 @@ class Designer:
             if self.triggered().count(RESET) == self.load_error[0]:
                 raise RuntimeError(self.load_error[1])
             self.loading = True
+        elif path == FRAME:
+            fields = self.helpers._state_fields
+            at = fields(self.state, ['camera'])['camera']._replace(target=self.framed[0], distance=self.framed[1])
+            self.state = self.helpers._state_edited(self.state, {'camera': at})
 
     def _loaded(self) -> None:
         """The load triggered, as Designer makes it in its event loop: the file read then."""
         if self.loading:
             self.loading = False
-            self.state = Path(self.saves_to or self.path).read_text(encoding='utf-8')
-            self.loads.append(self.state)
+            self.loads.append(Path(self.saves_to or self.path).read_text(encoding='utf-8'))
+            self.state = self.imported(self.loads[-1])
             self.linked, self.aov = False, 'Beauty'
-            self.overridden = [True] * len(self.overridden)
+            self.overridden = dict.fromkeys(self.loaded_materials or self.overridden, True)
 
-    def _override(self, i: int) -> SimpleNamespace:
+    def _override(self, name: str) -> SimpleNamespace:
         def trigger() -> None:
-            self.events.append(('trigger', ('override', str(i))))
-            self.overridden[i] = not self.overridden[i]
+            self.events.append(('trigger', ('override', name)))
+            self.overridden[name] = not self.overridden[name]
 
-        return SimpleNamespace(isChecked=lambda: self.overridden[i], trigger=trigger)
+        return SimpleNamespace(isChecked=lambda: self.overridden[name], trigger=trigger)
 
     def _aov(self, name: str) -> SimpleNamespace:
         def trigger() -> None:
@@ -816,12 +1093,13 @@ def test_the_mesh_the_tiling_and_the_light_need_no_parameters_panel(helpers: typ
 def test_the_menu_entries_it_needs_are_looked_up_before_anything_changes(
     helpers: types.ModuleType, mesh: str | None
 ) -> None:
-    # the mesh's entry, which tells whether the mesh shows already (_SetUp.may_change)
+    # the Scene menu's checked entries, which tell whether the mesh shows already (_SetUp.may_change): read as the text
+    # reads them (_mesh_shown)
     designer = Designer(helpers)
     set_up(helpers, mesh=mesh, view='Top', tiling=2.0)
     first = designer.looked_up_first()
-    assert {SAVE, RESET, ('Materials',)} <= set(first)
-    assert mesh is None or ('Scene', mesh) in first
+    assert {SAVE, RESET, ('Materials',), FRAME} <= set(first)  # Frame: a mesh of the user's own takes it
+    assert mesh is None or ('Scene',) in first
 
 
 def test_the_materials_menu_every_set_up_reads_is_looked_up_before_anything_changes(helpers: types.ModuleType) -> None:
@@ -837,6 +1115,19 @@ def test_an_unknown_environment_is_refused_before_anything_changes_naming_the_ma
         RuntimeError, match=r"^unknown environment 'Studio'; Designer has corsica_beach, panorama_map, studio$"
     ):
         set_up(helpers, mesh='Plane', environment='Studio')
+    assert designer.order == [] and designer.events == []
+
+
+def test_an_unknown_shader_model_is_refused_before_anything_changes_naming_the_models(
+    helpers: types.ModuleType,
+) -> None:
+    designer = Designer(helpers)
+    with pytest.raises(
+        RuntimeError,
+        match=r"^unknown shader model 'Principled BSDF'; the 3D view's Materials menu has AdobeStandardMaterial, "
+        r'OpenPBR Surface, UsdPreviewSurface$',
+    ):
+        set_up(helpers, mesh='Plane', shader_model='Principled BSDF')
     assert designer.order == [] and designer.events == []
 
 
@@ -884,6 +1175,7 @@ def test_every_option_is_written_in_one_load_the_rest_of_the_file_kept(helpers: 
         environment='studio',
         environment_rotation=90.0,
         environment_exposure=1.5,
+        shader_model='UsdPreviewSurface',
     )
     framed = helpers._framed(TORUS, 'Top', (400.0, 300.0))
     written = {
@@ -893,6 +1185,7 @@ def test_every_option_is_written_in_one_load_the_rest_of_the_file_kept(helpers: 
         'environment': MAPS['studio'],
         'rotation': 0.25,
         'exposure': 1.5,
+        'shader': 'usd::UsdPreviewSurface',
     }
     assert designer.loads == [helpers._state_edited(SAVED, written), SAVED]
     assert designer.triggered().count(RESET) == 2 and designer.triggered().count(SAVE) == 1
@@ -932,20 +1225,23 @@ def test_a_tiling_sets_the_material_the_mesh_uses_and_leaves_an_unused_one(helpe
     assert designer.loads == [tiled, users]
 
 
-def test_a_tiling_is_refused_before_anything_changes_for_a_mesh_using_several_materials(
-    helpers: types.ModuleType,
+@pytest.mark.parametrize(
+    'options', [{'tiling': 2.0}, {'shader_model': 'AdobeStandardMaterial'}], ids=['a tiling', 'a shader model']
+)
+def test_a_material_setting_is_refused_before_anything_changes_for_a_mesh_using_several_materials(
+    helpers: types.ModuleType, options: View3dOptions
 ) -> None:
     # REVIEW.md HLP-127: refused before the window comes on screen; with mesh=, the new mesh's, which isn't the menu's
     designer = Designer(helpers)
 
     def two(bar: 'QtWidgets.QMenuBar', keep: list['Kept']) -> NoReturn:
-        raise RuntimeError("the 3D view's mesh uses 2 materials (A, B): tiling= sets the material of a mesh with one")
+        raise RuntimeError("the 3D view's mesh uses 2 materials (A, B): tiling= and shader_model= set the material")
 
     vars(helpers)['_material_checked'] = two
     with pytest.raises(RuntimeError, match='2 materials'):
-        helpers._3d_set_up(tiling=2.0)
+        helpers._3d_set_up(**options)
     assert designer.triggered() == []
-    set_up(helpers, mesh='Plane', tiling=2.0)
+    set_up(helpers, mesh='Plane', **options)
     assert RESET in designer.triggered()
 
 
@@ -967,6 +1263,8 @@ def test_a_tiling_is_refused_before_anything_changes_for_a_mesh_using_several_ma
         ({'tiling': 1.0}, False),
         ({'environment': 'panorama_map'}, False),
         ({'environment_rotation': 0.0, 'environment_exposure': 0.0}, False),
+        ({'shader_model': 'AdobeStandardMaterial'}, True),
+        ({'shader_model': 'OpenPBR Surface'}, False),  # the fixture's
     ],
     ids=[
         'a tiling',
@@ -982,6 +1280,8 @@ def test_a_tiling_is_refused_before_anything_changes_for_a_mesh_using_several_ma
         'the tiling shown',
         'the map shown',
         'the rotation and exposure shown',
+        'a shader model',
+        'the shader model shown',
     ],
 )
 def test_a_set_up_says_whether_it_changed_what_the_view_shows(
@@ -1005,6 +1305,7 @@ def test_a_set_up_says_whether_it_changed_what_the_view_shows(
         ({'environment': 'studio'}, False, True),
         ({'view': 'Top'}, False, True),
         ({'graph': 'g'}, False, False),
+        ({'shader_model': 'AdobeStandardMaterial'}, False, True),
     ],
     ids=[
         'an orbit',
@@ -1016,6 +1317,7 @@ def test_a_set_up_says_whether_it_changed_what_the_view_shows(
         'a map',
         'a view',
         'a graph',
+        'a shader model',
     ],
 )
 def test_a_set_up_says_beforehand_whether_it_may_change_what_the_view_shows(
@@ -1024,7 +1326,7 @@ def test_a_set_up_says_beforehand_whether_it_may_change_what_the_view_shows(
     # a 3D shot takes a render before such a set-up, to compare with (shot3d.py)
     designer = Designer(helpers)
     if shown:
-        designer.checked.add(('Scene', 'Sphere'))
+        designer.mesh = 'Sphere'
     assert helpers._3d_set_up(**options).may_change is may_change
 
 
@@ -1034,7 +1336,7 @@ def test_a_mesh_shown_already_is_neither_loaded_again_nor_waited_for(
     # REVIEW.md HLP-195: picked again, it restarted nothing, and its wait ran to its limit (1.0 s measured). The Scene
     # menu checks it: the fixture's id is Designer's own Rounded cube's, which isn't the menu's (state3d.py)
     designer = Designer(helpers)
-    designer.checked.add(('Scene', 'Sphere'))
+    designer.mesh = 'Sphere'
     set_up(helpers, mesh='Sphere')
     # the base saved, and nothing loaded back after: the view as it was
     assert [e for e in designer.events if e[0] in ('trigger', 'wait')] == [('trigger', SAVE)], designer.events
@@ -1050,8 +1352,9 @@ def test_a_mesh_shown_already_is_neither_loaded_again_nor_waited_for(
         ({'view': 'Top'}, 'view Top, framed'),
         ({'tiling': 2.0}, 'tiling 2'),
         ({'environment': 'studio'}, 'environment studio'),
+        ({'shader_model': 'UsdPreviewSurface'}, 'shader model UsdPreviewSurface'),
     ],
-    ids=['a mesh', 'a graph', 'a view', 'a tiling', 'a map'],
+    ids=['a mesh', 'a graph', 'a view', 'a tiling', 'a map', 'a shader model'],
 )
 def test_a_wait_failing_after_a_steps_change_says_it_was_set(
     helpers: types.ModuleType, options: View3dOptions, said: str
@@ -1071,7 +1374,7 @@ def test_an_abort_after_a_change_says_what_was_set_and_goes_on(
     # backup is put back, and the view left as the call left it: no load (scene3d.py)
     designer = Designer(helpers)
 
-    def aborted(tree: 'QtWidgets.QTreeView', g: 'SDSBSCompGraph', keep: list['Kept']) -> None:
+    def aborted(tree: 'QtWidgets.QTreeView', g: 'SDSBSCompGraph', keep: list['Kept'], *rest: object) -> None:
         raise KeyboardInterrupt('an abort as the outputs are applied')
 
     vars(helpers)['_apply_outputs'] = aborted
@@ -1199,7 +1502,7 @@ def test_an_api_error_after_a_change_says_what_was_set(helpers: types.ModuleType
     # REVIEW.md HLP-117: the sd API's error is a BaseException, not an abort
     Designer(helpers)
 
-    def refused(tree: 'QtWidgets.QTreeView', g: 'SDSBSCompGraph', keep: list['Kept']) -> None:
+    def refused(tree: 'QtWidgets.QTreeView', g: 'SDSBSCompGraph', keep: list['Kept'], *rest: object) -> None:
         raise helpers.APIException('the API refused')
 
     vars(helpers)['_apply_outputs'] = refused
@@ -1235,7 +1538,7 @@ def test_an_error_after_a_change_says_what_was_set(
     # REVIEW.md HLP-107. Then the view gets the base back, and the backup is put back (scene3d.py)
     designer = Designer(helpers)
 
-    def failing(tree: 'QtWidgets.QTreeView', g: 'SDSBSCompGraph', keep: list['Kept']) -> None:
+    def failing(tree: 'QtWidgets.QTreeView', g: 'SDSBSCompGraph', keep: list['Kept'], *rest: object) -> None:
         raise RuntimeError("the Explorer's menu for graph %s didn't open" % g.getIdentifier())
 
     vars(helpers)['_apply_outputs'] = failing
@@ -1251,11 +1554,11 @@ def test_an_error_after_a_change_says_what_was_set(
     )
 
 
-EVERY_OPTION = ('g', 'Plane', 'Top', 2, 2.0, [90.0, 30.0], [0.25, -0.4], 'studio', 90.0, 1.0)
+EVERY_OPTION = ('g', 'Plane', 'Top', 2, 2.0, [90.0, 30.0], [0.25, -0.4], 'studio', 90.0, 1.0, 'AdobeStandardMaterial')
 # each option the state file holds, in one load, then the graph's outputs
 LOADED = (
     'Plane, view Top, framed, orbit 90 degrees right, 30 up, pan 0.25 of the view right, 0.4 down, +2 zoom steps, '
-    'tiling 2, environment studio, rotation 90 degrees, exposure 1'
+    'tiling 2, environment studio, rotation 90 degrees, exposure 1, shader model AdobeStandardMaterial'
 )
 EVERY_STEP = "3D view: %s, graph g's outputs on the mesh" % LOADED
 
@@ -1299,6 +1602,17 @@ def test_the_set_up_runs_the_shots_look_at_the_active_app_before_each_step(helpe
     steps = [i for i, (kind, line) in enumerate(said) if kind == 'print' and line[0].startswith('3D view, setting: ')]
     assert len(steps) == 3 and all(said[i - 1] == ('between', ()) for i in steps)
     assert said[steps[-1]] == ('print', ('3D view, setting: the 3D view as it was',))
+
+
+def test_a_mesh_files_framing_runs_the_shots_look_before_frame_and_before_its_second_load(
+    helpers: types.ModuleType, mine: str
+) -> None:
+    # REVIEW.md TST-1015: as before each step (HLP-136, HLP-264), Frame and the second load included
+    designer = Designer(helpers, linked=False)
+    set_up(helpers, mesh=mine, orbit=[30.0, 0.0], between=lambda: designer.events.append(('between', ())))
+    order = [path if kind == 'trigger' else kind for kind, path in designer.set_up() if kind in ('trigger', 'between')]
+    loads = [i for i, step in enumerate(order) if step == RESET]
+    assert len(loads) == 2 and order[order.index(FRAME) - 1] == 'between' and order[loads[1] - 1] == 'between'
 
 
 def test_the_camera_is_the_users_moved_by_the_options_the_rest_of_the_file_kept(
@@ -1385,10 +1699,11 @@ def test_a_state_file_lacking_the_camera_is_refused_and_nothing_is_loaded(helper
     assert files(designer.path) == {helpers.STATE_NAME: b'<the users/>'}
 
 
-def alike(a: 'Pose', b: 'Pose') -> bool:
-    """Two poses alike, as written in a state file and read back: each value to 9 significant digits."""
+def alike(a: 'Pose', b: 'Pose', abs_tol: float = 1e-6) -> bool:
+    """Two poses alike, as written in a state file and read back: each value to 9 significant digits, within `abs_tol`
+    near 0. A camera far away gives the point it looks at back within 1e-8 of its distance."""
     values = zip([*a.target, *a[1:]], [*b.target, *b[1:]], strict=True)
-    return all(math.isclose(x, y, rel_tol=1e-8, abs_tol=1e-6) for x, y in values)
+    return all(math.isclose(x, y, rel_tol=1e-8, abs_tol=abs_tol) for x, y in values)
 
 
 @pytest.mark.parametrize(
@@ -1431,7 +1746,7 @@ def test_a_set_up_that_changed_nothing_loads_nothing(
     # values the view shows already, the fixture's (the mesh the Scene menu checks): no load, so nothing to put back,
     # and no load's wait (REVIEW.md HLP-195)
     designer = Designer(helpers, viewport=viewport)
-    designer.checked.add(('Scene', 'Sphere'))
+    designer.mesh = 'Sphere'
     assert set_up(helpers, **options) is False
     assert designer.loads == [] and RESET not in designer.triggered()
 
@@ -1496,6 +1811,24 @@ def test_a_view_whose_graph_cant_be_relinked_is_said_to_follow_it_no_longer(
     assert [path for path in designer.triggered() if path[0] == 'outputs'] == []
 
 
+def test_a_relink_puts_the_outputs_back_on_the_materials_that_showed_them(helpers: types.ModuleType, mine: str) -> None:
+    # REVIEW.md HLP-312: on a mesh of several materials Designer asks which material; the base's Save names the
+    # textures of each that showed a graph's outputs (state3d._materials_linked; measured 2026-11-27)
+    designer = Designer(helpers)
+    obj = mapped(with_materials(showing(mine), 'first', 'second'), 'first', 'second')
+    designer.state = obj.replace('_resources/default_', '_moved/default_').replace('_resources/second_', '_moved/')
+    designer.mesh = None
+    set_up(helpers, orbit=[30.0, 0.0])
+    assert designer.applied == [['first'], ['first']]  # the set-up's relink, then the put-back's
+
+
+def test_graphs_outputs_go_on_every_material(helpers: types.ModuleType) -> None:
+    # the user's choice (2026-11-27, "Every material"): the call asked for those outputs (REVIEW.md HLP-312)
+    designer = Designer(helpers)
+    set_up(helpers, 'g')
+    assert designer.applied[0] == ()
+
+
 def test_the_users_default_state_file_is_the_one_backed_up_and_put_back(
     helpers: types.ModuleType, tmp_path: Path
 ) -> None:
@@ -1535,29 +1868,32 @@ def test_a_load_ends_only_once_the_scene_menu_checks_a_mesh_again(helpers: types
     assert designer.loads[1] == SAVED
 
 
-def test_a_load_of_a_mesh_of_the_users_own_ends_once_the_view_settled(
+def test_a_load_of_a_mesh_of_the_users_own_ends_once_the_materials_menu_lists_one_in_use(
     helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # REVIEW.md HLP-283, measured: the Scene menu checks no mesh for a mesh of the user's own, a file:// id, before the
-    # load or after it; each load waited its 3 s, and the shot said the view hadn't settled
+    # measured 2026-11-27: the Scene menu checks no mesh for a mesh of the user's own, a file:// id (REVIEW.md
+    # HLP-283), and the Samba FBX's import outlasted the view's restart and settle (REVIEW.md HLP-289): a Save then held
+    # no mesh. As Reset Scene returns, the Materials menu lists none in use, and the mesh's own once its import ended,
+    # the same file's again too. Read as each wait starts and once Designer's event loop has run, IMPORT_LIMIT at most
     designer = Designer(helpers, linked=False)
-    designer.state = USERS
-    vars(helpers)['_scene_checked'] = lambda bar, keep: {'Display UVs in 2D View'}
+    designer.state, designer.mesh = USERS, None
     set_up(helpers, orbit=[30.0, 0.0])
-    # REVIEW.md HLP-286: no menu wait ('loaded'), the load's own restart waited for instead, up to SETTLE_LIMIT
-    steps = [SAVE, RESET, 'restarted', 'settled', RESET, 'restarted', 'settled']
+    steps = [SAVE, RESET, 'loaded', 'settled', RESET, 'loaded', 'settled']
     assert designer.steps(designer.events) == steps, designer.events
+    assert designer.frames.states == [[False, True], [False, True]]
+    assert designer.frames.limits == [helpers.IMPORT_LIMIT] * 2
     said = [line for line in capsys.readouterr().out.splitlines() if line.startswith('3D view: ')]
     assert said == ['3D view: orbit 30 degrees right', '3D view: put back as it was']
 
 
 def test_each_load_waits_as_the_mesh_of_the_file_it_loads_says(helpers: types.ModuleType) -> None:
     # REVIEW.md TST-949: the base a mesh of the user's own, the set-up's file the Sphere: the set-up's load waits on the
-    # Scene menu, the put-back's on the view
+    # Scene menu, the put-back's on the Materials menu
     designer = Designer(helpers, linked=False)
     designer.state = USERS
     set_up(helpers, mesh='Sphere')
-    assert designer.steps(designer.events) == [SAVE, RESET, 'loaded', 'settled', RESET, 'restarted', 'settled']
+    assert designer.steps(designer.events) == [SAVE, RESET, 'loaded', 'settled', RESET, 'loaded', 'settled']
+    assert designer.frames.limits == [helpers.SETTLE_LIMIT, helpers.IMPORT_LIMIT]
 
 
 def test_a_light_set_in_a_file_with_no_mesh_id_is_loaded_as_one_of_a_listed_mesh(helpers: types.ModuleType) -> None:
@@ -1658,22 +1994,47 @@ def test_override_material_is_set_back_after_each_load(helpers: types.ModuleType
     # REVIEW.md HLP-267, measured: a load turns each material's Materials > Override Material on, though the file holds
     # it off
     designer = Designer(helpers, linked=False)
-    designer.overridden = [False]
+    designer.overridden = {'Default': False}
     set_up(helpers, orbit=[30.0, 0.0])
-    after = [path for path in designer.triggered() if path in (RESET, ('override', '0'))]
-    assert after == [RESET, ('override', '0')] * 2 and designer.overridden == [False]
+    after = [path for path in designer.triggered() if path in (RESET, ('override', 'Default'))]
+    assert after == [RESET, ('override', 'Default')] * 2 and designer.overridden == {'Default': False}
+
+
+def test_override_material_is_set_back_on_each_material_by_its_name_whatever_the_menus_order(
+    helpers: types.ModuleType,
+) -> None:
+    # measured 2026-11-27: the Materials menu lists the materials overridden first, so its order follows their Override
+    # Material. Set back in that order, a load turning each on would set `second` off and leave `first` on; and the
+    # Plane loaded over the project's OBJ's state took `first`'s off on its Default, which then didn't show its shader
+    # model (REVIEW.md HLP-315, HLP-311)
+    designer = Designer(helpers, linked=False)
+    designer.overridden = {'first': False, 'second': True}
+    set_up(helpers, orbit=[30.0, 0.0])
+    assert designer.overridden == {'first': False, 'second': True}
+
+
+def test_override_material_of_a_material_the_base_doesnt_name_is_left_as_a_load_lists_it(
+    helpers: types.ModuleType, mine: str
+) -> None:
+    # REVIEW.md HLP-315, TST-1007: a preset view with Default's Override off, switched to a mesh file whose load lists
+    # its own materials beside Default: Default set back, the new ones left on, as the fake's load turns each on
+    designer = Designer(helpers, linked=False)
+    designer.overridden, designer.loaded_materials = {'Default': False}, ['Default', 'only']
+    rendered: list[dict[str, bool]] = []
+    set_up(helpers, mesh=mine, render=lambda: rendered.append(dict(designer.overridden)))
+    assert rendered == [{'Default': False, 'only': True}]
 
 
 def test_override_material_is_set_back_after_each_relink(helpers: types.ModuleType) -> None:
     # REVIEW.md HLP-291, measured: the Explorer's View Outputs In 3D View turns Override Material on by itself, so the
     # relink after each load turned it on again once the load's had been set back; the render was overridden
     designer = Designer(helpers)
-    designer.overridden = [False]
-    rendered: list[list[bool]] = []
-    set_up(helpers, orbit=[30.0, 0.0], render=lambda: rendered.append(list(designer.overridden)))
-    after = [path for path in designer.triggered() if path in (RESET, ('override', '0')) or path[0] == 'outputs']
-    assert after == [RESET, ('override', '0'), ('outputs', 'editor'), ('override', '0')] * 2
-    assert rendered == [[False]] and designer.overridden == [False]
+    designer.overridden = {'Default': False}
+    rendered: list[dict[str, bool]] = []
+    set_up(helpers, orbit=[30.0, 0.0], render=lambda: rendered.append(dict(designer.overridden)))
+    after = [path for path in designer.triggered() if path in (RESET, ('override', 'Default')) or path[0] == 'outputs']
+    assert after == [RESET, ('override', 'Default'), ('outputs', 'editor'), ('override', 'Default')] * 2
+    assert rendered == [{'Default': False}] and designer.overridden == {'Default': False}
 
 
 @pytest.mark.parametrize('settles', [[True, False], [False, False]], ids=['the relink alone', 'the load too'])
@@ -1707,7 +2068,7 @@ def test_a_view_that_didnt_settle_after_override_material_set_back_is_said(
     # REVIEW.md TST-954: the set-back's wait folded into the load's result, untested; with no relink, it is the step's
     # last
     designer = Designer(helpers, linked=False)
-    designer.overridden = [False]
+    designer.overridden = {'Default': False}
     designer.frames.settles = [True, False]  # the load's settle, then the set-back's
     set_up(helpers, orbit=[30.0, 0.0])
     said = [line for line in capsys.readouterr().out.splitlines() if line.startswith('3D view: ')]
@@ -1718,16 +2079,16 @@ def test_graphs_outputs_put_on_the_mesh_leave_override_material_on(helpers: type
     # REVIEW.md HLP-291: graph= turns it on, as the Explorer's menu does, and the call asked for those outputs; the
     # put-back sets it back
     designer = Designer(helpers)
-    designer.overridden = [False]
-    rendered: list[list[bool]] = []
-    set_up(helpers, 'g', render=lambda: rendered.append(list(designer.overridden)))
-    assert rendered == [[True]] and designer.overridden == [False]
+    designer.overridden = {'Default': False}
+    rendered: list[dict[str, bool]] = []
+    set_up(helpers, 'g', render=lambda: rendered.append(dict(designer.overridden)))
+    assert rendered == [{'Default': True}] and designer.overridden == {'Default': False}
 
 
 def test_override_material_on_as_a_load_leaves_it_is_left_alone(helpers: types.ModuleType) -> None:
     designer = Designer(helpers, linked=False)
     set_up(helpers, orbit=[30.0, 0.0])
-    assert ('override', '0') not in designer.triggered() and designer.overridden == [True]
+    assert ('override', 'Default') not in designer.triggered() and designer.overridden == {'Default': True}
 
 
 @pytest.mark.parametrize('found', [True, False], ids=['a file of the users', 'none'])
@@ -1822,3 +2183,580 @@ def test_a_menu_the_guard_closed_with_nothing_picked_is_said_so(helpers: types.M
         "the Explorer's menu for graph g was still open %d s after it opened, and was closed with nothing picked"
         % (helpers.MENU_GUARD // 1000)
     )
+
+
+# A mesh of the user's own (ROADMAP item 84): mesh= the path of a mesh file, which the server made absolute
+@pytest.fixture
+def mine(tmp_path: Path) -> str:
+    """A mesh file of the user's own, its path."""
+    path = tmp_path / 'mine.obj'
+    path.write_text('o mine\n', encoding='utf-8')
+    return str(path)
+
+
+def two_materials(content: str) -> str:
+    """The state file `content` with its mesh's parts mapped to two materials, `first` and `second`, as Designer maps
+    the project's test OBJ (measured 2026-11-27)."""
+    return mapped(content, 'first', 'second')
+
+
+def camera(content: str, helpers: types.ModuleType) -> 'Pose':
+    """The camera the state file `content` holds."""
+    return cast('Pose', helpers._state_fields(content, ['camera'])['camera'])
+
+
+# a mesh file not there, by a path absolute on every system: Python 3.13's ntpath takes /nowhere as not absolute
+# (REVIEW.md TST-1016)
+GONE = os.path.abspath('/nowhere/mine.obj')
+
+
+@pytest.mark.parametrize(
+    'mesh, refused',
+    [
+        (GONE, '^no such mesh file: %s$' % re.escape(GONE)),
+        ('Teapot', r"^unknown mesh 'Teapot'; the 3D view has Cube, .*, Torus, and a mesh file is given by its path$"),
+    ],
+    ids=['a file that is not there', 'a name the Scene menu lacks'],
+)
+def test_a_mesh_neither_named_nor_a_file_is_refused_before_anything_changes(
+    helpers: types.ModuleType, mesh: str, refused: str
+) -> None:
+    designer = Designer(helpers)
+    with pytest.raises(RuntimeError, match=refused):
+        set_up(helpers, mesh=mesh)
+    assert designer.order == [] and designer.events == []
+
+
+def test_a_mesh_file_is_loaded_by_its_url_then_framed_by_designers_frame(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str], mine: str
+) -> None:
+    # measured 2026-11-27: a load of another mesh's id keeps the file's camera, and Frame then frames the mesh from the
+    # camera's direction (the OBJ at exactly ten times the cube's distance), as the Scene menu's switch frames a preset
+    designer = Designer(helpers, linked=False)
+    assert set_up(helpers, mesh=mine) is True
+    assert designer.loads == [helpers._state_edited(SAVED, {'mesh': state3d._mesh_id(mine)}), SAVED]  # no camera
+    assert designer.steps(designer.set_up()) == [SAVE, RESET, 'loaded', 'settled', FRAME, 'settled']
+    assert capsys.readouterr().out.splitlines() == [
+        '3D view, setting: ' + mine,
+        '3D view: ' + mine,
+        '3D view, setting: the 3D view as it was',
+        '3D view: put back as it was',
+    ]
+
+
+@pytest.mark.parametrize(
+    'options',
+    [{'view': 'Top'}, {'orbit': [30.0, -10.0]}, {'zoom': 2}, {'view': 'Front', 'pan': [0.25, 0.0]}],
+    ids=['a view', 'an orbit', 'a zoom', 'a view and a pan'],
+)
+def test_the_camera_options_on_a_mesh_file_start_from_designers_frame_in_a_second_load(
+    helpers: types.ModuleType, mine: str, options: View3dOptions
+) -> None:
+    # Frame's point and distance, the view's direction or else the user's camera's, then the moves (the user,
+    # 2026-11-27)
+    designer = Designer(helpers, linked=False)
+    set_up(helpers, mesh=mine, **options)
+    user = camera(SAVED, helpers)
+    start = helpers.Pose(FRAMED[0], *helpers.VIEW_DIRECTIONS.get(options.get('view'), user[1:3]), FRAMED[1])
+    turn, move = options.get('orbit') or (0.0, 0.0), options.get('pan') or (0.0, 0.0)
+    moved = helpers._camera_moved(start, (400.0, 300.0), tuple(turn), tuple(move), options.get('zoom', 0))
+    assert len(designer.loads) == 3 and alike(camera(designer.loads[1], helpers), moved, FAR)
+    assert designer.loads[1].count(state3d._mesh_id(mine)) == 1 and designer.loads[-1] == SAVED
+    loaded_twice = [SAVE, RESET, 'loaded', 'settled', FRAME, 'settled', SAVE, RESET, 'loaded', 'settled']
+    assert designer.steps(designer.set_up()) == loaded_twice
+
+
+@pytest.mark.parametrize('linked', [False, True], ids=['not linked', "a graph's outputs relinked"])
+def test_a_view_on_a_mesh_file_shown_already_is_framed_by_designers_frame_in_one_load(
+    helpers: types.ModuleType, mine: str, linked: bool
+) -> None:
+    # no load of the mesh first: Frame frames the mesh shown, then the view's camera is loaded. Without mesh= too. The
+    # view changed, so the shot compares its render (STALE), and the editor's graph is relinked after the load
+    # (REVIEW.md TST-1015)
+    for mesh in (mine, None):
+        designer = Designer(helpers, linked=linked)
+        designer.state, designer.mesh = showing(mine), None
+        assert set_up(helpers, mesh=mesh, view='Top') is True
+        steps = designer.steps(designer.set_up())
+        assert steps[:3] == [SAVE, FRAME, 'settled']
+        assert (('outputs', 'editor') in steps[steps.index(RESET) :]) is linked
+        framed = helpers.Pose(FRAMED[0], *helpers.VIEW_DIRECTIONS['Top'], FRAMED[1])
+        assert len(designer.loads) == 2 and alike(camera(designer.loads[0], helpers), framed, FAR)
+
+
+def test_a_mesh_file_shown_already_is_neither_loaded_nor_framed(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str], mine: str
+) -> None:
+    # the file's mesh, the URL asked: no load and no camera written, so nothing to put back (REVIEW.md HLP-195)
+    designer = Designer(helpers)
+    designer.state, designer.mesh = showing(mine), None
+    assert set_up(helpers, mesh=mine) is False
+    assert designer.triggered() == [SAVE] and designer.loads == []
+    assert capsys.readouterr().out.splitlines() == ['3D view, setting: ' + mine, '3D view: ' + mine]
+
+
+def test_a_mesh_file_shown_already_moves_the_users_camera_with_no_frame(helpers: types.ModuleType, mine: str) -> None:
+    designer = Designer(helpers, linked=False)
+    users = designer.state = showing(mine)
+    designer.mesh = None
+    set_up(helpers, mesh=mine, orbit=[30.0, 0.0])
+    moved = helpers._camera_moved(camera(users, helpers), (400.0, 300.0), (30.0, 0.0), (0.0, 0.0), 0)
+    assert designer.loads == [helpers._state_edited(users, {'camera': moved}), users]
+    assert FRAME not in designer.triggered()
+
+
+def test_a_mesh_file_may_change_what_the_view_shows_shown_already_or_not(helpers: types.ModuleType, mine: str) -> None:
+    # whether the view shows it is known only from the Save: a 3D shot takes a render before, to compare with
+    designer = Designer(helpers)
+    designer.state = showing(mine)
+    assert helpers._3d_set_up(mesh=mine).may_change is True
+
+
+def test_a_tiling_and_a_shader_model_on_a_new_mesh_file_are_written_after_its_import_in_its_material(
+    helpers: types.ModuleType, mine: str
+) -> None:
+    # the lead's choice (2026-11-27): the mesh file's own materials are known once it is imported, so these go in a
+    # second load, from a Save after Frame, in the material the new mesh uses
+    designer = Designer(helpers, linked=False)
+    set_up(helpers, mesh=mine, tiling=2.0, shader_model='UsdPreviewSurface')
+    names: list[StateField] = ['tiling', 'shader']
+    assert helpers._state_fields(designer.loads[0], names) == helpers._state_fields(SAVED, names)
+    assert helpers._state_fields(designer.loads[1], names) == {'tiling': 2.0, 'shader': 'usd::UsdPreviewSurface'}
+    framed = camera(SAVED, helpers)._replace(target=FRAMED[0], distance=FRAMED[1])
+    assert alike(camera(designer.loads[1], helpers), framed, FAR)
+
+
+@pytest.mark.parametrize(
+    'options', [{'tiling': 2.0}, {'shader_model': 'AdobeStandardMaterial'}], ids=['a tiling', 'a shader model']
+)
+def test_a_material_setting_on_a_new_mesh_file_of_several_materials_is_refused_once_loaded_the_view_put_back(
+    helpers: types.ModuleType, mine: str, options: View3dOptions
+) -> None:
+    # the lead's choice (2026-11-27): refused once the import says it uses several, the error saying what was set: the
+    # mesh, not the setting refused (REVIEW.md TST-988)
+    designer = Designer(helpers, linked=False)
+    designer.imported = two_materials
+    with pytest.raises(RuntimeError) as raised:
+        set_up(helpers, mesh=mine, environment_exposure=1.0, **options)
+    assert str(raised.value) == '%s; the 3D view was already set: %s, environment exposure 1' % (
+        helpers.MATERIALS_USED % (2, ' (first, second)'),
+        mine,
+    )
+    assert len(designer.loads) == 2 and designer.loads[-1] == SAVED
+
+
+@pytest.mark.parametrize('view', [None, 'Top'])
+def test_a_material_setting_on_a_mesh_file_shown_already_of_several_materials_is_refused_before_anything_changes(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str], mine: str, view: str | None
+) -> None:
+    # with a view too: the base holds the mesh's materials, so Frame isn't triggered first (REVIEW.md HLP-303)
+    designer = Designer(helpers)
+    designer.state, designer.mesh = two_materials(showing(mine)), None
+    with pytest.raises(RuntimeError, match=r"^the 3D view's mesh uses 2 materials \(first, second\)"):
+        set_up(helpers, mesh=mine, view=view, tiling=2.0)
+    assert designer.triggered() == [SAVE] and capsys.readouterr().out == ''
+
+
+@pytest.mark.parametrize('shown', [True, False], ids=['the file shown already', 'the file loaded by the call'])
+def test_a_tiling_on_a_mesh_file_over_another_ones_view_goes_in_the_material_the_menu_lists_in_use(
+    helpers: types.ModuleType, mine: str, shown: bool
+) -> None:
+    # REVIEW.md HLP-322, measured: the table kept both files' entries, and a tiling was refused as the mesh's 3
+    # materials; the Materials menu listed the earlier file's unused
+    designer = Designer(helpers, linked=False)
+    designer.in_use = ['only']
+    if shown:
+        designer.state, designer.mesh = over_two(showing(mine)), None
+    else:
+        designer.imported = over_two
+    set_up(helpers, mesh=None if shown else mine, tiling=4.0)
+    loaded = designer.loads[0 if shown else 1]
+    assert [held_by(loaded, m)[0] for m in ('first', 'second', 'only')] == ['*float(1)', '*float(1)', 'float(4)']
+
+
+def test_a_tiling_on_a_mesh_file_of_default_over_another_ones_view_goes_in_default_as_the_menu_names_it(
+    helpers: types.ModuleType, mine: str
+) -> None:
+    # REVIEW.md TST-1026: the menu lists box.fbx's material as `Default (overridden)`, its id `default` (measured): the
+    # mark dropped, then the names compared, not the ids
+    designer = Designer(helpers, linked=False)
+    stale = mapped(with_materials(showing(mine), 'first', 'second'), 'default', 'first', 'second')
+    designer.state, designer.mesh, designer.in_use = stale, None, ['Default (overridden)']
+    set_up(helpers, tiling=2.0)
+    assert [held_by(designer.loads[0], m)[0] for m in ('default', 'first', 'second')] == [
+        'float(2)',
+        '*float(1)',
+        '*float(1)',
+    ]
+
+
+def test_a_tiling_on_a_mesh_file_of_two_materials_over_another_ones_view_is_refused_naming_its_own(
+    helpers: types.ModuleType, mine: str
+) -> None:
+    # the reverse (REVIEW.md HLP-322)
+    designer = Designer(helpers, linked=False)
+    designer.in_use, designer.imported = ['first', 'second'], over_two
+    with pytest.raises(RuntimeError, match=r"^the 3D view's mesh uses 2 materials \(first, second\)"):
+        set_up(helpers, mesh=mine, tiling=4.0)
+    assert designer.loads[-1] == SAVED
+
+
+@pytest.mark.parametrize('materials', [('first', 'second'), ('only',)], ids=['two materials', 'one'])
+@pytest.mark.parametrize(
+    'options, held',
+    [({'tiling': 4.0}, ('float(4)', OPENPBR)), ({'shader_model': 'UsdPreviewSurface'}, ('*float(1)', USD_MODEL))],
+    ids=['a tiling', 'a shader model'],
+)
+def test_a_scene_menus_mesh_asked_over_a_mesh_file_takes_the_material_settings_in_its_own_material(
+    helpers: types.ModuleType, mine: str, materials: tuple[str, ...], options: View3dOptions, held: tuple[str, str]
+) -> None:
+    # REVIEW.md HLP-311, measured: a mesh of the Scene menu's loaded over a mesh file's state maps to Default, the
+    # file's entries left in the table. The base's materials were read: two refused, one's set. The last load before
+    # the put-back's holds what the view renders
+    designer = Designer(helpers, linked=False)
+    base = designer.state = mapped(with_materials(showing(mine), *materials), *materials)
+    designer.mesh = None
+    set_up(helpers, mesh='Plane', **options)
+    assert helpers._state_fields(designer.loads[0], ['mesh']) == {'mesh': 'plane'}
+    assert held_by(designer.loads[-2], 'default') == held
+    assert [held_by(designer.loads[-2], m) for m in materials] == [('*float(1)', OPENPBR)] * len(materials)
+    assert designer.loads[-1] == base
+
+
+def test_a_shader_model_with_a_switch_from_a_mesh_file_to_a_scene_menus_mesh_is_written_in_one_load(
+    helpers: types.ModuleType, mine: str
+) -> None:
+    # REVIEW.md HLP-311, HLP-316, measured 2026-11-27: a load set Default's model only with the file holding Default
+    # overridden; so held, the Plane loaded over the project's OBJ's state took it in that one load
+    designer = Designer(helpers, linked=False)
+    base = designer.state = overridden_as(mapped(with_materials(showing(mine), 'only'), 'only'), 'default', False)
+    designer.mesh = None
+    set_up(helpers, mesh='Plane', tiling=4.0, shader_model='UsdPreviewSurface')
+    assert held_by(designer.loads[0], 'default') == ('float(4)', USD_MODEL) and held_overridden(
+        designer.loads[0], 'default'
+    )
+    assert designer.steps(designer.set_up()) == [SAVE, RESET, 'loaded', 'settled']
+    assert designer.loads[1:] == [base]
+
+
+# what a set-up says beside the tiling or the shader model it set on a material whose Override Material was off
+# (REVIEW.md HLP-316, HLP-321)
+SHOWN_ON = 'Override Material on in %s, to show its %s'
+# a setting each of the material the mesh uses: its option, the field written, and what the set-up says of it. The
+# fixture's material holds the other model and tiling 1, and a mesh file's import copies them (with_materials)
+ANOTHER = [
+    pytest.param(
+        {'shader_model': 'AdobeStandardMaterial'},
+        {'shader': 'usd::AdobeStandardMaterial_4_0'},
+        'shader model AdobeStandardMaterial',
+        id='another model',
+    ),
+    pytest.param({'tiling': 4.0}, {'tiling': 4.0}, 'tiling 4', id='another tiling'),
+]
+HELD_ALREADY = [
+    pytest.param(
+        {'shader_model': 'OpenPBR Surface'},
+        {'shader': 'usd::ND_open_pbr_surface_surfaceshader'},
+        'shader model OpenPBR Surface',
+        id='the model held already',
+    ),
+    pytest.param({'tiling': 1.0}, {'tiling': 1.0}, 'tiling 1', id='the tiling held already'),
+]
+# each field of the material, as SHOWN_ON names it
+OWN_SAID: dict['StateField', str] = {'shader': 'shader model', 'tiling': 'tiling'}
+
+
+def said_as(field: 'StateFields') -> str:
+    """How SHOWN_ON names the material's field `field` holds (OWN_SAID)."""
+    return next(word for name, word in OWN_SAID.items() if name in field)
+
+
+@pytest.mark.parametrize('linked', [False, True], ids=['not linked', "a graph's outputs relinked"])
+@pytest.mark.parametrize(('option', 'field', 'said'), ANOTHER + HELD_ALREADY)
+def test_a_material_setting_on_a_material_with_override_off_renders_overridden_then_gives_it_back_off(
+    helpers: types.ModuleType,
+    capsys: pytest.CaptureFixture[str],
+    linked: bool,
+    option: View3dOptions,
+    field: 'StateFields',
+    said: str,
+) -> None:
+    # REVIEW.md HLP-316, measured 2026-11-27: with Override Material off, a load didn't take the model, and held
+    # overridden in the file it took it but showed it only with Override on. The user (2026-11-27): "Render with
+    # Override on", as graph= leaves it; their Override comes back with the view's put-back, and the result says so.
+    # HLP-318: the model held already wasn't written, so its Override stayed off and the render was the plain look.
+    # HLP-321, measured: tiling 4 was held but the render was a plain shot's; the user: "Same as shader_model"
+    designer = Designer(helpers, linked=linked)
+    base = designer.state = overridden_as(SAVED, 'default', False)
+    designer.overridden = {'Default': False}
+    rendered: list[dict[str, bool]] = []
+    set_up(helpers, **option, render=lambda: rendered.append(dict(designer.overridden)))
+    written = helpers._state_edited(base, field)
+    assert designer.loads == [overridden_as(written, 'default', True), base]
+    assert rendered == [{'Default': True}] and designer.overridden == {'Default': False}
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith('3D view: ')]
+    assert lines[0].startswith('3D view: %s, %s' % (said, SHOWN_ON % ('Default', said_as(field)))), lines
+
+
+@pytest.mark.parametrize(('option', 'field', 'said'), ANOTHER)
+def test_a_material_setting_on_a_material_overridden_already_says_nothing_of_it(
+    helpers: types.ModuleType,
+    capsys: pytest.CaptureFixture[str],
+    option: View3dOptions,
+    field: 'StateFields',
+    said: str,
+) -> None:
+    designer = Designer(helpers, linked=False)  # the fixture's Default held overridden, its Override on
+    set_up(helpers, **option)
+    assert designer.loads[0] == helpers._state_edited(SAVED, field)
+    assert 'Override Material on' not in capsys.readouterr().out
+
+
+def test_a_tiling_and_a_shader_model_on_a_material_with_override_off_are_said_together(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    Designer(helpers, linked=False).state = overridden_as(SAVED, 'default', False)
+    set_up(helpers, tiling=2.0, shader_model='AdobeStandardMaterial')
+    assert SHOWN_ON % ('Default', 'tiling and shader model') in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(('option', 'field', 'said'), ANOTHER + HELD_ALREADY)
+def test_a_material_setting_on_a_new_mesh_files_own_material_is_written_overridden_in_the_second_load(
+    helpers: types.ModuleType,
+    capsys: pytest.CaptureFixture[str],
+    mine: str,
+    option: View3dOptions,
+    field: 'StateFields',
+    said: str,
+) -> None:
+    # measured 2026-11-27: the material of a one-material OBJ, its Override off as imported, took the model in the
+    # second load, its render a plain shot's; held overridden, it showed (REVIEW.md HLP-316). HLP-318: the import's
+    # model asked, nothing differed from the Save after Frame, and no second load came. HLP-321: a tiling as a model
+    designer = Designer(helpers, linked=False)
+    designer.imported = lambda content: overridden_as(mapped(with_materials(content, 'only'), 'only'), 'only', False)
+    set_up(helpers, mesh=mine, **option)
+    assert len(designer.loads) == 3 and helpers._state_fields(designer.loads[1], list(field)) == field
+    assert held_overridden(designer.loads[1], 'only')
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith('3D view: ')]
+    assert SHOWN_ON % ('only', said_as(field)) in lines[0], lines
+
+
+def test_a_scene_menus_mesh_shown_with_a_mesh_files_entries_left_in_its_table_takes_a_tiling_in_its_own_material(
+    helpers: types.ModuleType,
+) -> None:
+    # REVIEW.md HLP-311, measured: the Plane loaded over the project's OBJ's state maps to Default, the OBJ's two
+    # entries left in the table, which a tiling then read as three materials and refused
+    designer = Designer(helpers, linked=False)
+    plane = with_materials(SAVED.replace('<id>Rounded Cube</id>', '<id>plane</id>'), 'first', 'second')
+    designer.state, designer.mesh = mapped(plane, 'default', 'first', 'second'), 'Plane'
+    set_up(helpers, tiling=3.0)
+    assert [held_by(designer.loads[0], m)[0] for m in ('default', 'first', 'second')] == [
+        'float(3)',
+        '*float(1)',
+        '*float(1)',
+    ]
+
+
+UNIMPORTED = " (the mesh file didn't import within 30 s: Designer's log says if it failed, read_designer_log)"
+
+
+@pytest.mark.parametrize('options', [{}, {'zoom': 1}, {'tiling': 2.0}], ids=['the mesh', 'a zoom', 'a tiling'])
+def test_a_mesh_file_that_doesnt_import_is_said_so_and_neither_framed_nor_loaded_again(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str], mine: str, options: View3dOptions
+) -> None:
+    # REVIEW.md HLP-299, measured: a corrupt file's import never ends; Frame and a second load then had no mesh to work
+    # on, and the step said a view that hadn't settled within 3 s, though the wait was IMPORT_LIMIT's
+    designer = Designer(helpers, linked=False)
+    designer.unimportable = True
+    set_up(helpers, mesh=mine, **options)
+    assert FRAME not in designer.triggered() and len(designer.loads) == 2 and designer.loads[-1] == SAVED
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith('3D view: ')]
+    # what was set: the mesh alone, the zoom or tiling never written (REVIEW.md TST-988)
+    assert lines == ['3D view: ' + mine + UNIMPORTED, '3D view: put back as it was']
+
+
+@pytest.mark.parametrize('graph', ['g', None], ids=["graph='s", "the editor's, relinked"])
+def test_a_graphs_outputs_arent_put_on_a_mesh_file_that_didnt_import(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str], mine: str, graph: str | None
+) -> None:
+    # REVIEW.md HLP-307, measured: graph= after an import that didn't end said its outputs were on the mesh, with no
+    # mesh shown; skipped, as Frame is, and so is the relink of a view that followed a graph: the put-back's alone
+    designer = Designer(helpers)
+    designer.unimportable = True
+    set_up(helpers, graph, mine)
+    assert [path for path in designer.triggered() if path[0] == 'outputs'] == [('outputs', 'editor')]  # the put-back's
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith('3D view')]
+    assert lines[:2] == ['3D view, setting: ' + mine, '3D view: ' + mine + UNIMPORTED], lines
+
+
+def test_a_put_back_of_a_mesh_file_that_doesnt_import_says_so(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str], mine: str
+) -> None:
+    # the user's view showing a mesh file whose import never ends (moved since, or corrupt): each load says it
+    designer = Designer(helpers, linked=False)
+    designer.state, designer.mesh, designer.unimportable = showing(mine), None, True
+    set_up(helpers, orbit=[30.0, 0.0])
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith('3D view: ')]
+    assert lines == ['3D view: orbit 30 degrees right' + UNIMPORTED, '3D view: put back as it was' + UNIMPORTED]
+
+
+# The 3D view as text (screenshot_designer's as_text, ROADMAP item 85: scene3d._3d_shown): the mesh the Scene menu
+# checks, the rest from a Save of the state file, the user's file backed up and put back, nothing loaded
+TEXT_TAIL = ['renderer: Rasterizer', 'AOV: Beauty', 'Override Material: Default on']
+
+
+def test_the_3d_view_is_read_as_text_from_a_save_with_nothing_loaded(helpers: types.ModuleType) -> None:
+    designer = Designer(helpers)
+    assert helpers._3d_shown() == [*helpers._state_said(SAVED, 'Rounded cube'), *TEXT_TAIL]
+    assert designer.triggered() == [SAVE] and designer.loads == []
+
+
+def test_the_3d_view_as_text_reads_a_mesh_files_tiling_in_the_material_the_menu_lists_in_use(
+    helpers: types.ModuleType, mine: str
+) -> None:
+    # REVIEW.md HLP-322: a mesh file loaded over another's view, the table keeping both files' entries
+    designer = Designer(helpers)
+    designer.state, designer.mesh, designer.in_use = over_two(showing(mine)), None, ['only']
+    assert helpers._3d_shown()[1] == 'tiling: 1'
+
+
+def test_shown_3d_prints_the_text(helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]) -> None:
+    Designer(helpers)
+    helpers.shown_3d()
+    assert capsys.readouterr().out.splitlines() == [*helpers._state_said(SAVED, 'Rounded cube'), *TEXT_TAIL]
+
+
+def test_the_default_state_file_and_its_folder_are_back_byte_for_byte_after_the_text(helpers: types.ModuleType) -> None:
+    designer = Designer(helpers)
+    before = designer.users_default()
+    helpers._3d_shown()
+    assert files(designer.path) == before
+
+
+def test_with_no_default_state_file_none_is_left_after_the_text(helpers: types.ModuleType) -> None:
+    designer = Designer(helpers)
+    helpers._3d_shown()
+    assert files(designer.path) == {}
+
+
+def test_a_leftover_backup_is_put_back_before_the_text_and_said(
+    helpers: types.ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # read with ours as the default, the backup in the folder a shot puts back from (REVIEW.md TST-944)
+    designer = Designer(helpers)
+    Path(designer.path).write_text('<the users/>', encoding='utf-8')
+    aside = os.path.join(helpers._version_folder(), helpers.STATE_BACKUP)
+    helpers._state_back_up(designer.path, aside)
+    Path(designer.path).write_text('<ours, left by a crash/>', encoding='utf-8')
+    helpers._3d_shown()
+    assert Path(designer.path).read_text(encoding='utf-8') == '<the users/>'
+    assert capsys.readouterr().out.splitlines() == ['3D view: ' + helpers.LEFTOVER_PUT_BACK % designer.path]
+
+
+def test_a_save_that_didnt_write_the_default_state_file_refuses_the_text(
+    helpers: types.ModuleType, tmp_path: Path
+) -> None:
+    # REVIEW.md HLP-268, as the set-up refuses it: the file read would be another than the one Designer saved
+    designer = Designer(helpers)
+    designer.saves_to = str(tmp_path / 'started_with.sbsscn')
+    Path(designer.path).write_text('<the users/>', encoding='utf-8')
+    with pytest.raises(RuntimeError, match='takes a restart of Designer'):
+        helpers._3d_shown()
+    assert files(designer.path) == {helpers.STATE_NAME: b'<the users/>'}
+
+
+def test_a_mesh_the_scene_menu_checks_none_of_is_said_from_the_file(
+    helpers: types.ModuleType, urls_as_posix: None
+) -> None:
+    # a mesh of the user's own, by its file's path (state3d._state_said)
+    designer = Designer(helpers)
+    designer.state, designer.mesh = USERS, None
+    assert helpers._3d_shown()[0] == 'mesh: /Users/u/box.fbx'
+
+
+def test_what_the_menus_and_the_title_dont_give_is_left_out(helpers: types.ModuleType) -> None:
+    # no AOV listed before the view has drawn, no Override Material before a graph's outputs were on the mesh
+    # (scene3d.py), and a title of another form than <mesh> - <renderer>
+    designer = Designer(helpers)
+    designer.title, designer.overridden = 'Rounded cube', {}
+    vars(helpers)['_aov_menu'] = lambda dock, keep: None
+    assert helpers._3d_shown() == helpers._state_said(SAVED, 'Rounded cube')
+
+
+def test_override_material_is_said_for_each_material_in_the_menus_order(helpers: types.ModuleType) -> None:
+    # the menu lists those on first (measured 2026-11-27); each by its name (the user, 2026-11-28: "Name them")
+    designer = Designer(helpers)
+    designer.overridden, designer.aov = {'first': False, 'second': True}, 'Material roughness'
+    designer.in_use = ['first', 'second']
+    assert helpers._3d_shown()[-2:] == ['AOV: Material roughness', 'Override Material: second on, first off']
+
+
+@pytest.mark.parametrize(
+    'overridden, in_use, said',
+    [
+        ({'first': False, 'only': True, 'second': False}, ['only'], ['Override Material: only on']),
+        ({'A&B': True}, ['AB'], ['Override Material: A&B on']),
+        ({'first': True}, [], []),
+    ],
+    ids=["an earlier mesh file's left out", 'a name the menu lists without its &', 'none in use: no line'],
+)
+def test_override_material_is_said_for_the_materials_the_mesh_uses_alone(
+    helpers: types.ModuleType, overridden: dict[str, bool], in_use: list[str], said: list[str]
+) -> None:
+    # the user (2026-11-28): the materials in use, the earlier file's "(unused)" ones left out; the menu's names in use
+    # drop an & (view3d._materials_used; REVIEW.md HLP-325). With none in use, as while an import hasn't ended, the line
+    # is left out (REVIEW.md TST-1028)
+    designer = Designer(helpers)
+    designer.overridden, designer.in_use = overridden, in_use
+    assert [line for line in helpers._3d_shown() if line.startswith('Override Material: ')] == said
+
+
+def test_the_set_up_and_the_text_read_the_mesh_shown_through_one_reader(helpers: types.ModuleType) -> None:
+    # ROADMAP item 85: the mesh a set-up skips as shown already is the one the text says
+    designer = Designer(helpers)
+    read: list[str] = []
+
+    def mesh_shown(bar: 'QtWidgets.QMenuBar', keep: list['Kept']) -> str:
+        read.append('read')
+        return 'Sphere'
+
+    vars(helpers)['_mesh_shown'] = mesh_shown
+    assert set_up(helpers, mesh='Sphere') is False and designer.loads == []
+    assert helpers._3d_shown()[0] == 'mesh: Sphere'
+    assert read == ['read', 'read']
+
+
+def test_an_abort_landing_in_the_texts_put_back_still_puts_the_file_back(helpers: types.ModuleType) -> None:
+    # the plugin raises an abort at a traced line, then stops tracing: landed on the put-back's first line, it skipped
+    # it, and the user's file stayed the session's state (as screenshots._3d_render's clipboard: REVIEW.md HLP-171)
+    designer = Designer(helpers)
+    before = designer.users_default()
+    put_back = helpers._state_put_back
+    landed: list[str] = []
+
+    def aborted_once(aside: str) -> bool:
+        if not landed:
+            landed.append(aside)
+            raise KeyboardInterrupt('an abort, landing in the put-back')
+        return cast(bool, put_back(aside))
+
+    vars(helpers)['_state_put_back'] = aborted_once
+    with pytest.raises(KeyboardInterrupt):
+        helpers._3d_shown()
+    assert files(designer.path) == before
+
+
+def test_the_text_never_puts_designers_window_on_screen(helpers: types.ModuleType) -> None:
+    # REVIEW.md TST-960: as_text leaves Designer's window as it is, off the user's screen (DECISIONS.md, the 3D
+    # screenshot's window): a Save made with Designer hidden holds the camera the view drew (scene3d.py). The fake
+    # Designer makes putting it on screen raise
+    Designer(helpers)
+    assert helpers._3d_shown()[0] == 'mesh: Rounded cube'
+
+
+def test_the_text_is_refused_with_the_3d_view_panel_hidden_before_anything_is_saved(helpers: types.ModuleType) -> None:
+    # REVIEW.md TST-968: refused before the backup, so no backup is left for the next call to put back first
+    designer = Designer(helpers, hidden=('3d',))
+    with pytest.raises(RuntimeError, match='the 3D View panel is not visible'):
+        helpers._3d_shown()
+    assert designer.triggered() == [] and files(designer.path) == {}

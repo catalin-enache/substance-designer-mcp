@@ -18,7 +18,9 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from test_designer_helpers import _bindings
 
+import designer_helpers  # conftest puts mcp_server on sys.path
 import server_tools
 from conftest import SELFTEST_DIR, selftest_sources
 
@@ -152,6 +154,11 @@ def test_designer_scripts_are_grouped_by_the_category_that_runs_them() -> None:
         assert not script.startswith('shared/') or len(categories) > 1, '%s is only run by %s' % (script, categories)
 
 
+def _placeholders_filled(text: str) -> str:
+    """`text` with each %-placeholder made a name, `%%` a `%`: a snippet as it compiles once filled."""
+    return re.sub(r'%%', '%', re.sub(r'%(\(\w+\))?[-.\d]*[rsdfx]', 'x0', text))
+
+
 def _is_several_lines_of_python(text: str) -> bool:
     """A string of several lines that compiles, with statements other than bare values or NAME=value lines of data:
     not a message, a separator or expected output. %-placeholders count as names. Not caught: an f-string, and code
@@ -159,7 +166,7 @@ def _is_several_lines_of_python(text: str) -> bool:
     if text.strip().count('\n') < 1:
         return False
     try:
-        body = ast.parse(re.sub(r'%%', '%', re.sub(r'%(\(\w+\))?[-.\d]*[rsdfx]', 'x0', text))).body
+        body = ast.parse(_placeholders_filled(text)).body
     except SyntaxError:
         return False
     return any(
@@ -277,3 +284,39 @@ def test_a_snippet_of_several_lines_is_written_with_dedent() -> None:
     sources = _dedent_rule_sources()
     joined = ['%s:%d' % (name, line) for name, source in sources.items() for line in _joined_snippets(source)]
     assert not joined
+
+
+def _helper_names() -> set[str]:
+    """The names the joined helpers bind at their top level (test_designer_helpers._bindings)."""
+    return set[str]().union(*map(_bindings, ast.parse(designer_helpers.source()).body))
+
+
+def _loop_names(code: str) -> set[str]:
+    """The names the loops and the `with ... as` of the snippet `code` bind, its %-placeholders filled; none when it
+    isn't Python."""
+    try:
+        tree = ast.parse(_placeholders_filled(textwrap.dedent(code)))
+    except SyntaxError:
+        return set()
+    bound: list[ast.expr] = [node.target for node in ast.walk(tree) if isinstance(node, ast.For | ast.comprehension)]
+    bound += [node.optional_vars for node in ast.walk(tree) if isinstance(node, ast.withitem) and node.optional_vars]
+    return {name.id for target in bound for name in ast.walk(target) if isinstance(name, ast.Name)}
+
+
+def test_the_loop_guard_reads_a_snippets_placeholders_and_its_with() -> None:
+    code = "with _on(%r) as (_a, _b):\n    for _c in %(rows)r:\n        print('%%s' %% [_d for _d in _c])"
+    assert _loop_names(code) == {'_a', '_b', '_c', '_d'}
+
+
+def test_no_snippets_loop_rebinds_a_helpers_name() -> None:
+    # REVIEW.md TST-981: a snippet runs after the helpers' text, so a loop variable named as one of their functions
+    # replaces it for the rest of the snippet. A snippet overrides a helper on purpose with a def or an assignment
+    helpers = _helper_names()
+    found = sorted(
+        (path, name)
+        for path, source in selftest_sources().items()
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and '\n' in node.value
+        for name in _loop_names(node.value) & helpers
+    )
+    assert not found, 'loop variables named as a helper: %s' % found

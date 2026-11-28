@@ -281,7 +281,10 @@ entry, takes the user (the `address-review` skill (`.claude/skills/address-revie
   README once said that apps under the window might pause drawing them; the user had that sentence removed once it was
   found wrong (2026-11-14). The Explorer's menu that `graph=` and the set-up's relink open is click-through too on
   macOS, the user's choice of 2026-11-14: whether a click would reach the menu while it is only transparent couldn't be
-  measured without clicking on the user's screen (`designer_helpers/view3d.py`). The user chose the window on screen
+  measured without clicking on the user's screen (`designer_helpers/view3d.py`). So is Designer's material menu
+  (`materialSelectionMenu`), which `graph=` on a mesh of several materials answers once per material: made transparent
+  and click-through as it opens, its native look given back, as the Explorer's is (the user, 2026-11-28: "Extend the
+  entry"). The user chose the window on screen
   over refusing a set-up that couldn't work off screen: for the camera's moves on 2026-11-16, and for `graph=` and any
   mesh switch on 2026-11-18. The state file's loads that replaced those moves and switches run with the window on
   screen too, transparent as above, their camera glides included (`designer_helpers/scene3d.py`; ROADMAP item 131, the

@@ -33,6 +33,9 @@ Parameters are described in each tool's schema; this is when to reach for which.
 - **Look:** `preview_node` (any node, even one feeding no output), `screenshot_designer` (what the user sees),
   `open_graph` (open the graph first, so the user and screenshots see it). A material on a mesh, in Designer's own
   renderer: `screenshot_designer('3d', graph=...)`; `mesh='Plane'`, `view='Top'` and `tiling=2` show how it repeats.
+  A material made for one asset is judged on it: `mesh=` takes the path of the asset's mesh file.
+  `shader_model` renders the material under another shader model. What the 3D view shows, with no image:
+  `screenshot_designer('3d', as_text=True)`.
 - **Measure:** `node_stats` (exact numbers; prefer them to eyeballing), `check_tiling` (trim sheets only need
   horizontal), `compare_to_reference` for tones against a reference image (add it to the graph with an `apply_edits`
   `bitmap` op if wanted). `node_stats(against=...)` compares two outputs pixel by pixel, of two nodes or of one.
@@ -566,11 +569,13 @@ The rules and the first pitfalls are in the core, `get_guide()`. Changing this p
   apps). Widget capture can't see the GPU-drawn 3D view: use `screenshot_designer('3d')`. Never use "Save Render...":
   its modal file dialog blocks the bridge.
 - **The 3D view** has no API: `screenshot_designer('3d', ...)` drives its menus and the Explorer's context menu (opened
-  on the Explorer's tree only; the warning above about the graph view stands, and an open menu holds the bridge until
-  it closes). Its camera, mesh, tiling and environment go through the view's own state file, which the Scene menu
-  saves and loads; the shot writes it and puts it back, the user's view with it. What Designer does there, measured:
-  `designer_helpers/view3d.py`, `scene3d.py` and `state3d.py`. How to tell when the view has drawn a change (its
-  paints and its overlay's sample count), instead of waiting a fixed time: `designer_helpers/frames3d.py`.
+  on the Explorer's tree only; the warning above about the graph view stands, and an open menu holds the bridge until it
+  closes). Its camera, mesh, tiling, environment and shader model go through the view's own state file, which the Scene
+  menu saves and loads; the shot writes it and puts it back, the user's view with it. A mesh file of the user's own is
+  written there by its URL, which loads it with no file dialog. What Designer does there,
+  measured: `designer_helpers/view3d.py`, `scene3d.py` and `state3d.py`. `as_text` reads the view without a render, from
+  that file and from the 3D view's menus and title (how: `scene3d.py`, `_3d_shown`). How to tell when the view has drawn
+  a change (its paints and its overlay's sample count), instead of waiting a fixed time: `designer_helpers/frames3d.py`.
 - Dock titles change with content, so find panels by object name: `areaA_` explorer, `areaB_` graph, `areaC_`
   parameters, `areaD_` 3D view, `areaE_` 2D view, `areaF_` console (hidden by default; Windows > Console), `areaG_`
   library.

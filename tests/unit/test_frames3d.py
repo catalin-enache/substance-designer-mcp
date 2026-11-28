@@ -570,39 +570,6 @@ def test_with_no_count_shown_a_steps_renders_compared_end_the_looks_record(
     assert (frames.undrawn, len(compared)) == (False, 2)
 
 
-def test_a_loads_restart_coming_after_no_restart_is_waited_for(helpers: types.ModuleType) -> None:
-    # REVIEW.md HLP-286: a load of a mesh the Scene menu doesn't list, nothing but the view marking its end, began
-    # drawing 2 s on: settled() alone takes no restart within NO_RESTART for a step that changed nothing
-    late: list[Event] = [('Wait', 2), *_paints(8, 1, 2, 3, 4, 5, 6, 7, 8)]
-    alone, _ = _frames_counting(helpers, True, late)
-    assert alone.settled(alone.mark()) and _counted(alone).seen == []  # ended before the load drew a frame
-    frames, limits = _frames_counting(helpers, True, late)
-    since = frames.mark()
-    assert frames.restarted(since) and frames.settled(since)
-    assert limits[0] == helpers.SETTLE_LIMIT and _counted(frames).seen[-1] == 8, (limits, _counted(frames).seen)
-
-
-def test_a_load_that_never_restarts_the_view_says_so(helpers: types.ModuleType) -> None:
-    frames, limits = _frames_counting(helpers, True, [])
-    assert frames.restarted(frames.mark()) is False and limits == [helpers.SETTLE_LIMIT]
-
-
-@pytest.mark.parametrize(
-    'exposed, coming, shows, waited',
-    [
-        (False, [('Wait', 2), ('UpdateRequest', 8)], 'Samples: 8', True),  # no paint off screen
-        (True, [], '', False),  # no count to read: settled() then compares renders
-    ],
-    ids=['off screen', 'no count shown'],
-)
-def test_a_loads_restart_is_its_frame_asked_off_screen_and_isnt_waited_for_with_no_count(
-    helpers: types.ModuleType, exposed: bool, coming: list[Event], shows: str, waited: bool
-) -> None:
-    frames, limits = _frames_counting(helpers, exposed, coming, shows)
-    assert frames.restarted(frames.mark())
-    assert limits == ([helpers.SETTLE_LIMIT] if waited else [])
-
-
 def test_a_step_that_restarts_nothing_waits_no_further(helpers: types.ModuleType) -> None:
     frames, limits = _frames_counting(helpers, True, [])
     frames.settled(frames.mark())

@@ -4,6 +4,7 @@ import ast
 import builtins
 import configparser
 import errno
+import itertools
 import json
 import os
 import re
@@ -119,6 +120,82 @@ def with_added_material(content: str) -> str:
     return content.replace(end, '\t\t\t\t</_1>\n' + ADDED_MATERIAL + '\t\t\t</materials>', 1)
 
 
+def with_materials(content: str, *names: str) -> str:
+    """The state file `content` (the fixture's layout) holding a material of each name after its own, Default, in its
+    materials list and in the renderer plugin's. Each is a copy of Default's, the name its id, its textures named after
+    it, as Designer saved the project's OBJ's `first` and `second` with a graph's outputs on both, Default kept beside
+    them (measured 2026-11-27). The mapping table is left as it is (mapped)."""
+    for own in (
+        r'\t{5}<_1 prefix="_">\n\t{6}<instance>.*?\n\t{5}</_1>\n',  # the renderer plugin's entry
+        r'\t{4}<_1 prefix="_">\n\t{5}<material_instance_id>default<.*?\n\t{4}</_1>\n',  # the materials list's
+    ):
+        found = re.search(own, content, re.S)
+        assert found is not None, 'no entry of the material Default'
+        copies = [
+            found.group(0)
+            .replace('>default<', '>%s<' % name)
+            .replace('<name>Default<', '<name>%s<' % name)
+            .replace('_resources/default_', '_resources/%s_' % name)
+            .replace('<_1 ', '<_%d ' % i)
+            .replace('</_1>', '</_%d>' % i)
+            for i, name in enumerate(names, 2)
+        ]
+        content = content.replace(found.group(0), found.group(0) + ''.join(copies), 1)
+    return content
+
+
+def held_by(content: str, material: str) -> tuple[str, str]:
+    """The tiling and the shader model of the material of id `material` in the state file `content`, as the file holds
+    them: found by that id, not as the set-up finds the material the mesh uses (state3d._used_material)."""
+    tiling = re.search(
+        r'<material_instance_id>%s</material_instance_id>\s*<material>(?:(?!</material>).)*?<___usd___tiling>([^<]*)<'
+        % re.escape(material),
+        content,
+        re.S,
+    )
+    shader = re.search(r'<id>%s</id>\s*<definition>\s*<name>([^<]*)</name>' % re.escape(material), content)
+    assert tiling is not None and shader is not None, 'no material %s' % material
+    return tiling.group(1), shader.group(1)
+
+
+def overridden_as(content: str, material: str, on: bool) -> str:
+    """The state file `content` with the material of id `material` held overridden or not (its
+    `override_existing_material`), as a Save writes its Materials > Override Material."""
+    pattern = (
+        r'(<material_instance_id>%s</material_instance_id>\s*<material>(?:(?!</material>).)*?'
+        r'<override_existing_material>)(?:true|false)(</override_existing_material>)' % re.escape(material)
+    )
+    out, n = re.subn(pattern, r'\g<1>%s\2' % ('true' if on else 'false'), content, count=1, flags=re.S)
+    assert n == 1, 'no Override Material of %s' % material
+    return out
+
+
+def held_overridden(content: str, material: str) -> bool:
+    """Whether the state file `content` holds the material of id `material` overridden."""
+    return overridden_as(content, material, True) == content
+
+
+def mapped(content: str, *ids: str) -> str:
+    """The state file `content` with the parts of its mesh mapped to the materials `ids` in turn, in its
+    material_mapping_table, as Designer maps a mesh file's parts each to its material."""
+    table = re.search(r'<material_mapping_table>.*?</material_mapping_table>', content, re.S)
+    assert table is not None, 'no mapping table'
+    turn = itertools.cycle(ids)
+    entries = re.sub(
+        r'<material_instance_id>[^<]*</material_instance_id>',
+        lambda m: '<material_instance_id>%s</material_instance_id>' % next(turn),
+        table.group(0),
+    )
+    return content.replace(table.group(0), entries, 1)
+
+
+def over_two(content: str) -> str:
+    """The state file `content` with a mesh file of one material, `only`, loaded over the project's OBJ's view: its
+    table keeps the OBJ's `first` and `second` beside `only`, each in the materials list (REVIEW.md HLP-322, measured
+    2026-11-28)."""
+    return mapped(with_materials(content, 'first', 'second', 'only'), 'only', 'first', 'second')
+
+
 class View3dOptions(TypedDict, total=False):
     """The keyword arguments of the 3D view's set-up: _3d_set_up's, and shoot_3d's after its path
     (designer_helpers/scene3d.py, shot3d.py)."""
@@ -133,6 +210,7 @@ class View3dOptions(TypedDict, total=False):
     environment: str | None
     environment_rotation: float | None
     environment_exposure: float | None
+    shader_model: str | None
 
 
 # What builtins.open takes as its file: typeshed's FileDescriptorOrPath, which exists for the checker only.
@@ -294,6 +372,26 @@ class FakeGraph:
 
     def getPackage(self) -> mock.MagicMock:
         return self.package
+
+
+@pytest.fixture
+def urls_as_posix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A file URL's path read as POSIX reads it, whatever the system: urllib.request.url2pathname is nturl2path's on
+    Windows, which a test expecting a POSIX path fails (REVIEW.md TST-926, TST-966)."""
+    import urllib.parse
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, 'url2pathname', urllib.parse.unquote)
+
+
+@pytest.fixture
+def urls_as_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A file URL's path read as Windows reads it, nturl2path's way, whatever the system: the drive after a third
+    slash (REVIEW.md HLP-266, TST-966). The form Designer writes on Windows isn't measured (ROADMAP item 90)."""
+    import nturl2path
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, 'url2pathname', nturl2path.url2pathname)
 
 
 @pytest.fixture

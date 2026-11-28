@@ -84,12 +84,15 @@ ON_SCREEN_WAIT = 3.0  # s at most for Designer's window to be on screen once sho
 RETAKES = 3  # renders taken again while identical to the one before a set-up that changed what the view shows
 BRINGS = 3  # times one look puts the window on screen, when it goes off screen again as the view draws (HLP-163)
 WINDOW = "Designer's window: "
+# a render after the set-up identical to the one before it, once retaken. The Rasterizer rendered a red, rough material
+# under UsdPreviewSurface within a grey level of OpenPBR Surface, and a black, glossy one identically, where
+# AdobeStandardMaterial differed by up to 92 and 16 levels (2026-11-27, once each)
 STALE = (
     '3D render: identical to the render before the set-up, though the set-up moved the camera, switched the mesh, or '
-    'changed the tiling or the light. '
+    'changed the tiling, the light or the shader model. '
     'The 3D view may not have been drawn. Shoot again with the same set-up before judging it: each call starts from '
-    'the view the user left. With no mesh in view, a pan or zoom changes nothing, and a tiling changes nothing on a '
-    'material with no pattern'
+    'the view the user left. With no mesh in view, a pan or zoom changes nothing, a tiling changes nothing on a '
+    'material with no pattern, and UsdPreviewSurface may render a material as OpenPBR Surface does'
 )
 TRANSPARENT = (0.0, True)  # a window's opacity, and whether the mouse goes through it (_MacWindow.appearance)
 OPAQUE = (1.0, False)
@@ -380,6 +383,7 @@ def shoot_3d(
     environment: str | None = None,
     environment_rotation: float | None = None,
     environment_exposure: float | None = None,
+    shader_model: str | None = None,
 ) -> None:
     """screenshot_designer('3d'): the 3D view set up when anything is given (scene3d._3d_set_up), then rendered, then
     put back, with Designer's window on screen throughout (_on_screen, looked at again before each set-up step, the
@@ -387,16 +391,18 @@ def shoot_3d(
     unsaved. What _3d_set_up checks, and a 3D View panel not shown, is refused first, before
     the window changes (REVIEW.md HLP-127). What the steps find as they go is refused after, the window's lines in the
     error: what the state file holds (a field missing); with graph=, its row in the Explorer. After a set-up that
-    changed what the view shows (the camera moved, the mesh switched, the tiling or the light changed: the set-up
-    says), a render identical to the one before it is taken again, at most RETAKES times, each once the view drew
-    another frame, then said (STALE): the view may not have been drawn. It isn't taken again once the view draws no
-    frame within NO_RESTART (_Frames.next_frame; off screen, at once). A graph may already be
+    changed what the view shows (the camera moved, the mesh switched, the tiling, the light or the shader model
+    changed: the set-up says), a render identical to the one before it is taken again, at most RETAKES times, each
+    once the view drew another frame, then said (STALE): the view may not have been drawn. It isn't taken again once
+    the view draws no frame within NO_RESTART (_Frames.next_frame; off screen, at once). A graph may already be
     what is shown, so it is no sign; nor is a value the view shows already, which the set-up says changed nothing.
     Each wait is on the view's frames, watched from before the window is put on screen until the view is put back
     (frames3d.py; REVIEW.md HLP-148)."""
     light = (environment, environment_rotation, environment_exposure)
-    given = bool(graph or mesh or view or zoom or orbit or pan) or any(v is not None for v in (tiling, *light))
-    set_up = _3d_set_up(graph, mesh, view, zoom, tiling, orbit, pan, *light) if given else None
+    given = bool(graph or mesh or view or zoom or orbit or pan or shader_model) or any(
+        v is not None for v in (tiling, *light)
+    )
+    set_up = _3d_set_up(graph, mesh, view, zoom, tiling, orbit, pan, *light, shader_model) if given else None
     mw = _main_window()
     dock = _3d_dock(mw)  # held: without, the viewport's wrapper went stale
     frames = _frames_of(mw, _viewport(dock))

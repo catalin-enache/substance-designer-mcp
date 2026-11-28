@@ -1,5 +1,6 @@
 """Designer facts GUIDE.md relies on (they fail if a Designer update changes them)."""
 
+import ast
 import base64
 import contextlib
 import os
@@ -10,7 +11,7 @@ import sys
 from collections.abc import Sequence
 from itertools import product
 from textwrap import dedent
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import designer_helpers
 from test_all_tools import common
@@ -30,7 +31,7 @@ from test_all_tools.common import (
     skip,
     text,
 )
-from test_all_tools.facts import state_camera, state_file
+from test_all_tools.facts import mesh_renders, state_camera, state_file
 from test_all_tools.facts.blend_cases import (
     COLOURS,
     DESTINATION,
@@ -47,12 +48,12 @@ from test_all_tools.facts.blend_cases import (
     image,
     listed,
 )
-from test_all_tools.facts.preparations import STATE_GRAPH
-from test_all_tools.facts.state_file import in_designer
+from test_all_tools.facts.preparations import PATTERN_GRAPH, STATE_GRAPH
+from test_all_tools.facts.state_file import imported, in_designer
 
 if TYPE_CHECKING:  # for the checker: the part as the helpers hold it
     from designer_helpers import state3d
-    from designer_helpers.state3d import StateField
+    from designer_helpers.state3d import StateField, StateFields
 else:
     state3d = designer_helpers.standalone('state3d')
 
@@ -421,30 +422,98 @@ async def check_the_3d_views_state_file_is_saved_and_loaded_in_designers_own_hom
     )
 
 
+# what the 3D view as text says of state_file.SET_UP_THEN_SAVED's shot as it renders, its fields before the camera
+RENDERED_SAID = [
+    'mesh: Sphere',
+    'tiling: 2.5',
+    'environment: airport',
+    'environment_rotation: 90',
+    'environment_exposure: 1.5',
+]
+RENDERED_MODEL = 'shader_model: AdobeStandardMaterial'  # what it says of the shot's shader model, after the camera
+# the shot's options: every field but the camera, then the state file checks' graph's outputs put on the mesh
+AS_IT_RENDERS = {
+    'graph': STATE_GRAPH,
+    'mesh': 'Sphere',
+    'tiling': 2.5,
+    'environment': 'airport',
+    'environment_rotation': 90,
+    'environment_exposure': 1.5,
+    'shader_model': 'AdobeStandardMaterial',
+}
+RELINKED_MODEL = 'UsdPreviewSurface'  # the model of the shot after which the editor's graph is relinked
+
+
+def held_shader(path: str) -> str | None:
+    """The shader model a Save copied to `path` holds; None when nothing was copied there."""
+    return state3d._state_fields(state3d._state_text(path), ['shader'])['shader'] if os.path.isfile(path) else None
+
+
 async def check_a_3d_shots_set_up_is_designers_state_as_it_renders(ctx: Ctx) -> None:
-    """A shot's mesh, tiling and light, through the state file, are what Designer holds as it renders, as a Save then
-    writes them and state3d.py reads them: the tiling written with no *, the background's map the environment's
-    (designer_helpers/scene3d.py). The user's camera is put away from Frame's framing first: the shot's new mesh is
-    framed as the Scene menu frames it, the user's camera's direction kept (check_the_scene_menus_mesh_switch_...)."""
-    what = "screenshot_designer('3d')'s mesh, tiling and light are Designer's state as it renders"
+    """A shot's mesh, tiling, light and shader model, through the state file, are what Designer holds as it renders,
+    as a Save then writes them and state3d.py reads them: the tiling written with no *, the background's map the
+    environment's (designer_helpers/scene3d.py). The tiling and the model are of one material, in a load switching the
+    mesh too, and `graph=`'s outputs put on the mesh after that load keep them (AS_IT_RENDERS). The user's camera is put
+    away from Frame's framing first: the shot's new mesh is framed as the Scene menu frames it, the user's camera's
+    direction kept (check_the_scene_menus_mesh_switch_...). The 3D view as text's reader, run as the shot renders, says
+    the shot's mesh, tiling, light and shader model (ROADMAP items 85, 88). Then, the view showing the graph's outputs
+    and the editor on the graph, a shot of another model alone keeps it at its render, the graph relinked after its
+    load (REVIEW.md TST-982)."""
+    what = (
+        "screenshot_designer('3d', graph=...)'s mesh, tiling, light and shader model are Designer's state as it"
+        " renders, the graph's outputs on the mesh"
+    )
     framed = "screenshot_designer('3d', mesh=...) frames the new mesh from the user's camera's direction"
-    if skipped_in_users(ctx, shots=[what, framed]):
+    shown = "the 3D view as text's reader says a 3D shot's mesh, tiling, light and shader model as it renders"
+    relinked = (
+        "screenshot_designer('3d', shader_model=...) keeps the model at its render, the editor's graph relinked after"
+        ' its load'
+    )
+    if skipped_in_users(ctx, shots=[what, framed, shown, relinked]):
         return
+    c = ctx.c
+    copy, again = (os.path.join(ctx.scratch, 'state_saved_as_%s.sbsscn' % name) for name in ('rendered', 'relinked'))
+    shot = os.path.join(ctx.scratch, 'state_shot.png')
     async with state_file.kept(ctx) as kept:
         at = state_camera.pose(kept.base)
         users = state3d.Pose(state_camera.UNFRAMED, 60.0, 15.0, at.distance * 1.4)
         state3d._state_write(kept.path, state3d._state_edited(kept.base, {'camera': users}))
         t = await in_designer(ctx, state_file.DOCKED_THEN_LOADED)
         viewport = state_file.pair(t, 'VIEWPORT')
-        copy = os.path.join(ctx.scratch, 'state_saved_as_a_shot_renders.sbsscn')
-        shot = os.path.join(ctx.scratch, 'state_shot.png')
-        t = await in_designer(ctx, state_file.SET_UP_THEN_SAVED % (copy, shot))
+        t = await in_designer(ctx, state_file.SET_UP_THEN_SAVED % (copy, shot, AS_IT_RENDERS))
+        await c('open_graph', ctx.G)  # another graph, then STATE_GRAPH: its outputs on the mesh, the editor on it
+        await c('open_graph', {'graph': STATE_GRAPH})
+        try:
+            relinked_t = await in_designer(
+                ctx, state_file.SET_UP_THEN_SAVED % (again, shot, {'shader_model': RELINKED_MODEL})
+            )
+        finally:
+            await c('open_graph', ctx.G)  # the editor back on the category's graph
         saved = state3d._state_text(copy) if os.path.isfile(copy) else ''
+    model = held_shader(again)
+    said_again, linked_again = state_file.at_the_render(relinked_t)
+    check(
+        'screenshot_designer',
+        relinked,
+        model == state3d.SHADER_MODELS[RELINKED_MODEL]
+        and 'shader_model: ' + RELINKED_MODEL in said_again
+        and linked_again
+        and 'no longer follows' not in relinked_t,
+        'held at the render %s, linked %s | %s' % (model, linked_again, ' '.join(relinked_t.split())[-200:]),
+    )
     if not saved:
         check('screenshot_designer', what, False, 'nothing saved as the shot rendered: %s' % ' '.join(t.split())[-200:])
         check('screenshot_designer', framed, False, 'nothing saved as the shot rendered')
+        check('screenshot_designer', shown, False, 'nothing saved as the shot rendered')
         return
-    values = state3d._state_fields(saved, ['mesh', 'tiling', 'environment', 'rotation', 'exposure'])
+    said, linked = state_file.at_the_render(t)
+    check(
+        'screenshot_designer',
+        shown,
+        said[:5] == RENDERED_SAID and said[6:7] == [RENDERED_MODEL],
+        ' / '.join(said) or ' '.join(t.split())[-200:],
+    )
+    values = state3d._state_fields(saved, ['mesh', 'tiling', 'environment', 'rotation', 'exposure', 'shader'])
     held = state_file.fields(saved)
     tiling = held.get('/database/materials/materials/_1/material/parameters/___usd___tiling')
     background = held.get('/database/scene_textures/panorama')
@@ -452,10 +521,18 @@ async def check_a_3d_shots_set_up_is_designers_state_as_it_renders(ctx: Ctx) -> 
         'screenshot_designer',
         what,
         values
-        == {'mesh': 'sphere', 'tiling': 2.5, 'environment': state_file.AIRPORT, 'rotation': 0.25, 'exposure': 1.5}
+        == {
+            'mesh': 'sphere',
+            'tiling': 2.5,
+            'environment': state_file.AIRPORT,
+            'rotation': 0.25,
+            'exposure': 1.5,
+            'shader': state3d.SHADER_MODELS['AdobeStandardMaterial'],
+        }
         and tiling == 'float(2.5)'
-        and background == '[(loaderType)(file)][(file)(%s)]' % state_file.AIRPORT,
-        '%s; the tiling written %s, the background %s' % (values, tiling, background),
+        and background == '[(loaderType)(file)][(file)(%s)]' % state_file.AIRPORT
+        and linked,
+        '%s; the tiling written %s, the background %s, linked %s' % (values, tiling, background, linked),
     )
     rendered = state_camera.pose(saved)
     check(
@@ -597,43 +674,805 @@ async def check_a_state_file_with_another_mesh_loads_it_keeping_the_files_camera
     )
 
 
-async def check_a_load_of_a_mesh_of_the_users_own_ends_once_the_view_settled(ctx: Ctx) -> None:
-    """A state file holding a mesh of the user's own, Designer's own box.fbx by its file:// URL, loaded: the Scene menu
-    checks no mesh as Reset Scene returns, nor once the view settled after it. The load restarts the view within
-    SETTLE_LIMIT, and the state saved once the view settled holds the mesh, so the load had ended by then
-    (designer_helpers/scene3d.py, _state_load; REVIEW.md HLP-283, HLP-286). A 3D shot with a camera option over it says
-    nothing of a view that hadn't settled."""
-    fact = (
-        "a mesh of the user's own: the Scene menu checks no mesh, the load restarts the view, and it has ended once"
-        ' the view settled'
+# the materials each mesh file maps, as the Materials menu names those in use (measured 2026-11-27): the project's OBJ
+# one per object, Designer's box.fbx its default, the Samba FBX its own two
+OBJ_MATERIALS = ['first', 'second']
+BOX_MATERIALS = ['Default (overridden)']
+SAMBA_MATERIALS = ['Alpha_Body_MAT', 'Alpha_Joints_MAT']
+
+
+def ended_with(said: state_file.Imported, materials: list[str]) -> bool:
+    """Whether state_file.IMPORTED printed of a mesh file's load what imported_as says, the view settled or not: a
+    check that only needs the mesh shown (REVIEW.md TST-1008)."""
+    return {**said, 'SETTLED': 'True'} == imported_as(materials)
+
+
+def imported_as(materials: list[str]) -> state_file.Imported:
+    """What state_file.IMPORTED prints of a mesh file's load whose import ends with `materials` in use: none in use and
+    no mesh checked as Reset Scene returns, then those, and the view settled."""
+    return state_file.Imported(AT_TRIGGER='[[], []]', ENDED='True', IMPORTED=repr([materials, []]), SETTLED='True')
+
+
+async def check_a_mesh_files_import_ends_once_the_materials_menu_lists_its_materials(ctx: Ctx) -> None:
+    """A state file holding a mesh file of the user's own by its file:// URL, loaded: as Reset Scene returns, the
+    Materials menu lists no material in use and the Scene menu checks no mesh; once the import has ended, the Materials
+    menu lists the file's own materials, and a Save then holds the mesh: a load of a mesh file waits for its materials
+    (designer_helpers/scene3d.py, _state_load; REVIEW.md HLP-283, HLP-289; the lead, 2026-11-27). That the Samba FBX's
+    import outlasts the view's restart and settle was measured once (scene3d.py), and isn't checked here. The project's OBJ maps two materials, Designer's box.fbx one and
+    the Samba FBX two; a reload of the Samba FBX, its camera alone changed, imports it again, and holds that camera. A
+    3D shot with a camera option over the Samba FBX takes each load as ended then: it says nothing of a view that
+    hadn't settled, and a Save after it holds the FBX, which its put-back loaded again."""
+    fact = "a mesh file's import ends once the Materials menu lists its own materials, %s"
+    cases = ['the OBJ', 'box.fbx', 'the Samba FBX', 'the Samba FBX again']
+    shot = "screenshot_designer('3d') over the Samba FBX takes each load as ended once its import ended"
+    if skipped_in_users(ctx, *(fact % case for case in cases), shots=[shot]):
+        return
+    box = state_file.printed(await in_designer(ctx, state_file.BOX_PATH), 'BOX')
+    if not box:
+        check('designer facts', fact % 'box.fbx', False, "Designer's resources hold no python/tests/assets/box.fbx")
+        return
+    moved = state3d.Pose(state_camera.UNFRAMED, 60.0, 15.0, 400.0)
+    # each case's mesh file, the materials it maps, and the camera loaded with it (None: the one before, kept)
+    rows = zip(
+        cases,
+        [state_file.OBJ, box, state_file.SAMBA, state_file.SAMBA],
+        [OBJ_MATERIALS, BOX_MATERIALS, SAMBA_MATERIALS, SAMBA_MATERIALS],
+        [None, None, None, moved],
+        strict=True,
     )
-    shot = "screenshot_designer('3d') over a mesh of the user's own takes each load as ended once the view settled"
-    if skipped_in_users(ctx, fact, shots=[shot]):
+    read: list[tuple[str, state_file.Imported, StateFields | None, bool]] = []
+    async with state_file.kept(ctx) as kept:
+        content = kept.base
+        for case, path, materials, camera in rows:
+            content = state3d._state_edited(content, {'mesh': state3d._mesh_id(path)})
+            content = state3d._state_edited(content, {'camera': camera}) if camera is not None else content
+            said = await imported(ctx, kept.path, content)
+            held = state_file.saved_fields(kept.path, ['mesh', 'camera'])
+            ok = (
+                ended_with(said, materials)
+                and held is not None
+                and held['mesh'] == state3d._mesh_id(path)
+                and (camera is None or state_camera.alike(held['camera'], camera))
+            )
+            read.append((case, said, held, ok))
+        r = await ctx.c('screenshot_designer', ORBIT)
+        await in_designer(ctx, '_sf_save()')
+        after = state_file.saved_fields(kept.path, ['mesh'])
+    for case, said, held, ok in read:
+        check(
+            'designer facts',
+            fact % case,
+            ok,
+            'read %s; the state saved holds %s' % (said, held and (held['mesh'], state_camera.said(held['camera']))),
+        )
+    check(
+        'screenshot_designer',
+        shot,
+        is_image(r)
+        and "hadn't settled" not in text(r)
+        and '3D view: put back as it was' in text(r)
+        and after == {'mesh': state3d._mesh_id(state_file.SAMBA)},
+        'the state saved after holds %s | %s'
+        % (after, ' / '.join(line for line in text(r).splitlines() if line.startswith('3D view'))[-250:]),
+    )
+
+
+def ten_cubes(viewport: tuple[float, float], yaw: float, pitch: float) -> state3d.Pose:
+    """The pose Designer's Frame gives the project's OBJ, ten times the Cube, from `yaw` and `pitch`: ten times the
+    Cube's point and distance at the viewport's aspect (state3d._framing)."""
+    target, distance = state3d._framing('cube', viewport)
+    return state3d.Pose((target[0] * 10, target[1] * 10, target[2] * 10), yaw, pitch, distance * 10)
+
+
+async def check_designers_frame_frames_a_mesh_file_as_its_size_says(ctx: Ctx) -> None:
+    """The project's OBJ, ten times the Cube, loaded, then Designer's own Frame from the camera's direction, and from
+    Camera > Top: each looks at ten times the Cube's point, the middle of the OBJ, from ten times the Cube's distance
+    at the viewport's aspect, the direction kept. So mesh= frames a mesh file by Frame, and view= turns Frame's pose
+    (designer_helpers/scene3d.py; the user, 2026-11-27)."""
+    fact = "Designer's Frame frames a mesh file as its size says, from the camera's direction and from Top"
+    if skipped_in_users(ctx, fact):
+        return
+    # Frame from the camera's direction (None), then from Top, each saved there
+    views = {view: os.path.join(ctx.scratch, 'state_framed_obj_%s.sbsscn' % view) for view in (None, 'Top')}
+    async with state_file.kept(ctx) as kept:
+        obj = state3d._state_edited(kept.base, {'mesh': state3d._mesh_id(state_file.OBJ)})
+        said = await imported(ctx, kept.path, obj)
+        at = state_camera.pose(kept.base)  # the camera a load of another mesh keeps (state3d.py)
+        t = await in_designer(ctx, '_sf_sized(None)\n' + state_file.VIEWED % (list(views.items()), None))
+    viewport = state_file.pair(t, 'VIEWPORT')
+    framed = [state_file.saved_fields(path, ['camera']) for path in views.values()]
+    wanted = [ten_cubes(viewport, at.yaw, at.pitch), ten_cubes(viewport, *state3d.VIEW_DIRECTIONS['Top'])]
+    check(
+        'designer facts',
+        fact,
+        ended_with(said, OBJ_MATERIALS)
+        and all(got and state_camera.alike(got['camera'], want) for got, want in zip(framed, wanted, strict=True)),
+        'the load %s; viewport %dx%d; framed %s, the OBJ ten cubes %s'
+        % (
+            said,
+            *viewport,
+            [got and state_camera.said(got['camera']) for got in framed],
+            [state_camera.said(w) for w in wanted],
+        ),
+    )
+
+
+def materials_said(materials: dict[str, state_file.Material]) -> str:
+    """Each material's outputs and Override Material, as said under a failed check."""
+    return ', '.join('%s %s %s' % (k, v.linked, v.overridden) for k, v in materials.items())
+
+
+def every_material(held: dict[str, state_file.Material], ids: list[str], printed: str) -> tuple[bool, str]:
+    """Whether a Save at a graph= shot's render holds the graph's outputs on each material of `ids`, each overridden,
+    and the shot answered Designer's menu asking which once per material, the menu transparent and click-through
+    (state_file.MENU_LOOKS printed in `printed`); what they were."""
+    looks: list[str] = re.findall(r'^MENU materialSelectionMenu (.*)$', printed, re.M)
+    ok = all(i in held and held[i].linked and held[i].overridden for i in ids)
+    return ok and looks == ['opacity=0 through=True'] * len(ids), 'at the render: %s; the menus of materials %s' % (
+        materials_said(held),
+        looks,
+    )
+
+
+# the mesh-file framing check's cases: the user's view, the OBJ, from Top, the Samba FBX, box.fbx (REVIEW.md TST-1023)
+FramedCase = Literal['user', 'obj', 'top', 'samba', 'box']
+
+
+async def check_a_3d_shot_shows_a_mesh_file_framed_by_designers_frame(ctx: Ctx) -> None:
+    """screenshot_designer('3d', mesh=<a mesh file's path>): the shot's state as it renders holds the file by its URL,
+    the 3D view as text's reader says its path, and the render shows the mesh (ROADMAP item 84):
+    - the project's OBJ, copied into a folder whose name holds a #, which a URL reads as a fragment unless encoded, and
+      a |, which Designer saves encoded (state3d._mesh_id; REVIEW.md HLP-300, HLP-308): the saved id the one written,
+      in both its materials' colours, framed by Designer's Frame from the user's camera's direction at ten times the
+      Cube's distance (check_designers_frame_frames_a_mesh_file_...);
+    - with view='Top', framed so from Top, in a second load from Frame's pose;
+    - the Samba FBX with graph=, its import waited for: its pixels against the user's view's render, and the graph's
+      outputs on both its materials, each overridden, Designer's menu asking which answered once per material, made
+      transparent and click-through (the user, 2026-11-27, "Every material"; REVIEW.md HLP-312);
+    - Designer's box.fbx with a tiling and graph=: the tiling in its one material, written in a second load after its
+      import, and the graph's outputs on it (designer_helpers/scene3d.py; the lead, 2026-11-27)."""
+    names: dict[FramedCase, str] = {
+        'obj': "screenshot_designer('3d', mesh=<an OBJ, a # and a | in its path>) shows it, framed by Designer's Frame,"
+        ' in its two materials',
+        'top': "screenshot_designer('3d', mesh=<an OBJ>, view='Top') frames it from Top in a second load",
+        'samba': "screenshot_designer('3d', mesh=<the Samba FBX>, graph=...) shows it once its import has ended, the"
+        " graph's outputs on both its materials",
+        'box': "screenshot_designer('3d', mesh=<box.fbx>, tiling=..., graph=...) tiles its one material, outputs on it",
+    }
+    if skipped_in_users(ctx, shots=list(names.values())):
+        return
+    box = state_file.printed(await in_designer(ctx, state_file.BOX_PATH), 'BOX') or ''
+    # a # and a |, which Designer saves as %23 and %7C (REVIEW.md HLP-300, HLP-308); its .mtl beside it
+    hashed = os.path.join(ctx.scratch, 'mesh #2|', os.path.basename(state_file.OBJ))
+    os.makedirs(os.path.dirname(hashed), exist_ok=True)
+    for path in (state_file.OBJ, os.path.splitext(state_file.OBJ)[0] + '.mtl'):
+        shutil.copy(path, os.path.dirname(hashed))
+    options: dict[FramedCase, ToolArgs] = {
+        'user': {},
+        'obj': {'mesh': hashed},
+        'top': {'mesh': state_file.OBJ, 'view': 'Top'},
+        'samba': {'mesh': state_file.SAMBA, 'graph': STATE_GRAPH},
+        'box': {'mesh': box, 'tiling': 2.0, 'graph': STATE_GRAPH},
+    }
+    copies = {case: os.path.join(ctx.scratch, 'state_mesh_file_%s.sbsscn' % case) for case in options}
+    shots = {case: os.path.join(ctx.scratch, 'mesh_file_%s.png' % case) for case in options}
+    printed: dict[FramedCase, str] = {}
+    async with state_file.kept(ctx) as kept:
+        at = state_camera.pose(kept.base)
+        viewport = state_file.pair(await in_designer(ctx, '_sf_sized(None)'), 'VIEWPORT')
+        for case, given in options.items():
+            code = state_file.MENU_LOOKS + state_file.SET_UP_THEN_SAVED % (copies[case], shots[case], given)
+            printed[case] = await in_designer(ctx, code)
+    saved = {case: state_file.saved_fields(path, ['mesh', 'camera']) for case, path in copies.items()}
+    held = {case: fields for case, fields in saved.items() if fields is not None}  # a Save at the render held them
+
+    # the shot's state as it rendered holds the file, said by its path
+    def rendered(case: FramedCase, mesh: str) -> bool:
+        said, _ = state_file.at_the_render(printed[case])
+        return (
+            case in held
+            and held[case]['mesh'] == state3d._mesh_id(mesh)
+            and said[:1] == ['mesh: ' + mesh]
+            and os.path.isfile(shots[case])
+        )
+
+    def detail(case: FramedCase) -> str:
+        camera = state_camera.said(held[case]['camera']) if case in held else 'nothing saved'
+        return '%s | %s' % (camera, ' '.join(printed[case].split())[-200:])
+
+    red, blue = mesh_renders.coloured(shots['obj']) if os.path.isfile(shots['obj']) else (0.0, 0.0)
+    framed = ten_cubes(viewport, at.yaw, at.pitch)
+    check(
+        'screenshot_designer',
+        names['obj'],
+        rendered('obj', hashed) and state_camera.alike(held['obj']['camera'], framed) and min(red, blue) > 0.01,
+        'red %.3f, blue %.3f of the render; framed %s; %s' % (red, blue, state_camera.said(framed), detail('obj')),
+    )
+    top = ten_cubes(viewport, *state3d.VIEW_DIRECTIONS['Top'])
+    check(
+        'screenshot_designer',
+        names['top'],
+        rendered('top', state_file.OBJ) and state_camera.alike(held['top']['camera'], top),
+        'framed %s; %s' % (state_camera.said(top), detail('top')),
+    )
+    samba = mesh_renders.shown(shots['samba']) if rendered('samba', state_file.SAMBA) else 0.0
+    apart = mesh_renders.apart(shots['samba'], shots['user']) if samba else float('nan')
+    on_both = every_material(state_file.saved_materials(copies['samba']), SAMBA_MATERIALS, printed['samba'])
+    check(
+        'screenshot_designer',
+        names['samba'],
+        samba > 0.01 and apart > 1 and on_both[0],
+        "shown on %.3f of the render, %.2f grey levels from the user view's; %s; %s"
+        % (samba, apart, on_both[1], detail('samba')),
+    )
+    tiling = state_file.saved_fields(copies['box'], ['tiling'])
+    _, linked = state_file.at_the_render(printed['box'])
+    # its geometry by pixels too (REVIEW.md TST-1002: a runner measured 0.334 for box.fbx, 0.0 for an empty view)
+    box_shown = mesh_renders.shown(shots['box']) if os.path.isfile(shots['box']) else 0.0
+    check(
+        'screenshot_designer',
+        names['box'],
+        bool(box) and rendered('box', box) and tiling == {'tiling': 2.0} and linked and box_shown > 0.01,
+        'tiling %s, linked %s, shown on %.3f of the render; %s' % (tiling, linked, box_shown, detail('box')),
+    )
+
+
+async def check_a_mesh_file_shown_already_takes_no_load_and_the_3d_view_as_text_says_its_path(ctx: Ctx) -> None:
+    """The user's view showing the project's OBJ, their camera away from its framing: screenshot_designer('3d',
+    as_text=True) says the mesh by the OBJ's path, and the Override Material of its two materials, `first` and `second`,
+    each by its name (scene3d._shown_said; REVIEW.md TST-1027). Given back to mesh=, the shot loads nothing, waits on
+    nothing, says the mesh set and puts nothing back: the base holds the URL asked, so neither the mesh nor a framed
+    camera is written (designer_helpers/scene3d.py; REVIEW.md HLP-195)."""
+    said = (
+        "screenshot_designer('3d', as_text=True) says a mesh file of the user's own by its path, and its materials'"
+        ' Override Material by name'
+    )
+    shown = "screenshot_designer('3d', mesh=<the mesh file shown>) loads nothing and waits on nothing"
+    if skipped_in_users(ctx, shots=[said, shown]):
+        return
+    shot = os.path.join(ctx.scratch, 'mesh_file_shown.png')
+    async with state_file.kept(ctx) as kept:
+        users = state3d.Pose(state_camera.UNFRAMED, 60.0, 15.0, 3000.0)
+        obj = state3d._state_edited(kept.base, {'mesh': state3d._mesh_id(state_file.OBJ), 'camera': users})
+        await imported(ctx, kept.path, obj)
+        lines = text(await ctx.c('screenshot_designer', AS_TEXT)).splitlines()
+        mesh = lines[0][len('mesh: ') :] if lines and lines[0].startswith('mesh: ') else ''
+        t = await in_designer(ctx, state_file.COUNTED % (shot, {'mesh': mesh}))
+    override = [line for line in lines if line.startswith('Override Material: ')]
+    entries = override[0][len('Override Material: ') :].split(', ') if len(override) == 1 else []
+    # each entry `<name> on` or `<name> off`, in either order; one of another form reads as no name
+    named = sorted(m.group(1) if m else '' for m in (re.fullmatch(r'(.+) (?:on|off)', e) for e in entries))
+    check(
+        'screenshot_designer',
+        said,
+        mesh == state_file.OBJ and named == sorted(OBJ_MATERIALS),
+        'the Override line %s | %s' % (override, ' / '.join(lines)),
+    )
+    counted = [state_file.printed(t, key) for key in ('LOADS', 'WAITS')]
+    check(
+        'screenshot_designer',
+        shown,
+        counted == ['0', '0']
+        and '3D view: %s\n' % state_file.OBJ in t + '\n'
+        and '3D view: put back' not in t
+        and os.path.isfile(shot),
+        'loads, waits %s | %s' % (counted, ' '.join(t.split())[-250:]),
+    )
+
+
+async def check_a_material_setting_on_a_mesh_file_of_several_materials_is_refused(ctx: Ctx) -> None:
+    """The project's OBJ maps two materials. With mesh= the OBJ, a tiling and a shader model are each refused once it
+    has loaded, as its materials are known only then: the error names both materials and what was set, and the user's
+    view is put back. With the OBJ shown already, a tiling is refused before anything changes (MATERIALS_USED;
+    designer_helpers/scene3d.py; the lead, 2026-11-27)."""
+    after = (
+        "screenshot_designer('3d', mesh=<an OBJ of two materials>, %s=...) is refused once loaded, the view put back"
+    )
+    first = "screenshot_designer('3d', tiling=...) on a mesh file of two materials shown is refused before any change"
+    settings: ToolArgs = {'tiling': 2.0, 'shader_model': 'AdobeStandardMaterial'}
+    if skipped_in_users(ctx, shots=[*(after % name for name in settings), first]):
+        return
+    refused = state3d.MATERIALS_USED % (2, ' (%s)' % ', '.join(OBJ_MATERIALS))
+    shots: dict[str, str] = {}
+    meshes: dict[str, str] = {}
+    async with state_file.kept(ctx) as kept:
+        for name, value in settings.items():
+            given: ToolArgs = {'panel': '3d', 'max_size': 128, 'mesh': state_file.OBJ, name: value}
+            shots[name] = text(await ctx.c('screenshot_designer', given))
+            await in_designer(ctx, '_sf_save()')
+            meshes[name] = (state_file.saved_fields(kept.path, ['mesh']) or {}).get('mesh', '')
+        obj = state3d._state_edited(kept.base, {'mesh': state3d._mesh_id(state_file.OBJ)})
+        await imported(ctx, kept.path, obj)
+        shown = text(await ctx.c('screenshot_designer', {'panel': '3d', 'mesh': state_file.OBJ, 'tiling': 2.0}))
+    users = state3d._state_fields(kept.base, ['mesh'])['mesh']
+    for name in settings:
+        check(
+            'screenshot_designer',
+            after % name,
+            refused in shots[name]
+            and 'the 3D view was already set: %s' % state_file.OBJ in shots[name]
+            and '3D view: put back as it was' in shots[name]
+            and meshes[name] == users,
+            'the view holds %s | %s' % (meshes[name], ' '.join(shots[name].split())[-300:]),
+        )
+    check(
+        'screenshot_designer',
+        first,
+        refused in shown and '3D view, setting' not in shown and 'put back' not in shown,
+        ' '.join(shown.split())[-300:],
+    )
+
+
+# the over-another check's cases: a mesh file loaded by the call, one shown (REVIEW.md TST-1023)
+OverAnotherCase = Literal['new', 'shown']
+
+
+async def check_a_tiling_on_a_mesh_file_over_another_ones_view_is_set_in_its_own_material(ctx: Ctx) -> None:
+    """A mesh file loaded over another mesh file's view: the state file's mapping table keeps the earlier file's
+    entries beside the new file's, and the Materials menu lists the earlier file's unused (REVIEW.md HLP-322, measured
+    2026-11-28). The user's view showing the project's OBJ, of two materials: screenshot_designer('3d', mesh=<an OBJ of
+    one material, `only`>, tiling=...) sets the tiling in `only`, which a Save at the render holds. The view showing the
+    OBJ of one material loaded so, tiling=... alone sets it there too, and mesh=<the OBJ of two>, tiling=... is
+    refused, naming the two materials of that OBJ alone (designer_helpers/state3d.py, _used_material). The 3D view as
+    text then names the Override Material of `only` alone, the earlier file's materials left out (scene3d._shown_said;
+    the user, 2026-11-28: "Name them")."""
+    names: dict[OverAnotherCase, str] = {
+        'new': "screenshot_designer('3d', mesh=<a mesh file of one material>, tiling=...) over a mesh file of two sets"
+        ' the tiling in its material',
+        'shown': "screenshot_designer('3d', tiling=...) on a mesh file loaded over another sets the tiling in its"
+        ' material',
+    }
+    refused = (
+        "screenshot_designer('3d', mesh=<a mesh file of two materials>, tiling=...) over a mesh file of one is refused,"
+        ' naming its two'
+    )
+    named = (
+        "screenshot_designer('3d', as_text=True) names the Override Material of the materials the mesh uses, an"
+        " earlier mesh file's left out"
+    )
+    if skipped_in_users(ctx, shots=[*names.values(), refused, named]):
+        return
+    one = state_file.one_material_obj(ctx.scratch)
+    copies = {case: os.path.join(ctx.scratch, 'state_over_another_%s.sbsscn' % case) for case in names}
+    shots = {case: os.path.join(ctx.scratch, 'over_another_%s.png' % case) for case in names}
+    printed: dict[OverAnotherCase, str] = {}
+    ended: list[bool] = []  # whether each load's import ended with the file's own materials
+    async with state_file.kept(ctx) as kept:
+
+        async def load(path: str, over: str, materials: list[str]) -> None:
+            said = await imported(ctx, kept.path, state3d._state_edited(over, {'mesh': state3d._mesh_id(path)}))
+            ended.append(ended_with(said, materials))
+
+        async def shot(case: OverAnotherCase, options: ToolArgs) -> None:
+            printed[case] = await in_designer(ctx, state_file.SET_UP_THEN_SAVED % (copies[case], shots[case], options))
+
+        await load(state_file.OBJ, kept.base, OBJ_MATERIALS)
+        await shot('new', {'mesh': one, 'tiling': 2.0})
+        await load(one, state3d._state_text(kept.path), ['only'])  # over the OBJ's view, which the put-back loaded
+        lines = text(await ctx.c('screenshot_designer', AS_TEXT)).splitlines()
+        await shot('shown', {'tiling': 2.0})
+        given: ToolArgs = {'panel': '3d', 'max_size': 128, 'mesh': state_file.OBJ, 'tiling': 2.0}
+        shown = text(await ctx.c('screenshot_designer', given))
+    for case, name in names.items():
+        only = state_file.saved_materials(copies[case]).get('only')
+        mesh = state_file.saved_fields(copies[case], ['mesh'])
+        said = ' / '.join(line for line in printed[case].splitlines() if line.startswith('3D view'))[-250:]
+        check(
+            'screenshot_designer',
+            name,
+            all(ended) and mesh == {'mesh': state3d._mesh_id(one)} and only is not None and only.tiling == 'float(2)',
+            'the loads ended %s; at the render, the mesh %s and only %s | %s' % (ended, mesh, only, said),
+        )
+    check(
+        'screenshot_designer',
+        refused,
+        all(ended)
+        and state3d.MATERIALS_USED % (2, ' (first, second)') in shown
+        and '3D view: put back as it was' in shown,
+        'the loads ended %s | %s' % (ended, ' '.join(shown.split())[-300:]),
+    )
+    override = [line for line in lines if line.startswith('Override Material: ')]
+    check(
+        'screenshot_designer',
+        named,
+        all(ended)
+        and len(override) == 1
+        and re.fullmatch(r'Override Material: only (on|off)', override[0]) is not None,
+        'said %s; the loads ended %s | %s' % (override, ended, ' / '.join(lines)),
+    )
+
+
+# the every-material check's cases: graph= on the OBJ, the relink after an orbit (REVIEW.md TST-1023)
+EveryMaterialCase = Literal['obj', 'relink']
+
+
+async def check_graph_puts_its_outputs_on_every_material_of_a_mesh_file(ctx: Ctx) -> None:
+    """screenshot_designer('3d', mesh=<the project's OBJ, of two materials>, graph=...): as "View Outputs In 3D View"
+    runs, Designer asks which material in a menu of its own, and the shot answers it once per material, the menu
+    transparent and click-through as the Explorer's is. A Save at the render holds the graph's outputs on both
+    materials, each overridden, and the OBJ's own red and blue are gone from the render (designer_helpers/view3d.py;
+    the user, 2026-11-27, "Every material"; REVIEW.md HLP-312). The Samba FBX's: check_a_3d_shot_shows_a_mesh_file_...
+    Then the user's view showing the OBJ with the graph's outputs on `first` alone, the editor on the graph: a shot with
+    an orbit relinks the graph on `first` alone after its load, which a Save at its render holds, and after its
+    put-back's, which a Save after it holds (designer_helpers/scene3d.py)."""
+    names: dict[EveryMaterialCase, str] = {
+        'obj': "screenshot_designer('3d', mesh=<an OBJ of two materials>, graph=...) puts the outputs on both, its red"
+        ' and blue replaced',
+        'relink': "screenshot_designer('3d', orbit=...) on an OBJ showing a graph's outputs on one of its two materials"
+        ' relinks the graph on that one',
+    }
+    if skipped_in_users(ctx, shots=list(names.values())):
+        return
+    options: dict[EveryMaterialCase, ToolArgs] = {
+        'obj': {'mesh': state_file.OBJ, 'graph': STATE_GRAPH},
+        'relink': {'orbit': [30.0, 0.0]},
+    }
+    copies = {case: os.path.join(ctx.scratch, 'state_every_material_%s.sbsscn' % case) for case in options}
+    shots = {case: os.path.join(ctx.scratch, 'every_material_%s.png' % case) for case in options}
+    printed: dict[EveryMaterialCase, str] = {}
+    async with state_file.kept(ctx) as kept:
+        code = state_file.MENU_LOOKS + state_file.SET_UP_THEN_SAVED % (copies['obj'], shots['obj'], options['obj'])
+        printed['obj'] = await in_designer(ctx, code)
+        obj = state3d._state_edited(kept.base, {'mesh': state3d._mesh_id(state_file.OBJ)})
+        said = await imported(ctx, kept.path, obj)
+        try:
+            applied = await in_designer(ctx, state_file.APPLIED % (STATE_GRAPH, ['first']))
+            code = state_file.SET_UP_THEN_SAVED % (copies['relink'], shots['relink'], options['relink'])
+            printed['relink'] = await in_designer(ctx, code)
+            await in_designer(ctx, '_sf_save()')
+            after = state_file.saved_materials(kept.path)
+        finally:
+            await ctx.c('open_graph', ctx.G)  # the editor back on the category's graph
+
+    red, blue = mesh_renders.coloured(shots['obj']) if os.path.isfile(shots['obj']) else (1.0, 1.0)
+    on_both = every_material(state_file.saved_materials(copies['obj']), OBJ_MATERIALS, printed['obj'])
+    check(
+        'screenshot_designer',
+        names['obj'],
+        on_both[0] and max(red, blue) < 0.05 and mesh_renders.shown(shots['obj']) > 0.01,
+        '%s; red %.3f, blue %.3f | %s' % (on_both[1], red, blue, ' '.join(printed['obj'].split())[-250:]),
+    )
+    rendered = state_file.saved_materials(copies['relink'])
+    alone = {'first': True, 'second': False}  # the outputs on `first` alone
+    check(
+        'screenshot_designer',
+        names['relink'],
+        ended_with(said, OBJ_MATERIALS)
+        and state_file.printed(applied, 'APPLIED') == 'True'
+        and all({k: m[k].linked for k in alone if k in m} == alone for m in (rendered, after))
+        and 'no longer follows' not in printed['relink'],
+        'the load %s; at the render: %s; after: %s | %s | %s'
+        % (
+            said,
+            materials_said(rendered),
+            materials_said(after),
+            ' '.join(applied.split())[-150:],
+            ' '.join(printed['relink'].split())[-250:],
+        ),
+    )
+
+
+# the Plane-over-OBJ check's cases: a Scene menu's mesh shot over the OBJ's view, then a stale one (REVIEW.md TST-1023)
+OverObjCase = Literal['over', 'stale']
+
+
+async def check_a_scene_menus_mesh_shot_over_a_mesh_files_view_takes_the_material_settings_in_its_own(
+    ctx: Ctx,
+) -> None:
+    """The user's view showing the project's OBJ, of two materials: screenshot_designer('3d', mesh='Plane', tiling=4,
+    shader_model='UsdPreviewSurface') sets the tiling and the model in Default, the Plane's own material, which the Plane
+    uses once loaded over the OBJ's state, the OBJ's entries left in its table; the model with Default held overridden
+    (scene3d.py). A Save at the render holds them so, the OBJ's materials as they were. Then, the user's view the Plane
+    loaded over the OBJ's state, a tiling alone is set so too (designer_helpers/state3d.py, _used_material; REVIEW.md
+    HLP-311)."""
+    over = (
+        "screenshot_designer('3d', mesh='Plane', tiling=..., shader_model=...) over an OBJ of two materials sets them"
+        " in the Plane's material"
+    )
+    stale = (
+        "screenshot_designer('3d', tiling=...) on the Plane loaded over an OBJ's state sets it in the Plane's material"
+    )
+    if skipped_in_users(ctx, shots=[over, stale]):
+        return
+    cases: list[OverObjCase] = ['over', 'stale']
+    copies = {case: os.path.join(ctx.scratch, 'state_plane_over_obj_%s.sbsscn' % case) for case in cases}
+    shot = os.path.join(ctx.scratch, 'plane_over_obj.png')
+    usd = state3d.SHADER_MODELS['UsdPreviewSurface']
+    async with state_file.kept(ctx) as kept:
+        await imported(ctx, kept.path, state3d._state_edited(kept.base, {'mesh': state3d._mesh_id(state_file.OBJ)}))
+        users = state_file.saved_materials(kept.path)  # the OBJ's, as the user's view holds them
+        given: ToolArgs = {'mesh': 'Plane', 'tiling': 4.0, 'shader_model': 'UsdPreviewSurface'}
+        over_t = await in_designer(ctx, state_file.SET_UP_THEN_SAVED % (copies['over'], shot, given))
+        await in_designer(ctx, '_sf_save()')
+        state3d._state_write(kept.path, state3d._state_edited(state3d._state_text(kept.path), {'mesh': 'plane'}))
+        loaded = state_file.printed(await in_designer(ctx, '_sf_load()'), 'LOADED')
+        stale_t = await in_designer(ctx, state_file.SET_UP_THEN_SAVED % (copies['stale'], shot, {'tiling': 3.0}))
+
+    def judged(case: OverObjCase, tiling: str, model: str, t: str) -> tuple[bool, str]:
+        """Whether the Save at the case's render holds Default's tiling and model as given, the Plane, and the OBJ's
+        materials as the user had them; what it holds."""
+        held = state_file.saved_materials(copies[case])
+        default = held.get('default')
+        ok = (
+            default is not None
+            and (default.tiling, default.shader) == (tiling, model)
+            and all(held.get(m) == users[m] for m in OBJ_MATERIALS)
+            and state_file.saved_fields(copies[case], ['mesh']) == {'mesh': 'plane'}
+        )
+        return ok, "Default at the render %s; the OBJ's %s, as the user had them %s | %s" % (
+            default,
+            [held.get(m) for m in OBJ_MATERIALS],
+            [users[m] for m in OBJ_MATERIALS],
+            ' '.join(t.split())[-250:],
+        )
+
+    check('screenshot_designer', over, *judged('over', 'float(4)', usd, over_t))
+    ok, said = judged('stale', 'float(3)', users['default'].shader, stale_t)
+    check('screenshot_designer', stale, ok and loaded == 'True', 'loaded %s; %s' % (loaded, said))
+
+
+# the Override check's cases: another model, the one the view holds, a tiling (REVIEW.md TST-1011, HLP-321)
+OverrideCase = Literal['new', 'held', 'tiling']
+OVERRIDE_TILING = 4.0  # the Override check's tiling: 5.8 grey levels on average from a plain shot, measured (HLP-321)
+
+
+async def check_a_tiling_or_a_shader_model_on_a_material_with_override_off_renders_it_overridden(ctx: Ctx) -> None:
+    """The user's view showing the Plane, a gradient's outputs on it, Default's Override Material off and OpenPBR
+    Surface: screenshot_designer('3d', shader_model=...) renders Default overridden, as graph= leaves it, and says so,
+    with a model the view doesn't hold (AdobeStandardMaterial) and with the one it holds (OpenPBR Surface); and so does
+    screenshot_designer('3d', tiling=...). A Save at each render holds the model or the tiling and Default overridden,
+    and the render differs from a plain shot's, as Override on makes it (the two models overridden came 0.05 grey levels
+    apart on average on the Plane, a probe). After each call the user's Override Material is off again, and a Save holds
+    the user's model and tiling in Default (designer_helpers/scene3d.py; the user, 2026-11-27, "Render with Override
+    on", then "Same as shader_model" for the tiling; REVIEW.md HLP-316: measured, the model not taken with Override off,
+    the render a plain shot's; HLP-318; HLP-321: the tiling held, the render a plain shot's; TST-1020)."""
+    said_of: dict[OverrideCase, str] = {
+        'new': 'shader_model=<another model>',
+        'held': 'shader_model=<the model the view holds>',
+        'tiling': 'tiling=...',
+    }
+    word: dict[OverrideCase, str] = {case: 'tiling' if case == 'tiling' else 'shader model' for case in said_of}
+    shown = {
+        case: "screenshot_designer('3d', %s) on a material whose Override Material is off renders it overridden, the"
+        ' %s held, the 3D view as text saying Default on' % (said, word[case])
+        for case, said in said_of.items()
+    }
+    back = (
+        "screenshot_designer('3d', ...) on a material whose Override Material is off gives it back off, with the user's"
+        ' model and tiling'
+    )
+    if skipped_in_users(ctx, shots=[*shown.values(), back]):
+        return
+    copies = {case: os.path.join(ctx.scratch, 'state_override_off_%s.sbsscn' % case) for case in shown}
+    shots = {case: os.path.join(ctx.scratch, 'override_off_%s.png' % case) for case in shown}
+    given: dict[OverrideCase, ToolArgs] = {'tiling': {'tiling': OVERRIDE_TILING}}  # the models': read from the view
+    plain = os.path.join(ctx.scratch, 'override_off_plain.png')
+    printed: dict[OverrideCase, str] = {}
+    after: dict[OverrideCase, str | None] = {}
+    back_as: dict[OverrideCase, state_file.Material | None] = {}  # Default as a Save after each call holds it
+    users: state_file.Material | None = None
+    async with state_file.kept(ctx) as kept:
+        state3d._state_write(kept.path, state3d._state_edited(kept.base, {'mesh': 'plane'}))
+        loaded = state_file.printed(await in_designer(ctx, '_sf_load()'), 'LOADED')
+        try:
+            applied = state_file.printed(await in_designer(ctx, state_file.APPLIED % (PATTERN_GRAPH, [])), 'APPLIED')
+            off = state_file.printed(await in_designer(ctx, "print('OFF=%s' % _sf_override(False))"), 'OFF')
+            await in_designer(ctx, 'shoot_3d(%r)' % plain)
+            await in_designer(ctx, '_sf_save()')
+            users = state_file.saved_materials(kept.path).get('default')
+            held = state3d._shader_said(users.shader) if users is not None else 'OpenPBR Surface'
+            given['held'] = {'shader_model': held}
+            given['new'] = {
+                'shader_model': next(m for m in ('AdobeStandardMaterial', 'UsdPreviewSurface') if m != held)
+            }
+            for case, options in given.items():
+                printed[case] = await in_designer(
+                    ctx, state_file.SET_UP_THEN_SAVED % (copies[case], shots[case], options)
+                )
+                t = await in_designer(ctx, "print('OVERRIDE=%s' % _sf_override()); _sf_save()")
+                after[case] = state_file.printed(t, 'OVERRIDE')
+                back_as[case] = state_file.saved_materials(kept.path).get('default')
+        finally:
+            await ctx.c('open_graph', ctx.G)  # the editor back on the category's graph
+    for case, options in given.items():
+        default = state_file.saved_materials(copies[case]).get('default')
+        plane = state_file.saved_fields(copies[case], ['mesh'])  # the Plane shown, its load's own wait settled or not
+        apart = (
+            mesh_renders.apart(shots[case], plain) if all(map(os.path.isfile, (shots[case], plain))) else float('nan')
+        )
+        said = ' / '.join(line for line in printed[case].splitlines() if line.startswith('3D view'))[-300:]
+        tiled = case == 'tiling'
+        wanted = 'float(%g)' % OVERRIDE_TILING if tiled else state3d.SHADER_MODELS[str(options['shader_model'])]
+        check(
+            'screenshot_designer',
+            shown[case],
+            plane == {'mesh': 'plane'}
+            and (applied, off) == ('True', 'False')
+            and default is not None
+            and default.overridden
+            and (default.tiling if tiled else default.shader) == wanted
+            and apart > 1
+            and 'Override Material on in Default, to show its %s' % word[case] in printed[case]
+            and 'Override Material: Default on' in state_file.at_the_render(printed[case])[0],
+            'loaded %s, applied %s, off %s; Default at the render %s; %.2f grey levels from the plain shot | %s'
+            % (loaded, applied, off, default, apart, said),
+        )
+    as_users = (False, users.shader, users.tiling) if users is not None else None  # the user's Default
+    check(
+        'screenshot_designer',
+        back,
+        list(after.values()) == ['False'] * len(shown)
+        and all(m is not None and (m.overridden, m.shader, m.tiling) == as_users for m in back_as.values())
+        and all('3D view: put back as it was' in t for t in printed.values()),
+        "Override Material after each call %s; the user's Default %s, then %s" % (after, users, back_as),
+    )
+
+
+async def check_a_mesh_file_that_doesnt_import_is_said_so(ctx: Ctx) -> None:
+    """A file Designer can't import, bytes that are no mesh as an .fbx, with a zoom, a tiling and graph=: the shot
+    says that the mesh file didn't import within IMPORT_LIMIT, and puts the view back. It is neither framed nor loaded
+    again, its tiling isn't refused for a mesh of no material, and the graph's outputs aren't put on it: there is no
+    mesh to work on (designer_helpers/scene3d.py; REVIEW.md HLP-299, HLP-307). The zoom and the tiling one at a time:
+    the unit tests, each such shot waiting IMPORT_LIMIT."""
+    what = "screenshot_designer('3d', mesh=<a file Designer can't import>) with a zoom, tiling and graph says so"
+    if skipped_in_users(ctx, shots=[what]):
+        return
+    corrupt = os.path.join(ctx.scratch, 'not_a_mesh.fbx')
+    with open(corrupt, 'wb') as f:
+        f.write(bytes(range(256)) * 16)
+    given: ToolArgs = {'panel': '3d', 'max_size': 128, 'mesh': corrupt, 'zoom': 1, 'tiling': 2.0, 'graph': STATE_GRAPH}
+    async with state_file.kept(ctx) as kept:
+        users = state3d._state_fields(kept.base, ['mesh'])
+        r = await ctx.c('screenshot_designer', given)
+        await in_designer(ctx, '_sf_save()')
+        held = state_file.saved_fields(kept.path, ['mesh'])
+    said = text(r) if is_image(r) else 'no image: ' + text(r)
+    check(
+        'screenshot_designer',
+        what,
+        "(the mesh file didn't import within 30 s" in said
+        and "hadn't settled" not in said
+        and 'outputs on the mesh' not in said
+        and '3D view: put back as it was' in said
+        and held == users,
+        'the view holds %s | %s' % (held, ' / '.join(said.splitlines())[-300:]),
+    )
+
+
+async def check_a_3d_shot_puts_a_mesh_file_the_user_showed_back(ctx: Ctx) -> None:
+    """The user's view showing the Samba FBX, their camera away from its framing, and a default state file and folder
+    of bytes no Save writes: a shot with mesh= the project's OBJ and an orbit puts them back. The user's files are back
+    byte for byte, and a Save then holds the Samba FBX and their camera: the put-back's load waited for the FBX's import
+    (designer_helpers/scene3d.py; ROADMAP item 131's put-back)."""
+    what = "screenshot_designer('3d', mesh=<an OBJ>) puts back the user's view showing their own FBX, and their files"
+    if skipped_in_users(ctx, shots=[what]):
+        return
+    samba = state3d._mesh_id(state_file.SAMBA)
+    async with state_file.kept(ctx) as kept:
+        users = state3d.Pose(state_camera.UNFRAMED, 60.0, 15.0, 300.0)
+        said = await imported(ctx, kept.path, state3d._state_edited(kept.base, {'mesh': samba, 'camera': users}))
+        users_files(kept.path)
+        before = kept_files(kept.path)
+        r = await ctx.c(
+            'screenshot_designer', {'panel': '3d', 'max_size': 128, 'mesh': state_file.OBJ, 'orbit': [30, 0]}
+        )
+        after = kept_files(kept.path)
+        await in_designer(ctx, '_sf_save()')
+        held = state_file.saved_fields(kept.path, ['mesh', 'camera'])
+    check(
+        'screenshot_designer',
+        what,
+        ended_with(said, SAMBA_MATERIALS)
+        and is_image(r)
+        and after == before
+        and held is not None
+        and held['mesh'] == samba
+        and state_camera.alike(held['camera'], users)
+        and '3D view: put back as it was' in text(r),
+        'the load %s; the files back %s; held %s | %s'
+        % (
+            said,
+            after == before,
+            held and (held['mesh'], state_camera.said(held['camera'])),
+            ' / '.join(text(r).splitlines())[-250:],
+        ),
+    )
+
+
+RENDERERS = ['Rasterizer', 'GPU Pathtracer', 'OpenGL']  # the 3D view's Renderer menu's, in its order (2026-11-27)
+
+
+async def check_the_3d_panels_title_names_the_mesh_then_the_renderer(ctx: Ctx) -> None:
+    """The 3D panel's title is `<mesh> - <renderer>` with each renderer the Renderer menu lists (RENDERERS) picked. The
+    mesh is the Scene menu's name of the one it checks, Sphere, or the file's name without its extension for a mesh of
+    the user's own, Designer's box.fbx, which it checks none of: read once its import has ended, when the title names
+    it (scene3d.py; REVIEW.md TST-1018). The renderer is the one the menu checks. The 3D view as text reads the
+    renderer from the title so (designer_helpers/scene3d.py, _renderer_shown)."""
+    fact = "the 3D panel's title is <mesh> - <renderer> with each renderer picked, on Sphere and on box.fbx"
+    if skipped_in_users(ctx, fact):
         return
     box = state_file.printed(await in_designer(ctx, state_file.BOX_PATH), 'BOX')
     if not box:
         check('designer facts', fact, False, "Designer's resources hold no python/tests/assets/box.fbx")
-        check('screenshot_designer', shot, False, 'no mesh of the users own to load')
         return
-    url = state3d.USERS_MESH + box
+    meshes = {'sphere': (['Sphere'], 'Sphere'), state3d._mesh_id(box): ([], 'box')}
+    read: dict[str, list[object]] = {}
+    ended: state_file.Imported | None = None  # what the box.fbx's load printed
     async with state_file.kept(ctx) as kept:
-        state3d._state_write(kept.path, state3d._state_edited(kept.base, {'mesh': url}))
-        t = await in_designer(ctx, state_file.LOADED_SETTLED)
-        saved = state3d._state_fields(state3d._state_text(kept.path), ['mesh'])['mesh']
-        r = await ctx.c('screenshot_designer', ORBIT)
-    expected = {'AT_TRIGGER': '[]', 'RESTARTED': 'True', 'SETTLED': 'True', 'AFTER': '[]'}
-    said = {key: state_file.printed(t, key) for key in expected}
+        for mesh in meshes:
+            content = state3d._state_edited(kept.base, {'mesh': mesh})
+            if state3d._mesh_listed(content):
+                state3d._state_write(kept.path, content)
+                t = await in_designer(ctx, '_sf_load()\n' + state_file.TITLES)
+            else:
+                ended = await imported(ctx, kept.path, content)
+                t = await in_designer(ctx, state_file.TITLES)
+            read[mesh] = [
+                ast.literal_eval(line[len('TITLE=') :]) for line in t.splitlines() if line.startswith('TITLE=')
+            ]
+    expected = {
+        mesh: [[checked, '%s - %s' % (title, name), [name], name] for name in RENDERERS]
+        for mesh, (checked, title) in meshes.items()
+    }
+    check('designer facts', fact, read == expected, "read %s; box.fbx's load %s" % (read, ended))
+
+
+# a 3D view differing from Designer's defaults in each field the 3D view as text says from the state file, as the file
+# holds them, then the lines the text says for them, in its order
+KNOWN = state3d.StateFields(
+    mesh='sphere',
+    tiling=2.3,
+    environment=state_file.AIRPORT,
+    rotation=0.3,
+    exposure=0.7,
+    camera=state3d.Pose(state_camera.UNFRAMED, 60.0, 15.0, 200.0),
+    shader=state3d.SHADER_MODELS['AdobeStandardMaterial'],
+)
+KNOWN_SAID = [
+    'mesh: Sphere',
+    'tiling: 2.3',
+    'environment: airport',
+    'environment_rotation: 108',
+    'environment_exposure: 0.7',
+    'camera: yaw 60, pitch 15 degrees (view Front then orbit [60, 15]), looking at (10, 5, -20) from 200 away',
+    'shader_model: AdobeStandardMaterial',
+]
+HIDDEN = "print('HIDDEN=%s' % _mac_window(_main_window()).hidden())"  # whether Designer is hidden, as at rest
+
+
+async def check_the_3d_view_as_text_says_a_known_view_and_the_camera_it_drew(ctx: Ctx) -> None:
+    """A 3D view loaded from a state file differing from Designer's defaults in the mesh, the tiling, the light, the
+    camera and the shader model (KNOWN), the view settled with Designer's window on screen, then hidden again as the
+    self-test keeps it.
+    screenshot_designer('3d', as_text=True) then says exactly those values, and the renderer. Its Save, made with
+    Designer hidden, holds the camera the view drew on screen: as_text leaves the window as it is
+    (designer_helpers/scene3d.py; a camera still moving with Designer hidden: state_file.py)."""
+    said = (
+        "screenshot_designer('3d', as_text=True) says a known 3D view's mesh, tiling, light, camera and shader model,"
+        ' exactly'
+    )
+    fact = 'a Save made with Designer hidden holds the camera the view drew on screen before it'
+    if skipped_in_users(ctx, fact, shots=[said]):
+        return
+    c = ctx.c
+    async with state_file.kept(ctx) as kept:
+        state3d._state_write(kept.path, state3d._state_edited(kept.base, KNOWN))
+        loaded = await in_designer(ctx, '_sf_load()\n' + HIDDEN)
+        r = await c('screenshot_designer', {'panel': '3d', 'as_text': True})
+        hidden = state_file.printed(await in_designer(ctx, HIDDEN), 'HIDDEN')
+    lines = text(r).splitlines()
+    check(
+        'screenshot_designer',
+        said,
+        lines[:7] == KNOWN_SAID and 'renderer: Rasterizer' in lines,
+        ' / '.join(lines) + ' | ' + ' '.join(loaded.split())[-120:],
+    )
+    before = state_file.printed(loaded, 'HIDDEN')
     check(
         'designer facts',
         fact,
-        said == expected and saved == url,
-        'read %s, expected %s; the state saved holds %s' % (said, expected, saved),
-    )
-    check(
-        'screenshot_designer',
-        shot,
-        is_image(r) and "hadn't settled" not in text(r) and '3D view: put back as it was' in text(r),
-        ' / '.join(line for line in text(r).splitlines() if line.startswith('3D view'))[-250:],
+        (before, hidden) == ('True', 'True') and lines[5:6] == KNOWN_SAID[5:6],
+        'hidden as it read %s, after %s; %s' % (before, hidden, lines[5:6]),
     )
 
 
@@ -679,6 +1518,53 @@ async def check_a_state_file_with_one_field_edited_loads_that_field_alone(ctx: C
                 "differing after the load %s; the camera at the load's end %.2f degrees off the file's; edited %s"
                 % (left[:4], apart, changed[:3]),
             )
+
+
+MODELS_ORDER = [
+    'AdobeStandardMaterial',
+    'UsdPreviewSurface',
+    'OpenPBR Surface',
+]  # each picked a change, Designer's last
+
+
+async def check_each_shader_model_picked_is_saved_as_the_set_up_writes_it_and_kept_by_a_relink(ctx: Ctx) -> None:
+    """The Materials menu's submenu of the mesh's material lists the shader models of state3d.SHADER_MODELS, in its
+    order. Each picked there, Designer's window on screen, the graph's outputs on the mesh: a Save holds it as the
+    table names it, in the renderer plugin's entry of that material (state3d._located). Then the graph's outputs put on
+    the mesh again through the Explorer, as a set-up relinks them after its load, keep it: the submenu checks it,
+    Override Material on beside it, and a Save holds it (designer_helpers/scene3d.py; measured 2026-11-27)."""
+    saved = 'a Save holds each shader model picked in the Materials menu as the set-up writes it'
+    relinked = "a graph's outputs put on the mesh again through the Explorer keep the shader model"
+    if skipped_in_users(ctx, saved, relinked):
+        return
+    c = ctx.c
+    picks = [
+        (model, *(os.path.join(ctx.scratch, 'model_%d_%s.sbsscn' % (i, when)) for when in ('picked', 'relinked')))
+        for i, model in enumerate(MODELS_ORDER)
+    ]
+    async with state_file.kept(ctx):
+        await c('open_graph', ctx.G)  # another graph, then STATE_GRAPH: its outputs on the mesh
+        await c('open_graph', {'graph': STATE_GRAPH})
+        t = await in_designer(ctx, state_file.MODELS_PICKED % (picks, STATE_GRAPH))
+        await c('open_graph', ctx.G)  # the editor back on the category's graph
+
+    wanted = [state3d.SHADER_MODELS[model] for model in MODELS_ORDER]
+    listed = state_file.printed(t, 'MODELS')
+    after_pick = [held_shader(path) for _, path, _ in picks]
+    check(
+        'designer facts',
+        saved,
+        listed == repr(list(state3d.SHADER_MODELS)) and after_pick == wanted,
+        'the menu lists %s; held after each pick %s | %s' % (listed, after_pick, ' '.join(t.split())[-150:]),
+    )
+    checked = [line[len('PICKED=') :] for line in t.splitlines() if line.startswith('PICKED=')]
+    after_relink = [held_shader(path) for _, _, path in picks]
+    check(
+        'designer facts',
+        relinked,
+        checked == [repr(['Override Material', model]) for model in MODELS_ORDER] and after_relink == wanted,
+        'checked after each relink %s; held %s' % (checked, after_relink),
+    )
 
 
 async def check_a_state_file_missing_its_lights_loads_them_at_designers_defaults(ctx: Ctx) -> None:
@@ -729,12 +1615,15 @@ async def check_designers_frame_gives_the_view_tables_poses(ctx: Ctx) -> None:
     F = 'designer facts'
     what_views = "the state file camera: each view framed on the Plane is view='s pose"
     framed = "the state file camera: each mesh framed in a viewport of %s is the view table's pose"
+    # 300 x 500 floats 300 to 358 wide from run to run, its viewport 159 to 214 x 423: mostly in the band (up to about
+    # 183 wide) where Designer frames a tall viewport farther, by up to 1.52 times (state3d.py; REVIEW.md HLP-306), as
+    # the viewport read says
     sizes = {'a panel taller than wide': (300, 500), 'a panel wider than tall': (700, 420)}
     if skipped_in_users(ctx, what_views, *(framed % size for size in sizes)):
         return
     async with state_file.kept(ctx):
         paths = {view: os.path.join(ctx.scratch, 'state_view_%s.sbsscn' % view) for view in state3d.VIEW_DIRECTIONS}
-        t = await in_designer(ctx, '_sf_sized(None)\n' + state_file.VIEWED % list(paths.items()))
+        t = await in_designer(ctx, '_sf_sized(None)\n' + state_file.VIEWED % (list(paths.items()), 'Plane'))
         viewport = state_file.pair(t, 'VIEWPORT')
         poses = {view: state_camera.pose(state3d._state_text(path)) for view, path in paths.items()}
         wanted = {view: state3d._framed('plane', view, viewport) for view in poses}
@@ -886,8 +1775,10 @@ EVERY_SET_UP: ToolArgs = {
     'environment': 'airport',
     'environment_rotation': 90,
     'environment_exposure': 1.0,
+    'shader_model': 'AdobeStandardMaterial',
 }
 ORBIT: ToolArgs = {'panel': '3d', 'max_size': 256, 'orbit': [30, 0]}  # a shot with a camera option alone
+AS_TEXT: ToolArgs = {'panel': '3d', 'as_text': True}  # the 3D view as text
 
 
 def kept_files(path: str) -> dict[str, bytes]:
@@ -910,24 +1801,43 @@ def users_files(path: str) -> None:
 async def check_a_3d_shot_puts_the_users_3d_view_and_default_state_file_back(ctx: Ctx) -> None:
     """A shot with every set-up option: the user's default state file and textures' folder, of bytes no Save writes,
     are back byte for byte after it, the shot's backup gone; and the state saved then holds the same camera, mesh,
-    environment and tiling as the one saved before it (designer_helpers/scene3d.py; the user's design, ROADMAP item
-    131). The shot says what it set, then that the view was put back. With neither file nor folder, a shot leaves
-    neither, and it leaves Override Material off when the user had it off, which a load turns on (REVIEW.md
+    environment, tiling and shader model as the one saved before it (designer_helpers/scene3d.py; the user's design,
+    ROADMAP item 131). The shot says what it set, then that the view was put back. With neither file nor folder, a shot
+    leaves neither, and it leaves Override Material off when the user had it off, which a load turns on (REVIEW.md
     HLP-267). The user's AOV, Material roughness, is shown again after it, which a load puts back to Beauty (REVIEW.md
-    TST-941)."""
-    view = "screenshot_designer('3d') with a set-up puts the user's 3D view back: camera, mesh, environment and tiling"
+    TST-941). The 3D view as text says the same before the shot and after it, the camera aside (its put-back: the
+    first check), and leaves the user's file and folder byte for byte too (ROADMAP item 85)."""
+    view = (
+        "screenshot_designer('3d') with a set-up puts the user's 3D view back: camera, mesh, environment, tiling and"
+        ' shader model'
+    )
     what = "screenshot_designer('3d') with a set-up puts the default state file and its folder back byte for byte"
     none = "screenshot_designer('3d') with a set-up leaves no default state file where there was none"
     overridden = "screenshot_designer('3d') with a set-up leaves Materials > Override Material off, as the user had it"
     aov_back = "screenshot_designer('3d') with a set-up shows the user's AOV again, which a load puts back to Beauty"
-    if skipped_in_users(ctx, shots=[view, what, none, overridden, aov_back]):
+    as_text = (
+        "screenshot_designer('3d', as_text=True) says the same before and after a shot, and puts the default state file"
+        ' and its folder back byte for byte'
+    )
+    if skipped_in_users(ctx, shots=[view, what, none, overridden, aov_back, as_text]):
         return
     async with state_file.kept(ctx) as kept:
         users_files(kept.path)
         before = kept_files(kept.path)
         picked = state_file.printed(await in_designer(ctx, state_file.AOV_SHOWN % 'Material roughness'), 'AOV')
+        # whether each call left its backup, read right after it: the next call puts back or removes a leftover before
+        # its own (state3d._state_back_up; REVIEW.md TST-1001)
+        backups: list[bool] = []
         try:
+            first = await ctx.c('screenshot_designer', AS_TEXT)
+            backups.append(os.path.exists(state_file.backup(kept.path)))
+            read_first = kept_files(kept.path)
             r = await ctx.c('screenshot_designer', EVERY_SET_UP)
+            backups.append(os.path.exists(state_file.backup(kept.path)))
+            after = kept_files(kept.path)
+            again = await ctx.c('screenshot_designer', AS_TEXT)
+            backups.append(os.path.exists(state_file.backup(kept.path)))
+            read_again = kept_files(kept.path)
         finally:  # the AOV after the shot, then Beauty again
             aov = state_file.printed(await in_designer(ctx, state_file.AOV_READ_BACK), 'AOV')
         check(
@@ -936,12 +1846,23 @@ async def check_a_3d_shot_puts_the_users_3d_view_and_default_state_file_back(ctx
             is_image(r) and picked == aov == "['Material roughness']",
             'picked %s; after the shot %s' % (picked, aov),
         )
-        after = kept_files(kept.path)
+        shown = [[line for line in text(t).splitlines() if not line.startswith('camera: ')] for t in (first, again)]
+        check(
+            'screenshot_designer',
+            as_text,
+            read_first == read_again == before
+            and backups[0::2] == [False, False]
+            and len(shown[0]) >= 5
+            and shown[0] == shown[1],
+            'files after the first %s, the second %s; a backup left after each %s | %s | %s'
+            % (sorted(read_first), sorted(read_again), backups[0::2], ' / '.join(shown[0]), ' / '.join(shown[1])),
+        )
         check(
             'screenshot_designer',
             what,
-            is_image(r) and after == before and not os.path.exists(state_file.backup(kept.path)),
-            'files before %s, after %s | %s' % (sorted(before), sorted(after), text(r).strip()[-200:]),
+            is_image(r) and after == before and backups[1:2] == [False],
+            'files before %s, after %s; a backup left %s | %s'
+            % (sorted(before), sorted(after), backups[1:2], text(r).strip()[-200:]),
         )
         # saved, then the user's Override Material off, which a load turns on (REVIEW.md HLP-267); kept's end loads it
         # on again
@@ -967,7 +1888,7 @@ async def check_a_3d_shot_puts_the_users_3d_view_and_default_state_file_back(ctx
             is_image(orbit) and not left,
             'left %s | %s' % (sorted(left), text(orbit)[-200:]),
         )
-    names: list[StateField] = ['mesh', 'tiling', 'environment', 'rotation', 'exposure']
+    names: list[StateField] = ['mesh', 'tiling', 'environment', 'rotation', 'exposure', 'shader']
     before_fields, after_fields = state3d._state_fields(kept.base, names), state3d._state_fields(saved, names)
     camera = [state_camera.pose(content) for content in (kept.base, saved)]
     said = [line for line in text(r).splitlines() if line.startswith('3D view: ')]
@@ -1432,8 +2353,21 @@ async def run(ctx: Ctx) -> None:
     await check_a_dropped_maps_url_is_the_one_the_set_up_writes(ctx)
     await check_the_scene_menus_mesh_switch_frames_the_mesh_from_the_cameras_direction(ctx)
     await check_a_state_file_with_another_mesh_loads_it_keeping_the_files_camera(ctx)
-    await check_a_load_of_a_mesh_of_the_users_own_ends_once_the_view_settled(ctx)
+    await check_a_mesh_files_import_ends_once_the_materials_menu_lists_its_materials(ctx)
+    await check_designers_frame_frames_a_mesh_file_as_its_size_says(ctx)
+    await check_a_3d_shot_shows_a_mesh_file_framed_by_designers_frame(ctx)
+    await check_a_mesh_file_shown_already_takes_no_load_and_the_3d_view_as_text_says_its_path(ctx)
+    await check_a_material_setting_on_a_mesh_file_of_several_materials_is_refused(ctx)
+    await check_a_tiling_on_a_mesh_file_over_another_ones_view_is_set_in_its_own_material(ctx)
+    await check_graph_puts_its_outputs_on_every_material_of_a_mesh_file(ctx)
+    await check_a_scene_menus_mesh_shot_over_a_mesh_files_view_takes_the_material_settings_in_its_own(ctx)
+    await check_a_tiling_or_a_shader_model_on_a_material_with_override_off_renders_it_overridden(ctx)
+    await check_a_mesh_file_that_doesnt_import_is_said_so(ctx)
+    await check_a_3d_shot_puts_a_mesh_file_the_user_showed_back(ctx)
+    await check_the_3d_panels_title_names_the_mesh_then_the_renderer(ctx)
+    await check_the_3d_view_as_text_says_a_known_view_and_the_camera_it_drew(ctx)
     await check_a_state_file_with_one_field_edited_loads_that_field_alone(ctx)
+    await check_each_shader_model_picked_is_saved_as_the_set_up_writes_it_and_kept_by_a_relink(ctx)
     await check_a_state_file_missing_its_lights_loads_them_at_designers_defaults(ctx)
     await check_reset_scene_reads_the_state_file_once_it_has_returned(ctx)
     await check_designers_frame_gives_the_view_tables_poses(ctx)

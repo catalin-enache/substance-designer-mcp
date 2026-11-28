@@ -430,11 +430,11 @@ OVERRIDE = dedent("""
     bar = _3d_dock(mw).findChildren(QtWidgets.QMenuBar)[0]
     keep = [mw, bar]
     on = %r
-    for action in _overrides(bar, keep):
+    for action in _overrides(bar, keep).values():
         if on is not None and action.isChecked() != on:
             action.trigger()
     _process_events()
-    print('OVERRIDE=%%r' %% [action.isChecked() for action in _overrides(bar, keep)])""")
+    print('OVERRIDE=%%r' %% [action.isChecked() for action in _overrides(bar, keep).values()])""")
 
 
 async def check_graph_finds_its_row_in_a_collapsed_package(ctx: Ctx) -> None:
@@ -533,9 +533,9 @@ async def check_a_tiling_on_a_material_with_no_pattern_is_said_to_change_nothing
 # a 3D shot of graph %r with the Explorer taken as hidden, then one failing once after the set-up's load, each saved to
 # %r
 EXPLORER_HIDDEN = dedent("""
-    _shown = _visible_dock
+    _real_visible_dock = _visible_dock
     def _visible_dock(mw, prefix):
-        return None if prefix == _PANEL_AREAS['explorer'] else _shown(mw, prefix)
+        return None if prefix == _PANEL_AREAS['explorer'] else _real_visible_dock(mw, prefix)
     shoot_3d(%r, %r, 'Sphere')""")
 FAILING_ONCE = dedent("""
     _failing, _real_overrides_back = [True], _overrides_back
@@ -549,7 +549,7 @@ FAILING_ONCE = dedent("""
 ABORTED = dedent("""
     class _Abort(BaseException):
         pass
-    def _apply_outputs(tree, g, keep):
+    def _apply_outputs(tree, g, keep, *rest):
         raise _Abort('an abort as the outputs are applied')
     shoot_3d(%r, %r, 'Sphere')""")
 
@@ -778,9 +778,9 @@ async def check_the_environment_turns_brightens_and_changes_the_light(ctx: Ctx) 
 # so the put-back's load is the one after the second render
 SETTLED = dedent("""
     _real_relinked, _relinks = _relinked, []
-    def _relinked(tree, keep):
+    def _relinked(tree, keep, *rest):
         _relinks.append(True)
-        return ' (not relinked: the check)' if len(_relinks) == 1 else _real_relinked(tree, keep)
+        return ' (not relinked: the check)' if len(_relinks) == 1 else _real_relinked(tree, keep, *rest)
     _shot_render, _shot_load, _rendered = _3d_render, _state_load, []
     def _3d_render(mw):
         _rendered.append(True)
@@ -818,41 +818,32 @@ async def check_a_3d_shot_setting_the_light_renders_the_view_once_it_settled(ctx
     )
 
 
-# a plain 3D shot, then one given the values the view shows (the mesh the Scene menu checks, the rest read from a Save,
-# the default state file kept aside meanwhile), its set-up's waits on the 3D view's frames counted (WAITS=), and its
-# loads (LOADS=)
+# a plain 3D shot, then one given the values the view shows, as the 3D view as text says them (scene3d._3d_shown, the
+# set-up's own reader, the default state file kept aside meanwhile), its set-up's waits on the 3D view's frames counted
+# (WAITS=), and its loads (LOADS=)
 SHOWN_ALREADY = dedent("""
     import os
     folder = %r
-    mw = _main_window()
-    bar = _3d_dock(mw).findChildren(QtWidgets.QMenuBar)[0]
-    keep = [mw, bar]
-    mesh = [m for m in _scene_checked(bar, keep) if m in MESHES][0]
-    path, aside = _state_default_path(_version_folder()), os.path.join(_version_folder(), STATE_BACKUP)
-    _state_back_up(path, aside)
-    try:
-        _state_save(bar, keep)
-        f = _state_fields(_state_text(path), ['tiling', 'environment', 'rotation', 'exposure'])
-    finally:
-        _state_put_back(aside)
+    said = dict(line.split(': ', 1) for line in _3d_shown())
     shown = dict(
-        mesh=mesh,
-        tiling=f['tiling'],
-        environment=os.path.splitext(f['environment'].split('://')[-1])[0],
-        environment_rotation=f['rotation'] * 360,
-        environment_exposure=f['exposure'],
+        mesh=said['mesh'],
+        tiling=float(said['tiling']),
+        environment=said['environment'],
+        environment_rotation=float(said['environment_rotation']),
+        environment_exposure=float(said['environment_exposure']),
+        shader_model=said['shader_model'],
     )
     print('SHOWN=%%r' %% (shown,))
     shoot_3d(os.path.join(folder, 'plain.png'))
     _waits, _loads = [], []
     _settled, _loaded = _Frames.settled, _state_load
-    def _counted(self, *args, **kw):
+    def _counting(self, *args, **kw):
         _waits.append(args)
         return _settled(self, *args, **kw)  # its result read since REVIEW.md HLP-214 (TST-678)
     def _state_load(bar, keep, watched, *rest):
         _loads.append(True)
         return _loaded(bar, keep, watched, *rest)
-    _Frames.settled = _counted
+    _Frames.settled = _counting
     try:
         shoot_3d(os.path.join(folder, 'again.png'), **shown)
     finally:
@@ -862,21 +853,25 @@ SHOWN_ALREADY = dedent("""
 
 
 async def check_values_a_3d_set_up_finds_shown_already_take_no_wait(ctx: Ctx) -> None:
-    """The mesh the 3D view shows, and the tiling, the map, the environment's rotation and exposure its state file
-    holds, given to a shot, are said set, with no load and no wait on the 3D view's frames: set again, they restarted
-    nothing, so their waits ran to their limit (REVIEW.md HLP-195: 1.0 s for the mesh, 1.5 s for the tiling, measured;
-    HLP-192 for the environment; HLP-201: 0.95 s for the map). Having changed nothing, the shot loads nothing back
-    after its render (designer_helpers/scene3d.py), and its render is the plain shot's: taken with no wait, it isn't
-    one the view was still drawing. In a Designer the self-test started."""
+    """The mesh the 3D view shows, and the tiling, the map, the environment's rotation and exposure and the shader model
+    its state file holds, its Default held overridden, as the 3D view as text says them (ROADMAP items 85, 88), given to
+    a shot, are said set, with no load and no wait on the 3D view's frames: set again, they restarted nothing, so their
+    waits ran to their limit (REVIEW.md HLP-195: 1.0 s for the mesh, 1.5 s for the tiling, measured; HLP-192 for the
+    environment; HLP-201: 0.95 s for the map). Having changed nothing, the shot loads nothing back after its render
+    (designer_helpers/scene3d.py), and its render is the plain shot's: taken with no wait, it isn't one the view was
+    still drawing. In a Designer the self-test started."""
     c = ctx.c
     name = 'values a 3D set-up finds shown already are said set, with no wait'
     if ctx.was_running:
         skip('screenshot_designer', name, USERS_3D_VIEW)
         return
     t = text(await c('execute_designer_code', {'code': ctx.helper_source + SHOWN_ALREADY % ctx.scratch}))
-    # the line of what was set: the mesh, the tiling, then the environment, nothing after
-    said = re.findall(
-        r'^3D view: [^,]+, tiling [\d.e-]+, environment [\w ]+, rotation [\d.e-]+ degrees, exposure [\d.e-]+$', t, re.M
+    # the line of what was set: the mesh, the tiling, the environment, then the shader model, nothing after
+    said: list[str] = re.findall(
+        r'^3D view: [^,]+, tiling [\d.e-]+, environment [\w ]+, rotation [\d.e-]+ degrees, exposure [\d.e-]+, '
+        r'shader model [\w ]+$',
+        t,
+        re.M,
     )
     waits = re.search(r'^WAITS=(\d+)$', t, re.M)
     loads = re.search(r'^LOADS=(\d+)$', t, re.M)
@@ -1948,15 +1943,23 @@ STALE_SET_UPS = (
     ('a pan', {'pan': [0.25, 0.0]}, {'pan': [0.25, 0.0]}, 'pan 0.25 of the view right'),
     # the user's ask (2026-11-18): the light settled as the camera is; each a change from the value before
     ('an exposure change', {'environment_exposure': 1.0}, {'environment_exposure': 2.0}, 'environment exposure 2'),
+    # AdobeStandardMaterial: its render differed from that of OpenPBR Surface, Designer's default, where
+    # UsdPreviewSurface came within a grey level of it (two materials, 2026-11-27)
+    (
+        'a shader model change',
+        {'shader_model': 'AdobeStandardMaterial'},
+        {'shader_model': 'AdobeStandardMaterial'},
+        'shader model AdobeStandardMaterial',
+    ),
 )
 
 
 async def check_a_render_that_didnt_follow_a_set_up_is_said(ctx: Ctx) -> None:
-    """A render identical to the one before a pan, or before an exposure change, is said, after its retakes
-    (designer_helpers/shot3d.py, STALE; REVIEW.md SRV-146): with Designer's window minimized and left so, the render is
-    the view's last frame (covered, it was drawn in some Designers launch_designer opened: REVIEW.md TST-433). On
-    screen the change changes the render, and nothing is said: Designer's QImage compares pixels. macOS only (the window
-    minimized through _MacWindow), in a Designer the self-test started."""
+    """A render identical to the one before a pan, an exposure change or a shader model change is said, after its
+    retakes (designer_helpers/shot3d.py, STALE; REVIEW.md SRV-146): with Designer's window minimized and left so, the
+    render is the view's last frame (covered, it was drawn in some Designers launch_designer opened: REVIEW.md
+    TST-433). On screen the change changes the render, and nothing is said: Designer's QImage compares pixels. macOS
+    only (the window minimized through _MacWindow), in a Designer the self-test started."""
     c = ctx.c
     if ctx.was_running or sys.platform != 'darwin':
         for what, _, _, _ in STALE_SET_UPS:
@@ -2462,23 +2465,23 @@ async def check_a_3d_shots_window_shown_again_mid_accumulation_waits_for_the_cou
     )
 
 
-# the meshes whose Scene action is checked, read as the set-up's mesh step reads the action of the mesh asked
 # a 3D shot given a mesh, saved to %r, the meshes the Scene menu checks printed at each render (SHOWN=), before the
-# shot puts the view back
+# shot puts the view back: read as the set-up and the 3D view as text read them (scene3d._mesh_shown), each one checked
 SHOWN_MESH = dedent("""
     _shown_render = _3d_render
     def _3d_render(mw):
         bar = _3d_dock(mw).findChildren(QtWidgets.QMenuBar)[0]
         keep = [mw, bar]
-        print('SHOWN=%%s' %% ', '.join(m for m in MESHES if _menu_action(bar, keep, 'Scene', m).isChecked()))
+        checked = _scene_checked(bar, keep)
+        print('SHOWN=%%s' %% ', '.join(m for m in MESHES if m in checked))
         return _shown_render(mw)
     shoot_3d(%r, mesh=%r)""")
 
 
 async def check_the_3d_views_scene_menu_checks_the_mesh_shown(ctx: Ctx) -> None:
     """The 3D view's Scene menu checks the mesh the view shows: as a shot given Sphere, then one given Plane, renders,
-    each is the one checked (designer facts: scene3d.py reads the action of the mesh asked, and writes no mesh shown
-    already; REVIEW.md TST-391, HLP-195, HLP-199). In a Designer the self-test started."""
+    each is the one checked (designer facts: scene3d.py reads the mesh it checks, and writes no mesh shown already;
+    REVIEW.md TST-391, HLP-195, HLP-199). In a Designer the self-test started."""
     c = ctx.c
     if ctx.was_running:
         skip('designer facts', "the 3D view's Scene menu checks the mesh shown", USERS_3D_VIEW)
@@ -2487,7 +2490,7 @@ async def check_the_3d_views_scene_menu_checks_the_mesh_shown(ctx: Ctx) -> None:
     for mesh in ('Sphere', 'Plane'):
         path = os.path.join(ctx.scratch, 'shown_mesh.png')
         t = text(await c('execute_designer_code', {'code': ctx.helper_source + SHOWN_MESH % (path, mesh)}))
-        shown = re.findall(r'^SHOWN=(.*)$', t, re.M)  # before the set-up, then as the shot renders
+        shown: list[str] = re.findall(r'^SHOWN=(.*)$', t, re.M)  # before the set-up, then as the shot renders
         seen.append(shown[-1].strip() if shown else (t.strip().splitlines() or ['nothing printed'])[-1])
     check(
         'designer facts',
@@ -2498,9 +2501,9 @@ async def check_the_3d_views_scene_menu_checks_the_mesh_shown(ctx: Ctx) -> None:
 
 
 async def check_the_3d_view_refuses_what_it_cant_show(ctx: Ctx) -> None:
-    """A mesh or view the 3D view's menus don't have, an environment map Designer doesn't have, and a graph with one
-    output (Designer would ask which channel to show it in), are refused before anything changes, so these run in the
-    user's Designer too."""
+    """A mesh, view or shader model the 3D view's menus don't have, an environment map Designer doesn't have, and a
+    graph with one output (Designer would ask which channel to show it in), are refused before anything changes, so
+    these run in the user's Designer too."""
     c = ctx.c
     t = text(await c('screenshot_designer', {**THREE_D, 'mesh': 'Teapot'}))
     check('screenshot_designer', 'an unknown mesh is refused, naming the meshes', 'Teapot' in t and 'Torus' in t, t)
@@ -2513,6 +2516,13 @@ async def check_the_3d_view_refuses_what_it_cant_show(ctx: Ctx) -> None:
     )
     t = text(await c('screenshot_designer', {**THREE_D, 'view': 'Diagonal'}))
     check('screenshot_designer', 'an unknown view is refused, naming the views', 'Diagonal' in t and 'Bottom' in t, t)
+    t = text(await c('screenshot_designer', {**THREE_D, 'shader_model': 'Principled BSDF'}))
+    check(
+        'screenshot_designer',
+        'an unknown shader model is refused, naming the models',
+        "unknown shader model 'Principled BSDF'" in t and 'UsdPreviewSurface' in t,
+        t[-150:],
+    )
     t = text(await c('screenshot_designer', {**THREE_D, 'graph': TEST_GRAPH}))  # its one output (preparations.py)
     check(
         'screenshot_designer',

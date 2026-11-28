@@ -15,6 +15,7 @@ from typing import (
     NamedTuple as NamedTuple,
     Protocol as Protocol,
     TypedDict as TypedDict,
+    assert_never as assert_never,
     cast as cast,
 )
 from xml.etree import ElementTree as ElementTree
